@@ -1,0 +1,568 @@
+// Conduck
+// RemoteAgentClientTests.swift
+//
+// Full round-trip tests of `RemoteAgentClient.send(...)` via
+// MockURLProtocol. Each test scripts a single gateway response (status +
+// body) and asserts the client either returns the expected reply text or
+// throws the expected `AppError` case.
+//
+// Per-test URLSession creation (NOT shared) — MockURLProtocol stores its
+// handler statically, so any shared session would cross-contaminate
+// concurrent test execution. The teardown explicitly nils the handler
+// for the same reason.
+
+import XCTest
+@testable import Conduck
+
+final class RemoteAgentClientTests: XCTestCase {
+
+    private var session: URLSession!
+    private let baseURL = URL(string: "https://gateway.example.test")!
+    private let token = "secret-token-do-not-log"
+
+    override func setUp() {
+        super.setUp()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        session = URLSession(configuration: config)
+    }
+
+    override func tearDown() {
+        MockURLProtocol.requestHandler = nil
+        session.invalidateAndCancel()
+        session = nil
+        super.tearDown()
+    }
+
+    // MARK: - Happy path — full client-owned history (backend-agnostic)
+
+    func testHappyPathSendsFullHistoryWithNoSessionWireFields() async throws {
+        var capturedRequest: URLRequest?
+        var capturedBody: Data?
+
+        MockURLProtocol.requestHandler = { request in
+            capturedRequest = request
+            // URLProtocol intercepts hide `httpBody`; the stream is set on
+            // the request and must be read explicitly when needed.
+            capturedBody = request.httpBody ?? Self.readStreamBody(request)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let payload = #"{"choices":[{"message":{"content":"hi"}}]}"#
+            return (response, Data(payload.utf8))
+        }
+
+        // A 2-turn prior history (user → agent); the client appends the new
+        // user turn → a 3-message messages[] array on the wire.
+        let prior: [ConverseRequest.Message] = [
+            .init(role: "user", content: "first question"),
+            .init(role: "assistant", content: "first answer"),
+        ]
+
+        let reply = try await RemoteAgentClient.shared.send(
+            backend: .openclaw,
+            url: baseURL,
+            token: token,
+            priorTurns: prior,
+            newUserText: "follow-up",
+            fileServerReady: false,
+            session: session
+        )
+
+        XCTAssertEqual(reply, "hi")
+
+        let req = try XCTUnwrap(capturedRequest)
+        XCTAssertEqual(req.url?.path, "/v1/chat/completions",
+                       "Request path must end in /v1/chat/completions")
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer \(token)")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Accept"), "application/json")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertNil(req.value(forHTTPHeaderField: "x-openclaw-session-key"),
+                     "No session header may be sent under client-owned history")
+
+        let body = try XCTUnwrap(capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertFalse(json.keys.contains("conversation"),
+                       "Body must NOT contain a `conversation` key. Got: \(Array(json.keys))")
+        XCTAssertEqual(json["stream"] as? Bool, false)
+
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        XCTAssertEqual(messages.count, 3, "Full history (2 prior + new user turn) must be sent")
+        XCTAssertEqual(messages[0]["role"] as? String, "user")
+        XCTAssertEqual(messages[0]["content"] as? String, "first question")
+        XCTAssertEqual(messages[1]["role"] as? String, "assistant")
+        XCTAssertEqual(messages[1]["content"] as? String, "first answer")
+        XCTAssertEqual(messages[2]["role"] as? String, "user")
+        XCTAssertEqual(messages[2]["content"] as? String, "follow-up")
+    }
+
+    func testHermesUsesIdenticalWireShape() async throws {
+        // The request is byte-shape-identical for every backend — no
+        // x-openclaw-session-key header, no `conversation` body field.
+        var capturedRequest: URLRequest?
+        var capturedBody: Data?
+
+        MockURLProtocol.requestHandler = { request in
+            capturedRequest = request
+            capturedBody = request.httpBody ?? Self.readStreamBody(request)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            let payload = #"{"choices":[{"message":{"content":"hermes reply"}}]}"#
+            return (response, Data(payload.utf8))
+        }
+
+        let reply = try await RemoteAgentClient.shared.send(
+            backend: .hermes,
+            url: baseURL,
+            token: token,
+            priorTurns: [],
+            newUserText: "hello",
+            fileServerReady: false,
+            session: session
+        )
+
+        XCTAssertEqual(reply, "hermes reply")
+
+        let req = try XCTUnwrap(capturedRequest)
+        XCTAssertNil(req.value(forHTTPHeaderField: "x-openclaw-session-key"),
+                     "Hermes MUST NOT send any session header (none exists under client-owned history)")
+
+        let body = try XCTUnwrap(capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertFalse(json.keys.contains("conversation"),
+                       "Hermes body must NOT carry a `conversation` field. Got: \(Array(json.keys))")
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        XCTAssertEqual(messages.count, 1, "Empty prior history → just the new user turn")
+        XCTAssertEqual(messages[0]["role"] as? String, "user")
+        XCTAssertEqual(messages[0]["content"] as? String, "hello")
+    }
+
+    // MARK: - Trim policy
+
+    func testTrimPolicyCapsSentArrayAtContextMaxTurns() async throws {
+        var capturedBody: Data?
+        MockURLProtocol.requestHandler = { request in
+            capturedBody = request.httpBody ?? Self.readStreamBody(request)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"choices":[{"message":{"content":"ok"}}]}"#.utf8))
+        }
+
+        // Build a prior history LONGER than the cap. Only the last
+        // `contextMaxTurns` prior turns should cross the wire; the new user
+        // turn is always appended → sent count == cap + 1.
+        let cap = Constants.contextMaxTurns
+        let prior: [ConverseRequest.Message] = (0..<(cap + 10)).map { i in
+            .init(role: i.isMultiple(of: 2) ? "user" : "assistant", content: "turn \(i)")
+        }
+
+        _ = try await RemoteAgentClient.shared.send(
+            backend: .openclaw,
+            url: baseURL,
+            token: token,
+            priorTurns: prior,
+            newUserText: "newest",
+            fileServerReady: false,
+            session: session
+        )
+
+        let body = try XCTUnwrap(capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        XCTAssertEqual(messages.count, cap + 1,
+                       "Sent array must be capped at contextMaxTurns prior turns + the new user turn")
+        // The newest prior turn (index cap+9) must survive the trim; the
+        // oldest (turn 0) must be dropped.
+        XCTAssertEqual(messages.first?["content"] as? String, "turn 10",
+                       "Trim keeps the SUFFIX (most recent) prior turns; turn 0..9 dropped")
+        XCTAssertEqual(messages.last?["role"] as? String, "user")
+        XCTAssertEqual(messages.last?["content"] as? String, "newest",
+                       "New user turn is always the last message")
+    }
+
+    // MARK: - Error mapping
+
+    func test401MapsToAuthFailed() async {
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+
+        await assertThrowsAppError(.remoteAgentAuthFailed) {
+            try await RemoteAgentClient.shared.send(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                newUserText: "hi", fileServerReady: false, session: self.session
+            )
+        }
+    }
+
+    func test500MapsToServerError() async {
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+
+        await assertThrowsAppError(.remoteAgentServerError) {
+            try await RemoteAgentClient.shared.send(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                newUserText: "hi", fileServerReady: false, session: self.session
+            )
+        }
+    }
+
+    func testMalformedJSONMapsToInvalidResponse() async {
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            // Decode failure — completely off-shape body.
+            return (response, Data("not json at all".utf8))
+        }
+
+        await assertThrowsAppError(.remoteAgentInvalidResponse) {
+            try await RemoteAgentClient.shared.send(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                newUserText: "hi", fileServerReady: false, session: self.session
+            )
+        }
+    }
+
+    func testCancelledDoesNotMapToCertMismatch() async {
+        // CRITICAL FIX: a user-initiated / structured-concurrency cancel
+        // must NOT surface as a cert error. The converse path re-throws it
+        // as a benign CancellationError; cert-mismatch comes ONLY from the
+        // trust-evaluator's server-certificate codes.
+        MockURLProtocol.requestHandler = { _ in
+            throw URLError(.cancelled)
+        }
+
+        do {
+            _ = try await RemoteAgentClient.shared.send(
+                backend: .openclaw, url: baseURL, token: token,
+                newUserText: "hi", fileServerReady: false, session: session
+            )
+            XCTFail("Expected a thrown error for a cancelled request")
+        } catch is CancellationError {
+            // Expected — benign cancel, distinct from any .remoteAgent* case.
+        } catch let error as AppError {
+            XCTFail("Cancelled request must NOT map to an AppError (got \(error)); cert-mismatch must come only from the trust path")
+        } catch {
+            XCTFail("Expected CancellationError, got \(type(of: error)): \(error)")
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func assertThrowsAppError(
+        _ expected: AppError,
+        file: StaticString = #file,
+        line: UInt = #line,
+        _ block: () async throws -> Void
+    ) async {
+        do {
+            try await block()
+            XCTFail("Expected throw of \(expected.errorCode) — got success", file: file, line: line)
+        } catch let error as AppError {
+            XCTAssertEqual(
+                error.errorCode, expected.errorCode,
+                "Expected error code \(expected.errorCode), got \(error.errorCode) (\(error))",
+                file: file, line: line
+            )
+        } catch {
+            XCTFail("Expected AppError, got \(type(of: error)): \(error)", file: file, line: line)
+        }
+    }
+
+    // MARK: - Test Connection
+    //
+    // testConnection probes the gateway with `GET /v1/models` rather than
+    // POSTing a converse. Status mapping reuses `backend.statusMap` (the
+    // single unified map) so error mapping stays consistent with the
+    // converse hop. Tests drive
+    // `testConnectionForTesting(...)` so MockURLProtocol intercepts the
+    // probe without standing up a real `RemoteAgentTrustEvaluator`-backed
+    // ephemeral session (which we can't intercept from the test process).
+
+    func testTestConnectionSuccessAndHeaderShape() async throws {
+        var capturedRequest: URLRequest?
+        MockURLProtocol.requestHandler = { request in
+            capturedRequest = request
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200,
+                httpVersion: "HTTP/1.1", headerFields: nil
+            )!
+            return (response, Data(#"{"data":[{"id":"llama3"}]}"#.utf8))
+        }
+
+        let outcome = try await RemoteAgentClient.shared.testConnectionForTesting(
+            backend: .openclaw,
+            url: baseURL,
+            token: token,
+            session: session
+        )
+
+        // A 2xx alone is NOT a pass — the body must carry the OpenAI model-list
+        // envelope (see `validateProbeBody`). An EMPTY `data` array is a separate
+        // outcome (`.okNoModels`), so this fixture advertises a model.
+        XCTAssertEqual(outcome, .ok, "A 2xx probe with a populated model list must return .ok")
+
+        let req = try XCTUnwrap(capturedRequest)
+        XCTAssertEqual(req.httpMethod, "GET")
+        XCTAssertEqual(req.url?.path, "/v1/models",
+                       "Test Connection MUST hit /v1/models — OpenAI-compatible probe both backends expose.")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer \(token)",
+                       "Bearer header MUST be set on the probe — the test verifies auth+connectivity.")
+    }
+
+    func testTestConnectionUnauthorizedMapsToAuthFailed() async {
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+
+        await assertThrowsAppError(.remoteAgentAuthFailed) {
+            try await RemoteAgentClient.shared.testConnectionForTesting(
+                backend: .openclaw, url: self.baseURL, token: self.token, session: self.session
+            )
+        }
+    }
+
+    func testTestConnectionServerErrorMapsToServerError() async {
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+
+        await assertThrowsAppError(.remoteAgentServerError) {
+            try await RemoteAgentClient.shared.testConnectionForTesting(
+                backend: .openclaw, url: self.baseURL, token: self.token, session: self.session
+            )
+        }
+    }
+
+    func testTestConnectionUnreachableMapsToUnreachable() async {
+        MockURLProtocol.requestHandler = { request in
+            throw URLError(.cannotConnectToHost)
+        }
+
+        await assertThrowsAppError(.remoteAgentUnreachable) {
+            try await RemoteAgentClient.shared.testConnectionForTesting(
+                backend: .openclaw, url: self.baseURL, token: self.token, session: self.session
+            )
+        }
+    }
+
+    func testTestConnectionPinMismatchStillThrowsCertMismatch() async {
+        // PIN SET + cert changed: `RemoteAgentTrustEvaluator` refuses the
+        // mismatch via cancelAuthenticationChallenge → URLError(.cancelled)
+        // AND sets `pinRejected`. With a pin configured this MUST stay a hard
+        // error — never auto-offer re-trust (that defeats pinning). TOFU is
+        // offered ONLY when no pin is set. (The mock bypasses the real
+        // evaluator, so we inject `pinRejected: { true }` to simulate the
+        // genuine-mismatch signal.)
+        MockURLProtocol.requestHandler = { request in
+            throw URLError(.cancelled)
+        }
+
+        await assertThrowsAppError(.remoteAgentCertMismatch) {
+            try await RemoteAgentClient.shared.testConnectionForTesting(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                session: self.session, hasPin: true,
+                pinRejected: { true }
+            )
+        }
+    }
+
+    func testTestConnectionCancelledNoPinIsRetryableNotCert() async {
+        // No pin + `.cancelled` (the evaluator never cancels on the no-pin
+        // path → this is a real task cancellation). Test Connection has no
+        // user-cancel surface, so it surfaces as a retryable transport
+        // failure — NOT a cert problem.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
+        await assertThrowsAppError(.remoteAgentUnreachable) {
+            try await RemoteAgentClient.shared.testConnectionForTesting(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                session: self.session, hasPin: false
+            )
+        }
+    }
+
+    func testTestConnectionSecureConnectionFailedTransientIsUnreachable() async {
+        // THE REGRESSION: a generic `.secureConnectionFailed` over a cold
+        // tunnel (no system rejection) must be a retryable transport failure,
+        // NOT a false "untrusted certificate" / pin offer.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
+        await assertThrowsAppError(.remoteAgentUnreachable) {
+            try await RemoteAgentClient.shared.testConnectionForTesting(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                session: self.session, hasPin: false,
+                systemTrustRejected: { false }
+            )
+        }
+    }
+
+    func testTestConnectionSecureConnectionFailedSystemRejectedIsTOFU() async throws {
+        // A genuine no-pin rejection that surfaced via the generic code (the
+        // system DID reject) is still a TOFU opportunity.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
+        let outcome = try await RemoteAgentClient.shared.testConnectionForTesting(
+            backend: .openclaw, url: baseURL, token: token,
+            session: session, hasPin: false,
+            presentedFingerprint: { "abcabcabcabc1234" },
+            systemTrustRejected: { true }
+        )
+        XCTAssertEqual(outcome, .untrustedCert(presentedFingerprintHex: "abcabcabcabc1234"),
+                       "A real system rejection (systemTrustRejected) must still offer TOFU even via the generic code.")
+    }
+
+    func testTestConnectionSecureConnectionFailedPinTransientIsUnreachable() async {
+        // Pinned host on a cold tunnel (no confirmed mismatch) → retryable,
+        // NOT a false cert MISMATCH (which would imply a MITM).
+        MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
+        await assertThrowsAppError(.remoteAgentUnreachable) {
+            try await RemoteAgentClient.shared.testConnectionForTesting(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                session: self.session, hasPin: true,
+                pinRejected: { false }
+            )
+        }
+    }
+
+    func testSendSecureConnectionFailedIsUnreachableNotCertMismatch() async {
+        // Live converse hop: a transient `.secureConnectionFailed` over a cold
+        // tunnel must be retryable, NOT a false cert mismatch (the converse
+        // path can't read the trust signals, so the generic code is treated as
+        // transport-transient).
+        MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
+        await assertThrowsAppError(.remoteAgentUnreachable) {
+            try await RemoteAgentClient.shared.send(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                newUserText: "hi", fileServerReady: false, session: self.session
+            )
+        }
+    }
+
+    func testSendSpecificCertCodeStillMapsToCertMismatch() async {
+        // A specific server-certificate code on the live hop still surfaces as
+        // a cert mismatch (the system named the cert as the cause).
+        MockURLProtocol.requestHandler = { _ in throw URLError(.serverCertificateUntrusted) }
+        await assertThrowsAppError(.remoteAgentCertMismatch) {
+            try await RemoteAgentClient.shared.send(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                newUserText: "hi", fileServerReady: false, session: self.session
+            )
+        }
+    }
+
+    func testTestConnectionUntrustedCertNoPinReturnsTOFUOutcome() async throws {
+        // NO pin set + system rejected an untrusted self-signed cert →
+        // `.untrustedCert(fp)`: a TOFU opportunity, NOT a thrown error. The
+        // captured leaf fingerprint comes from the evaluator (here injected
+        // via the test closure).
+        let presentedFP = "deadbeefcafef00d"
+        MockURLProtocol.requestHandler = { request in
+            throw URLError(.serverCertificateUntrusted)
+        }
+
+        let outcome = try await RemoteAgentClient.shared.testConnectionForTesting(
+            backend: .openclaw, url: baseURL, token: token,
+            session: session, hasPin: false,
+            presentedFingerprint: { presentedFP }
+        )
+
+        XCTAssertEqual(outcome, .untrustedCert(presentedFingerprintHex: presentedFP),
+                       "No-pin self-signed rejection must return .untrustedCert with the presented fingerprint (TOFU), not throw.")
+    }
+
+    func testTestConnectionUntrustedCertNoPinNoFingerprintStillReturnsTOFU() async throws {
+        // Untrusted self-signed, NO pin, but the leaf key algorithm is
+        // outside the V1 SPKI prefix table → evaluator captured nil. The
+        // outcome is still `.untrustedCert(nil)` (untrusted, no copyable fp)
+        // — the UI banner then offers manual pinning instead of one-tap.
+        MockURLProtocol.requestHandler = { request in
+            throw URLError(.serverCertificateHasUnknownRoot)
+        }
+
+        let outcome = try await RemoteAgentClient.shared.testConnectionForTesting(
+            backend: .openclaw, url: baseURL, token: token,
+            session: session, hasPin: false,
+            presentedFingerprint: { nil }
+        )
+
+        XCTAssertEqual(outcome, .untrustedCert(presentedFingerprintHex: nil),
+                       "Untrusted self-signed with an unsupported key algorithm must still surface .untrustedCert(nil), not throw.")
+    }
+
+    func testTestConnectionRequestUsesShortTimeout() {
+        // Verify the public `buildTestConnectionRequest` stamps the short-timeout
+        // Constant onto the request (load-bearing — the 300s converse
+        // budget would leave the user staring at a spinner forever on a
+        // wrong URL). Inspecting the request shape directly avoids
+        // needing a real timeout to fire mid-test.
+        let request = RemoteAgentClient.buildTestConnectionRequest(url: baseURL, token: token)
+        XCTAssertEqual(
+            request.timeoutInterval,
+            Constants.remoteAgentTestConnectionTimeout,
+            accuracy: 0.001,
+            "Test Connection request must use Constants.remoteAgentTestConnectionTimeout (interactive spinner, NOT the 300s converse budget)."
+        )
+        XCTAssertEqual(request.timeoutInterval, 15.0,
+                       "Drift guard: the locked Constants value is 15s — change here mirrors a change in Constants.swift.")
+    }
+
+    func testTestConnectionDoesNotLogToken() async {
+        // Privacy invariant: the bearer token must NEVER appear in
+        // thrown error messages. Force every error path and assert the
+        // localized description / debug description never includes the
+        // token literal.
+        let secretToken = "super-secret-bearer-DO-NOT-LEAK"
+        let cases: [(Int, AppError)] = [
+            (401, .remoteAgentAuthFailed),
+            (500, .remoteAgentServerError),
+        ]
+        for (status, expected) in cases {
+            MockURLProtocol.requestHandler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+            do {
+                try await RemoteAgentClient.shared.testConnectionForTesting(
+                    backend: .openclaw, url: baseURL, token: secretToken, session: session
+                )
+                XCTFail("Expected throw for status \(status)")
+            } catch let error as AppError {
+                XCTAssertEqual(error.errorCode, expected.errorCode)
+                let message = "\(error)\n\(error.localizedDescription)\n\(error.errorUserInfo)"
+                XCTAssertFalse(message.contains(secretToken),
+                               "Bearer token leaked into AppError for status \(status). Surface: \(message)")
+            } catch {
+                XCTFail("Expected AppError for status \(status), got: \(error)")
+            }
+        }
+    }
+
+    // MARK: - Stream helpers (existing)
+
+    /// URLProtocol surfaces request bodies via `httpBodyStream` when set
+    /// via URLRequest's body-stream APIs (URLSession sometimes upgrades
+    /// `httpBody` to a stream for large payloads). Reads to EOF.
+    private static func readStreamBody(_ request: URLRequest) -> Data? {
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 4096
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: bufferSize)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
+    }
+}

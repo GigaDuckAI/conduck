@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "conduck-chopping-wood.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

@@ -1,0 +1,10 @@
+.DS_Store
+xcuserdata/
+__pycache__/
+build/
+DerivedData/
+.env
+.env.*
+!.env.example
+# Official-identity override lives only in the private overlay — never commit here.
+Identity-Override.xcconfig

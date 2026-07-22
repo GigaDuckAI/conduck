@@ -1,0 +1,280 @@
+#if os(macOS)
+// Conduck
+// MacPersonalAICategory.swift
+//
+// macOS Settings → Personal AI category. Mirrors the iOS
+// `PersonalAISettingsView`: a top "Default for new chats" selector (the single
+// place to pick which gateway new conversations start on) + a gateway LIST whose
+// rows are configure-only (tap → a roomy per-gateway config detail via a
+// `NavigationStack` inside the full-window Settings mode swap). Status is
+// discrete — a quiet green check (+ a "Default" caption) via
+// `SettingsStatusMark`, no colored pills, no in-row set-default.
+//
+// Content sits on the shared settings rail (720pt max width, centered, 28pt
+// horizontal padding) with the increased zone-header prominence — the same
+// treatment `RemoteAgentConfigBody` applies, so list and editor read as one
+// surface.
+//
+// Global pickers (Playback / Session / Attachments) live in `MacGeneralCategory`
+// per the plan's clean grouping — NOT here.
+
+import SwiftUI
+
+/// Navigation route for the macOS Personal AI category — the "Default for new
+/// chats" chooser or a per-gateway config detail (mirrors the iOS screen).
+private enum MacPersonalAIRoute: Hashable {
+    case defaultChooser
+    case configure(RemoteAgentRef)
+}
+
+struct MacPersonalAICategory: View {
+    @Bindable var viewModel: SettingsViewModel
+
+    /// The settings content rail — matches `RemoteAgentConfigBody`'s editor rail
+    /// so the list and the pushed editor share one column width.
+    private static let contentRailMaxWidth: CGFloat = 720
+
+    /// Drives all pushes — the default chooser + a gateway config detail.
+    @State private var route: MacPersonalAIRoute?
+
+    /// The guided-setup presentation, OWNED by `MainWindowView` and threaded down
+    /// through `MacSettingsView`. On macOS the guided flow is a FULL-WINDOW overlay
+    /// at the window root (a `.sheet` is always an inset panel and can't go
+    /// edge-to-edge), so this category only TRIGGERS it (`isPresented = true`).
+    @Binding var guidedHost: GuidedGatewayHostState
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(LocalizedStringResource("settings.mac.personalAI.title", defaultValue: "Personal AI"))
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(AppColors.textEmphasis)
+                        .padding(.horizontal, 28)
+                        .padding(.top, 28)
+
+                    Form {
+                        // Always the populated layout — the "New chats use"
+                        // selector, the permanent Connect section, then the
+                        // gateway lists (configured rows get a green check;
+                        // unconfigured ones render dimmed without one). Gated on
+                        // `hasLoadedRemoteAgentState` so nothing flashes before
+                        // state loads.
+                        if viewModel.hasLoadedRemoteAgentState {
+                            defaultSelector
+                            connectSection
+                            selfHostedGatewaySection
+                            hostedModelSection
+                            customGatewaySection
+                        }
+                    }
+                    .formStyle(.grouped)
+                    .scrollContentBackground(.hidden)
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 28)
+                }
+                // The settings content rail: cap the column, center it in the
+                // window (the trailing `.frame(maxWidth: .infinity)` re-expands
+                // so the ScrollView keeps full-width scrolling).
+                .frame(maxWidth: Self.contentRailMaxWidth)
+                .frame(maxWidth: .infinity)
+            }
+            .navigationDestination(item: $route) { route in
+                switch route {
+                case .defaultChooser:
+                    DefaultGatewayPicker(
+                        rows: viewModel.personalAIRows,
+                        onActivate: { ref in
+                            Task {
+                                await viewModel.setDefaultRemoteAgentRef(ref)
+                                self.route = nil
+                            }
+                        },
+                        onSetUp: { ref in self.route = .configure(ref) }
+                    )
+                case .configure(let ref):
+                    // The editor supplies its own `bufferedEditorChrome` macOS
+                    // header (toolbar hidden), so no `.navigationTitle` here.
+                    RemoteAgentConfigBody(viewModel: viewModel, ref: ref, guidedHost: $guidedHost)
+                }
+            }
+        }
+    }
+
+    /// Zone-header treatment shared with the editor: sentence-case 13pt semibold
+    /// in the secondary color (increased prominence over the stock small gray),
+    /// with vertical padding that opens the section rhythm.
+    private func zoneHeader(_ text: Text) -> some View {
+        text
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(AppColors.textSecondary)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+    }
+
+    // MARK: - Connect (permanent setup affordances)
+
+    /// "Connect" — the prominent guided-setup entry (the lane chooser). Scan/paste
+    /// is no longer a list-level row: it lives inside each gateway's "Guided setup"
+    /// disclosure, and the chooser's guided flow ends in the same step.
+    private var connectSection: some View {
+        Section {
+            PersonalAIConnectRows(
+                emphasized: viewModel.hasLoadedRemoteAgentState
+                    && viewModel.configuredRemoteAgentRefSet.isEmpty,
+                onGuidedSetup: {
+                    guidedHost.present()   // open at the chooser
+                }
+            )
+        } header: {
+            zoneHeader(Text(GatewayGroupCopy.connectHeader))
+        }
+    }
+
+    // MARK: - Default selector (the single "which gateway" surface)
+
+    /// The "Default for new chats → <gateway>" selector at the top, the one
+    /// canonical place to choose the gateway new conversations start on (mirrors
+    /// the Voice STT/TTS selectors). Tapping opens the chooser.
+    private var defaultSelector: some View {
+        Section {
+            Button {
+                route = .defaultChooser
+            } label: {
+                DefaultGatewaySelectorRow(defaultName: viewModel.defaultSelectorDisplayName)
+            }
+            .buttonStyle(.plain)
+        } header: {
+            zoneHeader(Text(LocalizedStringResource(
+                "settings.personalAI.newChats.header",
+                defaultValue: "New chats use"
+            )))
+        }
+    }
+
+    // MARK: - Gateway list
+
+    /// "Full agent gateways" — the user's own self-hosted backends (OpenClaw /
+    /// Hermes; tools, memory, file attachments). Mirrors
+    /// `PersonalAISettingsView.selfHostedGatewaySection`.
+    private var selfHostedGatewaySection: some View {
+        Section {
+            ForEach(viewModel.personalAIRows.filter {
+                guard case .builtin(let b) = $0.ref else { return false }
+                return RemoteAgentBackendRegistry.lookup(id: b).category == .selfHostedAgent
+            }) { row in
+                gatewayRow(row)
+            }
+        } header: {
+            zoneHeader(Text(GatewayGroupCopy.fullAgentHeader))
+        } footer: {
+            Text(GatewayGroupCopy.fullAgentFooter)
+        }
+    }
+
+    /// "Hosted model" — third-party hosted services (OpenRouter). Hidden when none
+    /// are registered. Mirrors `PersonalAISettingsView.hostedModelSection`.
+    @ViewBuilder
+    private var hostedModelSection: some View {
+        let hostedRows = viewModel.personalAIRows.filter {
+            guard case .builtin(let b) = $0.ref else { return false }
+            return RemoteAgentBackendRegistry.lookup(id: b).category == .hostedModel
+        }
+        if !hostedRows.isEmpty {
+            Section {
+                ForEach(hostedRows) { row in
+                    gatewayRow(row)
+                }
+            } header: {
+                zoneHeader(Text(GatewayGroupCopy.hostedModelHeader))
+            } footer: {
+                Text(GatewayGroupCopy.hostedModelFooter)
+            }
+        }
+    }
+
+    /// "Custom gateways" group — the user-added gateways + the Add row. Shows
+    /// even with zero customs so the Add row always has context. (The setup-code
+    /// row moved to the permanent "Connect" section.)
+    private var customGatewaySection: some View {
+        Section {
+            ForEach(viewModel.personalAIRows.filter { !$0.ref.isBuiltin }) { row in
+                gatewayRow(row)
+            }
+            addCustomGatewayCard
+        } header: {
+            zoneHeader(Text(LocalizedStringResource("settings.personalAI.section.customHeader", defaultValue: "Custom gateways")))
+        } footer: {
+            Text(GatewayGroupCopy.customFooter)
+        }
+    }
+
+    @ViewBuilder
+    private func gatewayRow(_ row: PersonalAIRow) -> some View {
+        // Single tap → config detail. Discrete status: a quiet green check (+ a
+        // tertiary "Default" caption on the default) when configured, nothing +
+        // a dimmed name when not. The default is chosen in the top selector;
+        // file-transfer readiness lives in the detail (Advanced).
+        let configured = row.configured
+        Button {
+            route = .configure(row.ref)
+        } label: {
+            HStack(spacing: 12) {
+                Text(row.displayName)
+                    .font(.body)
+                    .foregroundStyle(configured ? AppColors.textPrimary : AppColors.textSecondary)
+                Spacer()
+                SettingsStatusMark(
+                    configured: configured,
+                    caption: row.isDefault
+                        ? LocalizedStringResource("settings.remoteAgent.list.pill.default", defaultValue: "Default")
+                        : nil
+                )
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("settings.personalAI.row.\(row.ref.rawString)")
+    }
+
+    /// "+ Add custom gateway" row — at the cap it's VISIBLE but disabled, with a
+    /// hint to delete/edit one above. Tap → mint a draft → push editor.
+    @ViewBuilder
+    private var addCustomGatewayCard: some View {
+        let canAdd = viewModel.customGatewayCount < Constants.maxCustomGateways
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                if let id = viewModel.newCustomGatewayDraftID() {
+                    route = .configure(.custom(id))
+                }
+            } label: {
+                Label {
+                    Text(canAdd
+                        ? LocalizedStringResource("settings.remoteAgent.customGateway.add", defaultValue: "Add custom gateway")
+                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap", defaultValue: "Add custom gateway (limit reached)"))
+                } icon: {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)
+                }
+                .font(.body)
+                .foregroundStyle(canAdd ? AppColors.textPrimary : AppColors.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canAdd)
+            .accessibilityIdentifier("settings.personalAI.addCustomGateway")
+            if !canAdd {
+                Text(LocalizedStringResource(
+                    "settings.remoteAgent.customGateway.capHint",
+                    defaultValue: "Delete a custom gateway above to add another."
+                ))
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+            }
+        }
+    }
+
+}
+#endif

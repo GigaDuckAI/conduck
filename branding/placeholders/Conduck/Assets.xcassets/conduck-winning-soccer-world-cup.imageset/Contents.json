@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "conduck-winning-soccer-world-cup.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

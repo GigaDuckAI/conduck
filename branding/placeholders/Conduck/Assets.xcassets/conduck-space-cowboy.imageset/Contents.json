@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "conduck-space-cowboy.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Conduck macOS Share Extension (ConduckShareExtensionMac appex) — Info.plist
+
+  Same `com.apple.share-services` extension point as the iOS appex, but the
+  activation rule DIFFERS: macOS uses the predefined DICTIONARY form
+  (`NSExtensionActivationSupports*WithMaxCount`, below) — NOT the iOS appex's
+  `SUBQUERY` predicate, which the macOS Sharing host does not reliably honor
+  (Finder doesn't populate `registeredTypeIdentifiers`). The
+  macOS principal also COPIES file:// URLs rather than rejecting them (see
+  ShareViewController file header).
+
+  PRINCIPAL CLASS: $(PRODUCT_MODULE_NAME).ShareViewController — the appex's own
+  module name, resolved at build time. The class is the AppKit `NSViewController`
+  in ConduckShareExtensionMac/ShareViewController.swift.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>$(CONDUCK_DISPLAY_NAME)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ConduckAppGroupID</key>
+	<string>$(CONDUCK_GROUP_ID)</string>
+	<key>ConduckIdentityNamespace</key>
+	<string>$(CONDUCK_IDENTITY_NAMESPACE)</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.share-services</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<!--
+			  Safari page-text capture. Safari executes ConduckWebCapture.js INSIDE
+			  the shared page at share time and vends its results to the appex as a
+			  com.apple.property-list NSItemProvider carrying
+			  NSExtensionJavaScriptPreprocessingResultsKey (see the iOS appex's
+			  Info.plist for the full mechanism; ShareViewController owns the
+			  loader branch + URL-from-payload recovery). The dictionary activation
+			  rule below is UNCHANGED — macOS runs the JS off the existing
+			  WebURLWithMaxCount match. If a founder Safari-share pass ever shows
+			  the JS NOT running under this config, the fallback is adding
+			  NSExtensionActivationSupportsWebPageWithMaxCount = 1 alongside the
+			  existing keys. Non-Safari browsers ignore this key and keep vending
+			  plain URLs (the existing path).
+			-->
+			<key>NSExtensionJavaScriptPreprocessingFile</key>
+			<string>ConduckWebCapture</string>
+			<!--
+			  Activation rule — macOS uses the PREDEFINED DICTIONARY form, NOT the
+			  iOS SUBQUERY predicate. Two reasons:
+
+			  1. RELIABILITY. macOS Sharing Services does not reliably populate an
+			     item's `registeredTypeIdentifiers`, so a predicate that tests them
+			     (`ANY $att.registeredTypeIdentifiers UTI-CONFORMS-TO …`) silently
+			     evaluates false in Finder and the extension never appears in the
+			     Share menu (Apple-confirmed Sharing Services bug — openradar
+			     30184633). The predefined keys are honored via a separate, robust
+			     code path that does not depend on that field. The iOS appex keeps
+			     its SUBQUERY predicate (it works on iOS, where the field is
+			     populated, and `public.data` there already matches almost any file).
+
+			  2. BREADTH ("accept everything"). Conduck is a thin forwarder to the
+			     user's general-purpose AI gateway; we cannot know what the gateway
+			     will do with a payload, so we surface for EVERYTHING a Share menu
+			     can offer and let the gateway decide. This is safe end-to-end: the
+			     capture layer (`ShareViewController.loadOne` step 4) copies any
+			     unrecognized attachment as a generic file, and the drainer uploads
+			     binaries to the bound gateway's file-server (image→inline,
+			     text→inline, everything-else→file upload). Broad activation therefore
+			     never creates an "appears-but-silently-drops" path. The only graceful
+			     stop is a binary shared to a gateway with NO file-server configured →
+			     the drainer quarantines it (recoverable), it is never lost.
+
+			  image + movie + file (any document) + text + web URL, ≤10 each = the
+			  whole practical universe of shareable content. Per-type max stays in
+			  step with the loader's `maxAttachments` cap.
+			-->
+			<key>NSExtensionActivationRule</key>
+			<dict>
+				<key>NSExtensionActivationSupportsImageWithMaxCount</key>
+				<integer>10</integer>
+				<key>NSExtensionActivationSupportsMovieWithMaxCount</key>
+				<integer>10</integer>
+				<key>NSExtensionActivationSupportsFileWithMaxCount</key>
+				<integer>10</integer>
+				<key>NSExtensionActivationSupportsText</key>
+				<true/>
+				<key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
+				<integer>10</integer>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>

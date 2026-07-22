@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "conduck-bathtub-thank-you.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

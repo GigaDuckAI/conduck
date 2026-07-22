@@ -1,0 +1,18 @@
+// Conduck build identity — Community defaults.
+// To build with a different identity, create Identity-Override.xcconfig beside
+// this file (gitignored in the public repo) defining the same CONDUCK_* variables.
+CONDUCK_BUNDLE_ID_BASE = com.example.Conduck
+CONDUCK_IDENTITY_NAMESPACE = com.example.conduck
+CONDUCK_GROUP_ID = group.com.example.conduck
+CONDUCK_ICLOUD_CONTAINER_ID = iCloud.com.example.conduck
+CONDUCK_DISPLAY_NAME = Conduck Community
+CONDUCK_ENTITLEMENTS_VARIANT = Community
+CONDUCK_DEVELOPMENT_TEAM =
+
+DEVELOPMENT_TEAM = $(CONDUCK_DEVELOPMENT_TEAM)
+
+// Single source for version numbers (removed from per-target settings)
+MARKETING_VERSION = 1.2
+CURRENT_PROJECT_VERSION = 8
+
+#include? "Identity-Override.xcconfig"

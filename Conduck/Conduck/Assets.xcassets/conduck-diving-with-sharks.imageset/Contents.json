@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "conduck-diving-with-sharks.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

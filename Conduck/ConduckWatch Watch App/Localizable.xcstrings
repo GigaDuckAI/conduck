@@ -1,0 +1,2125 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "" : {
+
+    },
+    "…" : {
+
+    },
+    "[File attached]" : {
+
+    },
+    "[Image attached]" : {
+
+    },
+    "%@ is answering…" : {
+
+    },
+    "1 min left" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "1 min left"
+          }
+        }
+      }
+    },
+    "A queued recording couldn't reach your iPhone and has expired." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A queued recording couldn't reach your iPhone and has expired."
+          }
+        }
+      }
+    },
+    "Agent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Agent"
+          }
+        }
+      }
+    },
+    "Answering…" : {
+
+    },
+    "api.error.failure" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something glitched on our end. Try again in a moment."
+          }
+        }
+      }
+    },
+    "api.error.failure.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Should be back in a minute or two."
+          }
+        }
+      }
+    },
+    "api.error.failure.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something went wrong with the last request. Try again in a moment."
+          }
+        }
+      }
+    },
+    "api.error.unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "An unexpected error occurred: %@"
+          }
+        }
+      }
+    },
+    "api.error.unknown.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again."
+          }
+        }
+      }
+    },
+    "Ask" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ask"
+          }
+        }
+      }
+    },
+    "Ask which gateway?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ask which gateway?"
+          }
+        }
+      }
+    },
+    "Ask your personal AI to start one." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ask your personal AI to start one."
+          }
+        }
+      }
+    },
+    "audio.error.invalid" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read that audio. Record again."
+          }
+        }
+      }
+    },
+    "audio.error.invalid.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record new audio."
+          }
+        }
+      }
+    },
+    "audio.error.micBusy" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The microphone is already in use by another recording."
+          }
+        }
+      }
+    },
+    "audio.error.micBusy.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Finish the other recording first, then try again."
+          }
+        }
+      }
+    },
+    "audio.error.missingData" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No audio data to transcribe."
+          }
+        }
+      }
+    },
+    "audio.error.noSpeechDetected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No speech was recognized in the recording."
+          }
+        }
+      }
+    },
+    "audio.error.noSpeechDetected.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try recording again."
+          }
+        }
+      }
+    },
+    "audio.error.processingFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "STT provider couldn't process that audio. Record again."
+          }
+        }
+      }
+    },
+    "audio.error.processingFailed.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record new audio."
+          }
+        }
+      }
+    },
+    "audio.error.tooLarge" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recording too long. Keep it under 5 minutes."
+          }
+        }
+      }
+    },
+    "audio.error.tooLarge.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Split it into shorter recordings."
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "Capture a voice note with Conduck" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Capture a voice note with Conduck"
+          }
+        }
+      }
+    },
+    "CarPlay" : {
+
+    },
+    "Clear search" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Clear search"
+          }
+        }
+      }
+    },
+    "Conduck" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck"
+          }
+        }
+      }
+    },
+    "Conduck is turned off for Apple Watch. Enable it in iPhone Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck is turned off for Apple Watch. Enable it in iPhone Settings."
+          }
+        }
+      }
+    },
+    "Conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conversation"
+          }
+        }
+      }
+    },
+    "Conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conversations"
+          }
+        }
+      }
+    },
+    "Could not prepare recording for iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not prepare recording for iPhone."
+          }
+        }
+      }
+    },
+    "Could not process response." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not process response."
+          }
+        }
+      }
+    },
+    "Could not read recording." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not read recording."
+          }
+        }
+      }
+    },
+    "Could not send recording. Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not send recording. Please try again."
+          }
+        }
+      }
+    },
+    "Could not start recording." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not start recording."
+          }
+        }
+      }
+    },
+    "Couldn't connect to the internet. If your iPhone is nearby, your watch may be using its connection. Make sure the iPhone is online, or turn it off, then try again so your watch uses its own Wi-Fi." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't connect to the internet. If your iPhone is nearby, your watch may be using its connection. Make sure the iPhone is online, or turn it off, then try again so your watch uses its own Wi-Fi."
+          }
+        }
+      }
+    },
+    "Couldn't load your conversations." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't load your conversations."
+          }
+        }
+      }
+    },
+    "Couldn't reach the internet. Check your connection and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach the internet. Check your connection and try again."
+          }
+        }
+      }
+    },
+    "Couldn't reach your personal AI. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your personal AI. Try again."
+          }
+        }
+      }
+    },
+    "Couldn't read the reply from your personal AI." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read the reply from your personal AI."
+          }
+        }
+      }
+    },
+    "Custom gateway" : {
+
+    },
+    "Done." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Done."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.authFailed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your file-server rejected the connection."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.authFailed.recovery.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI, tap this gateway, open File transfer, and generate a new password your file server accepts."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.certMismatch" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your file-server's certificate fingerprint changed."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.certMismatch.recovery.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "If you changed your file server's certificate, open its File transfer section, tap Forget file transfer, and set it up again. If you changed nothing, stop — the connection may be intercepted."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.fileUnavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That file is no longer on your gateway."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.fileUnavailable.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Re-attach the file and send again."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.notAFileServer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That address answered, but it isn't serving your files."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.notAFileServer.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It's most likely a login page, a dashboard, or the wrong address — not a file server. The file-server URL is a different address and port from your gateway's."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.notConfigured" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File transfer isn't set up for this gateway."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.notConfigured.recovery.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI, tap this gateway, and open File transfer."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.serverError" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your file-server reported an error."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.serverError.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your file-server's logs, then try again."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.unreachable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your file-server."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.unreachable.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your file-server is running and reachable from this device."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.uploadFailed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't upload the file to your gateway."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.uploadFailed.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap Retry. If it keeps failing, check your file-server is running."
+          }
+        }
+      }
+    },
+    "GigaAction" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "GigaAction"
+          }
+        }
+      }
+    },
+    "Got it" : {
+
+    },
+    "iPad" : {
+
+    },
+    "iPhone" : {
+
+    },
+    "Loading" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Loading"
+          }
+        }
+      }
+    },
+    "Mac" : {
+
+    },
+    "Message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Message"
+          }
+        }
+      }
+    },
+    "Microphone access is required. Please enable it in Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Microphone access is required. Please enable it in Settings."
+          }
+        }
+      }
+    },
+    "network.error.generic" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Network error: %@"
+          }
+        }
+      }
+    },
+    "network.error.noConnection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No internet. Conduck needs Wi-Fi or cellular to work."
+          }
+        }
+      }
+    },
+    "network.error.noConnection.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your connection and try again."
+          }
+        }
+      }
+    },
+    "network.error.persistentFailure" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach the server. Recording saved — open Conduck to retry."
+          }
+        }
+      }
+    },
+    "network.error.persistentFailure.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Better reception or Wi-Fi usually sorts it."
+          }
+        }
+      }
+    },
+    "network.error.timeout" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Request timed out. Network might be spotty."
+          }
+        }
+      }
+    },
+    "network.error.timeout.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try a shorter recording or check your signal."
+          }
+        }
+      }
+    },
+    "New conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New conversation"
+          }
+        }
+      }
+    },
+    "No conversations yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No conversations yet"
+          }
+        }
+      }
+    },
+    "No matches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No matches"
+          }
+        }
+      }
+    },
+    "No response received from server." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No response received from server."
+          }
+        }
+      }
+    },
+    "Nothing matches that search." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing matches that search."
+          }
+        }
+      }
+    },
+    "On-device voice isn't ready on your iPhone yet. Open Conduck there to set it up." : {
+
+    },
+    "Open Conduck on iPhone to get started" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Conduck on iPhone to get started"
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Pause"
+          }
+        }
+      }
+    },
+    "Raise to ask" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Raise to ask"
+          }
+        }
+      }
+    },
+    "Read aloud" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Read aloud"
+          }
+        }
+      }
+    },
+    "Record voice message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record voice message"
+          }
+        }
+      }
+    },
+    "Recording could not be sent. Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recording could not be sent. Please try again."
+          }
+        }
+      }
+    },
+    "Recording file not found." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recording file not found."
+          }
+        }
+      }
+    },
+    "Relay" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Relay"
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not authenticate with your personal AI."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings and verify the bearer token for your gateway."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.certMismatch" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway's certificate fingerprint changed."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.certMismatch.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings and update the pinned fingerprint, or remove the pin to use system trust."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.contextTooLong" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This chat got too long for the model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.contextTooLong.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Start a new chat, or switch to a model with a bigger context window."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointNotFound" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway didn't recognise the AI endpoint."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointNotFound.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the Gateway URL is your server's base address, not a full /v1/… path."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointUnexpectedResponse" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway answered, but not like an AI endpoint."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointUnexpectedResponse.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It answered with something other than an AI endpoint's data. The endpoint may be switched off on your server, or the URL may point at a web page."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointWrongEnvelope" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway answered JSON, but not in the shape Conduck needs."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointWrongEnvelope.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The /v1/models reply must be an object with a top-level \"data\" array. Contract: conduck.com/setup/adapter/v1"
+          }
+        }
+      }
+    },
+    "remoteAgent.error.imageTooLarge" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "An attached image was too large for your gateway."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.imageTooLarge.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway rejected the image as too large. Try a smaller image, or raise your gateway's image-size limit."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.invalidResponse" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your personal AI returned an unexpected response."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.invalidResponse.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the gateway is running an OpenAI-compatible /v1/chat/completions endpoint."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway needs you to name a model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open this gateway's settings and set a Model, for example llama3."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelUnavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That AI model isn't available."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelUnavailable.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the model name in Settings, or pick a different one."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No personal AI gateway is configured."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and add a URL and bearer token."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.outOfCredits" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI provider is out of credits. Add credits with your provider, then try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.rateLimited" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI provider is rate-limiting you."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.rateLimited.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Wait a moment, then try again — free models often have daily limits."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serverError" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your personal AI gateway reported an error."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serverError.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the gateway logs, then try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.timeout" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your personal AI took too long to respond."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.timeout.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again — the gateway may be processing a long reply."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unknownHTTPStatus" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Unknown error (HTTP %lld)"
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unreachable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not reach your personal AI gateway."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unreachable.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the gateway is running and accessible from this device."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.visionUnsupported" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This gateway couldn't use the photo."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.visionUnsupported.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Enable photo support on your gateway, or keep chatting with text."
+          }
+        }
+      }
+    },
+    "Reply from your personal AI" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reply from your personal AI"
+          }
+        }
+      }
+    },
+    "request.error.decodingError" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read the server response: %@"
+          }
+        }
+      }
+    },
+    "request.error.invalidResponse" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Got an unexpected response from the server."
+          }
+        }
+      }
+    },
+    "request.error.invalidURL" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Invalid API endpoint URL"
+          }
+        }
+      }
+    },
+    "Resume" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Resume"
+          }
+        }
+      }
+    },
+    "Saved." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved."
+          }
+        }
+      }
+    },
+    "Search conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Search conversations"
+          }
+        }
+      }
+    },
+    "Send message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send message"
+          }
+        }
+      }
+    },
+    "Sent to iPhone. Your transcript will arrive when it reconnects." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sent to iPhone. Your transcript will arrive when it reconnects."
+          }
+        }
+      }
+    },
+    "Set up your personal AI on iPhone first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up your personal AI on iPhone first."
+          }
+        }
+      }
+    },
+    "settings.error.loadFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to load settings. Using defaults."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.sessionPolicy.alwaysContinue" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Always"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.sessionPolicy.alwaysNew" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Never"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.sessionPolicy.minutes15" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "If within 15 min"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.sessionPolicy.minutes30" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "If within 30 min"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.sessionPolicy.minutes60" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "If within 60 min"
+          }
+        }
+      }
+    },
+    "Starting…" : {
+
+    },
+    "Stop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stop"
+          }
+        }
+      }
+    },
+    "stt.error.appleSpeechLanguageUnsupported" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Apple Speech doesn't support this language on-device."
+          }
+        }
+      }
+    },
+    "stt.error.appleSpeechLanguageUnsupported.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Switch to a cloud provider in Settings to transcribe this language."
+          }
+        }
+      }
+    },
+    "stt.error.appleSpeechModelNotInstalled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Apple Speech model isn't downloaded yet."
+          }
+        }
+      }
+    },
+    "stt.error.appleSpeechModelNotInstalled.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Conduck and download the model for your language."
+          }
+        }
+      }
+    },
+    "stt.error.appleSpeechModelNotInstalled.recovery.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Switch to a cloud voice provider in Settings → Voice, or try a different language."
+          }
+        }
+      }
+    },
+    "stt.error.appleSpeechModelNotInstalled.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "On-device voice model isn't ready for this language yet."
+          }
+        }
+      }
+    },
+    "stt.error.authFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your STT API key was rejected. Open Conduck → Settings to update it."
+          }
+        }
+      }
+    },
+    "stt.error.authFailed.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Verify the key in your provider dashboard, then paste it again."
+          }
+        }
+      }
+    },
+    "stt.error.customCertMismatch" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your custom STT server's certificate fingerprint changed."
+          }
+        }
+      }
+    },
+    "stt.error.customCertMismatch.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings and update the pinned fingerprint, or remove the pin to use system trust."
+          }
+        }
+      }
+    },
+    "stt.error.customEndpointNotConfigured" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No custom STT endpoint is configured."
+          }
+        }
+      }
+    },
+    "stt.error.customEndpointNotConfigured.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → STT and add your custom endpoint's URL."
+          }
+        }
+      }
+    },
+    "stt.error.decodingFailure" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "STT provider returned an unexpected response format."
+          }
+        }
+      }
+    },
+    "stt.error.decodingFailure.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "If this persists, the provider may have changed its API."
+          }
+        }
+      }
+    },
+    "stt.error.missingKey" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No STT API key set. Open Conduck → Settings to add one."
+          }
+        }
+      }
+    },
+    "stt.error.missingKey.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → STT API Key to add one."
+          }
+        }
+      }
+    },
+    "stt.error.providerUnreachable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "STT provider is unreachable. Recording saved — open Conduck to retry."
+          }
+        }
+      }
+    },
+    "stt.error.providerUnreachable.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Should be back in a minute or two."
+          }
+        }
+      }
+    },
+    "stt.error.quotaExceeded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your STT provider quota is exhausted. Check your billing dashboard."
+          }
+        }
+      }
+    },
+    "stt.error.quotaExceeded.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Top up your provider account or wait for the next billing cycle."
+          }
+        }
+      }
+    },
+    "stt.error.serverError" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "STT provider is having issues on their end. Recording saved — open Conduck to retry."
+          }
+        }
+      }
+    },
+    "stt.error.serverError.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Should be back in a minute or two."
+          }
+        }
+      }
+    },
+    "stt.error.speechPermissionDenied" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Speech Recognition is turned off for Conduck."
+          }
+        }
+      }
+    },
+    "stt.error.speechPermissionDenied.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Allow it in Settings → Privacy & Security → Speech Recognition. Watch recordings transcribe on your iPhone — enable it there."
+          }
+        }
+      }
+    },
+    "stt.error.tooManyRequests" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "STT provider is rate-limiting requests. Try again in a moment."
+          }
+        }
+      }
+    },
+    "stt.error.tooManyRequests.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Should be back in a minute or two."
+          }
+        }
+      }
+    },
+    "stt.error.unknownHTTPStatus" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Unknown error (HTTP %lld)"
+          }
+        }
+      }
+    },
+    "Tap to Stop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap to Stop"
+          }
+        }
+      }
+    },
+    "Thinking…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Thinking…"
+          }
+        }
+      }
+    },
+    "This conversation is empty." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This conversation is empty."
+          }
+        }
+      }
+    },
+    "thread.speak.announce.paused" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Paused"
+          }
+        }
+      }
+    },
+    "thread.speak.announce.reading" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reading reply"
+          }
+        }
+      }
+    },
+    "thread.speak.announce.stopped" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stopped"
+          }
+        }
+      }
+    },
+    "thread.speak.fallbackVoice" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Built-in voice"
+          }
+        }
+      }
+    },
+    "thread.speak.fallbackVoice.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Spoken with the built-in voice"
+          }
+        }
+      }
+    },
+    "Transcribe" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcribe"
+          }
+        }
+      }
+    },
+    "Transcribing…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcribing…"
+          }
+        }
+      }
+    },
+    "Transcription complete." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcription complete."
+          }
+        }
+      }
+    },
+    "Try Again" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try Again"
+          }
+        }
+      }
+    },
+    "tts.error.contentBlocked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The voice provider's safety filter blocked this text. Using the built-in voice."
+          }
+        }
+      }
+    },
+    "tts.error.customCertMismatch" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your custom voice server's certificate fingerprint changed."
+          }
+        }
+      }
+    },
+    "tts.error.customEndpointNotConfigured" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No custom voice endpoint is configured."
+          }
+        }
+      }
+    },
+    "tts.error.emptyAudio" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The voice provider returned no audio. Using the built-in voice."
+          }
+        }
+      }
+    },
+    "tts.error.providerUnreachable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach the voice provider. Using the built-in voice."
+          }
+        }
+      }
+    },
+    "tts.error.rateLimited" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The voice provider is rate-limited or out of quota. Using the built-in voice."
+          }
+        }
+      }
+    },
+    "tts.error.synthesisFailed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't generate the spoken reply. Using the built-in voice."
+          }
+        }
+      }
+    },
+    "tts.error.unauthorized" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your API key isn't allowed to make spoken replies. Using the built-in voice."
+          }
+        }
+      }
+    },
+    "Turned off for Apple Watch. Enable it in iPhone Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Turned off for Apple Watch. Enable it in iPhone Settings."
+          }
+        }
+      }
+    },
+    "Waiting for iPhone to set up Conduck…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Waiting for iPhone to set up Conduck…"
+          }
+        }
+      }
+    },
+    "Watch" : {
+
+    },
+    "watch.attachment.location" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "On your iPhone, iPad or Mac"
+          }
+        }
+      }
+    },
+    "watch.attachment.missing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This file is no longer available."
+          }
+        }
+      }
+    },
+    "watch.attachment.oversized" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Too large to view on Apple Watch"
+          }
+        }
+      }
+    },
+    "watch.attachment.snapshot.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved copy from when this reply arrived"
+          }
+        }
+      }
+    },
+    "watch.attachment.untitled" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Attached file"
+          }
+        }
+      }
+    },
+    "watch.attachment.view.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "View attached file %@"
+          }
+        }
+      }
+    },
+    "watch.error.dismiss" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Dismiss"
+          }
+        }
+      }
+    },
+    "watch.thread.error.dismiss" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Dismiss error"
+          }
+        }
+      }
+    },
+    "Yesterday" : {
+
+    },
+    "Your first one or two interactions may need a moment to warm up. It settles after that." : {
+
+    }
+  },
+  "version" : "1.0"
+}

@@ -1,0 +1,66 @@
+// Conduck
+// STTBackgroundTaskMetadata.swift
+//
+// Codable envelope attached to `URLSessionTask.taskDescription` for the
+// background-upload path (Watch surface). Cross-launch survival: when the
+// app is killed mid-upload and rebooted via background-session
+// completion handler, the delegate can decode metadata from
+// `task.taskDescription` and recover both the audio file path (for
+// cleanup) and the provider ID (for status-map dispatch).
+//
+// JSON-encoded so paths containing `|` characters parse correctly (a
+// delimiter-based encoding would break on them).
+
+import Foundation
+
+/// Metadata persisted via `URLSessionTask.taskDescription` so a
+/// background URLSession delegate can recover provider context even
+/// after the app process is recycled.
+struct STTBackgroundTaskMetadata: Codable {
+    /// Absolute path to the source audio file (used for `removeItem`
+    /// cleanup in the delegate completion handler).
+    let audioPath: String
+
+    /// Provider ID (matches `STTProvider.id`). Decode via
+    /// `STTProvider.lookup(id:)` to recover the full provider record.
+    let providerID: String
+
+    /// Optional pinned SHA-256 leaf-cert fingerprint (lowercase hex) for the
+    /// BYO custom STT endpoint. Written at task-creation ONLY when the custom
+    /// provider is active AND the user configured a pin; recovered at
+    /// server-trust-challenge time by `BackgroundSTT`'s delegate so the shared
+    /// background session (which can't carry a per-request delegate) can
+    /// host-scope the pin to the custom server. Nil for the 6 frozen providers
+    /// (and for an unpinned custom endpoint) → default ATS validation.
+    /// Tolerant optional — an older `taskDescription` JSON that predates this
+    /// field decodes with `pinnedFingerprintHex == nil`. Never logged.
+    let pinnedFingerprintHex: String?
+
+    /// Explicit memberwise init with `pinnedFingerprintHex` defaulting to nil —
+    /// keeps the pre-Custom-STT call site (audioPath + providerID) compiling as
+    /// the field is additive. Coexists with the synthesized `Codable`
+    /// conformance (which decodes a missing key as nil for an `Optional`).
+    init(audioPath: String, providerID: String, pinnedFingerprintHex: String? = nil) {
+        self.audioPath = audioPath
+        self.providerID = providerID
+        self.pinnedFingerprintHex = pinnedFingerprintHex
+    }
+
+    /// JSON-encode + UTF-8 stringify for attachment to
+    /// `URLSessionTask.taskDescription`.
+    func encodedString() throws -> String {
+        let data = try JSONEncoder().encode(self)
+        guard let str = String(data: data, encoding: .utf8) else {
+            throw AppError.sttDecodingFailure
+        }
+        return str
+    }
+
+    /// Decode from the string previously written to `taskDescription`.
+    static func decode(_ s: String) throws -> STTBackgroundTaskMetadata {
+        guard let data = s.data(using: .utf8) else {
+            throw AppError.sttDecodingFailure
+        }
+        return try JSONDecoder().decode(STTBackgroundTaskMetadata.self, from: data)
+    }
+}

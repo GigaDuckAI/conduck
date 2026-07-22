@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "conduck-waving.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

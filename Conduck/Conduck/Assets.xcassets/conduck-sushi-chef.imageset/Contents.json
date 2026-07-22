@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "conduck-sushi-chef.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

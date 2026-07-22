@@ -1,0 +1,422 @@
+# Conduck — Project Structure
+
+Annotated tree — one terse role per file. Architecture detail lives in `spec.md`; this file answers "what is this file," not "how does it work."
+
+**Conduck** is a Swift/SwiftUI voice client for user-configured, OpenAI-compatible AI gateways (iOS · iPadOS · macOS Dock app + menu bar · watchOS · CarPlay). Build identity — bundle IDs, Keychain group, App Group, iCloud/KVS container — is variable-driven from `Conduck/Configs/Identity.xcconfig` (the `CONDUCK_*` vars), defaulting to the Community `com.example.Conduck` reverse-DNS namespace; a private, gitignored `Identity-Override.xcconfig` can substitute another identity without touching source. Build posture: `spec.md` Build-Time Posture.
+
+## Map
+
+Top-level layout only; full annotated tree below. Keep in sync when top-level entries change.
+
+```
+./                                    # repository root
+├── .gitignore
+├── .env.example                      # BYO STT-provider key template (paste-source; never consumed at build/test/run)
+├── README.md                         # Repo intro + build/run
+├── docs/
+│   ├── ai-context/                   # spec.md · project-structure.md
+│   └── qa/                           # QA-mode harness docs + test scenarios
+├── branding/                         # README.md + placeholders/ (neutral stand-in art, regenerable)
+├── scripts/                          # generate-placeholder-assets.py
+└── Conduck/                          # Xcode project container
+    ├── Conduck.xcodeproj/            # SPM deps (KeyboardShortcuts/FluidAudio/Textual); Watch membership exceptions
+    ├── Configs/                      # Identity.xcconfig (build-identity variables)
+    ├── Conduck/                      # iOS+iPadOS+macOS target source: Services/ (store · history assembler · STT · TTS · RemoteAgent · share inbox · relay · permissions) · Models/ · ViewModels/ · Views/ · Intents/ · MenuBar/ + ScreenCapture/ (macOS) · CarPlay/ · QA/ · Utilities/ · Resources/ · Assets.xcassets/
+    ├── ConduckShareExtension/        # iOS Share Extension appex → App-Group inbox
+    ├── ConduckShareExtensionMac/     # Native macOS Share Extension appex (same inbox + drainer)
+    ├── ConduckWatch Watch App/       # watchOS target (record→STT→converse machine + TTS + views)
+    ├── ConduckWatch/                 # Widget extension (RecordNoteControl; Approach-B dup files)
+    ├── ConduckTests/                 # XCTest suite, 0-failure green on iOS Sim (synchronized group — new *.swift auto-compile, no pbxproj edit; keychain cases XCTSkip/guard unsigned)
+    └── ConduckWatchTests/            # watchOS unit-test target (hosted by Watch app; scheme "ConduckWatchTests"; @testable import ConduckWatch_Watch_App) — Watch-only logic ConduckTests can't see: settings-apply contract + monotonic stale-guard + AppleRelayPendingQueue additive Codable + observability primitives (`WatchLog` format/redaction · `WatchRecordingState.phaseKind`) + `diagnostics-pull` reply shape (`WatchDiagnosticsReporterTests`, explicit file ref — not a synchronized group)
+```
+
+---
+
+## Full Tree
+
+```
+./                                                      # repository root
+├── .gitignore
+├── .env.example                                        # BYO STT-provider key template — a paste-source only; Conduck has NO backend, so this is never consumed at build/test/run (copy into the sim Settings ▸ API Key field per active STT preset)
+├── README.md                                           # Repo intro + build/run
+│
+├── docs/
+│   ├── ai-context/
+│   │   ├── spec.md                                     # Product spec incl. planned features (self-contained)
+│   │   └── project-structure.md                        # This file
+│   └── qa/                                             # QA-mode launch-arg harness docs (`qa-mode.md`) + test scenarios (`scenarios.md`)
+│
+├── branding/                                           # placeholder-asset staging area
+│   ├── README.md                                       # How the neutral placeholders map onto the Xcode catalogs
+│   └── placeholders/                                   # Neutral stand-ins for every branded set — identical `Contents.json`, filenames + pixel dimensions; generic chat-bubble art (no character, no letterforms); mirrors the catalog paths of `Conduck/Conduck`, `ConduckShareExtensionMac`, `ConduckWatch Watch App`
+│
+├── scripts/
+│   └── generate-placeholder-assets.py                  # Deterministic, re-runnable placeholder generator (Pillow); emits verbatim `Contents.json` + same-dimension neutral images into `branding/placeholders/`
+│
+└── Conduck/                                            # Xcode project container
+    ├── Conduck.xcodeproj/                              # SPM deps (KeyboardShortcuts/FluidAudio/Textual + transitive), Watch file-membership exceptions; scheme omits empty <TestPlans/> (breaks Xcode 26.5); schemes: Conduck · ConduckShareExtension · ConduckShareExtensionMac · ConduckWatch Watch App · ConduckWatchExtension · ConduckWatchTests
+    │
+    ├── Configs/
+    │   └── Identity.xcconfig                           # Build-identity source of truth: `CONDUCK_BUNDLE_ID_BASE`/`_IDENTITY_NAMESPACE`/`_GROUP_ID`/`_ICLOUD_CONTAINER_ID`/`_DISPLAY_NAME`/`_ENTITLEMENTS_VARIANT`/`_DEVELOPMENT_TEAM` + `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION`; Community defaults to the `com.example.Conduck` namespace; `#include?`s a gitignored `Identity-Override.xcconfig` to swap in a private identity
+    │
+    ├── Conduck/                                        # iOS + iPadOS + macOS target source
+    │   ├── ConduckApp.swift                            # @main App; iOS bg-task handlers (stt/converse/carplay) + `NotificationDelegate` + file-internal `NotificationPresentationDecider`; macOS AppDelegate adaptor
+    │   ├── RootView.swift                              # iOS onboarding gate via conditional rendering (NOT `.fullScreenCover`); sync-seeds in `init()`
+    │   ├── AppDelegate.swift                           # macOS `NSApplicationDelegate`; Dock-visibility/activation-policy; first-launch onboarding; eager MenuBar wiring
+    │   ├── ContentView.swift                           # iOS host: thread + composer + retry card + Watch-setup nudge + toolbar; iPad → `ConversationLibraryView`
+    │   ├── Info.plist                                  # Hand-authored scene manifest (incl. CarPlay); `UIBackgroundModes=[remote-notification]` (CloudKit push) — NO `audio`
+    │   ├── Conduck-Community.entitlements              # Main-app entitlements, Community variant (CarPlay OMITTED): KVS + App Groups + Keychain + audio-input + app-sandbox + network-client + user-selected-files + CloudKit; every identity string resolves from `$(CONDUCK_*)` (default `com.example.conduck`)
+    │   ├── Conduck-Official.entitlements               # Official variant — identical to Community + `com.apple.developer.carplay-voice-based-conversation`; the active file is selected by `CODE_SIGN_ENTITLEMENTS = Conduck/Conduck-$(CONDUCK_ENTITLEMENTS_VARIANT).entitlements`
+    │   ├── Localizable.xcstrings                       # 1501 keys, English-only, manual extraction
+    │   │
+    │   ├── Services/
+    │   │   ├── ActiveViewTracker.swift                 # `@MainActor enum`; on-screen conversation-ID set for banner suppression (iOS+macOS; Watch-excepted)
+    │   │   ├── AudioRecorder.swift                     # `AVAudioRecorder` state machine [cross-target]
+    │   │   ├── AudioCompressor.swift                   # Off-MainActor M4A/WAV compressor [cross-target]
+    │   │   ├── UserIdentityManager.swift               # Keychain UUID + iCloud KVS sync
+    │   │   ├── CloudSyncMonitor.swift                  # `@MainActor @Observable`; silent NSPCKC sync-health monitor (redacted `os_log` ring buffer, never PII; `nonisolated recentSyncEventLines()` for Diagnostics) + publishes `iCloudUnavailable` ONLY for user-fixable states (signed-out/restricted/storage-full); drives `ICloudUnavailableBanner`
+    │   │   ├── ConversationStore.swift                 # `actor` over `NSPersistentCloudKitContainer` in App Group (sync ENABLED; test seam `cloudKit:false`); CRUD + bound-ref routing + `cloneConversation` + attachments; `appendMessage(id:)` dedupe (share idempotency); `searchConversationIDs` (whole-history content search, predicate-only)
+    │   │   ├── ConversationHistoryAssembler.swift      # [cross-target incl. Watch] THE single history-assembly choke point for every converse surface (fetch → image-byte resolution → per-gateway `ImageHistoryPolicy` → `priorTurns`); sole production `priorTurns` caller [spec.md Request shaping]
+    │   │   ├── SharedInboxDrainer.swift                # `actor`; Share-Extension inbox drain; `drain()` + `drainAndResolve(envelopeID:)`; exactly-once + failure surfacing (`failWithTurn`/`failNoTurn`, delete-on-fail, no graveyard) + janitor; iOS+macOS [spec.md Share Extension]
+    │   │   ├── ShareInboxWatcher.swift                 # macOS-only `DispatchSource` vnode watch on the App-Group share inbox; wakes the inactive menu-bar app to drain a background share (Darwin notifications get dropped under App Nap → file-system watch instead)
+    │   │   ├── ShareTargetsSnapshotWriter.swift        # `actor`; atomically writes the App-Group `share-targets.json` both appex pickers read; `#if os(iOS)||os(macOS)`
+    │   │   ├── ShareTargetsSnapshotObserver.swift      # Drives snapshot regenerate on conversations/settings change + launch; started by iOS `ConduckApp.init` + macOS `AppDelegate`
+    │   │   ├── ImageProcessor.swift                    # `actor`; ImageIO downsize + EXIF/GPS strip + HEIC→JPEG + thumbnail; `#if !os(watchOS)`
+    │   │   ├── DataURIBuilder.swift                    # [cross-target incl. Watch] Pure enum; JPEG → `data:image/jpeg;base64,…`
+    │   │   ├── TextFileExtractor.swift                 # Pure enum; security-scoped text/code → UTF-8 + MIME; `#if !os(watchOS)`
+    │   │   ├── AttachmentDeliveryPlanner.swift          # Pure `Sendable` enum; SINGLE route source for text/code attachments (`DeliveryPlan{inline,serverCopy:.none/.preferred/.required}`) by extracted-UTF8 size + file-server presence + per-turn inline budget; consumed by iOS+macOS composers + `SharedInboxDrainer` (picker never decides semantics)
+    │   │   ├── AppleSpeechRelayCoordinator.swift       # `#if os(iOS)`; Watch-relay receiver; branches on `providerID` (Apple / custom-openai); `Wire` enum mirrors Watch (drift trap)
+    │   │   ├── RelayInboxMover.swift                   # Watch→iPhone Apple-speech relay: moves the `WCSessionFile` SYNCHRONOUSLY inside the `didReceive` delegate (WC deletes the Inbox file on return — an async copy lost the race → a good recording died as `audioInvalid`)
+    │   │   ├── RelayReplyCache.swift                   # Watch→iPhone relay idempotency ledger: remembers last N verdicts by requestID so a retried duplicate (same requestID) gets the prior verdict — never re-transcribed, never dropped
+    │   │   ├── PendingRetryGuard.swift                 # Pre-record arm/disarm; deferred notification on OS-killed `perform()`
+    │   │   ├── NotificationPermissions.swift           # Central idempotent notification-auth request (requests ONLY when `.notDetermined`); called at every foreground moment that can lead to a local reply/failure notification (headless asks have no other feedback channel)
+    │   │   ├── VoicePermissions.swift                  # Testable seam over the mic + Speech Recognition TCC prompts; Speech requested ONLY when active STT is Apple on-device (`transport==.inProcess`) AND `.notDetermined`; one call site for onboarding prime + record-start preflights
+    │   │   ├── CompletionFeedbackPlayer.swift          # AudioToolbox completion sound/haptic
+    │   │   ├── SettingsManager.swift                   # Actor singleton; App Groups + KVS dual-write + Keychain secrets; per-ref remote-agent + custom-gateway CRUD; per-uuid custom-voice-endpoint CRUD + migration; `activeSTTSnapshot()`/`activeTTSSnapshot()` (incl. customModel)
+    │   │   ├── PendingRetryStore.swift                 # Actor + App Groups file + UserDefaults metadata
+    │   │   ├── STTClient.swift                         # Actor; `transcribe` routes by `provider.transport`; custom endpoint gets per-call cert-pinning session (cloud → default ATS); backoff; never logs key
+    │   │   ├── STTClient+Background.swift              # `BackgroundSTT` `.stt` session; host-scopes cert pin to custom base-URL host only
+    │   │   ├── InAppAudioRecorder.swift                # `@MainActor @Observable`; composes recorder + compressor + STT
+    │   │   ├── PhoneSessionManager.swift               # `WCSessionDelegate`; debounced atomic STT + multi-gateway envelope broadcast to Watch (marker-tagged settings courier; `didFinish` delivery stamps + last-assembled envelope ts → App Group for Diagnostics)
+    │   │   ├── TTSClient.swift                          # Actor; backend-agnostic `synthesize(...)→Data`; transport dispatch; cloud = default ATS (no pin); ≤2 retries (429 honors `Retry-After` ≤15 s, >cap aborts); in-memory only
+    │   │   ├── ReplyLengthClassifier.swift             # Pure predicate: is an agent reply long/code-heavy enough to push from the macOS popover glance surface to the full window (content side; height side measured in-view)
+    │   │   └── ReplySanitizer.swift                     # Shared enum; `spoken(_:)` Markdown→TTS plaintext · `linkCollapsed(_:)` display-only link collapse (Watch bubbles + list previews) [cross-target]
+    │   │
+    │   ├── Services/TTS/                                # Cloud TTS engine + single speak boundary (iOS/macOS; Watch reimplements `WatchTTSClient`). `SpeakEngine`/`ThreadSpeaker` are CROSS-TARGET (also compiled into Watch)
+    │   │   ├── SpeakEngine.swift                        # [cross-target] Foundation-only: `SpeakState` + `SpeechActivity` + `@MainActor protocol SpeakEngine` (the seam `ThreadSpeaker` drives; `ReplyVoice` + `WatchReplySpeaker` conform) + `AutoSpeakMailbox` (shared Read-Aloud one-shot, 60s/15s freshness) + `WatchCaptureSource`/`WatchAutoSpeakVerdict`
+    │   │   ├── SpeechExclusivity.swift                  # [cross-target type, macOS-only wiring] the speech/mic exclusivity bus — weak party + mic-authority registries, `claim`/`claimForAutoSpeak` (spec Text-to-Speech → macOS speech exclusivity)
+    │   │   ├── ThreadSpeaker.swift                      # [cross-target] `@Observable @MainActor`; the UNIFIED per-message speak state machine (idle→loading→playing→paused, play/pause/resume toggle, supersede + stale-callback guards); `init(engine: SpeakEngine)`; drives the footer/inline Speak control on iOS/macOS AND Watch; watch dim-cut ownership (`systemDimPause` dim-edge proactive pause · `reconcileSystemPauseIfNeeded` raise fallback · 30 s `autoResumeIfSystemPaused`); covered by `ThreadSpeakerTests` + `ThreadSpeakerReconcileTests`
+    │   │   ├── ChatPlaybackSession.swift                # iOS-only audio-session owner for the in-app chat read-aloud path (per-bubble Speak + notification-open auto-speak); iOS-chat analog of `CarPlayAudioSession` — `ReplyVoice`/`SpeechPlayer` never set category/active, so chat TTS needs a session owner; `ThreadSpeaker` configures it around the speak
+    │   │   ├── TTSProvider.swift                        # `struct TTSProvider` registry; LOCKED archetype IDs; `lookup` synthesizes per-uuid `custom-openai-tts_<uuid>` (sets `sharedKeySTTPresetID=custom-openai_<uuid>`); `effectiveVoice`/`effectiveModel`/`effectiveSpeechURL` (composes ElevenLabs-voice + Gemini-model URL rewrites)
+    │   │   ├── TTSBodyFactory.swift                     # Static protocol + named statics; `OpenAISpeechBody` · `MistralSpeechBody` (`voice_id`) · `ElevenLabsTTSBody`
+    │   │   ├── TTSStatusMap.swift                       # `@Sendable (Int)→AppError?`; `.openAICompat`/`.elevenLabs`/`.never`; 36/37/38 mapping
+    │   │   ├── SpeechPlayer.swift                       # `@MainActor` (iOS/macOS); owns AVAudioPlayer (cloud mp3) + AVSpeechSynthesizer (Apple); one `fireCompletion`; never set category/active
+    │   │   ├── SpeechLanguageDetector.swift             # [cross-target] pure `NLLanguageRecognizer` content-language detector (script-conditioned confidence gate → region-qualified BCP-47 or nil) + `reconcile` (device-region on same-base match, zh script-choice wins); makes Apple synth speak a reply in ITS language not the device's (spec Text-to-Speech → Content-language-aware Apple voice)
+    │   │   ├── SpeechSegmenter.swift                    # [cross-target] pure reply→chunks splitter (NLTokenizer sentences + line starts; `joined() == input` guarantee); `SpeechSegmentationPolicy` `.standard`/`.wristConservative`/`.off` with small→plateau `tailRamp` (synth ≈ real time → tail 1 bounded by the head's runway; spec Text-to-Speech → Chunked cloud playback)
+    │   │   ├── SpeechChunkQueue.swift                   # [cross-target] the UNIFIED chunked-TTS pipeline (lookahead-2 fetch, strict in-order play, per-chunk `AVChunkPlayer` preroll, queue-wide pause/resume, exactly-once terminal, remaining-text Apple-fallback handoff); driven by `ReplyVoice` + `WatchReplySpeaker`
+    │   │   └── ReplyVoice.swift                         # `@MainActor` (iOS/macOS); SINGLE speak boundary + `SpeakEngine` conformer; `speak(...)` Apple|cloud→Apple-fallback, exactly-once completion; LONG cloud replies via `SpeechChunkQueue` (`chunkPolicy` seam — every surface incl. CarPlay runs `.standard`; `.off` = whole-blob escape hatch); 45 s first-audio watchdog hands a HUNG cloud leg to Apple (never-silent covers hangs); `cancel()` guards `Task.isCancelled`; `previewSample(...)` (never chunks)
+    │   │
+    │   ├── Services/STT/                               # Multi-provider STT abstraction [cross-target iOS+Watch]
+    │   │   ├── STTProvider.swift                       # `struct STTProvider` registry; 7 LOCKED archetype IDs; `lookup` synthesizes per-uuid `custom-openai_<uuid>` (sets `dynamicEndpointKey=stt.custom.url.<uuid>`; prefix provably disjoint); `effectiveModel`/`effectiveTranscribeURL`; custom probe `#if os(watchOS)`→`NoOpSTTProbe`
+    │   │   ├── CustomVoiceEndpoint.swift               # [cross-target] roster record `{id, name}` per named custom endpoint (per-uuid URL/key/cert/auth/model/voice in the slots); mirrors `CustomGateway`
+    │   │   ├── STTInProcessRunner.swift                # Static protocol for non-network providers; shape-only on Watch
+    │   │   ├── AppleSpeechRunner.swift                 # Actor wrapping iOS 26 `SpeechAnalyzer`; file-level `#if !os(watchOS)`; locale-fallback ladder; `transcribe(…)` reads persisted engine, `transcribe(…engine:)` overload for the Settings test
+    │   │   ├── AppleSpeechTester.swift                  # `@Observable` live "Try voice" test driver (record→transcribe→show); `#if !os(watchOS)`; models `InAppAudioRecorder`; never persists audio/transcript
+    │   │   ├── AppleModelInstaller.swift                # `#if !os(watchOS)`; engine-aware `isReady`/`install` over `AssetInventory`; powers the in-app mic self-heal + Settings active-engine status
+    │   │   ├── CloudSTTTester.swift                    # `@Observable` live "Record a test" driver for a CLOUD STT provider (cloud analog of `AppleSpeechTester`): record clip → transcribe via the provider being configured → show inline; never persists audio/transcript
+    │   │   ├── STTAuthScheme.swift                     # `enum { bearer; headerName; none }` + `apply(...)`
+    │   │   ├── STTJSONBodyFactory.swift                # Static protocol; named statics (stack-trace clarity)
+    │   │   ├── STTProbe.swift                          # Static protocol + `STTGETProbe` default; ElevenLabs/Qwen POST overrides; `NoOpSTTProbe`
+    │   │   ├── STTMultipartBuilder.swift               # `build()` + `writeBodyFile()`; field names via `STTMultipartFieldNames`
+    │   │   ├── STTResponseDecoder.swift                # `STTResponseShape` + `decode(_:shape:)`
+    │   │   ├── STTStatusMap.swift                      # `@Sendable (Int)->AppError?`; LOAD-BEARING 429 differentiator
+    │   │   ├── STTBackgroundTaskMetadata.swift         # Codable `{audioPath, providerID, pinnedFingerprintHex?}` in `task.taskDescription`
+    │   │   ├── STTBroadcastEnvelope.swift              # Codable `{presetID, apiKey?, customModel?, ttsProviderID?/ttsApiKey?/ttsVoice?/ttsCustomModel?, timestamp}`; omit-when-nil; tolerant decode; monotonic
+    │   │   ├── STTConnectionTestSuite.swift            # Staged custom-endpoint Test Connection (reachability/TLS → auth → real transcription → latency); `runForTesting(session:)` seam
+    │   │   └── Providers/                              # `GeminiSTTProvider` (defensive prompt) · `QwenSTTProvider` (DashScope shape) · `ElevenLabsSTTProvider` · `OpenRouterSTTProvider` (`openrouter-stt`; key cross-reusable with the OpenRouter gateway) · `CustomOpenAISTTProbe` (iOS/macOS-only)
+    │   │
+    │   ├── Services/RemoteAgent/                       # Phase 1 agent layer (iOS+macOS auto; 3 envelope types opted into Watch)
+    │   │   ├── RemoteAgentBackend.swift                # `enum { openclaw, hermes }` (raw values LOCKED into key suffixes); ports/displayName/statusMap
+    │   │   ├── RemoteAgentAuthScheme.swift              # [cross-target] `enum { bearer, none }` (raw `bearer`/`none`, default `.bearer` fail-closed); `apply(to:&request,token:)` = the single Authorization-header site (`.none` omits); keyless never inferred from a missing token
+    │   │   ├── StagedRemoteAgentToken.swift             # The gateway editor's token INTENT (`enum { stored, typed(String), reuseVoiceKey }`) — what Save/Test/cert-trust use as the bearer credential without a View ever holding a raw key; `.reuseVoiceKey` (OpenRouter) resolves the saved voice key COPY-wise, resolution ONLY inside `SettingsViewModel` (Keychain reads live there)
+    │   │   ├── RemoteAgentRef.swift                     # [cross-target] routing identity `enum { builtin(RemoteAgentBackend), custom(UUID) }`; `rawString` ↔ `init?`; `customPrefix="custom_"` LOCKED; Codable migration-free
+    │   │   ├── CustomGateway.swift                      # [cross-target] roster record `{id, name, model?, colorID?, monogram?}` (URL/token/cert in per-ref slots)
+    │   │   ├── RemoteAgentRefMetadata.swift             # [cross-target] display resolver + `RemoteAgentBadgePalette` (8-slot custom palette)
+    │   │   ├── PairingPayload.swift                     # Pure parser for `conduck-setup:v1:<b64 JSON>` pairing strings (typed errors; tolerant decode) [spec.md Gateway Setup & Pairing]
+    │   │   ├── PairingPayloadExport.swift               # Inverse emitter: re-emits `conduck-setup:v1` from stored config, byte-identical to the wizard (python-style `\uXXXX` escaping, fixed key order); fail-closed token, OpenRouter → `.notExportable` [spec.md Gateway Setup & Pairing]
+    │   │   ├── SharedInboxRouting.swift                 # Shared resolve-or-mint routing helper (override→pointer→validate-default-then-mint, Decision-B no-silent-reroute); adopted by `ConverseIntent` + `SharedInboxDrainer` (no rule drift); returns `{conversationID, snapshot, token, ref}`
+    │   │   ├── RemoteAgentBackendMetadata.swift        # UI display registry; `RemoteAgentBackendRegistry.all` (length-2, both backends)
+    │   │   ├── RemoteAgentBroadcastEnvelope.swift      # Codable single + `RemoteAgentMultiBroadcastEnvelope`; decode requires only non-empty ref (customs round-trip); legacy single kept 1 release
+    │   │   ├── RemoteAgentStatusMap.swift              # `@Sendable (Int)->AppError?`; single `.unified` map (no 423)
+    │   │   ├── RemoteAgentTrustEvaluator.swift         # `URLSessionDelegate`; SPKI cert pinning (RSA + EC); captures presented leaf (TOFU)
+    │   │   ├── RemoteAgentClient.swift                 # `actor`; assembles client-owned `messages[]` → POST `/v1/chat/completions`; no per-backend dispatch
+    │   │   ├── RemoteAgentClient+TestConnection.swift  # `testConnection` GET `/v1/models`; ephemeral 15s session; `.ok`/`.untrustedCert`
+    │   │   ├── BackgroundRemoteAgent.swift             # Background `.converse` session; uploads body, appends reply, posts deep-link; `FileTransferOutputDetector` (reply→server-file download chips)
+    │   │   ├── RemoteAgentBackgroundMetadata.swift     # Codable `{bodyPath, conversationID, backendRawValue, shareEnvelopeID?}` recovery envelope; `BackgroundRemoteAgent.hasLiveConverseTask(shareEnvelopeID:)` drives the share converse reconcile
+    │   │   ├── FileServerClient.swift                  # File transfer: pure PUT/GET/PROBE(GET-never-HEAD)/DELETE/PROPFIND builders + parsers + staged Test Connection; `probeReachability` (non-mutating reach/auth 404-probe for Diagnostics); `deterministicStoredKey` (share per-attachment idempotent key)
+    │   │   ├── BackgroundFileTransfer.swift            # File transfer: `.filetransfer` bg session (upload/download/probe/delete); cert-pinned; deletes the body URL on enqueue (caller passes a copy)
+    │   │   └── FileTransferBackgroundMetadata.swift    # File transfer: Codable `{storedKey, refSuffix, direction, shareEnvelopeID?, sequence?}` recovery envelope; `hasLiveUploadTask(shareEnvelopeID:sequence:)` drives the share upload reconcile
+    │   │
+    │   ├── QA/                                         # #if DEBUG launch-arg-gated QA harness: `DebugFlags` · `QAMode` (in-memory gateway override + conversation seeding) · `QABanner` (docs at `docs/qa/`)
+    │   │
+    │   ├── Utilities/
+    │   │   ├── Constants.swift                         # App IDs / Keychain / KVS keys / audio limits / session IDs / timeouts / ports / VAD presets / storage keys; `identityNamespace` reads the build-identity layer (`CONDUCK_IDENTITY_NAMESPACE`, default `com.example.conduck`)
+    │   │   ├── DeviceCapabilities.swift                # Platform/device detection
+    │   │   ├── Extensions.swift                        # SwiftUI/Foundation extensions; `appendingTranscript` (dictation→draft, append-never-replace)
+    │   │   ├── AccessibilityAnnouncer.swift            # VoiceOver `Announcement` helper (cross-platform; no-op when VO off)
+    │   │   ├── Pasteboard.swift                        # `enum Pasteboard { static func copy(_:) }`; UIKit/AppKit clipboard split (Copy Diagnostics)
+    │   │   ├── FeatureFlags.swift                      # `notesEnabled=false` (legacy) · `remoteAgentHermesEnabled=true`
+    │   │   ├── ImageFormatSniffer.swift                # Pure magic-number → `(ext, mime)` sniffer (JPEG/PNG/HEIC/GIF/WEBP/TIFF-DNG); names the original-bytes file-transfer upload + wire "saved as"
+    │   │   ├── LanguageList.swift                      # 70+ language enum
+    │   │   └── MascotCatalog.swift                     # `MascotCatalog.emptyStatePoses` (36 poses, mixed aspect) + `MascotShuffleBag` device-local UserDefaults deck → empty-state mascot rotation
+    │   │
+    │   ├── Models/
+    │   │   ├── AppError.swift                          # Error taxonomy (`stt*`/audio/`remoteAgent*` incl. vision 32/33, custom 34/35); `CustomNSError` int-code round-trip; code 27 reserved gap
+    │   │   ├── Diagnostics/                             # `DiagnosticModels.swift` (value types: `DiagnosticCheck`/`Category` incl. `.capability`/`Tier`/`Status`/`Role`, `VoiceSetupState` + `FileLaneState` (per-gateway file display + derived `.badge`/`needsAttention`) + `GatewayDisplayEntry` (per-gateway UI-only display name/order, all outside `checks`), `DiagnosticsFocus` — the failable `{code,ref}` Troubleshoot filter, `WatchHealthWireReply`/`WatchHealthState`/`WatchHealthQueryOutcome`/`WatchSettingsFreshness` — the tolerant `diagnostics-pull` decode + display state, outside `checks`) + `HostReachabilityClass.swift` (pure host→locality enum for the Local-Network inference hint) + `DiagnosticsExplainer.swift` (pure: `AppError`-code→cause/fix via taxonomy copy, provider archetype, report slug) [spec.md Local Diagnostics]
+    │   │   ├── STTProviderMetadata.swift               # UI display registry; Apple `isOnDevice=true`
+    │   │   ├── AppleOnDeviceEngineMode.swift           # `enum { dictation, highQuality }` — which engine the single `apple-on-device` provider runs (one provider, two engines; stored mode, NOT a 2nd registry entry — keeps the locked 7-provider map + Keychain account map intact); `.dictation` default (no download, no A16 floor)
+    │   │   ├── VoiceVendor.swift                        # `VoiceVendor`/`VoiceVendorRegistry` UI-grouping over STT+TTS; UI-only `id`; dynamic `vendors(customEndpoints:)` = built-ins + one per `CustomVoiceEndpoint`; roster-aware reverse lookups; `sharedKeychainAccount`→STT slot
+    │   │   ├── ConverseRequest.swift                   # `/v1/chat/completions` codables; `Content` (.text/.parts) + omit-when-nil `model?`; `priorTurns(...)` builds history with inline/reference/expire image disposition + honesty-floor splices (an image turn never flattens to bare text); sole caller `ConversationHistoryAssembler` [spec.md Request shaping + Image history replay]
+    │   │   ├── ImageHistoryPolicy.swift                # [cross-target incl. Watch] Per-gateway image-replay policy enum (`recent`(3)/`extended`(10)/`all`); `inlineWindow`/`orphanInlineWindow` (nil = unlimited / never-expire); stored `imageHistory.policy.<refSuffix>`, legacy keep-inline bool migrates `true→.all` [spec.md Image history replay]
+    │   │   ├── ConversationRecord.swift                # Sendable snapshot of `Conversation` + defensive init
+    │   │   ├── ConversationSearchFilter.swift          # [cross-target] Pure-Foundation Tier-1 list-search helper (`title`+`titleSnippet` `[cd]` match); pairs with store `searchConversationIDs` Tier-2 predicate
+    │   │   ├── MessageRecord.swift                     # Sendable snapshot of `Message` (+ `status` + `attachments`)
+    │   │   ├── AttachmentRecord.swift                  # Sendable snapshot of `Attachment` (metadata + thumbnail + `extractedText`; NEVER full bytes); Watch member
+    │   │   ├── MenuBarInputMode.swift                  # `enum { voice, text }` macOS popover input leg; raw values storage-locked; device-local key [spec.md Per-Surface → macOS → Menu-bar input mode]
+    │   │   ├── OnLaunchMode.swift                      # `enum { startNewConversation, resumeLastConversation }`; iOS/iPadOS/macOS-only (Watch-excepted)
+    │   │   ├── SessionContinuationPolicy.swift         # `enum { alwaysNew, minutes15/30/60, alwaysContinue }` + `ttlSeconds?`; Watch member
+    │   │   ├── SharedInboxManifest.swift               # Share-Extension on-disk envelope contract (appex writes, drainer reads); dependency-free; verbatim-mirrored into both appexes — keep in sync [spec.md Share Extension]
+    │   │   ├── ShareTargetsSnapshot.swift              # App-Group JSON the appex "Send to" picker reads; NOT Core Data (appex stays thin); verbatim-mirrored into both appexes — keep in sync
+    │   │   └── Conversations.xcdatamodeld              # CloudKit-compatible model (current `Conversations 6.xcdatamodel`; additive-only versions — TestFlight/devices hold older stores); `Conversation`→`Message`→`Attachment` cascades, all attrs optional; `Message.outputScanDone` (retro output-scan) · `Attachment.isServerReference`/`storedKey` (file transfer) · `Attachment.previewData`/`previewKind` (wrist preview snapshot)
+    │   │
+    │   ├── ViewModels/
+    │   │   ├── ConversationListViewModel.swift        # `@Observable @MainActor` + `ObserverBox`; reload/delete/deleteAll
+    │   │   ├── ConversationDetailViewModel.swift      # `@Observable @MainActor`; thread + in-flight; `sendUserTurn` (iOS bg / macOS fg) + `cancelInFlight` + `suppressReplyBanner` seam + `setSendError`/`sendErrorCode` (banner Troubleshoot deep-link)
+    │   │   ├── DiagnosticsRunner.swift                 # `@MainActor @Observable`; tiered health-check orchestrator (auto-reads local-only → explicit "Test everything" = sweep incl. the Watch health pull + paid/mutating tests, `isBusy`-gated) + `WatchHealthTransport` seam + silent-failure rows (camera/share-inbox/pending-retry/storage/partial-gateway) + `copyBlock()` allowlist [spec.md Local Diagnostics]
+    │   │   ├── SettingsViewModel.swift                 # `@Observable @MainActor`; per-ref remote-agent dicts + custom-gateway cache + `personalAIRows` + model discovery + TOFU; per-preset STT + session-policy
+    │   │   ├── SettingsViewModel+TTS.swift             # TTS state: active provider/voice + per-vendor TTS rows + "set active" key-gate + sample-preview; capability-first home derivations (`VoiceDirection`/`directionOptions`/`credentialState`/active-vendor short names)
+    │   │   ├── SettingsViewModel+PairingImport.swift   # Pairing-import lifecycle: plan (ready/overwrite/blocked) → execute (persist-only via `saveRemoteAgent`; 3-state `PairingImportOutcome`) → gateway test; default-bootstrap rule; transport hint
+    │   │   └── SettingsViewModel+PairingExport.swift   # Pairing-export lifecycle: prepare code (typed failures mapped to copy) + non-mutating live preflight (Test-Connection probe; soft-warns, never blocks reveal)
+    │   │
+    │   ├── Intents/
+    │   │   ├── AppShortcuts.swift                      # `ConduckShortcuts`; exposes `ConverseIntent` + `CheckNetworkIntent`
+    │   │   ├── ConverseIntent.swift                    # Headless Shortcut intent: foreground STT → resolve/mint conversation → background `.converse` → reply append + deep-link
+    │   │   └── CheckNetworkIntent.swift                # `NWPathMonitor` probe; first step in bundled Shortcut
+    │   │
+    │   ├── Views/
+    │   │   ├── GatewayBadge.swift                      # Shared gateway badge (colored circle + monogram via `RemoteAgentRefMetadata`/`RemoteAgentBadgePalette`); `#if os(iOS)` `ImageRenderer`→`UIImage` for CarPlay rows; overview surfaces only
+    │   │   ├── SettingsView.swift                      # iPhone (+ compact-width-iPad fallback) master-detail root: HEADERLESS summary rows → sub-screens (General · Personal AI · Voice · Diagnostics) then Setup Guide · Support (Startup + Quick Captures live in `GeneralSettingsView`; language hint on the Voice screen)
+    │   │   ├── Settings/IpadSettingsView.swift         # iPad full-screen `NavigationSplitView` (`.fullScreenCover`, regular-width only): sidebar General·Personal AI·Voice·Diagnostics·About (macOS parity) + detail REUSING the iOS sub-screens (each own `NavigationStack`); owns the persistent `DiagnosticsRunner`; dirty-editor discard veto
+    │   │   ├── Settings/GeneralSettingsView.swift      # iOS General sub-screen (pushed from root; mirrors `MacGeneralCategory`): Startup (On launch) + Quick Captures (continuation policy) pickers
+    │   │   ├── Settings/MacSettingsView.swift          # macOS full-window mode swap (replaces the conversation split; NOT a sheet, NOT NavigationSplitView): `HStack` category sidebar + detail `switch`; General default; owns the persistent `DiagnosticsRunner`
+    │   │   ├── Settings/MacSettingsSubScreenChrome.swift # `ViewModifier`; canonical chrome for EVERY macOS Settings sub-screen push (choosers, providers library, per-vendor detail — non-editor screens)
+    │   │   ├── Settings/MacPersonalAICategory.swift    # macOS Personal AI `NavigationStack` (mirrors iOS connection-manager): always-populated (gated on `hasLoadedRemoteAgentState`): "New chats use" + Connect section + capability groups + Add-custom → per-ref config + share-recovery; presents `GuidedGatewaySetupView` via `.sheet`
+    │   │   ├── Settings/MacVoiceCategory.swift         # macOS Voice `NavigationStack` (mirrors iOS): Voice Setup (STT+TTS selectors + Providers & Keys) · Spoken Replies; library → `MacVoiceProvidersList` → `MacVoiceVendorDetail` (PURE-CONFIG per vendor)
+    │   │   ├── Settings/MacGeneralCategory.swift       # macOS General: Startup + Quick Captures + Launch-at-Login + Show-in-Dock + Menu Bar Input + blue "How to Use" affordance (→ `MenuBarGuideView` sheet) + `KeyboardShortcuts.Recorder` (global hotkeys ⌘⇧1/⌘⇧2)
+    │   │   ├── Settings/DiagnosticsView.swift          # Shared Diagnostics screen: `DiagnosticsView` (Form + nav chrome — iOS push / iPad detail / banner sheet) + `DiagnosticsContent` (sections; owns or adopts a `DiagnosticsRunner`) [spec.md Local Diagnostics]
+    │   │   ├── Settings/DiagnosticCheckRow.swift        # One status-glyph + title + plain-English detail row (mirrors `STTTestSuiteResultView.stageRow`); `.failed(code)` caption = explainer fix
+    │   │   ├── Settings/MacDiagnosticsCategory.swift    # macOS Diagnostics shell `ScrollView { Form { DiagnosticsContent(runner:) } }`; runner injected from `MacSettingsView` so it survives a sidebar switch (no flicker)
+    │   │   ├── Settings/TroubleshootButton.swift        # Reusable "Troubleshoot" peek-sheet (stethoscope → focused `DiagnosticsView` sheet) for in-scene-graph error surfaces; renders IFF a non-nil `DiagnosticsFocus` [spec.md Local Diagnostics]
+    │   │   ├── Settings/MenuBarGuideView.swift          # macOS "How to Use" guide sheet (⌘⇧1 voice+text · ⌘⇧2 Screenshot & Ask · Esc); reuses onboarding shortcut card, opened from `MacGeneralCategory` Menu Bar section
+    │   │   ├── Settings/MacAboutCategory.swift         # macOS About: version + feedback + Privacy/Terms
+    │   │   ├── Settings/SettingsStatusMark.swift       # Shared DISCRETE row status: green `checkmark` when configured (+ optional tertiary "Default" caption), nothing when not-set
+    │   │   ├── Settings/SettingsSharedComponents.swift # Feedback mailto helpers + macOS disclosure-tap fix (`tappableDisclosureLabel`, used by STT/gateway/model disclosures) + hi-res app-icon (iOS + macOS)
+    │   │   ├── Settings/BufferedEditorChrome.swift      # Shared buffer-until-Save editor chrome: STABLE top-bar Cancel+Save from mount (NOT `.cancellationAction` — bottom-docks on a macOS sheet) + Discard alert + `.onDisappear` revert; Delete inline
+    │   │   ├── Settings/ProviderRow.swift              # `ProviderRowState` + shared `ProviderConfigBody` w/ `Mode` (`.access` key-once · `.capabilitySTT` Test+model, NO activation row · `.full` legacy); Apple model-lifecycle (no built-in full-test — custom-only)
+    │   │   ├── Settings/PersonalAISettingsView.swift   # iOS Personal AI = connection manager: always-populated connection manager (gated on `hasLoadedRemoteAgentState`, no separate empty screen): "New chats use" → `DefaultGatewayPicker` + permanent Connect section + capability groups (Full agent / Hosted model / Custom) + Add-custom (cap-disabled) + share-recovery; presents `GuidedGatewaySetupView` via `.fullScreenCover` [Startup/Quick Captures live in `GeneralSettingsView`]
+    │   │   ├── Settings/PersonalAIConnectSection.swift  # The permanent Connect section's two rows (setup-code → `PairingImportSheet` + Guided setup → `GuidedGatewaySetupView`); parent passes the platform pairing label/icon
+    │   │   ├── Settings/GatewayGroupCopy.swift          # Single source of truth for the Personal AI section header/footer copy (`LocalizedStringResource` constants)
+    │   │   ├── Settings/GatewayFieldTips.swift          # Single source of truth for the gateway-editor ⓘ tooltip copy (title + body + a11y label per field); mirrors `GatewayGroupCopy`
+    │   │   ├── Settings/InfoTipButton.swift             # The ⓘ "what is this?" affordance — the app's ONLY `.popover` (+ macOS `.help()` hover); forces `.presentationCompactAdaptation(.popover)` except at accessibility Dynamic Type sizes, where it adapts to a sheet
+    │   │   ├── Settings/GatewayCredentialHelpSheet.swift # "Where do I find these?" — the PROVENANCE answer for a hand-configured self-hosted gateway, rendered from `RemoteAgentBackendMetadata.credentialSource` (config path, token key, port, health route, lane caveats) [spec.md Settings & Storage]
+    │   │   ├── Settings/CustomGatewayHelpSheet.swift    # "What do I enter?" — the custom lane's EXPLANATION counterpart (customs have no `credentialSource` to answer "where do I FIND"); FIRST-PARTY facts only (URL contract, where auth lives) split by CURRENT CAPABILITY (already OpenAI-compatible vs not-a-server-yet → shares `GatewayAdapterBriefView.clipboardBrief` + `Constants.{adapterBuildGuideURL,adapterContractURL}`), NEVER per-framework recipes (drift); framework names are recognition examples only, Test Connection is the authority
+    │   │   ├── Settings/GatewaySetupForkView.swift      # Guided-setup fork: create a fresh setup code (primary) vs use an existing one — the two guided branches ONLY, no manual-entry link; carries no desktop note (the heads-up step is next)
+    │   │   ├── Settings/GatewayHeadsUpView.swift        # iOS/iPadOS-only heads-up step after the fork (macOS skips to readiness): commands ahead, easier from a computer — lane-correct `Constants.setupCommandPageURLDisplay(generic:)` as a display-only mono chip, never a tappable Link; `conduck-waving` mascot
+    │   │   ├── Settings/GatewaySetupLane.swift          # `enum`; which self-hosted lane the guided flow walks (shared sub-steps fork→readiness→helper→commands→success; differ only in copy + the `conduck-connect` command variant `--generic` for custom); OpenRouter is NOT a lane. Also `GuidedGatewayPresentation` (Identifiable: destination + presence as ONE value) + `GuidedGatewayHostState` (window-root host driver: `present(initialPath:)`/`dismiss()`; `isPresented` read-only — iOS/iPadOS bind `.fullScreenCover(item:)`, macOS `if let`s the overlay)
+    │   │   ├── Settings/GatewayReadinessView.swift      # Guided readiness beat between the lane fork and the helper (the helper CONNECTS to a gateway, does not install one); custom lane adds the `onAdapterEscape` secondary into the adapter step
+    │   │   ├── Settings/GatewayAdapterBriefView.swift   # Custom-lane escape hatch off readiness ("I built my own AI — it's not a server yet"): keep the self-built agent, copy the adapter-v1 brief (`clipboardBrief`, content-lock-tested; delegates to the hosted build brief, stops before exposure/pairing) for the AI coding tool that built it (guide: `Constants.adapterBuildGuideURL` · contract: `Constants.adapterContractURL`); continue → helper
+    │   │   ├── Settings/GatewayHelperTrustView.swift    # Guided step priming the `conduck-connect` helper + trust model, then `proceed`
+    │   │   ├── Settings/GatewayCommandsView.swift       # Guided step between the chooser and scan/paste: "run this on your server"; command block leads on every platform (the desktop pointer lives on the heads-up step)
+    │   │   ├── Settings/GatewayGuidedConnectContent.swift # Chrome-neutral "Guided setup" body reused inside the per-gateway editor (`RemoteAgentConfigBody`) — expanded content of its collapsed guided disclosure
+    │   │   ├── Settings/GatewaySetupSuccessView.swift   # Final guided-setup confirmation after a `conduck-connect` setup code is imported
+    │   │   ├── Settings/GatewayPrimerStepView.swift     # Step-0 first-run orientation ("Connect the AI you choose"); `conduck-card-tower` mascot + 3 ranked exits (filled "Choose how to connect"→chooser · bordered "Set up manually"→`onPrimerManual`/Personal AI list · `Link` "Read the full setup guide"→`setupGuideURL`, no dismiss); shown only when `showPrimer` [spec.md Onboarding]
+    │   │   ├── Settings/GuidedGatewaySetupView.swift    # Re-runnable guided-setup sheet (Settings → Personal AI); LANE-aware `Step` machine over `GatewaySetupLane{.fullAgent,.custom}` (primer→chooser→fork→headsUp (iOS/iPadOS only)→readiness[→adapter]→helper→commands→success, + hostedModel/Edit); step-0 `primer` gated by caller-resolved `showPrimer`; pure `initialStep(initialPath:showPrimer:)`; LIVE settings VM; required `onPrimerManual` list bypass (the flow's ONLY manual escape); `customLaneAvailable` hides Custom at the cap [spec.md Onboarding]
+    │   │   ├── Settings/ConduckConnectCommandBlock.swift # Shared "run conduck-connect on your server" block: monospaced command (`Constants.conduckConnectSetupCommand`) + Copy + "Read it on GitHub first" link; used by the unconfigured-editor hint (onboarding renders its own copy)
+    │   │   ├── Settings/RemoteAgentDetailView.swift     # iOS per-ref gateway config (3rd level); hosts `RemoteAgentConfigBody`
+    │   │   ├── Settings/RemoteAgentConfigBody.swift     # Cross-platform per-ref gateway editor — ONE capability-driven `editorSections` template from the `RemoteAgentBackendMetadata` descriptor (IDENTICAL empty/filled); PURE CONFIG (Save+Cancel in chrome); guided-setup + Connection + Model + File-transfer nav row (→ `GatewayFileTransferPage`, saved-only) + Advanced; secret via `SecretEntrySheet` staged as a `StagedRemoteAgentToken`; Server-certificate row → `CertificateTrustSheet`; customs add Name/Model/badge [spec.md Settings & Storage]
+    │   │   ├── Settings/SecretEntrySheet.swift          # Focused tap-in sheet for ONE secret (gateway bearer token / custom-endpoint API key); the native `SecureField` lives HERE (macOS-SecureField-recursion-safe entry for `RemoteAgentConfigBody`/`CustomSTTConfigBody`)
+    │   │   ├── Settings/CertificateTrustSheet.swift     # The ONE place certificate trust is decided (`variant .gateway`/`.fileServer`) — the "Server certificate" row shows plain-language Automatic/Pinned/Approval-needed, all jargon (fingerprint, SPKI SHA-256) quarantined here; STAGING-ONLY (writes the caller's buffer, marks dirty, retracts verdict); `.fileServer` has no TOFU approval card (the file test never captures a cert)
+    │   │   ├── Settings/OpenRouterKeyReuseCallout.swift  # Inline callout to reuse an existing OpenRouter API key across the hosted-model GATEWAY ⇄ the VOICE provider (one-tap copy, not a live link)
+    │   │   ├── Settings/DefaultGatewayPicker.swift      # Shared "Default for new chats" selector ROW + pushed CHOOSER: configured→set-default+pop · unconfigured→"Set up…" deep-link; optional "Follow iPhone" row (Watch reuse); honest "for new chats" label (routing stays per-conversation)
+    │   │   ├── Settings/FileTransferSetupGuideView.swift # Shared file-transfer BUFFERED EDITOR `FileTransferSetupContent` under `bufferedEditorChrome` (Test Connection = draft probe, no persist; trailing Save = single commit carrying a signature-matching verdict into availability; Cancel/back discard-guards URL+pin edits; credential generate/regenerate stays instant-commit, hidden at `.ready`) + a thin sheet wrapper `FileTransferSetupGuideView` (`context: .composer`; away-from-server hint + `.interactiveDismissDisabled` while dirty + auto-dismiss on ready-AND-clean) presented by the composer `.needsSetup` tile; the gateway editor pushes the SAME content via `GatewayFileTransferPage` [spec.md Settings & Storage]
+    │   │   ├── Settings/GatewayFileTransferPage.swift    # PUSHED file-transfer destination (editor nav row → here; saved gateway ONLY, so never needs a save-first state) hosting `FileTransferSetupContent` (which brings its own Cancel/title/Save chrome + minted-credential drop); adds only the macOS content rail; carries the `GatewayFileLaneStatus` display extension (`shortLabel`/`meaning`/`tint`) that the editor nav-row badge AND this page's status both read (can't drift); hidden for `.unsupported` (OpenRouter)
+    │   │   ├── Settings/FileTransferStageChecklist.swift # Shared dumb 4-stage (Reachability/Auth/Write/Read) test-result checklist; rendered by BOTH `GatewayFileTransferPage` and the composer sheet
+    │   │   ├── Settings/PairingExportSheet.swift        # Shared iOS+macOS "Show Gateway Setup Code" reveal sheet: device-owner-auth step-up → soft preflight → QR (CIFilter) + gated paste string; auto-blank ~60 s/background/capture; `.privacySensitive` [spec.md Gateway Setup & Pairing]
+    │   │   ├── Settings/PairingImportSheet.swift        # Shared iOS+macOS setup-code import sheet (scan/paste → overwrite alert → staged checklist w/ TOFU trust-retry); `onImported: (RemoteAgentRef)->Void` fires on EVERY successful save [spec.md Gateway Setup & Pairing]
+    │   │   ├── Settings/PairingScannerView.swift        # VisionKit QR viewport (whole-file `#if os(iOS) && canImport(VisionKit)`); one-shot latch + re-arm via `.id(generation)`
+    │   │   ├── Settings/VoiceProviderListView.swift    # iOS Voice home: Voice Setup (STT+TTS selectors + Providers & Keys library) · Spoken Replies; chooser `VoiceActiveProviderPicker` (hosts the Language hint); scoped vendor destination
+    │   │   ├── Settings/VoiceProviderDetailView.swift  # iOS per-vendor PURE CONFIG (no activation rows): cloud → Provider Access + STT + TTS (symmetric); Apple on-device → `AppleEngineModeSection` + `AppleSpeechTestSection` + TTS; custom → `CustomSTTConfigBody`
+    │   │   ├── Settings/CloudSTTTestSection.swift      # The "Record a test" surface for a cloud STT provider, injected into the Speech-to-Text section; hosts `CloudSTTTester` (real-voice audition vs the cheap key-check in Provider Access)
+    │   │   ├── Settings/AppleEngineModeSection.swift    # On-device Apple "Speech Recognition" section: two engine option rows (Standard / High quality) + INLINE high-quality per-language download lifecycle (no sheet); `#if !os(watchOS)`; commit-after-install via `selectHighQualityEngine`
+    │   │   ├── Settings/AppleSpeechTestSection.swift    # On-device Apple "Try voice" live test UI (record→transcribe); binds `SettingsViewModel.appleSpeechTester`; `#if !os(watchOS)`
+    │   │   ├── Settings/VoiceDirectionSelectorRow.swift # Shared STT/TTS selector row (glyph + capability + active-vendor name + chevron)
+    │   │   ├── Settings/VoiceActiveProviderPicker.swift # Shared per-direction chooser — THE activation surface: activate a configured/Apple vendor · "Set up…" deep-link an unconfigured one (never silent-activate); the `.stt` chooser also hosts the global Language hint
+    │   │   ├── Settings/CustomSTTConfigBody.swift       # Cross-platform endpoint-scoped custom editor (`uuid:` + required Name): PURE CONFIG — Connection (URL/auth/key) + STT (staged-suite Test) + TTS (peer section) + Delete; https-only
+    │   │   ├── Settings/AdvancedModelDisclosure.swift   # Shared STT+TTS "Advanced › Use a different model" disclosure (per-provider model-override field; withheld for Apple TTS; TTS-domain helper copy) + OPTIONAL voice sub-field (nil-defaulted voice params → STT renders model-only, cloud TTS renders voice-above-model)
+    │   │   ├── Settings/VoiceReliabilityDisclosure.swift # Shared iOS+macOS collapsed "About reliability" disclosure closing the Providers & Keys library; evergreen copy (why chunked fetches → latency, the rate-limit symptom, the usage-tier fix, fallback reassurance)
+    │   │   ├── Settings/RecommendedModelLine.swift      # Shared "Recommended model · <mono model>" caption (extracted from `ProviderConfigBody`) so STT + TTS render it identically; reuses `settings.stt.provider.recommendedModel`
+    │   │   ├── Settings/TTSCapabilityBody.swift         # Shared (iOS+macOS) TTS section body mirroring `ProviderConfigBody.capabilitySTT`: RecommendedModelLine (cloud) → "Speak a sample" → error-only status → Advanced(voice+model); Apple = Speak-only (no model/voice); stateless (callback-only)
+    │   │   ├── Settings/STTTestSuiteResultView.swift    # Staged Test-Connection checklist UI (per-stage glyph + transcript + latency + TOFU)
+    │   │   ├── Settings/EnableNotificationsStepView.swift # Setup-Guide step priming + requesting notification auth (mirrors `EnableVoiceStepView`; `onContinue` finishes regardless of grant — never hard-blocks)
+    │   │   ├── Settings/WatchSettingsView.swift        # iOS-only Watch settings sub-screen (Settings▸Setup▸Apple Watch): Apple-Watch-default-gateway picker (Follow iPhone | specific) + "Speak replies aloud" toggle (`watch.readRepliesAloud`) + "Set up Apple Watch" → guide
+    │   │   ├── Settings/WatchSetupGuideView.swift      # iOS-only 3-step Watch setup guide; `.fullScreenCover`
+    │   │   ├── Settings/SetupGuideView.swift           # iOS-only re-runnable 2-step Setup Guide (Shortcut → Action Button)
+    │   │   ├── Settings/ActionButtonStepView.swift     # Capability-aware trigger binding (Action Button / Back Tap / Control Center / Keyboard)
+    │   │   ├── Conversation/
+    │   │   │   ├── ConversationThreadView.swift       # Chat thread: bubbles + attachment grid/chips + send-state + in-flight UX + gateway banner + lock/clone sheet (`vm.showingGatewaySheet`); `.onAppear`/`.onDisappear` → `ActiveViewTracker`
+    │   │   │   ├── ConversationListView.swift          # Shared list (iPhone sheet + iPad/macOS sidebar): time-grouped, swipe-delete; `showsToolbarActions`/`externalSearchText`/`onOpenSettings` adapt the Settings affordance + search per surface
+    │   │   │   ├── ConversationLibraryView.swift       # iPad `NavigationSplitView` (sidebar + thread + composer); `#if os(iOS)`
+    │   │   │   ├── MainWindowView.swift                 # macOS unified `Window("main")` (desktop shell); `.toolbar(removing:.title)` + `.principal` gateway item; sidebar + edge-to-edge detail; Settings `.sheet`
+    │   │   │   ├── LockedComposerBar.swift             # Composer-shaped CTA shown in place of the live composer when no gateway is configured (onboarding defers gateway setup → user lands in the app first)
+    │   │   │   ├── RecordingStatusIndicator.swift      # Shared recording/transcribing HUD (dot + elapsed timer); self-ticking `TimelineView` variant keeps the recorder's observed `state` STABLE during capture (no 10Hz elapsed re-publish)
+    │   │   │   ├── iOSMessageComposerBar.swift         # iOS/iPad type-or-talk composer: morphing mic↔send↔stop + paperclip; `.safeAreaInset`
+    │   │   │   ├── MessageComposerBar.swift            # macOS window composer: rounded box (field + `[paperclip]—[mic][send]`); Return-send + `.onDrop`
+    │   │   │   ├── CaptureCircleButton.swift           # Filled-circle mic/stop/send control (white glyph, per-state tint) + `PulseHalo` + press style; shared iOS+macOS composer
+    │   │   │   ├── MessageActionButton.swift           # Bubble-footer speak/copy button: per-platform hit region + `PressableFooterButtonStyle`
+    │   │   │   ├── AttachmentMenu.swift                # Leading paperclip → device-aware `Menu` → PhotosPicker / camera / unified "Choose Files…" / "Set Up File Transfer…" (iff no file-transfer snapshot)
+    │   │   │   ├── AttachmentComposerContainer.swift   # Hosts PhotosPicker + unified `.fileImporter` + camera + setup-guide sheet + large-file confirm alert
+    │   │   │   ├── ComposerAttachmentCoordinator.swift # `@MainActor @Observable` staging + classifier (`stageServerFiles`); `.needsSetup` promotion + soft-confirm queue; ImageProcessor/TextFileExtractor → `StagedAttachment`
+    │   │   │   ├── StagedAttachment.swift             # Pre-send staged item → `AttachmentDraft` at send; `.serverFile`+`ServerFileUploadState` and `.needsSetup` (binary, no file-server) gate Send; `.dualText` (inline + eager upload, mirrors `.dualImage`) never gates
+    │   │   │   ├── AttachmentPreviewStrip.swift        # Horizontal staged thumbs/chips, X-to-remove; amber `.needsSetup` tile w/ inline "Set Up"
+    │   │   │   ├── CameraPicker.swift                 # `UIImagePickerController` bridge (iOS only)
+    │   │   │   ├── AttachmentImageGrid.swift           # Bubble image grid keyed on `thumbnailData` (1 / 2–4 / 5+; no cap)
+    │   │   │   ├── AttachmentFullScreenView.swift      # Swipeable full-screen pinch-zoom gallery (`TabView(.page)`)
+    │   │   │   ├── AttachmentChipStyle.swift          # Shared file-chip styling
+    │   │   │   ├── MessageRowFormatters.swift          # Relative-date + `conversationListDate` + title-fallback + device/modality icon maps + `ThinkingStage.clock`
+    │   │   │   ├── SourceDeviceChip.swift              # Per-bubble device + modality chip
+    │   │   │   └── EmptyStateMascot.swift              # Shared empty-state mascot renderer (pose + height + amber glow); pose chosen by caller from `MascotShuffleBag`, held on owning model (no reshuffle on re-render)
+    │   │   ├── Components/                              # `PendingRetryCard` · `MailComposerView` · `LanguagePickerView` · `ICloudUnavailableBanner` (shown only when iCloud is in a user-actionable bad state; opens the OS fix surface; pairs with `CloudSyncMonitor`)
+    │   │   └── Onboarding/
+    │   │       ├── OnboardingContainerView.swift       # FLAT linear 3-step `{welcome, enableVoice, completion}` (gateway setup DEFERRED to Settings); nav via the constant `OnboardingFlow.orderedSteps` + `previousStep()` back-nav [spec.md Onboarding]
+    │   │       ├── OnboardingStepScaffold.swift         # Shared step layout: greedy ScrollView + VStack-sibling pinned CTA (never overlaps at any Dynamic Type) + iPad-regular width caps + `onboardingMascot`
+    │   │       ├── SetupAtmosphereBackground.swift       # Shared premium backdrop for onboarding + guided setup: static `MeshGradient` warm-black base + one-time amber ambient fade behind the mascot (no drift; static under Reduce Motion; glow rail-capped on macOS); the backdrop for both container surfaces
+    │   │       ├── OnboardingChoiceCard.swift           # Shared chooser card (`emphasis: Bool` → amber border + `.title3`)
+    │   │       ├── GatewayChooserStepView.swift         # NEUTRAL gateway fork with prerequisite-bearing titles ("OpenClaw or Hermes server" · "An AI you built — or a custom server" · "OpenRouter with your key"; own-AI first, Hosted last); reached from `GuidedGatewaySetupView` (after the primer), never onboarding
+    │   │       ├── HostedModelGatewayStepView.swift     # Hosted-model (OpenRouter) detail; self-classifies setup vs manage after hydrate; key + required model; advance keyed on a COMPLETED save, NOT the probe verdict
+    │   │       ├── HostedModelEditStepView.swift        # Dedicated EDIT step for an already-configured hosted-model (OpenRouter) gateway; reached from the manage card on `HostedModelGatewayStepView`
+    │   │       ├── OpenRouterModelPickerField.swift     # Required model field + suggestion picker for the OpenRouter guided screens (shared by setup + edit; only bindings differ)
+    │   │       ├── EnableVoiceStepView.swift            # Onboarding step priming + requesting mic (and Speech Recognition for Apple on-device STT); advances regardless of grant
+    │   │       ├── WelcomeStepView.swift               # Conduck story + consent
+    │   │       ├── CompletionStepView.swift            # Summary + Setup Guide nudge
+    │   │       └── ShortcutStepView.swift               # Adds bundled `GigaAction.shortcut`; used ONLY by SetupGuideView
+    │   │
+    │   ├── MenuBar/                                    # macOS-only
+    │   │   ├── GlobalShortcut.swift                    # `KeyboardShortcuts`: `.toggleVoiceCapture` (⌘⇧1 voice) + `captureRegionAndVoice` (⌘⇧2 Screenshot & Ask)
+    │   │   ├── MenuBarCoordinator.swift                # AppDelegate-owned owner of `DictationService` + active VM; `handleQuickSend(modality:)` + text-mode draft; deferred-present `pendingShowSettings`; Screenshot & Ask staging + "Type Instead" composer bridge
+    │   │   ├── MenuBarController.swift                 # `NSStatusItem` + popover + 6-state icon swap; left-click→popover, right/control-click→context menu; input-mode press branches; popover key monitor (Esc · text-mode keys); ⌘⇧2 → `RegionCaptureController` staging
+    │   │   ├── DictationService.swift                  # Audio→STT state machine; terminal → `onTranscript` callback
+    │   │   └── DictationPopoverView.swift              # Menu-bar popover: header + ONE status/answer slot (transcribing→answering→reply Markdown + Heard line) + controls footer; ONE recording HUD for ⌘⇧1/⌘⇧2; voice-mode STT-error recovery footer; text mode adds a compose surface
+    │   │
+    │   ├── ScreenCapture/                             # macOS-only (⌘⇧2 Screenshot & Ask)
+    │   │   └── RegionCaptureController.swift          # `@MainActor`; ⌘⇧2 region capture — permission preflight (Screen Recording always; mic only when `requiresMicrophone`) → crosshair NSWindow overlay (no `CGEventTap`) → ScreenCaptureKit grab → in-memory PNG (never disk/logged)
+    │   │
+    │   ├── CarPlay/                                   # Multi-turn voice conversation; iOS target, no pbxproj membership change
+    │   │   ├── CarPlayAudioSession.swift               # Single-category session; activate-once/deactivate-once per session
+    │   │   ├── EndOfSpeechDetector.swift               # FluidAudio/Silero VAD wrapper with CarPlay threshold preset
+    │   │   ├── CarPlaySpeechService.swift              # fixed-string acks on `AVSpeechSynthesizer`; `speakAgent` runs `ReplySanitizer` then a CarPlay-scoped `ReplyVoice(chunkPolicy: .standard)` (chunked cloud TTS, Apple fallback)
+    │   │   ├── CarPlaySettings.swift                   # `@MainActor` STT-config cache (avoids Keychain in hot path)
+    │   │   ├── CarPlaySceneDelegate.swift              # Scene state machine; picker root + idle gateway switcher + stable End/Mute buttons
+    │   │   ├── CarPlayRecordingService.swift           # Per-session voice loop (listen→STT→think→speak→re-arm); 300s cap
+    │   │   ├── CarPlayConverseUploader.swift           # Background carplay-converse session; append + stale-reply/foreground guards
+    │   │   └── CarPlayConversationLabel.swift          # Pure helper: row label + relative date + cap
+    │   │
+    │   ├── Resources/                                  # silero-vad-unified-256ms-v6.0.0.mlmodelc (~1MB) · stt-probe-silent.wav · stt-probe-spoken.m4a · GigaAction.shortcut
+    │   │
+    │   └── Assets.xcassets/                            # AppIcon + menubar-conduck imageset + discord-logo imageset + conduck-app-mark imageset + AccentColor + 48 character imagesets (same filenames/dimensions as the `branding/placeholders/` staging set); no tinted-mode variant. The public tree ships NEUTRAL placeholder art in every catalog — drop your own art in to rebrand (regen the placeholders via `scripts/generate-placeholder-assets.py`)
+    │
+    ├── ConduckShareExtension/                          # iOS Share Extension appex (system share-sheet → App-Group inbox); signed-device QA required [spec.md Share Extension]
+    │   ├── ShareViewController.swift                   # UIKit principal; copies shared items → App-Group inbox (ZERO decode, 120MB cap) → atomic publish; stamps picked target into manifest; rejects `file://`; resolves rich header (`ResolvedHeader`/`resolveLeadHeader` — bounded ImageIO thumbnail for images, typed glyph + localized type-desc otherwise; no `NSWorkspace.icon` on iOS)
+    │   ├── ShareView.swift                             # SwiftUI "Send to" picker: `NavigationStack` (nav-bar Cancel + "Send to" title; Send = bottom composer's amber send-circle via `.safeAreaInset`, NOT a toolbar item), pinned rich item header, conditional search (`ShareTargetFilter`, >8 targets), pinned New-conversation/Recent-chats sections, reads `ShareTargetsSnapshot`; missing snapshot → non-dead-end default row. Convergent-with-macOS design, platform-adapted (NavigationStack+`.safeAreaInset`+`UIImage` vs macOS manual VStack+`NSImage`)
+    │   ├── ShareTargetFilter.swift                     # Pure-Foundation search/threshold helper for the picker; VERBATIM MIRROR of the macOS appex copy below the header; drift guard = `ShareTargetFilterTests` (2-way iOS↔macOS)
+    │   ├── SharedInboxManifest.swift                   # VERBATIM MIRROR of `Conduck/Models/SharedInboxManifest.swift` (self-contained, no cross-target membership); drift guard = `SharedInboxManifestTests`
+    │   ├── ShareTargetsSnapshot.swift                  # VERBATIM MIRROR of `Conduck/Models/ShareTargetsSnapshot.swift`; same no-cross-membership rule
+    │   ├── ConduckWebCapture.js                        # Share-sheet JS preprocessor: pulls page URL/title/selection from Safari for the "share this page" path
+    │   ├── WebPageCapture.swift                        # Decodes the JS preprocessor results into a shareable page item
+    │   ├── Info.plist                                  # `NSExtension` share-services; `NSPredicate` activation (image+text+url+file; Live Photos accepted)
+    │   └── ConduckShareExtension.entitlements          # App Group `$(CONDUCK_GROUP_ID)` (default `group.com.example.conduck`)
+    │
+    ├── ConduckShareExtensionMac/                       # NATIVE macOS Share Extension appex (bundle id `…ConduckShareExtensionMac`; SDKROOT=macosx, sandboxed); feeds the SAME App-Group inbox + `SharedInboxDrainer`; signed-device QA required [spec.md Share Extension]
+    │   ├── ShareViewController.swift                   # AppKit principal (`NSHostingController(ShareView)`, 480×600, `.darkAqua`). DIVERGENCE: ACCEPTS `file://` (Finder/Preview security-scoped URLs) → copies bytes inside balanced security-scope access; `http(s)` → `urls[]`
+    │   ├── ShareView.swift                             # Telegram-style PINNED layout (header + conditional search + list + IN-LAYOUT bottom bar/send — macOS share host renders no `.toolbar`). Convergent-with-iOS in content, platform-adapted in chrome (manual VStack+`NSImage`+in-layout Send vs iOS NavigationStack+`UIImage`+nav-bar Cancel). NOT a verbatim mirror of iOS
+    │   ├── ShareTargetFilter.swift                     # Pure-Foundation search/threshold helper; the canonical copy (also compiled into `ConduckTests` via `@testable import Conduck`); iOS mirrors it; drift guard = `ShareTargetFilterTests`
+    │   ├── SharedInboxManifest.swift                   # VERBATIM MIRROR (3rd copy); drift guard = `SharedInboxManifestTests` 3-way test
+    │   ├── ShareTargetsSnapshot.swift                  # VERBATIM MIRROR (3rd copy); drift guard = `ShareTargetsSnapshotTests` 3-way test
+    │   ├── ConduckWebCapture.js                        # Share-sheet JS preprocessor (macOS copy)
+    │   ├── WebPageCapture.swift                        # Decodes the JS preprocessor results (macOS copy)
+    │   ├── Info.plist                                  # `NSExtension` share-services; DICTIONARY activation (NOT predicate — macOS Finder bug); `CFBundleDisplayName=Conduck`
+    │   ├── Assets.xcassets/                            # Appex AppIcon (placeholder in the public tree)
+    │   └── ConduckShareExtensionMac.entitlements       # App Group + `com.apple.security.app-sandbox` (mandatory on a macOS appex; iOS omits it)
+    │
+    ├── ConduckWatch Watch App/                         # watchOS target
+    │   ├── ConduckWatchApp.swift                       # Root gate (first-run `WatchOnboardingView` → identity → `WatchNoteView`/`WatchSetupView`; capture-priority defers to `WatchRecordingCoordinator`) + two `.backgroundTask(.urlSession)` handlers (`.watch.stt` + `.watch.converse`)
+    │   ├── Info.plist                                  # `WKApplication` + companion id + `UIBackgroundModes=[audio,remote-notification]` + mic
+    │   ├── Localizable.xcstrings                       # 205 keys, English-only, per-target
+    │   ├── ConduckWatch.entitlements                   # iCloud KVS + APS + CloudKit (`$(CONDUCK_ICLOUD_CONTAINER_ID)`, same container as iOS)
+    │   ├── RecordNoteIntent.swift                      # Watch AppIntent (foreground immediate)
+    │   ├── WatchAppShortcuts.swift                     # `AppShortcutsProvider` — forces `appintentsd` install-time index
+    │   ├── QA/WatchScreenshotSeed.swift                # #if DEBUG launch-arg-gated Watch screenshot/QA seed
+    │   ├── Models/                                     # `WatchSTTRequest` (LOCKED `"file"` field) · `WatchConversationViewModel`
+    │   ├── Services/
+    │   │   ├── WatchRecordingCoordinator.swift         # `@MainActor @Observable` singleton bridging triggers
+    │   │   ├── WatchReplyDeepLinkCoordinator.swift      # `@Observable` shared singleton (mirrors `WatchRecordingCoordinator`); notification-tap `conversationID` → `WatchNoteView` `.capture(.existing(id))` push; cold-launch-safe
+    │   │   ├── WatchRecordingService.swift             # record→STT→converse machine; `WatchCaptureTarget` (`.existing`/`.new`) resolved at trigger-time + lazy mint; `.arming` state; relay branch for Apple OR custom-openai; bound-conversation entry points; pin life-cycle wrapper-owned
+    │   │   ├── AppleSpeechRelayCoordinator.swift       # `actor`; continuation map; `relay(...)` via `WCSession.transferFile` + 30s timeout; `Wire` mirrors iOS (drift trap)
+    │   │   ├── AppleRelayPendingQueue.swift            # Persistent deferred-relay queue; drains on reachability flip + launch
+    │   │   ├── HeadlessDrainDecision.swift             # Pure decision helper: should a headless wake drain the pending-relay queue
+    │   │   ├── WatchCaptureGuard.swift                 # Pure capture-eligibility gate (arming/overlap/permission preconditions)
+    │   │   ├── WatchConverseCompletionVerdict.swift    # Pure verdict for a converse round-trip terminal state
+    │   │   ├── WatchDiagnosticsReporter.swift          # `diagnostics-pull` reply builder (pure `makeReply` + local permission/queue/envelope reads) + `WatchOneShotReply` one-shot latch
+    │   │   ├── TaskDeadline.swift                      # First-finisher race between a running task and a deadline; shared by `WatchSessionManager.pullSettingsFromPhone` + relay timeouts
+    │   │   ├── WatchIdentityResolver.swift             # Tiered UUID; per-preset STT Keychain + remote-agent token
+    │   │   ├── WatchSessionManager.swift               # Decodes STT + remote-agent envelopes; persists to Watch App-Group; drains queue; `diagnostics-pull` replyHandler responder
+    │   │   ├── WatchSettingsReader.swift               # Cold-launch STT + remote-agent resolver; ref-keyed caches + `[CustomGateway]` known-custom-refs index; in-app-Ask pending hint
+    │   │   ├── WatchAudioUploader.swift                # Background STT + converse sessions; cert-pinned; `defer`-cleans files
+    │   │   ├── WatchNetworkClient.swift                # Foreground STT client, provider-aware
+    │   │   ├── WatchNetworkFailureCopy.swift           # Pure transport-`URLError`→honest message map (companion-routing trap; -1009 iPhone-aware, hedged); see spec Per-Surface → Apple Watch
+    │   │   ├── WatchTTSClient.swift                    # `enum`; cloud TTS fetch→mp3 (same `ResponseShape.decodeAudio` as iOS); Apple-synth fallback on throw
+    │   │   ├── WatchReplySpeaker.swift                 # `SpeakEngine` conformer (mirrors iOS `SpeechPlayer`): `NSObject`+AV delegates, one-shot `fireCompletion`, pause/resume, `generation`+`ObjectIdentifier` supersede guards; cloud via `WatchTTSClient`→local AVAudioPlayer (LONG replies via the shared `SpeechChunkQueue`, `.wristConservative`), Apple fallback; runs `ReplySanitizer.spoken`. Driven by the shared `ThreadSpeaker`
+    │   │   ├── WatchAudioSessionCoordinator.swift      # Record⇄playback ownership tokens + FIFO-serialized session-config lane (`runConfig` — issue-time claim check, `@concurrent` IPC) + grace-deferred terminal deactivation (duck-restore); see spec Per-Surface → Apple Watch → Audio-session arbitration
+    │   │   └── WatchLog.swift                          # Always-compiled `os.Logger` facility (subsystem `Constants.identityNamespace`, per-category enum); §5 metadata-only lines marked `.public`; `shortID` + per-turn correlation. Replaces raw `#if DEBUG print`
+    │   ├── Views/                                      # `WatchOnboardingView` (one-time first-run expectation-set; latched by App-Group `watch.onboardingSeen`) · `WatchSetupView` · `WatchNoteView` (root launchpad + nav host) · `WatchConversationListView` · `WatchConversationThreadView` (thread + capture-overlay shell + per-attachment rows via `watchDisplayClass`: thumbnails, tappable text rows, informative server markers) · `WatchAttachmentTextView` (read-only text viewer; lazy server-preview fetch + snapshot footer) · `WatchMessageComposerBar` (morphing mic↔stop↔send) · `WatchGatewayBadge` (compact per-conversation gateway monogram for list rows + thread header)
+    │   └── Assets.xcassets/                            # AppIcon + `conduck-avatar` imageset (placeholder art in the public tree)
+    │
+    ├── ConduckWatch/                                   # Widget extension
+    │   ├── ConduckWatchBundle.swift                    # @main `WidgetBundle` wrapping `RecordNoteControl`
+    │   ├── ConduckWatchControl.swift                   # `RecordNoteControl: ControlWidget`
+    │   ├── RecordNoteIntent.swift                      # DUP of watch-app file (Approach B; mirror edits)
+    │   ├── WatchRecordingCoordinator.swift             # DUP of watch-app file (Approach B; mirror edits)
+    │   └── Info.plist / Assets.xcassets/               # `widgetkit-extension`; AccentColor + WidgetBackground
+    │
+    ├── ConduckTests/                                   # XCTest ~1980 cases, 0-failure green on iOS Sim; keychain-touching cases XCTSkip/guard on unsigned; signed run (`-allowProvisioningUpdates`) only needed for live-Keychain assertions
+    │   ├── (iOS/macOS suites)                          # ActiveViewTracker · NotificationPresentationDecider · MacReplyBanner · OnLaunchMode · SessionContinuationPolicy · STTProvider(+Registry) · STTBroadcastEnvelope · STTCustomModel · CustomSTTEndpoint · CustomVoiceEndpointRegistry(+Migration · per-uuid synthesis/disjointness) · STTConnectionTestSuite · AppError · STTStatusMap · MascotShuffleBag · AttachmentDeliveryPlanner(route matrix) · StagedAttachment(dual-text→pending)
+    │   ├── (TTS suites)                                # TTSProviderRegistry · TTSCustomModel(effectiveModel/effectiveSpeechURL · Gemini URL rewrite · never-leaks-to-custom) · TTSClient · TTSBodyFactory · TTSStatusMap · ReplyVoiceFallback · VoiceVendorRegistry · SettingsManagerTTS · VoiceProviderRows · AutoSpeakMailbox · ReplyAutoSpeakDecider · WatchAutoSpeakVerdict · SettingsManagerReadAloud · SpeechExclusivity · ConversationDetailViewModelMacReplySpeak + ThreadSpeakerExclusivity (`#if os(macOS)`)
+    │   ├── Providers/                                  # GeminiSTT · QwenSTT · OpenRouterSTT · NoOpSTTProbe · AppleSpeechRunner · AppleOnDeviceEngineMode · AppleStandardPrepare
+    │   ├── RemoteAgent/                                # MockURLProtocol + Backend(+Metadata) · Ref(+Metadata) · CustomGatewayRegistry · ConverseRequestModel · ModelDiscovery · Migration · Routing · StatusMap · ConverseWire · Client · Fingerprint · BackgroundMetadata · AuthScheme(fail-closed default · header-omission · keyless envelope round-trip) · PairingPayload(parser contract)
+    │   ├── (store/UI logic)                            # SettingsManagerRemoteAgent · ConversationStore · ConversationHistoryAssembler (in-memory store seam; the image-replay regression locks) · ConversationThreadLogic · ImageProcessor · ImageFormatSniffer · DataURIBuilder · TextFileExtractor · ReplySanitizer · ReplyLengthClassifier · CloudSyncMonitor · VoicePermissions · CarPlayConversationLabel · SettingsViewModel(RemoteAgentURL · CustomSTTURL · PairingImport)
+    │   ├── (file transfer)                             # FileServerClient(stored-key/auth/request-shapes/probe-table) · FileServerPropfind(207 parser) · SettingsManagerFileTransfer(round-trips; credential signing-gated) · FileTransferMigration(v2→v3); + ConverseWire/Envelope server-ref cases
+    │   ├── (share + relay)                            # SharedInboxManifest · SharedInboxDrainer (claim/fail-surface[turn-exists+no-turn delete]/janitor/routing/classify/dedupe-replay/converse-reconcile/upload-reconcile/double-dispatch-guard) · SharedInboxRouting · SharedInboxUploadKey · ShareTargetsSnapshot · ShareTargetsSnapshotWriterColor · ConversationStoreDedupe (share idempotency) · RelayInboxMover · RelayReplyCache (Watch→iPhone relay inbox-race + idempotency)
+    │   ├── (literal/contract regression locks)        # Locked*Literals (Keychain/KVS keys · enum raw values + ID prefixes · OpenRouter URL/`/api`-doubled-path · pairing prefix/version — pinned to HARDCODED literals, not helper==helper) · AppErrorCodeContract (every numeric wire code + inverse) · RelayWireSourceDriftGuard (host-side: iOS↔Watch `Wire` enum literal parity, no watch test target) · GeminiQwenSTTWire · TTSDecodeChokepoint · RemoteAgentVisionError · FileServerConnection(staged-test FSM) · ConversationStoreClone · SettingsManagerICloudSync(inbound KVS mirror) · StagedAttachmentMapping · MenuBarQuickDestination · ThreadSpeakerStopAndAutoSpeak · STTBackgroundMetadataAndAuth · OfficialIdentityLock (build-identity resolution)
+    │   └── Resources/test-cert.der                     # 809B self-signed RSA-2048 fixture; SHA-256 hardcoded in `RemoteAgentFingerprintTests`
+    │
+    └── ConduckWatchTests/                              # watchOS unit-test target (explicit file refs, not a synchronized group; `PRODUCT_NAME = $(TARGET_NAME)`): TaskDeadline · WatchArmActivation · WatchAudioSessionOwnership · WatchCaptureGuard · WatchConversationViewModelRefresh · WatchConverseCompletionVerdict · WatchDiagnosticsReporter · WatchDraftMint · WatchHeadlessDrainDecision · WatchObservability · WatchRecordingLifecycle · WatchReplySpeakerFallback · WatchSettingsApplyAndQueue · WatchSettingsPull · WatchTTSClientGuard · ConduckWatchSmoke
+```
+
+---
+
+## Couplings & notes
+
+- **Branded art is a private overlay.** The public tree ships neutral placeholder art in every Xcode catalog; `branding/placeholders/` holds the staging source (identical `Contents.json`, filenames, and pixel dimensions) regenerated by `scripts/generate-placeholder-assets.py`. Drop your own art into the catalogs to rebrand. Empty-state pose rotation pool: `MascotCatalog.emptyStatePoses` (36 of the 48 character imagesets).
+- **Gateway pairing wizard** — `conduck-connect` (run on the user's own always-on gateway host: endpoint-enable + HTTPS exposure + file lane + verify + QR/paste pairing code) lives in its own repository: https://github.com/gigaduckai/conduck-connect. The app-side parser/emitter is `Services/RemoteAgent/PairingPayload{,Export}.swift` (`conduck-setup:v1`) [spec.md Gateway Setup & Pairing].
+- **No backend / workers / server** — locked architecture (`spec.md` Invariants): zero outbound except the user's STT-provider REST + gateway HTTP.
+
+Cross-target file-membership patterns (Approach A / B) + build-posture settings (Community/Official identity layer): `spec.md` Build-Time Posture.

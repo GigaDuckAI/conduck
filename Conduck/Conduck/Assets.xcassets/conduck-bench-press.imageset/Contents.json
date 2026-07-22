@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "conduck-bench-press.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

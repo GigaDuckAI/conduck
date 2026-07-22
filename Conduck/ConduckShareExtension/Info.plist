@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Conduck Share Extension (ConduckShareExtension appex) — Info.plist
+  INERT until the Xcode target is created.
+
+  Activation rule is in NSPredicate form (NOT the dictionary form). The
+  dictionary form sometimes activates for non-image UTIs that merely conform to
+  public.image, and its Live-Photo exclusion is unreliable; the predicate gives
+  us an explicit, testable rule.
+
+  PRINCIPAL CLASS: $(PRODUCT_MODULE_NAME).ShareViewController — the appex's own
+  module name, resolved at build time once the target exists.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>$(CONDUCK_DISPLAY_NAME)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ConduckAppGroupID</key>
+	<string>$(CONDUCK_GROUP_ID)</string>
+	<key>ConduckIdentityNamespace</key>
+	<string>$(CONDUCK_IDENTITY_NAMESPACE)</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.share-services</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<!--
+			  Safari page-text capture. Safari executes ConduckWebCapture.js INSIDE
+			  the shared page at share time and vends its results as the share's
+			  ONLY attachment — one com.apple.property-list NSItemProvider carrying
+			  NSExtensionJavaScriptPreprocessingResultsKey; the usual public.url
+			  provider DISAPPEARS. Two load-bearing consequences (spike-verified on
+			  iOS 26, ShareViewController owns both): the loader's property-list
+			  branch is what makes a Safari share usable at all (without it the
+			  plist bytes would ride as a generic file via public.data), and the
+			  page URL must be recovered from the JS payload (WebPageCapture.parse)
+			  — there is no other URL source. Non-Safari browsers ignore this key
+			  and keep vending plain URLs (the existing path). The activation
+			  predicate below is UNCHANGED: com.apple.property-list conforms to
+			  public.data, so the JS-results item already matches.
+			-->
+			<key>NSExtensionJavaScriptPreprocessingFile</key>
+			<string>ConduckWebCapture</string>
+			<!--
+			  Activation predicate. Reads bottom-up:
+
+			  Outer SUBQUERY over `extensionItems` ($item):
+			    - extensionItems.@count <= 1
+			        Accept at most ONE NSExtensionItem (most shares are one item;
+			        the drainer + appex are single-item-oriented). Defence-in-depth
+			        with the appex's own `maxAttachments` cap.
+
+			  Inner SUBQUERY over $item.attachments ($att) — an attachment is
+			  ACCEPTED iff:
+			    ( image OR text OR URL OR arbitrary-file )
+			      • public.image    — photos (HEIC/JPEG/PNG/GIF…). GIF copies as
+			                          bytes; the main app's ImageProcessor renders
+			                          the first frame post-drain.
+			      • public.text     — plain text + text/code files.
+			      • public.url      — web links (file:// URLs are accepted by the
+			                          predicate but REJECTED in code — they aren't
+			                          durable post-exit).
+			      • public.data     — any arbitrary file (PDF/docx/zip/…); the
+			                          drainer classifies + routes (inline vs
+			                          file-server) at drain time.
+			    Live Photos are ACCEPTED (the still advertises public.image): the
+			    appex copies the STILL representation and ignores the motion track.
+			    An earlier `AND NOT com.apple.live-photo-bundle` clause was REMOVED —
+			    because a Live Photo's still ALSO advertises the live-photo-bundle
+			    UTI, the whole-item rule below would reject the item, suppressing
+			    Conduck from the share sheet for the iPhone's DEFAULT photo type.
+			    (Founder gate: confirm the still copies cleanly on a real Live-Photo
+			    share on device.)
+
+			  Per-item attachment cap:
+			    - $item.attachments.@count <= 10
+			        Bounds a pathological multi-select; mirrored by the appex's
+			        `maxAttachments`.
+
+			  Whole-item acceptance:
+			    - count(accepted attachments) == $item.attachments.@count
+			        EVERY attachment in the item must be acceptable (no partial
+			        item with one rejected attachment slipping through).
+			-->
+			<key>NSExtensionActivationRule</key>
+			<string>SUBQUERY (
+    extensionItems,
+    $item,
+    SUBQUERY (
+        $item.attachments,
+        $att,
+        (
+            ANY $att.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image"
+            OR ANY $att.registeredTypeIdentifiers UTI-CONFORMS-TO "public.text"
+            OR ANY $att.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url"
+            OR ANY $att.registeredTypeIdentifiers UTI-CONFORMS-TO "public.data"
+        )
+    ).@count == $item.attachments.@count
+    AND $item.attachments.@count &lt;= 10
+).@count == extensionItems.@count
+AND extensionItems.@count &lt;= 1</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

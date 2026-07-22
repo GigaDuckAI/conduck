@@ -1,0 +1,1493 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		069650C8AC0F675681F58C58 /* WatchRecordingLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5777E15559EA6B1951DE08 /* WatchRecordingLifecycleTests.swift */; };
+		1263D93A1706BD55172ED31F /* WatchSettingsApplyAndQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A801C634B327CE22742C2AB /* WatchSettingsApplyAndQueueTests.swift */; };
+		221BB6745DA7B0E378D997C5 /* ConduckWatchSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87595BE862314620EF226B1 /* ConduckWatchSmokeTests.swift */; };
+		3B3369FEAAD168D055C48147 /* TaskDeadlineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 346CBAB7BF95F11E04B690E2 /* TaskDeadlineTests.swift */; };
+		3CDFE6DF6134706F3C5989D8 /* WatchSettingsPullTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AAC5754C441E19A321BA922 /* WatchSettingsPullTests.swift */; };
+		49336A39A8433FC8127DBFCF /* ConduckShareExtensionMac.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 279EE628C4491511540B6F33 /* ConduckShareExtensionMac.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		621F6DCF4F851CF5CD688390 /* WatchAudioSessionOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28B3F3EB66D5E3FB9A523616 /* WatchAudioSessionOwnershipTests.swift */; };
+		630432D82FB759DC00994EC0 /* ConduckWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 630432CE2FB759DB00994EC0 /* ConduckWatch Watch App.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		630432E42FB75BAE00994EC0 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 630432E32FB75BAE00994EC0 /* WidgetKit.framework */; };
+		630432E62FB75BAE00994EC0 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 630432E52FB75BAE00994EC0 /* SwiftUI.framework */; };
+		630432F32FB75BB000994EC0 /* ConduckWatchExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 630432E12FB75BAE00994EC0 /* ConduckWatchExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		631B3F2B2FD060FC00E01924 /* ConduckShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 631B3F212FD060FC00E01924 /* ConduckShareExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		63A29F842F7D7570001E7E52 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = 63CC00022F6A1B0A00A00002 /* KeyboardShortcuts */; };
+		63FA00032F6A1B0A00A00003 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 63FA00022F6A1B0A00A00002 /* FluidAudio */; };
+		63ST00032F6A1B0A00ST0003 /* ShareTargetFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */; };
+		63TX00032F6A1B0A00TX0003 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 63TX00022F6A1B0A00TX0002 /* Textual */; };
+		63WC00032F6A1B0A00WC0003 /* WebPageCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63WC00012F6A1B0A00WC0001 /* WebPageCapture.swift */; };
+		75BE4967C913D2388127BA4A /* WatchCaptureGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2102331634B096D3857E8A4E /* WatchCaptureGuardTests.swift */; };
+		76D89192A7CC71C5BB1165A3 /* WatchHeadlessDrainDecisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE5C9F3DEA04EE0F93679 /* WatchHeadlessDrainDecisionTests.swift */; };
+		81BC91FF3F9DF8A6B54931C6 /* WatchDraftMintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD013915D6DC49FEF67B48F1 /* WatchDraftMintTests.swift */; };
+		8718AFBC91AC4556CE661DD7 /* WatchArmActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A317365301218A5EE4D2D9B /* WatchArmActivationTests.swift */; };
+		88896A7728AF0FEA2853BEDB /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 50484C38EFB50AF68146AA9B /* Foundation.framework */; };
+		89700A11ABA1C9AF465DA4E0 /* WatchReplySpeakerFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEFC36B01C1F38EA15DA7611 /* WatchReplySpeakerFallbackTests.swift */; };
+		BACA6CA80A16CA4946FA2799 /* WatchDiagnosticsReporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7962D7C5DB078A44B543DBC8 /* WatchDiagnosticsReporterTests.swift */; };
+		C03497D936DB6031248B40CE /* WatchConverseCompletionVerdictTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AD4C033BF02CCA1CBEDBFAD /* WatchConverseCompletionVerdictTests.swift */; };
+		C6486202BB44DA8DF866B51B /* WatchObservabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8036F5A26DD045BFB31148B6 /* WatchObservabilityTests.swift */; };
+		F931ABD9E6AEA0D93CFD338D /* WatchConversationViewModelRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E411F3AF5A7364E4CCE5578D /* WatchConversationViewModelRefreshTests.swift */; };
+		FE2BBA31EA6030DB1561E93B /* WatchTTSClientGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2694DF31E04092B32E20C0 /* WatchTTSClientGuardTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		33EB4FFC31E60F7491DCAC07 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 630432B42FB7593700994EC0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8ECFBB4ECFC1F14CD4D5BE26;
+			remoteInfo = ConduckShareExtensionMac;
+		};
+		39F94AE50DD0B77AAEB06DFF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 630432B42FB7593700994EC0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 630432CD2FB759DB00994EC0;
+			remoteInfo = "ConduckWatch Watch App";
+		};
+		630432D62FB759DC00994EC0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 630432B42FB7593700994EC0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 630432CD2FB759DB00994EC0;
+			remoteInfo = "ConduckWatch Watch App";
+		};
+		630432F12FB75BB000994EC0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 630432B42FB7593700994EC0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 630432E02FB75BAE00994EC0;
+			remoteInfo = ConduckWatchExtension;
+		};
+		630434012FCC000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 630432B42FB7593700994EC0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 630432BB2FB7593700994EC0;
+			remoteInfo = Conduck;
+		};
+		631B3F292FD060FC00E01924 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 630432B42FB7593700994EC0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 631B3F202FD060FC00E01924;
+			remoteInfo = ConduckShareExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		630432DC2FB759DC00994EC0 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				630432D82FB759DC00994EC0 /* ConduckWatch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630432F82FB75BB000994EC0 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				630432F32FB75BB000994EC0 /* ConduckWatchExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		631B3F2C2FD060FC00E01924 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				631B3F2B2FD060FC00E01924 /* ConduckShareExtension.appex in Embed Foundation Extensions */,
+				49336A39A8433FC8127DBFCF /* ConduckShareExtensionMac.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0AAC5754C441E19A321BA922 /* WatchSettingsPullTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchSettingsPullTests.swift; sourceTree = "<group>"; };
+		1AD4C033BF02CCA1CBEDBFAD /* WatchConverseCompletionVerdictTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConverseCompletionVerdictTests.swift; sourceTree = "<group>"; };
+		2102331634B096D3857E8A4E /* WatchCaptureGuardTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchCaptureGuardTests.swift; sourceTree = "<group>"; };
+		279EE628C4491511540B6F33 /* ConduckShareExtensionMac.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConduckShareExtensionMac.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		28B3F3EB66D5E3FB9A523616 /* WatchAudioSessionOwnershipTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchAudioSessionOwnershipTests.swift; sourceTree = "<group>"; };
+		346CBAB7BF95F11E04B690E2 /* TaskDeadlineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskDeadlineTests.swift; sourceTree = "<group>"; };
+		393448D4A01EF6FDF81A1E05 /* ConduckWatchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConduckWatchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A801C634B327CE22742C2AB /* WatchSettingsApplyAndQueueTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchSettingsApplyAndQueueTests.swift; sourceTree = "<group>"; };
+		50484C38EFB50AF68146AA9B /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS11.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		5A317365301218A5EE4D2D9B /* WatchArmActivationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchArmActivationTests.swift; sourceTree = "<group>"; };
+		5C2EE5C9F3DEA04EE0F93679 /* WatchHeadlessDrainDecisionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchHeadlessDrainDecisionTests.swift; sourceTree = "<group>"; };
+		630432BC2FB7593700994EC0 /* Conduck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Conduck.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		630432CE2FB759DB00994EC0 /* ConduckWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "ConduckWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		630432E12FB75BAE00994EC0 /* ConduckWatchExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConduckWatchExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		630432E32FB75BAE00994EC0 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		630432E52FB75BAE00994EC0 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		630434022FCC000000000002 /* ConduckTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConduckTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		631B3F212FD060FC00E01924 /* ConduckShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConduckShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		63C0F1D12F6A1B0A00C0F1D1 /* Identity.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Identity.xcconfig; sourceTree = "<group>"; };
+		63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareTargetFilter.swift; path = ConduckShareExtensionMac/ShareTargetFilter.swift; sourceTree = SOURCE_ROOT; };
+		63WC00012F6A1B0A00WC0001 /* WebPageCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WebPageCapture.swift; path = ConduckShareExtensionMac/WebPageCapture.swift; sourceTree = SOURCE_ROOT; };
+		7962D7C5DB078A44B543DBC8 /* WatchDiagnosticsReporterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchDiagnosticsReporterTests.swift; sourceTree = "<group>"; };
+		8036F5A26DD045BFB31148B6 /* WatchObservabilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchObservabilityTests.swift; sourceTree = "<group>"; };
+		AA2694DF31E04092B32E20C0 /* WatchTTSClientGuardTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchTTSClientGuardTests.swift; sourceTree = "<group>"; };
+		AD013915D6DC49FEF67B48F1 /* WatchDraftMintTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchDraftMintTests.swift; sourceTree = "<group>"; };
+		AEFC36B01C1F38EA15DA7611 /* WatchReplySpeakerFallbackTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchReplySpeakerFallbackTests.swift; sourceTree = "<group>"; };
+		CE5777E15559EA6B1951DE08 /* WatchRecordingLifecycleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchRecordingLifecycleTests.swift; sourceTree = "<group>"; };
+		E411F3AF5A7364E4CCE5578D /* WatchConversationViewModelRefreshTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConversationViewModelRefreshTests.swift; sourceTree = "<group>"; };
+		E87595BE862314620EF226B1 /* ConduckWatchSmokeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConduckWatchSmokeTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		504E69F71DA16916157AD3D0 /* Exceptions for "ConduckShareExtensionMac" folder in "ConduckShareExtensionMac" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 8ECFBB4ECFC1F14CD4D5BE26 /* ConduckShareExtensionMac */;
+		};
+		630432F42FB75BB000994EC0 /* Exceptions for "ConduckWatch" folder in "ConduckWatchExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 630432E02FB75BAE00994EC0 /* ConduckWatchExtension */;
+		};
+		630433012FBB000000994EC0 /* Exceptions for "Conduck" folder in "Conduck" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 630432BB2FB7593700994EC0 /* Conduck */;
+		};
+		630433022FBB000000994EC0 /* Exceptions for "ConduckWatch Watch App" folder in "ConduckWatch Watch App" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 630432CD2FB759DB00994EC0 /* ConduckWatch Watch App */;
+		};
+		631B3F302FD060FC00E01924 /* Exceptions for "ConduckShareExtension" folder in "ConduckShareExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 631B3F202FD060FC00E01924 /* ConduckShareExtension */;
+		};
+		63E4A0010000000000000001 /* Exceptions for "Conduck" folder in "ConduckWatch Watch App" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Models/AdapterWireCode.swift,
+				Models/AppError.swift,
+				Models/AttachmentRecord.swift,
+				Models/ConversationRecord.swift,
+				Models/Conversations.xcdatamodeld,
+				Models/ConversationSearchFilter.swift,
+				Models/ConverseRequest.swift,
+				Models/ImageHistoryPolicy.swift,
+				Models/MessageRecord.swift,
+				Models/OnLaunchMode.swift,
+				Models/SessionContinuationPolicy.swift,
+				Services/ActiveViewTracker.swift,
+				Services/AudioCompressor.swift,
+				Services/ConversationHistoryAssembler.swift,
+				Services/ConversationStore.swift,
+				Services/DataURIBuilder.swift,
+				Services/RemoteAgent/CustomGateway.swift,
+				Services/RemoteAgent/RemoteAgentAuthScheme.swift,
+				Services/RemoteAgent/RemoteAgentBackend.swift,
+				Services/RemoteAgent/RemoteAgentBackgroundMetadata.swift,
+				Services/RemoteAgent/RemoteAgentBroadcastEnvelope.swift,
+				Services/RemoteAgent/RemoteAgentClient.swift,
+				Services/RemoteAgent/RemoteAgentRef.swift,
+				Services/RemoteAgent/RemoteAgentRefMetadata.swift,
+				Services/RemoteAgent/RemoteAgentStatusMap.swift,
+				Services/RemoteAgent/RemoteAgentTrustEvaluator.swift,
+				Services/ReplySanitizer.swift,
+				Services/STT/AppleSpeechRunner.swift,
+				Services/STT/CustomVoiceEndpoint.swift,
+				Services/STT/Providers/ElevenLabsSTTProvider.swift,
+				Services/STT/Providers/GeminiSTTProvider.swift,
+				Services/STT/Providers/OpenRouterSTTProvider.swift,
+				Services/STT/Providers/QwenSTTProvider.swift,
+				Services/STT/STTAuthScheme.swift,
+				Services/STT/STTBackgroundTaskMetadata.swift,
+				Services/STT/STTBroadcastEnvelope.swift,
+				Services/STT/STTInProcessRunner.swift,
+				Services/STT/STTJSONBodyFactory.swift,
+				Services/STT/STTMultipartBuilder.swift,
+				Services/STT/STTProbe.swift,
+				Services/STT/STTProvider.swift,
+				Services/STT/STTResponseDecoder.swift,
+				Services/STT/STTStatusMap.swift,
+				Services/TTS/SpeakEngine.swift,
+				Services/TTS/SpeechChunkQueue.swift,
+				Services/TTS/SpeechLanguageDetector.swift,
+				Services/TTS/SpeechSegmenter.swift,
+				Services/TTS/ThreadSpeaker.swift,
+				Services/TTS/TTSBodyFactory.swift,
+				Services/TTS/TTSProvider.swift,
+				Services/TTS/TTSStatusMap.swift,
+				Utilities/AccessibilityAnnouncer.swift,
+				Utilities/Constants.swift,
+				Views/Conversation/MessageRowFormatters.swift,
+			);
+			target = 630432CD2FB759DB00994EC0 /* ConduckWatch Watch App */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		630432BE2FB7593700994EC0 /* Conduck */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				630433012FBB000000994EC0 /* Exceptions for "Conduck" folder in "Conduck" target */,
+				63E4A0010000000000000001 /* Exceptions for "Conduck" folder in "ConduckWatch Watch App" target */,
+			);
+			path = Conduck;
+			sourceTree = "<group>";
+		};
+		630432CF2FB759DB00994EC0 /* ConduckWatch Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				630433022FBB000000994EC0 /* Exceptions for "ConduckWatch Watch App" folder in "ConduckWatch Watch App" target */,
+			);
+			path = "ConduckWatch Watch App";
+			sourceTree = "<group>";
+		};
+		630432E72FB75BAE00994EC0 /* ConduckWatch */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				630432F42FB75BB000994EC0 /* Exceptions for "ConduckWatch" folder in "ConduckWatchExtension" target */,
+			);
+			path = ConduckWatch;
+			sourceTree = "<group>";
+		};
+		630434032FCC000000000003 /* ConduckTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ConduckTests;
+			sourceTree = "<group>";
+		};
+		631B3F222FD060FC00E01924 /* ConduckShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				631B3F302FD060FC00E01924 /* Exceptions for "ConduckShareExtension" folder in "ConduckShareExtension" target */,
+			);
+			path = ConduckShareExtension;
+			sourceTree = "<group>";
+		};
+		E21FF585883B2FE78B83972E /* ConduckShareExtensionMac */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				504E69F71DA16916157AD3D0 /* Exceptions for "ConduckShareExtensionMac" folder in "ConduckShareExtensionMac" target */,
+			);
+			path = ConduckShareExtensionMac;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		288A1397ECB4874F9174524D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				88896A7728AF0FEA2853BEDB /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630432B92FB7593700994EC0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				63A29F842F7D7570001E7E52 /* KeyboardShortcuts in Frameworks */,
+				63FA00032F6A1B0A00A00003 /* FluidAudio in Frameworks */,
+				63TX00032F6A1B0A00TX0003 /* Textual in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630432CB2FB759DB00994EC0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630432DE2FB75BAE00994EC0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				630432E62FB75BAE00994EC0 /* SwiftUI.framework in Frameworks */,
+				630432E42FB75BAE00994EC0 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630434042FCC000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		631B3F1E2FD060FC00E01924 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FA4A4B8C316A265014ACD6E6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		630432B32FB7593700994EC0 = {
+			isa = PBXGroup;
+			children = (
+				630432BE2FB7593700994EC0 /* Conduck */,
+				630432CF2FB759DB00994EC0 /* ConduckWatch Watch App */,
+				630432E72FB75BAE00994EC0 /* ConduckWatch */,
+				630434032FCC000000000003 /* ConduckTests */,
+				631B3F222FD060FC00E01924 /* ConduckShareExtension */,
+				E21FF585883B2FE78B83972E /* ConduckShareExtensionMac */,
+				63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */,
+				63WC00012F6A1B0A00WC0001 /* WebPageCapture.swift */,
+				63C0F1D22F6A1B0A00C0F1D2 /* Configs */,
+				630432E22FB75BAE00994EC0 /* Frameworks */,
+				630432BD2FB7593700994EC0 /* Products */,
+				F52E3A687B933AB85CE69175 /* ConduckWatchTests */,
+			);
+			sourceTree = "<group>";
+		};
+		630432BD2FB7593700994EC0 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				630432BC2FB7593700994EC0 /* Conduck.app */,
+				630432CE2FB759DB00994EC0 /* ConduckWatch Watch App.app */,
+				630432E12FB75BAE00994EC0 /* ConduckWatchExtension.appex */,
+				630434022FCC000000000002 /* ConduckTests.xctest */,
+				631B3F212FD060FC00E01924 /* ConduckShareExtension.appex */,
+				279EE628C4491511540B6F33 /* ConduckShareExtensionMac.appex */,
+				393448D4A01EF6FDF81A1E05 /* ConduckWatchTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		630432E22FB75BAE00994EC0 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				630432E32FB75BAE00994EC0 /* WidgetKit.framework */,
+				630432E52FB75BAE00994EC0 /* SwiftUI.framework */,
+				CA28D3C24B5B2D66DE02EE8D /* watchOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		63C0F1D22F6A1B0A00C0F1D2 /* Configs */ = {
+			isa = PBXGroup;
+			children = (
+				63C0F1D12F6A1B0A00C0F1D1 /* Identity.xcconfig */,
+			);
+			path = Configs;
+			sourceTree = "<group>";
+		};
+		CA28D3C24B5B2D66DE02EE8D /* watchOS */ = {
+			isa = PBXGroup;
+			children = (
+				50484C38EFB50AF68146AA9B /* Foundation.framework */,
+			);
+			name = watchOS;
+			sourceTree = "<group>";
+		};
+		F52E3A687B933AB85CE69175 /* ConduckWatchTests */ = {
+			isa = PBXGroup;
+			children = (
+				E87595BE862314620EF226B1 /* ConduckWatchSmokeTests.swift */,
+				4A801C634B327CE22742C2AB /* WatchSettingsApplyAndQueueTests.swift */,
+				8036F5A26DD045BFB31148B6 /* WatchObservabilityTests.swift */,
+				346CBAB7BF95F11E04B690E2 /* TaskDeadlineTests.swift */,
+				2102331634B096D3857E8A4E /* WatchCaptureGuardTests.swift */,
+				1AD4C033BF02CCA1CBEDBFAD /* WatchConverseCompletionVerdictTests.swift */,
+				AD013915D6DC49FEF67B48F1 /* WatchDraftMintTests.swift */,
+				5C2EE5C9F3DEA04EE0F93679 /* WatchHeadlessDrainDecisionTests.swift */,
+				CE5777E15559EA6B1951DE08 /* WatchRecordingLifecycleTests.swift */,
+				AEFC36B01C1F38EA15DA7611 /* WatchReplySpeakerFallbackTests.swift */,
+				0AAC5754C441E19A321BA922 /* WatchSettingsPullTests.swift */,
+				AA2694DF31E04092B32E20C0 /* WatchTTSClientGuardTests.swift */,
+				5A317365301218A5EE4D2D9B /* WatchArmActivationTests.swift */,
+				28B3F3EB66D5E3FB9A523616 /* WatchAudioSessionOwnershipTests.swift */,
+				E411F3AF5A7364E4CCE5578D /* WatchConversationViewModelRefreshTests.swift */,
+				7962D7C5DB078A44B543DBC8 /* WatchDiagnosticsReporterTests.swift */,
+			);
+			path = ConduckWatchTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		630432BB2FB7593700994EC0 /* Conduck */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 630432C72FB7593800994EC0 /* Build configuration list for PBXNativeTarget "Conduck" */;
+			buildPhases = (
+				630432B82FB7593700994EC0 /* Sources */,
+				630432B92FB7593700994EC0 /* Frameworks */,
+				630432BA2FB7593700994EC0 /* Resources */,
+				630432DC2FB759DC00994EC0 /* Embed Watch Content */,
+				631B3F2C2FD060FC00E01924 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				630432D72FB759DC00994EC0 /* PBXTargetDependency */,
+				631B3F2A2FD060FC00E01924 /* PBXTargetDependency */,
+				FF3F9BD13E00279A20437B92 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				630432BE2FB7593700994EC0 /* Conduck */,
+			);
+			name = Conduck;
+			packageProductDependencies = (
+				63CC00022F6A1B0A00A00002 /* KeyboardShortcuts */,
+				63FA00022F6A1B0A00A00002 /* FluidAudio */,
+				63TX00022F6A1B0A00TX0002 /* Textual */,
+			);
+			productName = Conduck;
+			productReference = 630432BC2FB7593700994EC0 /* Conduck.app */;
+			productType = "com.apple.product-type.application";
+		};
+		630432CD2FB759DB00994EC0 /* ConduckWatch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 630432D92FB759DC00994EC0 /* Build configuration list for PBXNativeTarget "ConduckWatch Watch App" */;
+			buildPhases = (
+				630432CA2FB759DB00994EC0 /* Sources */,
+				630432CB2FB759DB00994EC0 /* Frameworks */,
+				630432CC2FB759DB00994EC0 /* Resources */,
+				630432F82FB75BB000994EC0 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				630432F22FB75BB000994EC0 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				630432CF2FB759DB00994EC0 /* ConduckWatch Watch App */,
+			);
+			name = "ConduckWatch Watch App";
+			productName = "ConduckWatch Watch App";
+			productReference = 630432CE2FB759DB00994EC0 /* ConduckWatch Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		630432E02FB75BAE00994EC0 /* ConduckWatchExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 630432F52FB75BB000994EC0 /* Build configuration list for PBXNativeTarget "ConduckWatchExtension" */;
+			buildPhases = (
+				630432DD2FB75BAE00994EC0 /* Sources */,
+				630432DE2FB75BAE00994EC0 /* Frameworks */,
+				630432DF2FB75BAE00994EC0 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				630432E72FB75BAE00994EC0 /* ConduckWatch */,
+			);
+			name = ConduckWatchExtension;
+			productName = ConduckWatchExtension;
+			productReference = 630432E12FB75BAE00994EC0 /* ConduckWatchExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		630434052FCC000000000005 /* ConduckTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 630434092FCC000000000009 /* Build configuration list for PBXNativeTarget "ConduckTests" */;
+			buildPhases = (
+				630434062FCC000000000006 /* Sources */,
+				630434042FCC000000000004 /* Frameworks */,
+				630434072FCC000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				630434082FCC000000000008 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				630434032FCC000000000003 /* ConduckTests */,
+			);
+			name = ConduckTests;
+			productName = ConduckTests;
+			productReference = 630434022FCC000000000002 /* ConduckTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		631B3F202FD060FC00E01924 /* ConduckShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 631B3F2F2FD060FC00E01924 /* Build configuration list for PBXNativeTarget "ConduckShareExtension" */;
+			buildPhases = (
+				631B3F1D2FD060FC00E01924 /* Sources */,
+				631B3F1E2FD060FC00E01924 /* Frameworks */,
+				631B3F1F2FD060FC00E01924 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				631B3F222FD060FC00E01924 /* ConduckShareExtension */,
+			);
+			name = ConduckShareExtension;
+			productName = ConduckShareExtension;
+			productReference = 631B3F212FD060FC00E01924 /* ConduckShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		8ECFBB4ECFC1F14CD4D5BE26 /* ConduckShareExtensionMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 947CEAD5DF195F83C404C67B /* Build configuration list for PBXNativeTarget "ConduckShareExtensionMac" */;
+			buildPhases = (
+				F0DBD6ECA14866B8E62E3C07 /* Sources */,
+				FA4A4B8C316A265014ACD6E6 /* Frameworks */,
+				813DF9DCFB610393DC280699 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				E21FF585883B2FE78B83972E /* ConduckShareExtensionMac */,
+			);
+			name = ConduckShareExtensionMac;
+			productName = ConduckShareExtensionMac;
+			productReference = 279EE628C4491511540B6F33 /* ConduckShareExtensionMac.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		D261EFACF72E207F34A9C564 /* ConduckWatchTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C3BD0DA8893069E8AB3E4260 /* Build configuration list for PBXNativeTarget "ConduckWatchTests" */;
+			buildPhases = (
+				989C59C8495E1461CAD556D7 /* Sources */,
+				288A1397ECB4874F9174524D /* Frameworks */,
+				E9C8F024CDCA732A0C611AE1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6CB26BFB91BD4725FCCFC6BD /* PBXTargetDependency */,
+			);
+			name = ConduckWatchTests;
+			productName = ConduckWatchTests;
+			productReference = 393448D4A01EF6FDF81A1E05 /* ConduckWatchTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		630432B42FB7593700994EC0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					630432BB2FB7593700994EC0 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					630432CD2FB759DB00994EC0 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					630432E02FB75BAE00994EC0 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					630434052FCC000000000005 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 630432BB2FB7593700994EC0;
+					};
+					631B3F202FD060FC00E01924 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					8ECFBB4ECFC1F14CD4D5BE26 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+				};
+			};
+			buildConfigurationList = 630432B72FB7593700994EC0 /* Build configuration list for PBXProject "Conduck" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 630432B32FB7593700994EC0;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				63CC00012F6A1B0A00A00001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
+				63FA00012F6A1B0A00A00001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				63TX00012F6A1B0A00TX0001 /* XCRemoteSwiftPackageReference "textual" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 630432BD2FB7593700994EC0 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				630432BB2FB7593700994EC0 /* Conduck */,
+				630432CD2FB759DB00994EC0 /* ConduckWatch Watch App */,
+				630432E02FB75BAE00994EC0 /* ConduckWatchExtension */,
+				630434052FCC000000000005 /* ConduckTests */,
+				631B3F202FD060FC00E01924 /* ConduckShareExtension */,
+				8ECFBB4ECFC1F14CD4D5BE26 /* ConduckShareExtensionMac */,
+				D261EFACF72E207F34A9C564 /* ConduckWatchTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		630432BA2FB7593700994EC0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630432CC2FB759DB00994EC0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630432DF2FB75BAE00994EC0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630434072FCC000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		631B3F1F2FD060FC00E01924 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		813DF9DCFB610393DC280699 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E9C8F024CDCA732A0C611AE1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		630432B82FB7593700994EC0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				63ST00032F6A1B0A00ST0003 /* ShareTargetFilter.swift in Sources */,
+				63WC00032F6A1B0A00WC0003 /* WebPageCapture.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630432CA2FB759DB00994EC0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630432DD2FB75BAE00994EC0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		630434062FCC000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		631B3F1D2FD060FC00E01924 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		989C59C8495E1461CAD556D7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				221BB6745DA7B0E378D997C5 /* ConduckWatchSmokeTests.swift in Sources */,
+				1263D93A1706BD55172ED31F /* WatchSettingsApplyAndQueueTests.swift in Sources */,
+				C6486202BB44DA8DF866B51B /* WatchObservabilityTests.swift in Sources */,
+				3B3369FEAAD168D055C48147 /* TaskDeadlineTests.swift in Sources */,
+				75BE4967C913D2388127BA4A /* WatchCaptureGuardTests.swift in Sources */,
+				C03497D936DB6031248B40CE /* WatchConverseCompletionVerdictTests.swift in Sources */,
+				81BC91FF3F9DF8A6B54931C6 /* WatchDraftMintTests.swift in Sources */,
+				76D89192A7CC71C5BB1165A3 /* WatchHeadlessDrainDecisionTests.swift in Sources */,
+				069650C8AC0F675681F58C58 /* WatchRecordingLifecycleTests.swift in Sources */,
+				89700A11ABA1C9AF465DA4E0 /* WatchReplySpeakerFallbackTests.swift in Sources */,
+				3CDFE6DF6134706F3C5989D8 /* WatchSettingsPullTests.swift in Sources */,
+				FE2BBA31EA6030DB1561E93B /* WatchTTSClientGuardTests.swift in Sources */,
+				8718AFBC91AC4556CE661DD7 /* WatchArmActivationTests.swift in Sources */,
+				621F6DCF4F851CF5CD688390 /* WatchAudioSessionOwnershipTests.swift in Sources */,
+				F931ABD9E6AEA0D93CFD338D /* WatchConversationViewModelRefreshTests.swift in Sources */,
+				BACA6CA80A16CA4946FA2799 /* WatchDiagnosticsReporterTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F0DBD6ECA14866B8E62E3C07 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		630432D72FB759DC00994EC0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = 630432CD2FB759DB00994EC0 /* ConduckWatch Watch App */;
+			targetProxy = 630432D62FB759DC00994EC0 /* PBXContainerItemProxy */;
+		};
+		630432F22FB75BB000994EC0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 630432E02FB75BAE00994EC0 /* ConduckWatchExtension */;
+			targetProxy = 630432F12FB75BB000994EC0 /* PBXContainerItemProxy */;
+		};
+		630434082FCC000000000008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 630432BB2FB7593700994EC0 /* Conduck */;
+			targetProxy = 630434012FCC000000000001 /* PBXContainerItemProxy */;
+		};
+		631B3F2A2FD060FC00E01924 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = 631B3F202FD060FC00E01924 /* ConduckShareExtension */;
+			targetProxy = 631B3F292FD060FC00E01924 /* PBXContainerItemProxy */;
+		};
+		6CB26BFB91BD4725FCCFC6BD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "ConduckWatch Watch App";
+			target = 630432CD2FB759DB00994EC0 /* ConduckWatch Watch App */;
+			targetProxy = 39F94AE50DD0B77AAEB06DFF /* PBXContainerItemProxy */;
+		};
+		FF3F9BD13E00279A20437B92 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilters = (
+				macos,
+			);
+			target = 8ECFBB4ECFC1F14CD4D5BE26 /* ConduckShareExtensionMac */;
+			targetProxy = 33EB4FFC31E60F7491DCAC07 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2B4D357FF5A876F6A053805D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ConduckShareExtensionMac/ConduckShareExtensionMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ConduckShareExtensionMac/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).ConduckShareExtensionMac";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		33E74E2A0E17792183049420 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ConduckShareExtensionMac/ConduckShareExtensionMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ConduckShareExtensionMac/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).ConduckShareExtensionMac";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		4D6B465F01567807C4862263 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).watchkitapp.ConduckWatchTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ConduckWatch Watch App.app/ConduckWatch Watch App";
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
+		630432C52FB7593800994EC0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 63C0F1D12F6A1B0A00C0F1D1 /* Identity.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				"ARCHS[sdk=macosx*]" = arm64;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		630432C62FB7593800994EC0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 63C0F1D12F6A1B0A00C0F1D1 /* Identity.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				"ARCHS[sdk=macosx*]" = arm64;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		630432C82FB7593800994EC0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Conduck/Conduck-$(CONDUCK_ENTITLEMENTS_VARIANT).entitlements";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Conduck/Info.plist;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = NO;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = NO;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE)";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+		630432C92FB7593800994EC0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Conduck/Conduck-$(CONDUCK_ENTITLEMENTS_VARIANT).entitlements";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Conduck/Info.plist;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = NO;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = NO;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE)";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
+		630432DA2FB759DC00994EC0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "ConduckWatch Watch App/ConduckWatch.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "ConduckWatch Watch App/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(CONDUCK_BUNDLE_ID_BASE)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+		630432DB2FB759DC00994EC0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "ConduckWatch Watch App/ConduckWatch.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "ConduckWatch Watch App/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(CONDUCK_BUNDLE_ID_BASE)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
+		630432F62FB75BB000994EC0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ConduckWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).watchkitapp.AgentRelayWatch";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+		630432F72FB75BB000994EC0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ConduckWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).watchkitapp.AgentRelayWatch";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
+		6304340A2FCC00000000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Conduck.app/$(BUNDLE_LOADER_DIR)Conduck";
+				"TEST_HOST[sdk=iphoneos*]" = "$(BUILT_PRODUCTS_DIR)/Conduck.app/Conduck";
+				"TEST_HOST[sdk=iphonesimulator*]" = "$(BUILT_PRODUCTS_DIR)/Conduck.app/Conduck";
+				"TEST_HOST[sdk=macosx*]" = "$(BUILT_PRODUCTS_DIR)/Conduck.app/Contents/MacOS/Conduck";
+			};
+			name = Debug;
+		};
+		6304340B2FCC00000000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				"TEST_HOST[sdk=iphoneos*]" = "$(BUILT_PRODUCTS_DIR)/Conduck.app/Conduck";
+				"TEST_HOST[sdk=iphonesimulator*]" = "$(BUILT_PRODUCTS_DIR)/Conduck.app/Conduck";
+				"TEST_HOST[sdk=macosx*]" = "$(BUILT_PRODUCTS_DIR)/Conduck.app/Contents/MacOS/Conduck";
+			};
+			name = Release;
+		};
+		631B3F2D2FD060FC00E01924 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ConduckShareExtension/ConduckShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ConduckShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).ConduckShareExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		631B3F2E2FD060FC00E01924 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ConduckShareExtension/ConduckShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ConduckShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).ConduckShareExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		9CD3E90AE6F8EE36E93EE712 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).watchkitapp.ConduckWatchTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ConduckWatch Watch App.app/ConduckWatch Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		630432B72FB7593700994EC0 /* Build configuration list for PBXProject "Conduck" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				630432C52FB7593800994EC0 /* Debug */,
+				630432C62FB7593800994EC0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		630432C72FB7593800994EC0 /* Build configuration list for PBXNativeTarget "Conduck" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				630432C82FB7593800994EC0 /* Debug */,
+				630432C92FB7593800994EC0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		630432D92FB759DC00994EC0 /* Build configuration list for PBXNativeTarget "ConduckWatch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				630432DA2FB759DC00994EC0 /* Debug */,
+				630432DB2FB759DC00994EC0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		630432F52FB75BB000994EC0 /* Build configuration list for PBXNativeTarget "ConduckWatchExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				630432F62FB75BB000994EC0 /* Debug */,
+				630432F72FB75BB000994EC0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		630434092FCC000000000009 /* Build configuration list for PBXNativeTarget "ConduckTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6304340A2FCC00000000000A /* Debug */,
+				6304340B2FCC00000000000B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		631B3F2F2FD060FC00E01924 /* Build configuration list for PBXNativeTarget "ConduckShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				631B3F2D2FD060FC00E01924 /* Debug */,
+				631B3F2E2FD060FC00E01924 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		947CEAD5DF195F83C404C67B /* Build configuration list for PBXNativeTarget "ConduckShareExtensionMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				33E74E2A0E17792183049420 /* Debug */,
+				2B4D357FF5A876F6A053805D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C3BD0DA8893069E8AB3E4260 /* Build configuration list for PBXNativeTarget "ConduckWatchTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4D6B465F01567807C4862263 /* Release */,
+				9CD3E90AE6F8EE36E93EE712 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		63CC00012F6A1B0A00A00001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sindresorhus/KeyboardShortcuts";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
+		63FA00012F6A1B0A00A00001 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio";
+			requirement = {
+				kind = exactVersion;
+				version = 0.13.2;
+			};
+		};
+		63TX00012F6A1B0A00TX0001 /* XCRemoteSwiftPackageReference "textual" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/GigaDuckAI/textual";
+			requirement = {
+				kind = revision;
+				revision = a1365b4675fd772f57772d53aacee918cfa18b45;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		63CC00022F6A1B0A00A00002 /* KeyboardShortcuts */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 63CC00012F6A1B0A00A00001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
+			productName = KeyboardShortcuts;
+		};
+		63FA00022F6A1B0A00A00002 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 63FA00012F6A1B0A00A00001 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+		63TX00022F6A1B0A00TX0002 /* Textual */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 63TX00012F6A1B0A00TX0001 /* XCRemoteSwiftPackageReference "textual" */;
+			productName = Textual;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 630432B42FB7593700994EC0 /* Project object */;
+}

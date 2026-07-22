@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "conduck-smartwatch-hologram.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
