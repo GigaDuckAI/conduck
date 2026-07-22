@@ -8,3 +8,6 @@ DerivedData/
 !.env.example
 # Official-identity override lives only in the private overlay — never commit here.
 Identity-Override.xcconfig
+
+# Local agent-instruction overlays (private, never committed)
+CLAUDE.md
