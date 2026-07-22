@@ -132,7 +132,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/GigaDuckAI/textual",
       "state" : {
-        "revision" : "a1365b4675fd772f57772d53aacee918cfa18b45"
+        "revision" : "251b3b71d95d016fc7d93124afebcd97b2e4f929"
       }
     },
     {
