@@ -2,8 +2,8 @@
 
 **The short version:** the code in this repository is free under Apache-2.0.
 The Conduck name and the real brand artwork are not. Building it for yourself
-is welcome — you get "Conduck Community". If you distribute a fork, give it
-your own name and icon.
+is welcome — you get "Conduck Community". If you distribute a build to
+others, give it a product name of its own.
 
 ## What is a trademark here
 
@@ -30,16 +30,24 @@ Building Conduck from this source for your own use, on devices you control, is
 sanctioned and encouraged. Such builds display the name "Conduck Community",
 and you are welcome to use that name for them.
 
-## Redistributing a fork
+## Redistributing a build
 
-If you distribute builds of a fork — publicly or within an organization,
-modified or not — use your own product name and your own app icon. Do not use
-"Conduck", "Conduck Community", the duck character, or anything confusingly
-similar as the identity of your distribution. The goal is simple: nobody who
-installs your build should mistake it for the official Conduck app or believe
-it comes from us. Truthful references in your source code, documentation, and
-release notes (for example, "based on Conduck") are fine and do not need to be
-removed.
+If you distribute a build made from this source to others — publicly or
+within an organization, modified or unmodified — use a product name that is
+not "Conduck", "Conduck Community", or confusingly similar, and do not use
+the duck character as the identity of your distribution. Those names and that
+character are not licensed as the product identity of a redistributed build.
+The goal is simple: nobody who installs your build should mistake it for the
+official Conduck app or believe it comes from us.
+
+You do not need to remove those strings from the source code, and truthful
+references in your source, documentation, and release notes (for example,
+"based on Conduck") are fine.
+
+You may redistribute and use the neutral placeholder artwork under
+Apache-2.0, including as your app icon — it contains no Conduck brand mark,
+and using it does not imply endorsement by us. The official Conduck icons and
+duck-character artwork are not in this repository and are not licensed.
 
 ## Nominative fair use
 
