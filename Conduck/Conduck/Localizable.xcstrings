@@ -1,6 +1,105 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "settings.about.licenses.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Source Licenses"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.conduck.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck License"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.conduck.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apache License 2.0"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.notice.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notice"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.notice.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attribution notice"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.thirdparty.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Third-Party Notices"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.thirdparty.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bundled open-source components"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.footer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck's own source and placeholder artwork are licensed under the Apache License 2.0. Bundled third-party components keep their own licenses, reproduced here."
+          }
+        }
+      }
+    },
+    "settings.about.licenses.loadError" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This document could not be loaded."
+          }
+        }
+      }
+    },
     "" : {
 
     },

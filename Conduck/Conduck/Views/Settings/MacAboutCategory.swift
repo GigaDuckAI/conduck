@@ -8,6 +8,11 @@
 import SwiftUI
 
 struct MacAboutCategory: View {
+    // Open Source Licenses opens in a sheet (native + simple — no restructuring
+    // of `MacSettingsView`'s category swap), wrapping the shared `LicensesView`
+    // in its own `NavigationStack` so its detail pushes work inside the modal.
+    @State private var showingLicenses = false
+
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
@@ -26,6 +31,22 @@ struct MacAboutCategory: View {
                     .padding(.bottom, 24)
             }
             .padding(28)
+        }
+        .sheet(isPresented: $showingLicenses) {
+            NavigationStack {
+                LicensesView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button {
+                                showingLicenses = false
+                            } label: {
+                                Text(LocalizedStringResource("settings.mac.done",
+                                                             defaultValue: "Done"))
+                            }
+                        }
+                    }
+            }
+            .frame(width: 640, height: 680)
         }
     }
 
@@ -62,6 +83,19 @@ struct MacAboutCategory: View {
 
             Link(destination: URL(string: Constants.termsOfServiceURL)!) {
                 rowLabel("Terms of Service", systemImage: "doc.text", trailing: "arrow.up.right") // xcstrings
+            }
+            .buttonStyle(.plain)
+
+            // Internal sheet (not an external link) — trailing chevron signals
+            // in-app content. Apache-2.0 §4 / MIT notice preservation.
+            Button {
+                showingLicenses = true
+            } label: {
+                rowLabel(
+                    LocalizedStringKey("settings.about.licenses.title"),
+                    systemImage: "doc.plaintext",
+                    trailing: "chevron.forward"
+                )
             }
             .buttonStyle(.plain)
         }

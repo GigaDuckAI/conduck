@@ -392,6 +392,19 @@ private struct AboutPane: View {
                     supportRow("Terms of Service", systemImage: "doc.text") // xcstrings
                 }
                 .buttonStyle(.plain)
+
+                // Internal push (not an external link) — Apache-2.0 §4 / MIT
+                // notice preservation for the bundled packages + Silero model.
+                NavigationLink {
+                    LicensesView()
+                } label: {
+                    Label(
+                        LocalizedStringResource("settings.about.licenses.title",
+                                                defaultValue: "Open Source Licenses"),
+                        systemImage: "doc.plaintext"
+                    )
+                    .foregroundStyle(AppColors.textPrimary)
+                }
             }
 
             Section {
