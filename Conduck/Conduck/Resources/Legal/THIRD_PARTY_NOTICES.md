@@ -1,17 +1,17 @@
 # Third-Party Notices
 
 Conduck's own source code and the neutral placeholder artwork in this repository
-are licensed under the Apache License 2.0 — see [LICENSE](LICENSE). This file
-lists the third-party components that are part of a Conduck build, in two
-categories:
+are licensed under the Apache License 2.0 — see the LICENSE file at the root of
+this repository. This file lists the third-party components that are part of a
+Conduck build, in two categories:
 
 1. **A vendored model artifact** — one compiled machine-learning model checked
    into this repository.
 2. **Swift Package Manager dependencies** — sixteen packages that are not
    vendored in this tree; they are fetched at build time and compiled into the
    distributed app binaries. The exact pinned versions and revisions are
-   recorded in
-   [`Conduck/Conduck.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`](Conduck/Conduck.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved).
+   recorded in the repository at
+   `Conduck/Conduck.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`.
    The list covers direct and transitive packages.
 
 License identities below were verified against the upstream repositories.
@@ -234,7 +234,7 @@ SOFTWARE.
 ### Apache-2.0-licensed packages
 
 The following packages are licensed under the Apache License 2.0. The full
-license text is identical to this repository's root [LICENSE](LICENSE) file.
+license text is identical to this repository's root LICENSE file.
 Three of these projects (SwiftASN1, Swift Crypto, SwiftNIO) publish a NOTICE
 file, reproduced verbatim below; the remaining projects publish the unmodified
 Apache-2.0 text without a project-specific copyright notice.
