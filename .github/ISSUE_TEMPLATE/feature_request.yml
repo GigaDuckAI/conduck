@@ -16,14 +16,14 @@ body:
   - type: textarea
     id: solution
     attributes:
-      label: Proposed solution
-      description: What would you like Conduck to do?
+      label: Desired outcome
+      description: What should Conduck make possible instead? You don't need to propose how it should be built.
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
+      label: Alternatives or workarounds
       description: Other approaches or workarounds you have tried or thought about.
     validations:
       required: false

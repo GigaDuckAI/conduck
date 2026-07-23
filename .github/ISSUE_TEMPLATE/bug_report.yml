@@ -12,7 +12,18 @@ body:
     id: what-happened
     attributes:
       label: What happened?
-      description: What did you observe?
+      description: What did you observe? Include the affected gateway or voice provider if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps that trigger the problem — or, for intermittent issues, when it tends to occur.
+      placeholder: |
+        1.
+        2.
+        3.
     validations:
       required: true
   - type: textarea
@@ -33,7 +44,7 @@ body:
   - type: dropdown
     id: platform
     attributes:
-      label: Platform
+      label: Affected platforms
       multiple: true
       options:
         - iOS
@@ -44,49 +55,17 @@ body:
     validations:
       required: true
   - type: input
-    id: app-version
+    id: version
     attributes:
-      label: App version
-      description: The Conduck version, or the commit you built from.
-    validations:
-      required: true
-  - type: input
-    id: os-version
-    attributes:
-      label: OS version
-      description: e.g. iOS 26.5, macOS 26.5, watchOS 26.5.
-    validations:
-      required: true
-  - type: dropdown
-    id: gateway
-    attributes:
-      label: Gateway type
-      description: Which gateway or model provider was involved, if any.
-      options:
-        - Not applicable
-        - OpenClaw
-        - Hermes
-        - OpenRouter hosted
-        - Custom OpenAI-compatible
-        - Other
-    validations:
-      required: false
-  - type: textarea
-    id: repro
-    attributes:
-      label: Steps to reproduce
-      description: Numbered steps that reliably trigger the problem.
-      placeholder: |
-        1.
-        2.
-        3.
+      label: App, OS, and source version
+      description: Write "Diagnostics below" if you paste the diagnostics report. Otherwise give the Conduck and OS versions, e.g. "Conduck 1.3 (57) on iOS 26.5". For builds from source, include the commit.
     validations:
       required: true
   - type: textarea
     id: diagnostics
     attributes:
       label: Diagnostics report
-      description: In Conduck, open Settings → Diagnostics, tap "Test everything", then "Copy Diagnostics" and paste the result here. This report is safe to share by design — it never contains API keys, tokens, URLs, transcripts, or file names.
+      description: In Conduck, open Settings → Diagnostics, tap "Test everything", then "Copy Diagnostics" and paste the result here. Safe to share by design — it never contains API keys, tokens, URLs, transcripts, or file names.
       render: shell
     validations:
       required: false
