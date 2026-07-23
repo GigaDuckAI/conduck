@@ -12,7 +12,7 @@ body:
     id: what-happened
     attributes:
       label: What happened?
-      description: What did you observe? Include the affected gateway or voice provider if relevant.
+      description: What did you observe, and what did you expect instead? Include the affected gateway or voice provider if relevant.
     validations:
       required: true
   - type: textarea
@@ -24,12 +24,6 @@ body:
         1.
         2.
         3.
-    validations:
-      required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: What did you expect to happen?
     validations:
       required: true
   - type: dropdown
