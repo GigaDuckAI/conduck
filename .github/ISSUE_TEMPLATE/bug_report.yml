@@ -83,10 +83,18 @@ body:
     validations:
       required: true
   - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics report
+      description: In Conduck, open Settings → Diagnostics, tap "Test everything", then "Copy Diagnostics" and paste the result here. This report is safe to share by design — it never contains API keys, tokens, URLs, transcripts, or file names.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
     id: logs
     attributes:
-      label: Relevant log output
-      description: "Paste console or log output. Before pasting, remove anything private: API keys, bearer tokens, gateway URLs, transcripts, prompts and replies, filenames, and account names. Conduck itself does not log these, but output from a modified build might."
+      label: Additional log output
+      description: "Optional console or log output beyond the diagnostics report. Before pasting, remove anything private: API keys, bearer tokens, gateway URLs, transcripts, prompts and replies, filenames, and account names. Conduck itself does not log these, but output from a modified build might."
       render: shell
     validations:
       required: false
