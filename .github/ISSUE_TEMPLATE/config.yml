@@ -1,11 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Questions and setup help
-    url: https://discord.gg/HqVwTmM7
-    about: Join the Discord community for questions, setup help, and general discussion.
   - name: Setup guide
     url: https://conduck.com/setup/
     about: Step-by-step pairing and configuration guide on the official site.
-  - name: Report a security vulnerability
-    url: https://conduck.com/security
-    about: Security issues must not be filed as public issues. Report them privately here.
+  - name: Discord Community
+    url: https://discord.gg/HqVwTmM7
+    about: Join the Discord community for questions, setup help, and general discussion.
