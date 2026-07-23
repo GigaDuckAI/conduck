@@ -1,0 +1,99 @@
+name: Bug report
+description: Report a problem with Conduck
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. For questions or setup help, the [Discord](https://discord.gg/HqVwTmM7) is usually faster.
+
+        **Do not report security vulnerabilities here.** See [SECURITY.md](https://github.com/gigaduckai/conduck/blob/main/SECURITY.md) — a public issue discloses the problem before a fix exists.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you observe?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: dropdown
+    id: build
+    attributes:
+      label: Build flavor
+      options:
+        - Community build from source
+        - App Store build
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options:
+        - iOS
+        - iPadOS
+        - macOS
+        - watchOS
+        - CarPlay
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: The Conduck version, or the commit you built from.
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      description: e.g. iOS 26.5, macOS 26.5, watchOS 26.5.
+    validations:
+      required: true
+  - type: dropdown
+    id: gateway
+    attributes:
+      label: Gateway type
+      description: Which gateway or model provider was involved, if any.
+      options:
+        - Not applicable
+        - OpenClaw
+        - Hermes
+        - OpenRouter hosted
+        - Custom OpenAI-compatible
+        - Other
+    validations:
+      required: false
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps that reliably trigger the problem.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: "Paste console or log output. Before pasting, remove anything private: API keys, bearer tokens, gateway URLs, transcripts, prompts and replies, filenames, and account names. Conduck itself does not log these, but output from a modified build might."
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Screenshots or additional context
+      description: Drag in screenshots or a screen recording, and add anything else that helps.
+    validations:
+      required: false
