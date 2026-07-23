@@ -75,8 +75,8 @@ final class CarPlaySettings {
     func refreshFromSettings() async {
         // Single atomic actor hop (mirrors the foreground transcribe sites) so
         // presetID / key / customModel always refer to the SAME preset — three
-        // separate hops could tear against a concurrent preset switch (Wave-5B
-        // H2). Language is read in the same hop. `customConfig` (the BYO
+        // separate hops could tear against a concurrent preset switch.
+        // Language is read in the same hop. `customConfig` (the BYO
         // endpoint's url/cert/auth) is intentionally NOT cached: CarPlay routes
         // only cloud + Apple providers at V1.
         let snapshot = await SettingsManager.shared.activeSTTSnapshot()

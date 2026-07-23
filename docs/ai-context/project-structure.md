@@ -11,7 +11,7 @@ Top-level layout only; full annotated tree below. Keep in sync when top-level en
 ```
 ./                                    # repository root
 ├── .gitignore
-├── .env.example                      # BYO STT-provider key template (paste-source; never consumed at build/test/run)
+├── .env.example                      # BYO voice-key + QA gateway-token template (paste-source; never consumed at build/test/run)
 ├── README.md                         # Repo intro + build/run
 ├── docs/
 │   ├── ai-context/                   # spec.md · project-structure.md
@@ -37,7 +37,7 @@ Top-level layout only; full annotated tree below. Keep in sync when top-level en
 ```
 ./                                                      # repository root
 ├── .gitignore
-├── .env.example                                        # BYO STT-provider key template — a paste-source only; Conduck has NO backend, so this is never consumed at build/test/run (copy into the sim Settings ▸ API Key field per active STT preset)
+├── .env.example                                        # BYO voice-key + QA gateway-token template — a paste-source only; Conduck has NO backend, so this is never consumed at build/test/run (keys: copy into the sim Settings ▸ API Key field per active STT preset; tokens: sourced by the maintainer QA harness per docs/qa/qa-mode.md)
 ├── README.md                                           # Repo intro + build/run
 │
 ├── docs/

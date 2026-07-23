@@ -48,7 +48,7 @@ Requires Xcode 26.5 or later.
 
 1. Clone this repository.
 2. Open `Conduck/Conduck.xcodeproj`.
-3. Build and run — no configuration needed. Simulator builds work as-is; running on your own devices just needs your development team selected under Signing & Capabilities.
+3. Build and run — no configuration needed. Simulator builds work as-is. Running on your own devices needs your development team plus your own identifiers (the community `com.example.*` app group, iCloud container, and push capabilities can't provision under an arbitrary team) — define them via a gitignored `Conduck/Configs/Identity-Override.xcconfig` as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The result is **Conduck Community**: identical functionality (minus the CarPlay entitlement) under a neutral identity with placeholder art. The real Conduck brand artwork is not part of this repository and is not covered by the code license — see [TRADEMARKS.md](TRADEMARKS.md).
 

@@ -888,7 +888,7 @@ struct ConverseResponse: Decodable, Sendable {
 /// case is the ONLY one producing a MIXED-shape `messages[]` (bare-string text
 /// turns + one `.parts` image turn); logging the assembled shape + client-side
 /// send→done timing proves what the app emits and attributes the wall-clock to
-/// the gateway, not the device. Pairs with `Conduck/scripts/wire-latency-probe.sh`.
+/// the gateway, not the device.
 ///
 /// PRIVACY (spec.md "Privacy & Security" — non-negotiable): METADATA ONLY. Never reads or logs
 /// message content, image bytes, gateway URLs, or bearer tokens — only roles,

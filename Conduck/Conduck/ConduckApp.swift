@@ -2,8 +2,6 @@
 //  ConduckApp.swift
 //  Conduck
 //
-//  Created by Peter Krück on 15.05.26.
-//
 //  Lifecycle wiring. Wires the iOS WindowGroup, NotificationDelegate (foreground
 //  banners — required for the macOS Shortcuts-foregrounding pattern),
 //  SettingsManager.performInitialSync, PendingRetryStore.cleanupExpired, and

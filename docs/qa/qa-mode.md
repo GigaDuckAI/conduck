@@ -50,7 +50,7 @@ QA mode is gated entirely by launch arguments. The DEBUG binary serves both
 QA and dev runs without any rebuild.
 
 ```bash
-xcrun simctl launch <UDID> ai.gigaduck.AgentRelay \
+xcrun simctl launch <UDID> com.example.Conduck \
   -ConduckQAMode \
   -ConduckQAOpenClawURL https://openclaw.example.com \
   -ConduckQAOpenClawToken <token> \
@@ -77,13 +77,16 @@ xcrun simctl launch <UDID> ai.gigaduck.AgentRelay \
 
 ## Where the tokens come from
 
-The two bearer tokens live in your gitignored `.env` as
-`OPENCLAW_GATEWAY_TOKEN` and `HERMES_API_SERVER_KEY`. The QA harness `source`s
-that file at run time and interpolates the values onto the launch-arg line —
-**the tokens are never bundled into the app and never echoed to logs**. The
-gateway URLs are non-secret config and are supplied to the harness as
-constants. If `.env` or a token is missing, the harness warns and continues
-config-unseeded: the UI is still testable, but sends will error.
+The two bearer tokens live in your gitignored `.env` (template:
+`.env.example`) as `OPENCLAW_GATEWAY_TOKEN` and `HERMES_API_SERVER_KEY`,
+pointing at your own gateway instances. The automated QA harness — maintainer
+tooling, not part of this repository; everything it does is reproducible
+manually with the launch arguments above — `source`s that file at run time and
+interpolates the values onto the launch-arg line — **the tokens are never
+bundled into the app and never echoed to logs**. The gateway URLs are
+non-secret config and are supplied to the harness as constants. If `.env` or a
+token is missing, the harness warns and continues config-unseeded: the UI is
+still testable, but sends will error.
 
 ## Gateway reachability
 

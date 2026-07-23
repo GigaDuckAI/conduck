@@ -23,7 +23,7 @@ enum FeatureFlags {
     /// against a self-hosted Hermes instance: green at the wire level
     /// (GET /v1/models 200, model-omitted accepted, full-history turn
     /// returned "42").
-    /// Multi-device CloudKit remains an org-conversion-window founder gate,
+    /// Multi-device CloudKit remains a signed-device verification gate,
     /// same as OpenClaw's.
     ///
     /// The network layer (`RemoteAgentStatusMap`, `RemoteAgentClient`) does

@@ -3,7 +3,9 @@
 Each scenario is one QA run. Read the relevant section before the run and use
 it to scope what you exercise.
 
-Setup background for every scenario (automated by the QA harness): build the
+Setup background for every scenario (automated by the maintainer-side QA
+harness — not part of this repository; the manual equivalent is the launch-arg
+flow in `qa-mode.md`): build the
 Debug binary, install to a per-run ephemeral simulator, source `.env` for the
 gateway tokens, run the gateway-reachability precheck, launch with the QA
 launch args, and verify the red `QA MODE` banner is visible. Conduck has no
@@ -18,7 +20,8 @@ instead of a reply.
 
 **Targeting toolbar actions — coordinate-tap only.** SwiftUI `NavigationStack`
 toolbars collapse the entire nav bar into one opaque `AXGroup` (`children: []`)
-in the live `AXUIElement` tree that `axe` reads, so the toolbar buttons are NOT
+in the live `AXUIElement` tree that `axe` (an accessibility-driver CLI used
+for simulator UI automation) reads, so the toolbar buttons are NOT
 reachable by id OR by label — do not waste turns on `tap --id`/`--label` for
 them. Tap by coordinate instead (iPhone 17 Pro, portrait, inline nav bar at
 y≈89): Conversations x≈22, centered gateway-title/Clone x≈201, New conversation x≈370. Settings is a conversation-list footer row (id `toolbar.settings`) — in the live tree, tap by id or row coordinate, not a nav-bar coordinate. (The buttons
