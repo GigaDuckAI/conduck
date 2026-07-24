@@ -213,4 +213,27 @@ final class SettingsViewModelMakeDefaultTests: XCTestCase {
         XCTAssertEqual(defaultRef, openrouter,
                        "First gateway ever (OpenRouter) must become the default — the hosted-model lane is not exempt when it's the only gateway.")
     }
+
+    func testOpenRouterSavePreservesLongModelIdentifierExactly() async throws {
+        try await requireGatewayKeychainOrSkip(for: openrouter)
+        let vm = await makeVM()
+        let model = "provider/team/" + String(repeating: "opaque-model-segment-", count: 8)
+        XCTAssertGreaterThan(model.count, 100, "The fixture must cross the retired cap.")
+
+        vm.editorHasUnsavedChanges = true
+        vm.remoteAgentModelStrings[openrouter] = "  \(model)  "
+        let ok = await vm.saveRemoteAgent(
+            ref: openrouter,
+            name: nil,
+            stagedToken: .typed("sk-or-test-long-model")
+        )
+
+        XCTAssertTrue(ok, "A valid OpenRouter token + model must commit.")
+        let storedModel = await SettingsManager.shared.getRemoteAgentModel(for: openrouter)
+        XCTAssertEqual(
+            storedModel,
+            model,
+            "OpenRouter model identifiers are opaque: Save may trim surrounding whitespace but must preserve the full value."
+        )
+    }
 }

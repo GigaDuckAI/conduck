@@ -12,9 +12,10 @@
 //
 // The URL is display-first (read it off the phone, type it on the computer),
 // deliberately NOT a tappable Link — opening it on the phone is the exact detour
-// this screen exists to prevent. Lane-correct is load-bearing: the custom lane's
-// page carries the `--generic` command (and links the adapter contract); the
-// full-agent page would pair the wrong service for a custom-lane user.
+// this screen exists to prevent. Lane-correct remains useful because the custom
+// page leads with `--check-server` and links the adapter contract, while the
+// full-agent page leads with `--setup` for OpenClaw and Hermes. The in-app
+// Commands step still uses `--setup` for both lanes.
 //
 // Like every guided sub-step, the container paints the gradient + Back/Close
 // chrome and owns routing; this view renders only the mascot / title / body card
@@ -24,7 +25,7 @@ import SwiftUI
 
 struct GatewayHeadsUpView: View {
     /// The chosen lane (full-agent vs custom). Drives which site page the chip
-    /// shows — `Constants.setupCommandPageURLDisplay(generic:)`.
+    /// shows — `Constants.setupCommandPageURLDisplay(custom:)`.
     let lane: GatewaySetupLane
     /// Advance to the readiness step.
     let proceed: () -> Void
@@ -80,7 +81,7 @@ struct GatewayHeadsUpView: View {
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-                Text(verbatim: Constants.setupCommandPageURLDisplay(generic: lane.isGeneric))
+                Text(verbatim: Constants.setupCommandPageURLDisplay(custom: lane.isCustom))
                     .onboardingScaledFont(.subheadline, weight: .semibold, design: .monospaced)
                     .foregroundStyle(AppColors.textEmphasis)
                     .textSelection(.enabled)

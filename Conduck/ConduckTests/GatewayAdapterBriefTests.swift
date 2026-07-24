@@ -6,7 +6,9 @@
 // is pointer-first (it delegates to the hosted build brief, narrowed to stop
 // before exposure/pairing — the app owns those) with a self-contained fallback
 // aligned to contract revision 1.3, so its load-bearing points must not silently
-// drift: the two raw `.md` URLs, the workflow-ownership boundary, the wire shape,
+// drift: the two raw `.md` URLs, the workflow-ownership boundary, the COMPLETE
+// runnable adapter-check invocation (download + `CONDUCK_TOKEN` + explicit
+// loopback URL — a bare `--check-adapter` blocks on an interactive prompt), the wire shape,
 // the 1.3 image rules (verbatim historical disclosure, never-reject-historical),
 // the frozen error-code vocabulary, the 285s cap, the 50 MiB body floor,
 // loopback-only bind, and bearer auth. It also guards the security-critical
@@ -18,6 +20,21 @@ import XCTest
 
 final class GatewayAdapterBriefTests: XCTestCase {
 
+    /// Every in-app setup surface uses the direct setup action. Gateway
+    /// detection informs the script's menu; the app never forces a hidden lane.
+    func testInAppSetupCommandUsesCanonicalSetupFlag() {
+        XCTAssertEqual(
+            Constants.conduckConnectSetupCommandShort,
+            "curl -fsSLO https://github.com/gigaduckai/conduck-connect/releases/latest/download/conduck-connect.sh && bash conduck-connect.sh --setup"
+        )
+        for retired in ["--generic", "--doctor", "--compat", " check server", " check adapter"] {
+            XCTAssertFalse(
+                Constants.conduckConnectSetupCommandShort.contains(retired),
+                "setup command must not contain retired CLI spelling: \(retired)"
+            )
+        }
+    }
+
     /// The brief must carry every load-bearing contract point verbatim.
     func testBriefContainsContractInvariants() {
         let brief = GatewayAdapterBriefView.clipboardBrief
@@ -28,7 +45,13 @@ final class GatewayAdapterBriefTests: XCTestCase {
             "steps 1-9",                                   // narrowed scope
             "STOP before step 10",                         // stop before expose/pair
             "supervisor",                                  // always-on install stays in scope
-            "conduck-connect",                             // doctor + later pairing tool
+            // Adapter check in COMPLETE runnable form — a bare `--check-adapter`
+            // blocks on an interactive URL prompt, fatal for a headless agent.
+            "curl -fsSLO https://github.com/gigaduckai/conduck-connect/releases/latest/download/conduck-connect.sh",
+            "CONDUCK_TOKEN=\"$TOKEN\" bash conduck-connect.sh --check-adapter http://127.0.0.1:8480",
+            "CONDUCK_TOKEN=\"$TOKEN\" bash conduck-connect.sh --check-adapter --deep http://127.0.0.1:8480",
+            "a PASS may ask whether to continue with setup",
+            "answer no during these build checks",
 
             // Wire + security
             "/v1/chat/completions",                        // the turn route
@@ -77,13 +100,41 @@ final class GatewayAdapterBriefTests: XCTestCase {
         )
     }
 
-    /// Workflow-ownership negative: exposure/pairing belongs to the user via the
+    /// Workflow-ownership negative: exposure/pairing belongs to the USER via the
     /// app's guided flow — the brief must never hand the AI the pairing command.
+    ///
+    /// This brief is pasted into an autonomous coding agent, which acts on what it
+    /// is given. The brief names exposure and pairing in prose ("I'll handle them
+    /// myself through Conduck's guided setup") and deliberately supplies NO runnable
+    /// invocation for them, in any spelling — first-person phrasing states intent,
+    /// but the absent command is the actual guard. `--check-adapter` stays (that IS
+    /// the AI's job); anything that would set up, expose, or pair must not appear.
     func testBriefNeverRunsPairing() {
-        XCTAssertFalse(
-            GatewayAdapterBriefView.clipboardBrief.contains("--generic"),
-            "clipboardBrief must not contain the conduck-connect pairing command"
+        let brief = GatewayAdapterBriefView.clipboardBrief
+        for forbidden in ["--setup", "--generic", "--expose", "--pair"] {
+            XCTAssertFalse(
+                brief.contains(forbidden),
+                "clipboardBrief must not hand the AI the pairing/exposure invocation: \(forbidden)"
+            )
+        }
+        // The prose hand-off must still be present, so the AI knows the step exists
+        // and that someone else owns it — silence would invite it to improvise.
+        XCTAssertTrue(
+            brief.contains("Conduck's guided setup"),
+            "clipboardBrief must still name the user-owned exposure/pairing step in prose"
         )
+    }
+
+    /// The public CLI has one canonical spelling per action. The brief must
+    /// not keep any removed aliases or command-form spellings alive.
+    func testBriefUsesOnlyCanonicalCLI() {
+        let brief = GatewayAdapterBriefView.clipboardBrief
+        for retired in ["--generic", "--doctor", "--compat", "check adapter", "check server"] {
+            XCTAssertFalse(
+                brief.contains(retired),
+                "clipboardBrief must not contain retired CLI spelling: \(retired)"
+            )
+        }
     }
 
     /// Revision lock: the pre-1.3 image rule ("say so in the reply or return an

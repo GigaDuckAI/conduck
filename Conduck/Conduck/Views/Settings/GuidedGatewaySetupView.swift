@@ -9,8 +9,7 @@
 //  Two self-hosted LANES share one linear sub-flow (`GatewaySetupLane`):
 //    .fullAgent — OpenClaw / Hermes (a full personal-AI server).
 //    .custom    — any OpenAI-compatible endpoint the user runs.
-//  Both lanes walk the SAME steps, differing only in copy + the
-//  `conduck-connect` command variant:
+//  Both lanes walk the SAME steps, differing only in copy and help-page context:
 //    fork → readiness → helper → commands → success
 //  The hosted-model (OpenRouter) lane is NOT a `GatewaySetupLane`; it has its
 //  own dedicated single step (`HostedModelGatewayStepView`).
@@ -400,11 +399,10 @@ struct GuidedGatewaySetupView: View {
             // Install / trust the conduck-connect helper.
             GatewayHelperTrustView(lane: lane, proceed: { goTo(.commands(lane)) })
 
-        case .commands(let lane):
+        case .commands:
             // The command to run, then scan / paste the resulting setup code
             // (the container-level import sheet does the actual import).
             GatewayCommandsView(
-                lane: lane,
                 onScanOrPaste: { connectedRef = nil; showingPairingImport = true }
             )
 

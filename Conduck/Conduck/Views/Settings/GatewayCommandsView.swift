@@ -4,9 +4,8 @@
 // Guided-setup step that shows the one-paste `conduck-connect` command to run on
 // the user's always-on server, then hands off to scan/paste the resulting setup
 // code. Renders the SHORT one-paste command (download to disk then `bash`, same
-// form as the per-gateway editor's quick connect). Lane-aware: the custom lane
-// appends `--generic` (`kind=custom` setup code), so the shared command block is
-// rendered with `generic: lane.isGeneric`.
+// form as the per-gateway editor's quick connect). Every lane uses `--setup`;
+// the script reports detected gateways and asks which one to configure.
 //
 // The command card leads on every platform and the neutral what-happens-next
 // panel carries the come-back-here cue. (The "easier from a computer" pointer —
@@ -23,9 +22,6 @@ import SwiftUI
 
 /// Step between the chooser and the scan/paste import: "run this on your server."
 struct GatewayCommandsView: View {
-    /// The chosen lane (full-agent vs custom). Drives which command variant the
-    /// shared block renders + copies.
-    let lane: GatewaySetupLane
     /// Move on to scanning / pasting the setup code the command printed.
     let onScanOrPaste: () -> Void
 
@@ -64,7 +60,7 @@ struct GatewayCommandsView: View {
 
                 // The command itself (wrapped, bordered in-card copy) — the
                 // centerpiece on every platform.
-                ConduckConnectCommandBlock(generic: lane.isGeneric, hero: true)
+                ConduckConnectCommandBlock()
 
                 // Terminal→app hand-off: what conduck-connect prints (a QR code /
                 // setup code) and the action that finishes setup. A NEUTRAL panel —
@@ -195,7 +191,7 @@ struct GatewayCommandsView: View {
         )
         .ignoresSafeArea()
 
-        GatewayCommandsView(lane: .fullAgent, onScanOrPaste: {})
+        GatewayCommandsView(onScanOrPaste: {})
     }
 }
 
@@ -208,6 +204,6 @@ struct GatewayCommandsView: View {
         )
         .ignoresSafeArea()
 
-        GatewayCommandsView(lane: .custom, onScanOrPaste: {})
+        GatewayCommandsView(onScanOrPaste: {})
     }
 }

@@ -1,13 +1,9 @@
 // Conduck
 // ConduckConnectCommandBlock.swift
 //
-// Shared "run conduck-connect on your server" block. TWO presentations off one
-// command source (`conduckConnectSetupCommandShort(generic:)`, lane-aware via
-// `generic`):
-//   • COMPACT (default) — a horizontally-scrolling one-line strip + a below-card
-//     Copy button + the GitHub link. Used by the per-gateway editor's quick-connect
-//     disclosure (`GatewayGuidedConnectContent`); unchanged.
-//   • HERO (`hero: true`) — a full-width terminal-pane card with the command
+// Shared "run conduck-connect on your server" block. ONE presentation from one
+// command source (`conduckConnectSetupCommandShort`):
+//   • HERO — a full-width terminal-pane card with the command
 //     WRAPPED (never truncated) + an IN-CARD copy button (the guided Commands
 //     step's focal action) + a "what it does" caption. Used by `GatewayCommandsView`.
 //
@@ -18,21 +14,10 @@
 import SwiftUI
 
 struct ConduckConnectCommandBlock: View {
-    /// Render + copy the generic lane's command (`conduck-connect.sh --generic`)
-    /// instead of the auto-detecting form. Defaults `false`.
-    var generic: Bool = false
-
-    /// Hero presentation for the guided "Commands" wizard step: a wrapped,
-    /// full-width terminal-pane card with an IN-CARD copy button (the screen's
-    /// focal action) + a "what it does" caption. Default `false` keeps the COMPACT
-    /// form (horizontal-scroll strip + below-card copy) the per-gateway editor's
-    /// quick-connect disclosure renders — that caller is unchanged.
-    var hero: Bool = false
-
-    /// The shell text this block renders + copies — the short lane-aware one-paste
-    /// command (`-O` download-to-disk then `bash`, never a blind pipe).
+    /// The shell text this block renders + copies — the short `--setup`
+    /// one-paste command (`-O` download-to-disk then `bash`, never a blind pipe).
     private var setupCommand: String {
-        Constants.conduckConnectSetupCommandShort(generic: generic)
+        Constants.conduckConnectSetupCommandShort
     }
 
     /// Transient "Copied" confirmation on the Copy button.
@@ -40,71 +25,13 @@ struct ConduckConnectCommandBlock: View {
 
     /// `true` when this block renders inside the onboarding scaffold on a
     /// regular surface (iPad/macOS) — bumps the shell-text padding a notch.
-    /// `false` elsewhere (iPhone, and the per-gateway editor hint outside the
-    /// scaffold), so those callers render unchanged.
     @Environment(\.onboardingRegularSurface) private var regularSurface
 
     var body: some View {
-        if hero { heroForm } else { compactForm }
+        heroForm
     }
 
-    // MARK: - Compact form (per-gateway editor disclosure) — unchanged
-
-    private var compactForm: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            compactCommandBlock
-            compactCopyButton
-            gitHubLink
-                .padding(.top, 2)
-        }
-    }
-
-    /// Shell text — `verbatim`, never localized, selectable, horizontally scrollable.
-    private var compactCommandBlock: some View {
-        ScrollView(.horizontal, showsIndicators: true) {
-            Text(verbatim: setupCommand)
-                .onboardingScaledFont(.caption, design: .monospaced)
-                .foregroundStyle(AppColors.textPrimary)
-                .textSelection(.enabled)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(regularSurface ? 12 : 10)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(AppColors.cardBackgroundElevated)
-        )
-    }
-
-    private var compactCopyButton: some View {
-        Button {
-            copyCommand()
-        } label: {
-            ZStack(alignment: .leading) {
-                // Invisible widest-state sizer: reserves a stable width so the
-                // button doesn't shrink when "Copy command" → "Copied".
-                Label(
-                    LocalizedStringResource("gateway.setupCommand.copy", defaultValue: "Copy command"),
-                    systemImage: "doc.on.doc"
-                )
-                .hidden()
-
-                Label(
-                    didCopy
-                        ? LocalizedStringResource("gateway.setupCommand.copied", defaultValue: "Copied")
-                        : LocalizedStringResource("gateway.setupCommand.copy", defaultValue: "Copy command"),
-                    systemImage: didCopy ? "checkmark" : "doc.on.doc"
-                )
-            }
-            .onboardingScaledFont(.subheadline, weight: .semibold)
-            .labelStyle(AccentGlyphActionLabelStyle())
-        }
-        .buttonStyle(.bordered)
-        .accessibilityIdentifier("settings.remoteAgent.copyConnectCommand")
-    }
-
-    // MARK: - Hero form (guided Commands step)
+    // MARK: - Guided Commands step
 
     private var heroForm: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -128,8 +55,7 @@ struct ConduckConnectCommandBlock: View {
     }
 
     /// Terminal-pane card: a header row (terminal glyph + the IN-CARD copy button,
-    /// the screen's focal action) over the WRAPPED, full command. Bigger corner +
-    /// padding than the compact strip so it reads as the screen's centerpiece.
+    /// the screen's focal action) over the WRAPPED, full command.
     private var heroCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {

@@ -855,9 +855,10 @@ struct ConverseRequest: Encodable, Sendable {
 /// `id`, `created`, `system_fingerprint`, etc. We extract only what we
 /// need (`choices[0].message.content`); anything else is silently ignored.
 ///
-/// Decoding-side errors (`choices` missing, `choices` empty,
-/// `message.content` missing) surface to callers as `DecodingError` and
-/// are translated to `AppError.remoteAgentInvalidResponse` by
+/// The full `[Choice]` array decodes eagerly: a malformed later choice rejects
+/// the response even when choice zero is valid. A missing `choices` key or a
+/// malformed choice throws; an empty array decodes and yields no reply. All of
+/// those paths become `AppError.remoteAgentInvalidResponse` in
 /// `RemoteAgentClient.decodeReply`.
 struct ConverseResponse: Decodable, Sendable {
     let choices: [Choice]

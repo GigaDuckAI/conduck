@@ -9,8 +9,9 @@
 //
 // CONTRACT OWNER: `spec.md` "Gateway Setup & Pairing" — "Pairing payload v1
 // (LOCKED wire contract)". This emitter MUST reproduce the `conduck-connect`
-// server wizard's python emission (`Conduck/connect/conduck-connect.sh`
-// `emit_payload`, `json.dumps(p, separators=(",", ":"))`, `ensure_ascii=True`)
+// server wizard's python emission (the standalone `conduck-connect` repo's
+// `conduck-connect.sh` `emit_payload`, `json.dumps(p, separators=(",", ":"))`,
+// `ensure_ascii=True`)
 // BYTE-FOR-BYTE for identical values, and its output MUST re-import cleanly
 // through `PairingPayload.parse` — both are enforced by golden-vector +
 // round-trip tests (`PairingPayloadExportTests`).

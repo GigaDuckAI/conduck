@@ -2157,11 +2157,13 @@ final class SettingsViewModel {
             return
         }
 
-        // Custom-only: soft 100-char cap on the model; empty → nil (omit).
+        // Custom-only: trim surrounding whitespace; empty → nil (omit). Model
+        // identifiers are opaque server-owned strings, so preserve the full
+        // value rather than imposing an app-invented length limit.
         let trimmedModel: String? = {
             guard case .custom = ref else { return nil }
             let candidate = (model ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return candidate.isEmpty ? nil : String(candidate.prefix(100))
+            return candidate.isEmpty ? nil : candidate
         }()
 
         // A `.systemTrustOnly` backend (OpenRouter) never sends a pin — drop any
@@ -2442,14 +2444,15 @@ final class SettingsViewModel {
         // false reject of a valid save).
 
         // Model applies to a custom ref OR a built-in whose descriptor shows the
-        // model field (OpenRouter). Soft 100-char cap; empty → nil (omit).
+        // model field (OpenRouter). Trim surrounding whitespace and omit an
+        // empty value, but otherwise preserve the full opaque identifier.
         // Self-hosted built-ins (`showsModelField == false`) resolve nil.
         let modelApplies = (builtinDescriptor?.showsModelField ?? false)
             || { if case .custom = ref { return true } else { return false } }()
         let trimmedModel: String? = {
             guard modelApplies else { return nil }
             let candidate = (remoteAgentModelStrings[ref] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return candidate.isEmpty ? nil : String(candidate.prefix(100))
+            return candidate.isEmpty ? nil : candidate
         }()
 
         // A `.systemTrustOnly` backend (OpenRouter, public CA) must never carry a
@@ -4214,4 +4217,3 @@ final class SettingsViewModel {
         #endif
     }
 }
-

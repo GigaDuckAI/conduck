@@ -15,7 +15,9 @@
 // copied brief (`clipboardBrief`) delegates to the hosted build brief — narrowed
 // to stop before exposure/pairing, which this flow owns — with a self-contained
 // fallback for tools without web access; the full normative contract lives on
-// the website (`Constants.adapterContractURL`). The footer is the screen's
+// the website (`Constants.adapterContractURL`). It hands over the executable
+// adapter-CHECK commands (the AI's job) and never the pairing command (the
+// user's job — prose names the step, no invocation). The footer is the screen's
 // single filled CTA — the way forward once the adapter is up.
 //
 // Like every guided sub-step, the container (`GuidedGatewaySetupView`) paints the
@@ -245,12 +247,26 @@ struct GatewayAdapterBriefView: View {
     /// contract is at `Constants.adapterContractURL`; both raw `.md` URLs are
     /// hardcoded inline below. `internal` so a content-lock test can read it via
     /// `@testable import`.
+    ///
+    /// **Workflow-ownership boundary — the load-bearing rule of this string.**
+    /// This text is pasted into an AUTONOMOUS coding agent, so what it can act on
+    /// is exactly what it is handed. It therefore carries the adapter-check
+    /// invocations in COMPLETE runnable form (download, `CONDUCK_TOKEN`, explicit
+    /// loopback URL — a bare `--check-adapter` blocks on an interactive URL/token
+    /// prompt, which is fatal for a non-interactive agent) and carries NO pairing
+    /// invocation at all: exposure and pairing are named in prose only. First-person
+    /// phrasing ("I'll handle that") is intent, not a control; the actual control is
+    /// that the command is absent. `GatewayAdapterBriefTests` locks both halves.
     static let clipboardBrief: String = """
     Build a "Conduck adapter v1" for my existing AI agent, so the Conduck app can talk to it.
 
     Best path — if you have web access, read and follow the build brief:
     https://conduck.com/setup/adapter/build.md
-    This request deliberately narrows that workflow: do steps 1-9 only — through the build gate (doctor exit 0 against the real engine on loopback), then the supervisor install, then re-run the ordinary and --deep doctor against the supervised adapter. STOP before step 10 (expose and pair): use conduck-connect in doctor mode only — do NOT set up HTTPS, expose anything to a network, or pair a device. I'll do those steps myself from the Conduck app afterwards. The full wire contract is https://conduck.com/setup/adapter/v1.md — record the document revision you build against.
+    This request deliberately narrows that workflow: do steps 1-9 only — through the build gate (the adapter check exits 0 against the real engine on loopback), then the supervisor install, then re-run both check profiles against the supervised adapter. Download the checker once, then run it with the port and bearer token you configured:
+    curl -fsSLO https://github.com/gigaduckai/conduck-connect/releases/latest/download/conduck-connect.sh
+    CONDUCK_TOKEN="$TOKEN" bash conduck-connect.sh --check-adapter http://127.0.0.1:8480
+    CONDUCK_TOKEN="$TOKEN" bash conduck-connect.sh --check-adapter --deep http://127.0.0.1:8480
+    In an interactive terminal, a PASS may ask whether to continue with setup; answer no during these build checks. STOP before step 10 (expose and pair): run the adapter check only — do NOT set up HTTPS, expose anything to a network, or pair a device. Exposure and pairing are not yours to run: I'll handle them myself through Conduck's guided setup afterwards. The full wire contract is https://conduck.com/setup/adapter/v1.md — record the document revision you build against.
 
     First, inspect my project — don't guess. If it ALREADY runs a long-lived HTTP server with the two routes below, tell me and skip the build.
 
@@ -263,7 +279,12 @@ struct GatewayAdapterBriefView: View {
     6. Require "Authorization: Bearer <token>" on every request, including /v1/models (long random token, stored outside the code), and check it before any other work. Bind to 127.0.0.1 only. Accept request bodies of at least 50 MiB — an image turn legitimately arrives that big.
     7. Safety: never pass chat text through a shell; tool approvals fail closed (no auto-approve-everything); never log message content or tokens.
 
-    Either path: STOP once the adapter runs and is verified on loopback. Do NOT set up HTTPS or expose it to any network — I'll do that afterwards with Conduck's own conduck-connect script.
+    If you can reach GitHub but not conduck.com, you can still run the automated conformance check — download it and pass the URL and token explicitly, never bare (with no URL it waits at an interactive prompt and a non-interactive run dies there):
+    curl -fsSLO https://github.com/gigaduckai/conduck-connect/releases/latest/download/conduck-connect.sh
+    CONDUCK_TOKEN="$TOKEN" bash conduck-connect.sh --check-adapter http://127.0.0.1:8480
+    CONDUCK_TOKEN="$TOKEN" bash conduck-connect.sh --check-adapter --deep http://127.0.0.1:8480
+
+    Either path: STOP once the adapter runs and is verified on loopback. If a PASS offers to continue with setup, answer no. Do NOT set up HTTPS or expose it to any network — exposure and pairing are mine to run, and I'll do them myself through Conduck's guided setup afterwards.
     """
 }
 

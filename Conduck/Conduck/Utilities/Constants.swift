@@ -216,22 +216,19 @@ enum Constants {
     /// escape hatch and the custom-gateway help sheet).
     static let adapterBuildGuideURL = "https://conduck.com/setup/adapter/build/"
 
-    /// Lane-correct "run the setup command from your computer" handoff pages.
-    /// Each renders the SAME command string the app shows (the site imports the
-    /// shared constant), so a phone user opens a short URL on their desktop
-    /// instead of copy-pasting shell text off a phone. `generic` mirrors
-    /// `conduckConnectSetupCommandShort(generic:)` — the custom lane's page
-    /// carries `--generic` (auto-detect off); sending a custom-lane user to the
-    /// non-generic page would pair the wrong service.
-    static func setupCommandPageURL(generic: Bool) -> String {
-        generic ? "https://conduck.com/setup/custom/" : "https://conduck.com/setup/agent/"
+    /// Lane-correct "continue on your computer" handoff pages. The full-agent
+    /// page leads with `--setup`; the custom-server page leads with
+    /// `--check-server`, whose interactive PASS can continue into setup. The
+    /// in-app Commands step itself always uses the direct `--setup` action.
+    static func setupCommandPageURL(custom: Bool) -> String {
+        custom ? "https://conduck.com/setup/custom/" : "https://conduck.com/setup/agent/"
     }
 
-    /// Short typeable display form of `setupCommandPageURL(generic:)` for the
+    /// Short typeable display form of `setupCommandPageURL(custom:)` for the
     /// guided flow's heads-up step (no scheme, no trailing slash — something a
     /// user can read off a phone and type on a computer).
-    static func setupCommandPageURLDisplay(generic: Bool) -> String {
-        generic ? "conduck.com/setup/custom" : "conduck.com/setup/agent"
+    static func setupCommandPageURLDisplay(custom: Bool) -> String {
+        custom ? "conduck.com/setup/custom" : "conduck.com/setup/agent"
     }
 
     /// Privacy policy URL (hosted publicly for App Store + in-app link)
@@ -988,6 +985,15 @@ enum Constants {
     /// the auditable source + release assets live.
     static let conduckConnectReleasesURL = URL(string: conduckConnectLatestBase)!
 
+    /// The download half of every one-paste `conduck-connect` command — `curl -O`
+    /// of the LATEST release asset onto disk. Factored out because a REMEDY screen
+    /// (a failing hand-configured custom gateway) hands the user a non-`--setup`
+    /// action, and that user has typically never downloaded the script: naming the
+    /// action alone would print an uncopyable instruction. Verbatim shell text,
+    /// NEVER localized.
+    static let conduckConnectDownloadCommand =
+        "curl -fsSLO \(conduckConnectLatestBase)/download/conduck-connect.sh"
+
     /// Short, single-line gateway setup command — the DEFAULT form everywhere
     /// the user is handed a command to run (onboarding, the per-gateway editor
     /// guided setup, and the guided-lane wizard). Downloads the
@@ -998,15 +1004,12 @@ enum Constants {
     /// tampering: the `.sha256` arrived down the same HTTPS pipe as the script)
     /// for HTTPS-from-GitHub trust, the mainstream installer bar.
     ///
-    /// Lane-aware run hint: the custom lane appends
-    /// `--generic` (emits a `kind=custom` setup code — load-bearing, the script
-    /// otherwise auto-detects OpenClaw/Hermes and stalls on a custom server); the
-    /// full-agent lane runs the auto-detecting form. Verbatim shell text, NEVER
-    /// localized.
-    static func conduckConnectSetupCommandShort(generic: Bool) -> String {
-        let run = generic ? "bash conduck-connect.sh --generic" : "bash conduck-connect.sh"
-        return "curl -fsSLO \(conduckConnectLatestBase)/download/conduck-connect.sh && \(run)"
-    }
+    /// `--setup` skips the top-level action menu, then reports any detected
+    /// OpenClaw/Hermes installs and asks the user which gateway to configure.
+    /// The app never makes that choice on the user's behalf. Verbatim shell
+    /// text, NEVER localized.
+    static let conduckConnectSetupCommandShort =
+        "\(conduckConnectDownloadCommand) && bash conduck-connect.sh --setup"
 
     // MARK: - Custom Gateways (user-defined, multi-gateway)
 

@@ -11,8 +11,8 @@ import SwiftUI
 
 /// Which self-hosted lane the guided flow is walking. Both lanes share the SAME
 /// sub-step views (fork → readiness → helper → commands → success); they differ
-/// only in copy and the `conduck-connect` command variant (`--generic` for custom)
-/// and the manual-fallback target. The hosted-model (OpenRouter) lane is NOT a
+/// only in copy, help-page context, and the manual-fallback target. Both run the
+/// same `conduck-connect.sh --setup` command. The hosted-model (OpenRouter) lane is NOT a
 /// `GatewaySetupLane` — it has its own dedicated step view.
 enum GatewaySetupLane: Hashable {
     /// OpenClaw / Hermes — a full personal-AI server (tools, memory, files).
@@ -20,9 +20,8 @@ enum GatewaySetupLane: Hashable {
     /// Any OpenAI-compatible endpoint the user runs (Ollama / vLLM / LiteLLM…).
     case custom
 
-    /// The custom lane drives `conduck-connect --generic` (kind=custom code);
-    /// the full-agent lane runs the auto-detecting `conduck-connect`.
-    var isGeneric: Bool { self == .custom }
+    /// Whether lane-specific copy and links should describe a custom server.
+    var isCustom: Bool { self == .custom }
 }
 
 /// One guided-flow presentation: destination + presence as a SINGLE value.

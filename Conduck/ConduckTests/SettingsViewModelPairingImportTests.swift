@@ -331,6 +331,32 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         XCTAssertEqual(storedURL?.absoluteString, "https://llm.example.test:8080")
     }
 
+    /// Pairing imports share the manual editor's single save path. A model ID
+    /// longer than the retired 100-character cap must survive that handoff
+    /// exactly after the parser trims its surrounding whitespace.
+    func testExecuteCustomPreservesLongModelIdentifierExactly() async throws {
+        let vm = await makeVM()
+        let model = "litellm/team/" + String(repeating: "provider-route-segment-", count: 7)
+        let payload = try makePayload(
+            kind: "custom", name: "Long Route",
+            url: "https://llm.example.test:8080",
+            auth: "none", token: nil,
+            model: "  \(model)  "
+        )
+
+        let plan = await vm.planPairingImport(payload, lockedTarget: nil)
+        guard case .ready(let target) = plan, case .custom(let id) = target else {
+            return XCTFail("Expected a minted custom draft target, got \(plan).")
+        }
+
+        let outcome = await vm.executePairingImport(payload, target: target)
+        XCTAssertEqual(outcome, .committed)
+
+        let roster = await SettingsManager.shared.customGateway(id: id)
+        XCTAssertEqual(roster?.model, model)
+        XCTAssertGreaterThan(model.count, 100, "The fixture must cross the retired cap.")
+    }
+
     // MARK: - Execute: keyless
 
     func testExecuteKeylessPersistsExplicitNoneAndNoToken() async throws {

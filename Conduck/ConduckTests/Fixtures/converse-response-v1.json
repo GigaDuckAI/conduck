@@ -1,0 +1,109 @@
+{
+  "schema": "ai.gigaduck.conduck.converse-response-fixtures",
+  "version": 1,
+  "metadata": {
+    "authorityPlatform": "Apple",
+    "authority": "Apple ConverseResponse app-level behavior",
+    "canonicalPath": "Conduck/ConduckTests/Fixtures/converse-response-v1.json",
+    "canonicalURL": "https://github.com/GigaDuckAI/conduck/blob/main/Conduck/ConduckTests/Fixtures/converse-response-v1.json",
+    "corpusRevision": 1,
+    "scope": "A 2xx chat-completions body resolves to either a reply string, including the empty string, or an invalid response."
+  },
+  "cases": [
+    {
+      "id": "minimal_reply",
+      "body": "{\"choices\":[{\"message\":{\"content\":\"Hello\"}}]}",
+      "expected": {
+        "outcome": "reply",
+        "reply": "Hello"
+      }
+    },
+    {
+      "id": "unknown_fields_reply",
+      "body": "{\"id\":\"chatcmpl-abc\",\"created\":1234567890,\"model\":\"gpt-4-turbo\",\"system_fingerprint\":\"fp_xxx\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5},\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Hi!\",\"tool_calls\":[]},\"finish_reason\":\"stop\"}]}",
+      "expected": {
+        "outcome": "reply",
+        "reply": "Hi!"
+      }
+    },
+    {
+      "id": "multiple_choices_returns_first",
+      "body": "{\"choices\":[{\"message\":{\"content\":\"first\"}},{\"message\":{\"content\":\"second\"}}]}",
+      "expected": {
+        "outcome": "reply",
+        "reply": "first"
+      }
+    },
+    {
+      "id": "empty_content_reply",
+      "body": "{\"choices\":[{\"message\":{\"content\":\"\"}}]}",
+      "expected": {
+        "outcome": "reply",
+        "reply": ""
+      }
+    },
+    {
+      "id": "missing_choices_invalid",
+      "body": "{\"model\":\"gpt-4\"}",
+      "expected": {
+        "outcome": "invalid"
+      }
+    },
+    {
+      "id": "empty_choices_invalid",
+      "body": "{\"choices\":[]}",
+      "expected": {
+        "outcome": "invalid"
+      }
+    },
+    {
+      "id": "missing_message_invalid",
+      "body": "{\"choices\":[{\"index\":0}]}",
+      "expected": {
+        "outcome": "invalid"
+      }
+    },
+    {
+      "id": "missing_content_invalid",
+      "body": "{\"choices\":[{\"message\":{\"role\":\"assistant\"}}]}",
+      "expected": {
+        "outcome": "invalid"
+      }
+    },
+    {
+      "id": "null_content_invalid",
+      "body": "{\"choices\":[{\"message\":{\"content\":null}}]}",
+      "expected": {
+        "outcome": "invalid"
+      }
+    },
+    {
+      "id": "non_string_content_invalid",
+      "body": "{\"choices\":[{\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}]}}]}",
+      "expected": {
+        "outcome": "invalid"
+      }
+    },
+    {
+      "id": "malformed_later_choice_invalid",
+      "body": "{\"choices\":[{\"message\":{\"content\":\"first\"}},{\"message\":{\"content\":null}}]}",
+      "expected": {
+        "outcome": "invalid"
+      }
+    },
+    {
+      "id": "non_json_invalid",
+      "body": "<html>not a chat response</html>",
+      "expected": {
+        "outcome": "invalid"
+      }
+    },
+    {
+      "id": "empty_body_invalid",
+      "body": "",
+      "expected": {
+        "outcome": "invalid"
+      }
+    }
+  ]
+}

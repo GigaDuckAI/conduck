@@ -750,10 +750,15 @@ struct RemoteAgentConfigBody: View {
     /// above states the SYMPTOM; this only offers the probable CAUSE, so an assertive
     /// "your endpoint is off" would send the wrong user down the wrong path.
     ///
-    /// CUSTOM lanes (`builtinDescriptor == nil`) get their own remedy: these two
-    /// codes are the signature failures of a self-built adapter, and the server-side
-    /// pairing script's `--doctor` mode tests the exact rules this app enforces and
-    /// names the first one that fails — far better than guessing from the phone.
+    /// CUSTOM lanes (`builtinDescriptor == nil`) have no saved provenance: the
+    /// endpoint may be existing OpenAI-compatible software OR an adapter built for
+    /// Conduck. The remedy therefore presents both server-side checks instead of
+    /// guessing: `--check-server` for existing software; `--check-adapter` for a
+    /// Conduck adapter. An interactive PASS can continue directly into setup.
+    /// The download step (`Constants.conduckConnectDownloadCommand`) leads both:
+    /// this user hand-configured their gateway and has typically never run
+    /// `conduck-connect`, so naming an action alone would print a command they
+    /// cannot execute.
     /// A built-in whose descriptor carries NO remedy (hosted OpenRouter) stays
     /// silent: its user can't run anything on the server side.
     @ViewBuilder
@@ -774,12 +779,12 @@ struct RemoteAgentConfigBody: View {
                 amberCallout(
                     systemImage: "stethoscope",
                     title: LocalizedStringResource(
-                        "settings.remoteAgent.customDoctor.title",
-                        defaultValue: "Check it on the server"
+                        "settings.remoteAgent.customCheck.title",
+                        defaultValue: "Choose the matching server check"
                     ),
                     body: LocalizedStringResource(
-                        "settings.remoteAgent.customDoctor.body",
-                        defaultValue: "If you run this server yourself, run bash conduck-connect.sh --doctor on that machine. It changes nothing, sends test requests, and tells you what to fix."
+                        "settings.remoteAgent.customCheck.body",
+                        defaultValue: "On that machine, download the script with \(Constants.conduckConnectDownloadCommand), then run the matching check. Already running OpenAI-compatible software? Run bash conduck-connect.sh --check-server. If this is an adapter built for Conduck, run bash conduck-connect.sh --check-adapter instead. Both send live test requests without changing server configuration. After a PASS, the interactive script can continue into setup."
                     )
                 )
             }

@@ -5,8 +5,8 @@
 // so the setup affordance lives in ONE place. A single "Guided Setup" row (the
 // lane chooser entry) — the front door for someone who doesn't yet know which
 // gateway lane they want. Scanning/pasting a setup code is NOT a list-level row:
-// it lives inside each gateway's detail ("Guided setup" disclosure), and the
-// chooser's guided flow ends in that same scan/paste step.
+// the chooser's guided flow owns that step, while a gateway detail's Quick
+// connect row deep-links the same flow to that specific ref.
 //
 // PROMINENCE IS CONDITIONAL (`emphasized`). This row is PERMANENT — it stays in
 // Settings for a user who already has three gateways wired up — so it earns its

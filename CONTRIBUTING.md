@@ -55,7 +55,8 @@ Two things that are intentional, not broken:
 Some tests skip themselves in community builds: cases that touch the live
 Keychain skip on unsigned simulator builds, and the official-identity lock
 tests skip under the community identity. Skips there are expected — failures
-are not. Please keep the suite green.
+are not. Please keep the suite green. Pull requests and pushes to `main` run
+both complete simulator suites in GitHub Actions.
 
 ## Pull requests
 

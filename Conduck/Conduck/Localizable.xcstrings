@@ -3760,83 +3760,6 @@
         }
       }
     },
-    "fileTransfer.guided.framing" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A setup code from conduck-connect sets up — or updates — this gateway's connection and its file transfer, in one step."
-          }
-        }
-      }
-    },
-    "fileTransfer.guided.haveCode.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Already have a setup code?"
-          }
-        }
-      }
-    },
-    "fileTransfer.guided.header" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Use a setup code"
-          }
-        }
-      }
-    },
-    "fileTransfer.guided.missingLane" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "That setup code didn't include file transfer. Re-run conduck-connect and include the file lane when it asks."
-          }
-        }
-      }
-    },
-    "fileTransfer.guided.needCode.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Run this on your always-on server. It downloads conduck-connect, checks it's untampered, then prints a setup code to bring back here."
-          }
-        }
-      }
-    },
-    "fileTransfer.guided.needCode.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Need to create one?"
-          }
-        }
-      }
-    },
-    "fileTransfer.guided.readGithub" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Read it on GitHub first"
-          }
-        }
-      }
-    },
     "fileTransfer.inline.autoOn" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5184,17 +5107,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Copied"
-          }
-        }
-      }
-    },
-    "gateway.setupCommand.copy" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Copy command"
           }
         }
       }
@@ -8028,17 +7940,6 @@
         }
       }
     },
-    "settings.pairing.entry.scanOrPaste" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Scan or paste setup code"
-          }
-        }
-      }
-    },
     "settings.pairing.error.capReached" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9194,24 +9095,24 @@
         }
       }
     },
-    "settings.remoteAgent.customDoctor.body" : {
+    "settings.remoteAgent.customCheck.body" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "If you run this server yourself, run bash conduck-connect.sh --doctor on that machine. It changes nothing, sends test requests, and tells you what to fix."
+            "value" : "On that machine, download the script with %@, then run the matching check. Already running OpenAI-compatible software? Run bash conduck-connect.sh --check-server. If this is an adapter built for Conduck, run bash conduck-connect.sh --check-adapter instead. Both send live test requests without changing server configuration. After a PASS, the interactive script can continue into setup."
           }
         }
       }
     },
-    "settings.remoteAgent.customDoctor.title" : {
+    "settings.remoteAgent.customCheck.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Check it on the server"
+            "value" : "Choose the matching server check"
           }
         }
       }
@@ -9332,7 +9233,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Test Connection is the real judge — it tells you whether Conduck and your server understand each other."
+            "value" : "Test Connection checks that Conduck can reach this address, authenticate, and read its model list. To exercise the chat wire too, download the script on that machine with %@ and run bash conduck-connect.sh --check-server. After a PASS, the interactive script can continue into setup."
           }
         }
       }
@@ -9612,28 +9513,6 @@
         }
       }
     },
-    "settings.remoteAgent.guided.haveCode" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Already have a setup code? Tap to scan or paste it."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.guided.hosted.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No server to run. Create an account at OpenRouter, generate an API key, then paste it below and pick a model."
-          }
-        }
-      }
-    },
     "settings.remoteAgent.guided.hosted.link" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9641,94 +9520,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Get an API key"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.guided.intro" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "conduck-connect is our setup helper script. Run it on your server, then bring back the setup code it prints."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.guided.macScanHint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Or open Conduck on your iPhone or iPad and scan the QR code there."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.guided.noCode.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "It turns on the chat endpoint, exposes it over HTTPS, and optionally sets up file transfer."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.guided.noCode.body.generic" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "It checks your server, exposes it over HTTPS, and optionally sets up file transfer."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.guided.noCode.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Don't have a code yet?"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.guided.step1.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1. Set up your server"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.guided.step2.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "2. Bring the code back"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.guided.watchNote" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Using a standalone Apple Watch? It can't reach a Tailscale-only gateway — pick a public HTTPS path (Funnel or your own certificate) when the script asks how to expose it."
           }
         }
       }

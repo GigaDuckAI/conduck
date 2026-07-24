@@ -171,6 +171,32 @@ final class SettingsViewModelRemoteAgentURLTests: XCTestCase {
         await vm.clearRemoteAgent(for: ref)
     }
 
+    /// Model identifiers are opaque strings owned by the selected server.
+    /// Save trims only surrounding whitespace and must not silently truncate a
+    /// long LiteLLM route or Hugging Face-style repository path.
+    func testManualSavePreservesLongModelIdentifierExactly() async {
+        let vm = SettingsViewModel()
+        await vm.loadSettings()
+        await Task.yield()
+        guard let id = vm.newCustomGatewayDraftID() else {
+            return XCTFail("Expected a fresh VM to mint a custom-gateway draft below the cap.")
+        }
+        let ref = RemoteAgentRef.custom(id)
+        let model = "router/team/" + String(repeating: "long-model-segment-", count: 8)
+        vm.remoteAgentURLStrings[ref] = "https://gw.example.test"
+        vm.remoteAgentModelStrings[ref] = "  \(model)  "
+        vm.setRemoteAgentAuthSchemeBuffer(.none, for: ref)
+
+        let ok = await vm.saveRemoteAgent(ref: ref, name: "Long model", stagedToken: .stored)
+        XCTAssertTrue(ok)
+
+        let roster = await SettingsManager.shared.customGateway(id: id)
+        XCTAssertEqual(roster?.model, model)
+        XCTAssertGreaterThan(model.count, 100, "The fixture must cross the retired cap.")
+
+        await vm.clearRemoteAgent(for: ref)
+    }
+
     /// Cancel DROPS a never-saved draft: the in-memory roster row is removed and
     /// nothing reaches the store. Cancel keys off the store as the sole authority
     /// (a draft never reached it), so this is correct however the editor is left

@@ -1,0 +1,111 @@
+name: Apple tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: iOS and watchOS
+    runs-on: macos-26
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Select available simulators
+        id: simulators
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          payload = json.loads(
+              subprocess.check_output(
+                  ["xcrun", "simctl", "list", "devices", "available", "-j"],
+                  text=True,
+              )
+          )
+
+          def newest_device(platform: str, preferred_name: str) -> tuple[str, str]:
+              pattern = re.compile(
+                  rf"^com\.apple\.CoreSimulator\.SimRuntime\.{platform}-(\d+(?:-\d+)*)$"
+              )
+              candidates: list[tuple[tuple[int, ...], bool, str, str]] = []
+              for runtime, devices in payload["devices"].items():
+                  match = pattern.fullmatch(runtime)
+                  if match is None:
+                      continue
+                  version = tuple(int(part) for part in match.group(1).split("-"))
+                  for device in devices:
+                      if not device.get("isAvailable", False) or not device.get("udid"):
+                          continue
+                      name = device.get("name", "")
+                      candidates.append(
+                          (version, preferred_name in name, name, device["udid"])
+                      )
+
+              preferred = [candidate for candidate in candidates if candidate[1]]
+              pool = preferred or candidates
+              if not pool:
+                  raise SystemExit(
+                      f"No available {platform} simulator was found.\n"
+                      + subprocess.check_output(
+                          ["xcrun", "simctl", "list", "devices", "available"],
+                          text=True,
+                      )
+                  )
+
+              version, _, name, udid = max(pool)
+              print(
+                  f"Selected {name} ({'.'.join(map(str, version))}) for {platform}: {udid}"
+              )
+              return name, udid
+
+          _, iphone_udid = newest_device("iOS", "iPhone")
+          _, watch_udid = newest_device("watchOS", "Apple Watch")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"iphone_udid={iphone_udid}\n")
+              output.write(f"watch_udid={watch_udid}\n")
+          PY
+
+      - name: Run full Conduck iOS suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project Conduck/Conduck.xcodeproj \
+            -scheme Conduck \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulators.outputs.iphone_udid }}' \
+            -derivedDataPath "$RUNNER_TEMP/conduck-ios-derived-data"
+
+      - name: Run full ConduckWatchTests suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project Conduck/Conduck.xcodeproj \
+            -scheme ConduckWatchTests \
+            -destination 'platform=watchOS Simulator,id=${{ steps.simulators.outputs.watch_udid }}' \
+            -derivedDataPath "$RUNNER_TEMP/conduck-watch-derived-data"

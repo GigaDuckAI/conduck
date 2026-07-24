@@ -66,52 +66,161 @@ final class ConverseWireTests: XCTestCase {
         XCTAssertEqual(messages.first?["content"] as? String, "hello")
     }
 
-    // MARK: - Response decoding (tolerant of unknown fields)
+    // MARK: - Apple-authoritative response compatibility corpus
 
-    func testResponseDecodesHappyPath() throws {
-        let payload = #"{"choices":[{"message":{"content":"Hello"}}]}"#
-        let data = Data(payload.utf8)
-        let decoded = try JSONDecoder().decode(ConverseResponse.self, from: data)
-        XCTAssertEqual(decoded.firstReplyContent, "Hello")
-    }
+    private struct ResponseFixtureCorpus: Decodable {
+        let schema: String
+        let version: Int
+        let metadata: Metadata
+        let cases: [Fixture]
 
-    func testResponseIgnoresUnknownTopLevelFields() throws {
-        // Gateways routinely add `model`, `usage`, `id`, `system_fingerprint`,
-        // `created`, etc. Decoding must tolerate them silently.
-        let payload = """
-        {
-          "id": "chatcmpl-abc",
-          "created": 1234567890,
-          "model": "gpt-4-turbo",
-          "system_fingerprint": "fp_xxx",
-          "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-          "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi!"}, "finish_reason": "stop"}]
+        struct Metadata: Decodable {
+            let authorityPlatform: String
+            let authority: String
+            let canonicalPath: String
+            let canonicalURL: String
+            let corpusRevision: Int
         }
-        """
-        let data = Data(payload.utf8)
-        let decoded = try JSONDecoder().decode(ConverseResponse.self, from: data)
-        XCTAssertEqual(decoded.firstReplyContent, "Hi!",
-                       "Decoder must extract content from a realistic OpenAI-shaped response with extra fields")
+
+        struct Fixture: Decodable {
+            let id: String
+            let body: String
+            let expected: Expected
+        }
+
+        struct Expected: Decodable {
+            let outcome: Outcome
+            let reply: String?
+        }
+
+        enum Outcome: String, Decodable {
+            case reply
+            case invalid
+        }
     }
 
-    func testResponseMissingChoicesThrows() {
-        // Empty choices is decodable but produces no reply — caller
-        // (RemoteAgentClient.decodeReply) translates this to
-        // .remoteAgentInvalidResponse via the firstReplyContent == nil check.
-        // Here we lock the decode-side behaviour: missing top-level
-        // `choices` key throws.
-        let payload = #"{"model": "gpt-4"}"#
-        let data = Data(payload.utf8)
-        XCTAssertThrowsError(try JSONDecoder().decode(ConverseResponse.self, from: data),
-                             "Missing top-level `choices` must throw DecodingError — RemoteAgentClient surfaces this as .remoteAgentInvalidResponse")
+    func testResponseCompatibilityFixtureIsPackagedInTestBundle() throws {
+        let bundle = Bundle(for: type(of: self))
+        let url = bundle.url(forResource: "converse-response-v1", withExtension: "json")
+            ?? bundle.url(
+                forResource: "converse-response-v1",
+                withExtension: "json",
+                subdirectory: "Fixtures"
+            )
+        XCTAssertNotNil(
+            url,
+            "The public response corpus must be copied into ConduckTests.xctest; #filePath fallback cannot make a missing bundle resource pass."
+        )
     }
 
-    func testResponseEmptyChoicesYieldsNilReply() throws {
-        let payload = #"{"choices":[]}"#
-        let data = Data(payload.utf8)
-        let decoded = try JSONDecoder().decode(ConverseResponse.self, from: data)
-        XCTAssertNil(decoded.firstReplyContent,
-                     "Empty choices must yield nil reply — RemoteAgentClient maps this to .remoteAgentInvalidResponse")
+    func testAppleAuthoritativeResponseCompatibilityCorpus() throws {
+        let corpus = try loadResponseFixtureCorpus()
+
+        XCTAssertEqual(corpus.schema, "ai.gigaduck.conduck.converse-response-fixtures")
+        XCTAssertEqual(corpus.version, 1)
+        XCTAssertEqual(corpus.metadata.authorityPlatform, "Apple")
+        XCTAssertEqual(corpus.metadata.authority, "Apple ConverseResponse app-level behavior")
+        XCTAssertEqual(
+            corpus.metadata.canonicalPath,
+            "Conduck/ConduckTests/Fixtures/converse-response-v1.json"
+        )
+        XCTAssertEqual(
+            corpus.metadata.canonicalURL,
+            "https://github.com/GigaDuckAI/conduck/blob/main/Conduck/ConduckTests/Fixtures/converse-response-v1.json"
+        )
+        XCTAssertEqual(corpus.metadata.corpusRevision, corpus.version)
+
+        let expectedCaseIDs = [
+            "minimal_reply",
+            "unknown_fields_reply",
+            "multiple_choices_returns_first",
+            "empty_content_reply",
+            "missing_choices_invalid",
+            "empty_choices_invalid",
+            "missing_message_invalid",
+            "missing_content_invalid",
+            "null_content_invalid",
+            "non_string_content_invalid",
+            "malformed_later_choice_invalid",
+            "non_json_invalid",
+            "empty_body_invalid",
+        ]
+        XCTAssertEqual(
+            corpus.cases.map(\.id),
+            expectedCaseIDs,
+            "The public corpus is versioned; add or change cases deliberately rather than silently dropping coverage"
+        )
+        XCTAssertEqual(Set(expectedCaseIDs).count, expectedCaseIDs.count)
+
+        for fixture in corpus.cases {
+            let decodedReply: String?
+            do {
+                let response = try JSONDecoder().decode(
+                    ConverseResponse.self,
+                    from: Data(fixture.body.utf8)
+                )
+                // This nil check is the app-level boundary: RemoteAgentClient
+                // maps an empty choices array to remoteAgentInvalidResponse.
+                decodedReply = response.firstReplyContent
+            } catch {
+                decodedReply = nil
+            }
+
+            switch fixture.expected.outcome {
+            case .reply:
+                let expectedReply = try XCTUnwrap(
+                    fixture.expected.reply,
+                    "Reply fixture \(fixture.id) must carry its expected string"
+                )
+                XCTAssertEqual(decodedReply, expectedReply, "Fixture: \(fixture.id)")
+            case .invalid:
+                XCTAssertNil(decodedReply, "Fixture: \(fixture.id)")
+            }
+        }
+    }
+
+    private func loadResponseFixtureCorpus() throws -> ResponseFixtureCorpus {
+        return try JSONDecoder().decode(
+            ResponseFixtureCorpus.self,
+            from: fixtureData(named: "converse-response-v1", extension: "json")
+        )
+    }
+
+    /// Bundle-FIRST fixture lookup, `#filePath` only as a fallback.
+    ///
+    /// `ConduckTests` is a `PBXFileSystemSynchronizedRootGroup` with no exceptions,
+    /// so `Fixtures/*.json` is copied into the built test bundle — that resource is
+    /// the portable handle and works wherever the bundle runs. `#filePath` bakes in
+    /// the COMPILE-time absolute source path, so a bundle built on one machine and
+    /// run on another (a CI runner, or `build-for-testing` here +
+    /// `test-without-building` there) cannot resolve it. Keeping the source walk as
+    /// a fallback covers a toolchain that stops copying the folder.
+    private func fixtureData(named name: String, extension ext: String) throws -> Data {
+        let bundle = Bundle(for: type(of: self))
+        if let url = bundle.url(forResource: name, withExtension: ext)
+            ?? bundle.url(forResource: name, withExtension: ext, subdirectory: "Fixtures") {
+            return try Data(contentsOf: url)
+        }
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // RemoteAgent/
+            .deletingLastPathComponent() // ConduckTests/
+            .appendingPathComponent("Fixtures", isDirectory: true)
+            .appendingPathComponent("\(name).\(ext)")
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            throw FixtureNotFound(name: "\(name).\(ext)")
+        }
+        return try Data(contentsOf: sourceURL)
+    }
+
+    /// Neither the test bundle nor the compile-time source tree carries the fixture
+    /// — a build-configuration problem, not a wire regression. Named so the failure
+    /// reads that way in the log.
+    private struct FixtureNotFound: Error, CustomStringConvertible {
+        let name: String
+        var description: String {
+            "Fixture \(name) is in neither the test bundle nor the source tree "
+                + "(ConduckTests/Fixtures/) — check that the synchronized group still copies it."
+        }
     }
 
     // MARK: - V1.1 multimodal wire shape (Core Attachments)
