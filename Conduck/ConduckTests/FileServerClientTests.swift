@@ -122,6 +122,144 @@ final class FileServerClientTests: XCTestCase {
         XCTAssertEqual(name, "file", "empty original name falls back to 'file'")
     }
 
+    // MARK: - makeStoredKey: path-component bound
+    //
+    // The stored key's last segment becomes a real filename on the file server's
+    // filesystem (POSIX NAME_MAX = 255 bytes). The 8-hex prefix and `__` are pure
+    // additions to the user's name, so a filename the SOURCE filesystem accepts
+    // at its own 255-byte limit mints a 265-byte component here — refused on PUT,
+    // which means a legitimately long filename cannot be sent at all.
+
+    /// The bound must be invisible to every name that already fits, or it would
+    /// silently re-key attachments that existing conversations already hold.
+    func testMakeStoredKeyLeavesNamesThatAlreadyFitByteIdentical() {
+        let uuid = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let budget = FileServerClient.storedKeyComponentMaxCharacters - "00000000__".count
+        for name in ["a", "report.pdf", "a.b-c_d.tar.gz", String(repeating: "x", count: budget)] {
+            let key = FileServerClient.makeStoredKey(originalName: name, uuid: uuid)
+            XCTAssertEqual(
+                key.components(separatedBy: "__")[1], name,
+                "a name within budget must pass through untouched"
+            )
+        }
+    }
+
+    func testMakeStoredKeyBoundsAnOverlongNameToOnePathComponent() {
+        let uuid = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        // 300 characters — well past what any filesystem accepts once prefixed.
+        let key = FileServerClient.makeStoredKey(
+            originalName: String(repeating: "a", count: 296) + ".pdf",
+            uuid: uuid
+        )
+        XCTAssertEqual(
+            key.count, FileServerClient.storedKeyComponentMaxCharacters,
+            "an overlong name is cut to exactly the component budget"
+        )
+        XCTAssertLessThanOrEqual(key.utf8.count, 255, "must fit POSIX NAME_MAX in BYTES")
+        XCTAssertTrue(key.hasSuffix(".pdf"), "the extension survives truncation")
+    }
+
+    /// An agent decides what to do with a file by its extension, so the stem is
+    /// what gets cut — `report.p` would be useless where `repo.pdf` still works.
+    func testMakeStoredKeyPreservesTheLastExtensionWhenTruncating() {
+        let uuid = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let key = FileServerClient.makeStoredKey(
+            originalName: String(repeating: "a", count: 300) + ".tar.gz",
+            uuid: uuid
+        )
+        // Only the LAST dot-suffix is preserved: `.gz` survives, `.tar` is inside
+        // the stem and may be cut with it.
+        XCTAssertTrue(key.hasSuffix(".gz"), "the final extension is kept")
+        XCTAssertLessThanOrEqual(key.utf8.count, 255)
+    }
+
+    /// A dotfile has no extension — treating the leading dot as one would
+    /// truncate the entire name away.
+    func testMakeStoredKeyTreatsALeadingDotAsStemNotExtension() {
+        let uuid = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let key = FileServerClient.makeStoredKey(
+            originalName: "." + String(repeating: "a", count: 300),
+            uuid: uuid
+        )
+        let name = key.components(separatedBy: "__")[1]
+        XCTAssertTrue(name.hasPrefix(".a"), "the dotfile name is truncated, not consumed")
+        XCTAssertLessThanOrEqual(key.utf8.count, 255)
+    }
+
+    /// A pathological "extension" must not eat the budget the stem needs.
+    func testMakeStoredKeyTruncatesBlindWhenTheSuffixIsNotAPlausibleExtension() {
+        let uuid = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let key = FileServerClient.makeStoredKey(
+            originalName: String(repeating: "a", count: 10) + "." + String(repeating: "b", count: 300),
+            uuid: uuid
+        )
+        XCTAssertEqual(key.count, FileServerClient.storedKeyComponentMaxCharacters)
+        XCTAssertTrue(
+            key.components(separatedBy: "__")[1].hasPrefix("aaaaaaaaaa."),
+            "the real stem is kept; the absurd suffix is simply cut"
+        )
+    }
+
+    /// Retry re-mints the key and re-PUTs over the partial blob, so truncation
+    /// has to be deterministic or a retry would orphan the first attempt.
+    func testMakeStoredKeyTruncationIsDeterministic() {
+        let uuid = UUID()
+        let name = String(repeating: "z", count: 400) + ".bin"
+        XCTAssertEqual(
+            FileServerClient.makeStoredKey(originalName: name, uuid: uuid),
+            FileServerClient.makeStoredKey(originalName: name, uuid: uuid)
+        )
+    }
+
+    /// The folder is its own path component and carries the same budget.
+    func testMakeStoredKeyBoundsTheFolderComponentToo() {
+        let uuid = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let key = FileServerClient.makeStoredKey(
+            originalName: "x.txt",
+            uuid: uuid,
+            folder: String(repeating: "f", count: 400)
+        )
+        let parts = key.components(separatedBy: "/")
+        XCTAssertEqual(parts.count, 2, "still exactly one folder segment")
+        for part in parts {
+            XCTAssertLessThanOrEqual(
+                part.utf8.count, 255,
+                "every path component must fit NAME_MAX"
+            )
+        }
+    }
+
+    /// `deterministicStoredKey`'s prefix widens with `sequence`, so its budget is
+    /// derived from the prefix actually built rather than a hardcoded width.
+    func testDeterministicStoredKeyBoundsTheNameAcrossSequenceWidths() {
+        let envelope = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let name = String(repeating: "a", count: 400) + ".pdf"
+        for sequence in [0, 7, 999_999] {
+            let key = FileServerClient.deterministicStoredKey(
+                envelopeID: envelope,
+                sequence: sequence,
+                originalName: name
+            )
+            XCTAssertEqual(
+                key.count, FileServerClient.storedKeyComponentMaxCharacters,
+                "a wider sequence must eat into the name budget, not overflow it"
+            )
+            XCTAssertLessThanOrEqual(key.utf8.count, 255)
+            XCTAssertTrue(key.hasSuffix(".pdf"))
+        }
+    }
+
+    /// Same no-op guarantee on the share path: a manifest-bounded name (120
+    /// characters) must keep minting exactly the key it minted before.
+    func testDeterministicStoredKeyLeavesNamesThatAlreadyFitByteIdentical() {
+        let envelope = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let name = String(repeating: "n", count: 120) + ".pdf"
+        let key = FileServerClient.deterministicStoredKey(
+            envelopeID: envelope, sequence: 3, originalName: name
+        )
+        XCTAssertTrue(key.hasSuffix("__" + name), "a within-budget name is untouched")
+    }
+
     // MARK: - makeStoredKey — per-conversation folder prefix
 
     /// With a `folder`, the key is `<folder>/<8hex>__<name>` — the folder is a

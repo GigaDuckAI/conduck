@@ -179,6 +179,63 @@ enum FileServerClient {
 
     // MARK: - Stored-key minting
 
+    /// Longest single path component a stored key may occupy, in characters.
+    ///
+    /// Every stored key's last segment becomes a real filename on whatever
+    /// filesystem backs the user's file server, where POSIX `NAME_MAX` is 255
+    /// BYTES. Sanitization maps each character to one of `[A-Za-z0-9._-]`, all
+    /// single-byte, so a sanitized component's character count IS its byte count
+    /// and the budget can be counted in characters.
+    ///
+    /// The cap sits below 255 to leave headroom for a temporary name the server
+    /// may write and rename into place during a PUT. A key that only overflows
+    /// once the server appends its own suffix fails just as hard as one that
+    /// overflows on its own, and diagnosing that from an opaque 5xx is far worse
+    /// than reserving the room up front.
+    static let storedKeyComponentMaxCharacters = 200
+
+    /// Longest dot-suffix still treated as an extension worth preserving.
+    ///
+    /// Real extensions are short (`.markdown` is 9). The bound exists so a
+    /// pathological name whose "extension" is hundreds of characters cannot
+    /// consume the budget the stem needs — such a name is truncated blind
+    /// instead, which is the better failure.
+    private static let maxPreservedExtensionCharacters = 16
+
+    /// Bound an already-sanitized name so `<prefix><name>` fits inside one path
+    /// component, keeping the file extension.
+    ///
+    /// The stem is what gets cut, because an agent routes on the extension: a
+    /// `report.pdf` shortened to `repo.pdf` is still a PDF to whatever tooling
+    /// opens it, where `report.p` is nothing at all.
+    ///
+    /// Pure and deterministic, which the retry path depends on — the same inputs
+    /// must re-mint the same key so a re-PUT overwrites the partial blob instead
+    /// of orphaning it. And a no-op for every name that already fits, so no key
+    /// any existing conversation already holds changes shape.
+    static func boundedStoredKeyName(
+        _ safeName: String,
+        reservedPrefixCharacters: Int
+    ) -> String {
+        let budget = storedKeyComponentMaxCharacters - reservedPrefixCharacters
+        guard budget > 0 else { return "" }
+        guard safeName.count > budget else { return safeName }
+
+        // The extension is the last dot-suffix, but only when the dot is not the
+        // leading character — a dotfile like `.gitignore` is all stem, and
+        // treating it as an extension would truncate away the entire name.
+        var stem = safeName
+        var ext = ""
+        if let dot = safeName.lastIndex(of: "."), dot != safeName.startIndex {
+            let suffix = safeName[dot...]
+            if suffix.count <= maxPreservedExtensionCharacters, suffix.count < budget {
+                stem = String(safeName[..<dot])
+                ext = String(suffix)
+            }
+        }
+        return String(stem.prefix(budget - ext.count)) + ext
+    }
+
     /// Derive the opaque stored name for an attachment:
     /// `[<folder>/]<8 lowercase hex>__<sanitized original>` (with the
     /// per-conversation folder prefix).
@@ -193,6 +250,12 @@ enum FileServerClient {
     ///   component for both the `PUT baseURL/<storedKey>` URL and the agent's
     ///   shell-side tooling. An empty sanitized result (e.g. a name that was all
     ///   spaces) falls back to `"file"` so the key is always well-formed.
+    /// - The sanitized name is then bounded so the whole `<8hex>__<name>`
+    ///   component fits `storedKeyComponentMaxCharacters`, extension preserved
+    ///   (`boundedStoredKeyName`). Unbounded, a filename the source filesystem
+    ///   happily accepts at its own 255-byte limit mints a LONGER component here
+    ///   — the 8-hex prefix and `__` are pure additions — which the file server's
+    ///   filesystem then refuses, so the attachment cannot be sent at all.
     /// - `folder` (optional) namespaces the upload under a per-conversation
     ///   directory: when present (and non-empty after the same safe-set
     ///   sanitization — a `conversationID` UUID string is already in the safe
@@ -220,7 +283,11 @@ enum FileServerClient {
         let sanitized = String(originalName.map { allowed.contains($0) ? $0 : "_" })
         let safeName = sanitized.isEmpty ? "file" : sanitized
 
-        let baseKey = "\(shortID)__\(safeName)"
+        let prefix = "\(shortID)__"
+        let baseKey = prefix + boundedStoredKeyName(
+            safeName,
+            reservedPrefixCharacters: prefix.count
+        )
 
         // Prefix the per-conversation folder when supplied + capable. The folder
         // segment is sanitized through the SAME safe set (a UUID string is
@@ -229,7 +296,12 @@ enum FileServerClient {
         guard let folder, !folder.isEmpty else { return baseKey }
         let safeFolder = String(folder.map { allowed.contains($0) ? $0 : "_" })
         guard !safeFolder.isEmpty else { return baseKey }
-        return "\(safeFolder)/\(baseKey)"
+        // The folder is its own path component, so it carries the same NAME_MAX
+        // budget as the filename. A plain truncation is right here where the
+        // filename gets extension-aware treatment: a directory name has no
+        // extension to protect, and the value is a `conversationID` UUID (36
+        // characters) in every real caller.
+        return "\(safeFolder.prefix(storedKeyComponentMaxCharacters))/\(baseKey)"
     }
 
     /// Derive the deterministic stored key for a SHARE-EXTENSION attachment:
@@ -252,6 +324,14 @@ enum FileServerClient {
     ///   `PUT baseURL/<storedKey>` URL + the agent's shell-side tooling). An empty
     ///   sanitized result (e.g. a name that was all spaces) falls back to `"file"`
     ///   so the key is always well-formed.
+    /// - The sanitized name is then bounded to fit
+    ///   `storedKeyComponentMaxCharacters` with the extension preserved, exactly
+    ///   as the in-app key is. The budget is derived from the prefix actually
+    ///   built, because `sequence` widens it. `SharedInboxManifest` already
+    ///   bounds `originalName` on the way in, but that guards the manifest, not
+    ///   this component — a manifest decoded from an older build carries whatever
+    ///   name it was written with, and the bound belongs where the filesystem
+    ///   constraint actually is.
     ///
     /// Deterministic given the same `(envelopeID, sequence, originalName, folder)`
     /// — tests assert this so a relaunch re-mints the SAME key (the bytes are
@@ -279,12 +359,18 @@ enum FileServerClient {
         let sanitized = String(originalName.map { allowed.contains($0) ? $0 : "-" })
         let safeName = sanitized.isEmpty ? "file" : sanitized
 
-        let baseKey = "\(shortID)-\(sequence)__\(safeName)"
+        // `sequence` widens the prefix, so the name budget is derived from the
+        // prefix actually built rather than a hardcoded width.
+        let prefix = "\(shortID)-\(sequence)__"
+        let baseKey = prefix + boundedStoredKeyName(
+            safeName,
+            reservedPrefixCharacters: prefix.count
+        )
 
         guard let folder, !folder.isEmpty else { return baseKey }
         let safeFolder = String(folder.map { allowed.contains($0) ? $0 : "_" })
         guard !safeFolder.isEmpty else { return baseKey }
-        return "\(safeFolder)/\(baseKey)"
+        return "\(safeFolder.prefix(storedKeyComponentMaxCharacters))/\(baseKey)"
     }
 
     // MARK: - Auth
