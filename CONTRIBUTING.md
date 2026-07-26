@@ -22,6 +22,17 @@ That's the whole agreement: there is **no CLA** and no copyright assignment.
 Forgot to sign off? `git commit --amend -s` fixes the last commit;
 `git rebase --signoff <base>` fixes a branch.
 
+Rather than rely on remembering the flag, enable the tracked hook once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+`.githooks/prepare-commit-msg` then adds the trailer for you. It is keyed on the
+commit **author** (the person who can certify the change, and not always the
+committer), skipped for merge and squash messages, and idempotent — so
+`git commit -s` keeps working and never produces a duplicate line.
+
 ## Building from source
 
 You need **Xcode 26.5 or later**. The app targets iOS/iPadOS 26.5, macOS 26.5,

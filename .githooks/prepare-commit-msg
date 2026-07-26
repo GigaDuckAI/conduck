@@ -1,0 +1,34 @@
+#!/bin/sh
+# Append the DCO sign-off trailer unless the message already carries one.
+#
+# CONTRIBUTING.md makes `Signed-off-by` mandatory and a DCO bot enforces it on
+# `main`. Leaving that to whoever remembers `git commit -s` is how a repository
+# ends up with a required check that most of its own history does not satisfy —
+# which is the wall an outside contributor's first pull request runs into.
+#
+# Enable once per clone (it is local config, so it cannot ship in the repo):
+#
+#     git config core.hooksPath .githooks
+#
+# Arguments: $1 = message file, $2 = message source, $3 = SHA being amended.
+
+msg_file="$1"
+msg_source="$2"
+
+# A merge or squash message is assembled from commits that already carry their
+# own authors' sign-offs. Adding this committer's on top would attest to work
+# they did not write.
+case "$msg_source" in
+	merge|squash) exit 0 ;;
+esac
+
+# Keyed on the AUTHOR, not the committer: the DCO bot matches the trailer
+# against the commit author, the two differ on a rebase or an applied patch, and
+# only the author can certify where the change came from.
+signoff=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+[ -n "$signoff" ] || exit 0
+
+# `--if-exists doNothing` makes this idempotent: `git commit -s` and this hook
+# cannot both add a line, and a cherry-picked commit keeps the original author's
+# sign-off rather than gaining a second one.
+git interpret-trailers --if-exists doNothing --trailer "$signoff" --in-place "$msg_file"
