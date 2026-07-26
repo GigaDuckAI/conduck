@@ -1368,40 +1368,62 @@ final class MenuBarCoordinator {
     /// `stampsQuickPointer: false` (explicit surfaces never retarget the quick
     /// lane). Mints a fresh conversation (bound to the window picker's pending
     /// backend, else the persisted default) only when the lane is empty.
-    func handleTypedText(_ text: String, attachments: [PendingAttachment]) async {
+    func handleTypedText(_ dispatch: ComposerTurnDispatch) async -> Bool {
         defer { sweepRegistry() }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
+        let trimmed = dispatch.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !dispatch.attachments.isEmpty else { return false }
+        guard ComposerDispatchOwnership.matches(
+            sealedConversationID: dispatch.conversationID,
+            activeConversationID: windowViewModel?.conversationID
+        ) else {
+            windowViewModel?.reportComposerDispatchRejection()
+            return false
+        }
         if windowViewModel == nil {
-            let ref: RemoteAgentRef
-            if let pending = pendingNewConversationRef {
-                ref = pending
-            } else {
-                ref = await SettingsManager.shared.defaultRemoteAgentRef()
-            }
-            pendingNewConversationRef = nil
             guard let fresh = try? await conversationStore
-                .createConversation(backend: ref.rawString) else {
-                // Mint failed — the composer already cleared its draft, so a
-                // bare return is total silent text loss. Surface the failure on
-                // the popover's error footer (the only error surface reachable
-                // from the coordinator; attachments were in-memory and are
-                // dropped) and stash the text for its Retry — but ONLY when the
-                // error actually presented (`presentHandoffError` no-ops over a
-                // live capture; an invisible stash would hijack a later,
-                // unrelated error's Retry with this stale text).
-                if dictationService.presentHandoffError(message: mintFailedMessage) {
-                    pendingFailedTurn = .typed(text: trimmed)
-                }
-                return
+                .createConversation(backend: dispatch.ref.rawString) else {
+                // Mint failed. The local-acceptance handshake leaves the window
+                // composer's draft and attachments intact; also surface the
+                // failure on the coordinator's existing error footer.
+                _ = dictationService.presentHandoffError(message: mintFailedMessage)
+                return false
             }
+            guard ComposerMintOwnership.resolve(
+                sealedConversationID: dispatch.conversationID,
+                activeConversationIDAfterMint: windowViewModel?.conversationID
+            ) == .adoptFreshConversation else {
+                // The create hop suspended and the user selected an existing
+                // conversation meanwhile. Discard only our unused empty mint;
+                // never bind it over the user's newer selection.
+                try? await conversationStore.deleteConversation(id: fresh.id)
+                windowViewModel?.reportComposerDispatchRejection()
+                return false
+            }
+            // Consume the mutable picker slot only after the sealed ref was
+            // durably minted. A failed mint leaves both composer and picker
+            // ownership intact for retry.
+            pendingNewConversationRef = nil
             bindWindowViewModel(to: fresh.id)
         }
-        guard let vm = windowViewModel else { return }
+        guard let vm = windowViewModel,
+              dispatch.conversationID == nil
+                || vm.conversationID == dispatch.conversationID,
+              let raw = try? await conversationStore
+                .fetchConversation(id: vm.conversationID)?.backend,
+              RemoteAgentRef(rawString: raw) == dispatch.ref else {
+            windowViewModel?.reportComposerDispatchRejection()
+            return false
+        }
         // Successful hand-off — drop any stale mint-failure stash (see
         // `handleTranscript`).
         pendingFailedTurn = nil
-        await vm.sendUserTurn(trimmed, modality: .text, attachments: attachments)
+        return await vm.submitUserTurnAwaitingLocalAcceptance(
+            trimmed,
+            modality: .text,
+            attachments: dispatch.attachments,
+            expectedRef: dispatch.ref,
+            expectedFileLaneID: dispatch.fileLaneID
+        )
     }
 
     // MARK: - Hand-off failure recovery (stranded turn)
@@ -1460,7 +1482,23 @@ final class MenuBarCoordinator {
             }
         case .typed(let text):
             Task { [weak self] in
-                await self?.handleTypedText(text, attachments: [])
+                guard let self else { return }
+                let ref: RemoteAgentRef
+                if let pending = self.pendingNewConversationRef {
+                    ref = pending
+                } else {
+                    ref = await SettingsManager.shared.defaultRemoteAgentRef()
+                }
+                _ = await self.handleTypedText(ComposerTurnDispatch(
+                    text: text,
+                    attachments: [],
+                    ref: ref,
+                    fileLaneID: nil,
+                    handedOffServerAttachmentIDs: [],
+                    conversationID: self.windowViewModel?.conversationID,
+                    stagingGeneration: UUID(),
+                    stagedAttachmentIDs: []
+                ))
             }
         }
     }

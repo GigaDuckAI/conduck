@@ -155,8 +155,15 @@ struct ContentView: View {
             ConversationLibraryView(
                 selectedConversationID: $currentConversationID,
                 recorder: recorder,
-                onSendTurn: { text, modality, attachments in
-                    await sendTurn(text, modality: modality, attachments: attachments)
+                onSendTurn: { dispatch, modality in
+                    await sendTurn(
+                        dispatch.text,
+                        modality: modality,
+                        attachments: dispatch.attachments,
+                        expectedRef: dispatch.ref,
+                        expectedFileLaneID: dispatch.fileLaneID,
+                        expectedConversationID: dispatch.conversationID
+                    )
                 },
                 isRemoteAgentConfigured: isRemoteAgentConfigured,
                 backendTitle: backendTitle,
@@ -228,7 +235,20 @@ struct ContentView: View {
     /// conversation, `currentConversationID` is non-nil and the picker falls
     /// away to a static title.
     private var canPickBackend: Bool {
-        configuredRefs.count >= 2 && currentConversationID == nil
+        configuredRefs.count >= 2
+            && currentConversationID == nil
+            && !attachmentGatewaySelectionLocked
+    }
+
+    /// macOS owns its composer in `MainWindowView`; only the iPhone shell has
+    /// this local coordinator. Keep the shared picker predicate buildable on
+    /// both platforms while still locking iPhone gateway changes during staging.
+    private var attachmentGatewaySelectionLocked: Bool {
+        #if os(iOS)
+        attachmentCoordinator.gatewaySelectionLocked
+        #else
+        false
+        #endif
     }
 
     /// The principal-placement gateway `Menu` shared by the iPhone toolbar. Label
@@ -381,8 +401,15 @@ struct ContentView: View {
                             recorder: recorder,
                             draft: $composerDraft,
                             coordinator: attachmentCoordinator,
-                            onSend: { text, attachments in
-                                await sendTurn(text, modality: .text, attachments: attachments)
+                            onSend: { dispatch in
+                                await sendTurn(
+                                    dispatch.text,
+                                    modality: .text,
+                                    attachments: dispatch.attachments,
+                                    expectedRef: dispatch.ref,
+                                    expectedFileLaneID: dispatch.fileLaneID,
+                                    expectedConversationID: dispatch.conversationID
+                                )
                             },
                             onVoiceResult: handleTranscriptionResult,
                             settingsVM: settingsVM,
@@ -490,7 +517,10 @@ struct ContentView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active { Task { await refreshOnForeground() } }
             }
-            .onChange(of: currentConversationID) { _, _ in
+            .onChange(of: currentConversationID) { oldID, newID in
+                #if os(iOS)
+                attachmentCoordinator.discardForNavigation(from: oldID, to: newID)
+                #endif
                 composerDraft = ""   // don't carry a half-typed draft into another thread
                 clearComposerFeedback()   // stale voice error/recovery shouldn't follow a thread switch
                 syncDetailVM()
@@ -587,7 +617,9 @@ struct ContentView: View {
         Task {
             configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
             customGateways = await SettingsManager.shared.customGateways()
-            pickerSelectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
+            if !attachmentGatewaySelectionLocked {
+                pickerSelectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
+            }
             await refreshBackendTitle()
         }
     }
@@ -795,7 +827,7 @@ struct ContentView: View {
         // Seed the session-local picker selection from the persisted default
         // whenever we're in an empty/new state (no bound thread yet). Inside a
         // thread the picker is hidden, so the selection is irrelevant.
-        if currentConversationID == nil {
+        if currentConversationID == nil, !attachmentGatewaySelectionLocked {
             pickerSelectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
         }
         await refreshBackendTitle()
@@ -960,8 +992,23 @@ struct ContentView: View {
     private func sendTurn(
         _ text: String,
         modality: TurnModality = .voice,
-        attachments: [PendingAttachment] = []
-    ) async {
+        attachments: [PendingAttachment] = [],
+        expectedRef: RemoteAgentRef? = nil,
+        expectedFileLaneID: String? = nil,
+        expectedConversationID: UUID? = nil
+    ) async -> Bool {
+        // A sealed composer dispatch may target either one established
+        // conversation or a genuine new-chat mint. Never reinterpret nil as
+        // "whatever thread happens to be visible now".
+        if expectedRef != nil {
+            guard ComposerDispatchOwnership.matches(
+                sealedConversationID: expectedConversationID,
+                activeConversationID: currentConversationID
+            ) else {
+                detailVM?.reportComposerDispatchRejection()
+                return false
+            }
+        }
         // Ensure we have a visible conversation + VM; mint one bound to the
         // gateway-picker selection on first turn. The selection is
         // seeded from the default in the empty state, then driven by the title
@@ -969,23 +1016,68 @@ struct ContentView: View {
         // `currentConversationID` is non-nil → the picker is gated off and the
         // thread is locked to this backend.
         if currentConversationID == nil {
-            if let fresh = try? await ConversationStore.shared.createConversation(backend: pickerSelectedRef.rawString) {
+            let mintRef = expectedRef ?? pickerSelectedRef
+            if let fresh = try? await ConversationStore.shared.createConversation(backend: mintRef.rawString) {
+                guard ComposerMintOwnership.resolve(
+                    sealedConversationID: expectedConversationID,
+                    activeConversationIDAfterMint: currentConversationID
+                ) == .adoptFreshConversation else {
+                    // `createConversation` suspends. If the user selected an
+                    // existing conversation while the empty row was being
+                    // minted, never steal the selection back to the mint.
+                    // Delete only our unused empty row through the store's
+                    // normal single-conversation path.
+                    try? await ConversationStore.shared.deleteConversation(id: fresh.id)
+                    if expectedRef != nil {
+                        detailVM?.reportComposerDispatchRejection()
+                    } else {
+                        composerDraft = appendingTranscript(text, to: composerDraft)
+                        showSendFailedAlert = true
+                    }
+                    return false
+                }
                 currentConversationID = fresh.id
             } else {
                 // Mint failure (rare Core Data write error, e.g. disk-full).
-                // The composer already cleared the draft before calling us, so
-                // a bare return would silently swallow the user's message —
-                // restore the text and say so. (Staged attachments were also
-                // cleared; the text is the recoverable part.)
-                composerDraft = appendingTranscript(text, to: composerDraft)
+                // Sealed composer sends retain their own draft/tiles until this
+                // returns true. Legacy voice paths still need the historical
+                // host-side text restoration below.
+                if expectedRef == nil {
+                    composerDraft = appendingTranscript(text, to: composerDraft)
+                }
                 showSendFailedAlert = true
-                return
+                return false
             }
         }
-        guard currentConversationID != nil else { return }
+        guard let conversationID = currentConversationID else { return false }
+        if let expectedConversationID,
+           conversationID != expectedConversationID {
+            detailVM?.reportComposerDispatchRejection()
+            return false
+        }
+        if let expectedRef {
+            guard let raw = try? await ConversationStore.shared
+                .fetchConversation(id: conversationID)?.backend,
+                  RemoteAgentRef(rawString: raw) == expectedRef else {
+                detailVM?.reportComposerDispatchRejection()
+                return false
+            }
+        }
         if detailVM?.conversationID != currentConversationID { syncDetailVM() }
-        guard let vm = detailVM else { return }
+        guard currentConversationID == conversationID,
+              let vm = detailVM,
+              vm.conversationID == conversationID else { return false }
+        if let expectedRef {
+            return await vm.submitUserTurnAwaitingLocalAcceptance(
+                text,
+                modality: modality,
+                attachments: attachments,
+                expectedRef: expectedRef,
+                expectedFileLaneID: expectedFileLaneID
+            )
+        }
         await vm.sendUserTurn(text, modality: modality, attachments: attachments)
+        return true
     }
 
     // MARK: - Pending retry

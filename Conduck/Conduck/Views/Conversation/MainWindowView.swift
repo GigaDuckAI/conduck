@@ -38,6 +38,9 @@ struct MainWindowView: View {
     /// writes through to `coordinator.pendingNewConversationRef` so the next
     /// minted conversation actually binds to the chosen gateway.
     @State private var selectedRef: RemoteAgentRef = .builtin(Constants.remoteAgentDefaultBackendDefault)
+    /// Raised by the VM-less composer while attachment staging/dispatch owns
+    /// `selectedRef`; the title-bar pill becomes read-only for that interval.
+    @State private var newChatGatewaySelectionLocked = false
     /// The fully-configured gateway refs (token + url): built-ins first, then
     /// customs. The gateway picker renders only when this has ≥2 entries AND no
     /// conversation is active (new/empty).
@@ -410,7 +413,7 @@ struct MainWindowView: View {
                 } else {
                     gatewayReadOnlyLabel(vm.backendDisplayName)
                 }
-            } else if configuredRefs.count >= 2 {
+            } else if configuredRefs.count >= 2 && !newChatGatewaySelectionLocked {
                 gatewayPickerMenu
                     .font(.subheadline.weight(.semibold))
                     .fixedSize()
@@ -501,11 +504,13 @@ struct MainWindowView: View {
     private func refreshConfiguredBackends() async {
         configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
         customGateways = await SettingsManager.shared.customGateways()
-        selectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
+        if !newChatGatewaySelectionLocked {
+            selectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
+        }
         // Keep the pending mint-ref in sync with the visible picker label so a
         // first typed turn binds to the gateway the user sees selected. Gated
         // on the WINDOW lane — `pendingNewConversationRef` is window-mint state.
-        if coordinator.windowViewModel == nil {
+        if coordinator.windowViewModel == nil, !newChatGatewaySelectionLocked {
             coordinator.pendingNewConversationRef = selectedRef
         }
     }
@@ -516,8 +521,8 @@ struct MainWindowView: View {
     // composer therefore target the same conversation on screen.
     /// Shared mint-on-first-turn send path. Both composer instances (active +
     /// new-chat branch) use the SAME closure so behavior is identical.
-    private func sendTypedText(_ text: String, _ atts: [PendingAttachment]) async {
-        await coordinator.handleTypedText(text, attachments: atts)
+    private func sendTypedText(_ dispatch: ComposerTurnDispatch) async -> Bool {
+        await coordinator.handleTypedText(dispatch)
     }
 
     /// Route an STT result from the window mic — the mic-tap path (via the
@@ -663,6 +668,10 @@ struct MainWindowView: View {
                 selectedRef: selectedRef,
                 pendingStagedImage: composerImageBridge
             )
+            // Attachment staging is view-local @State. Give each active
+            // conversation its own mount so A → B runs A's onDisappear/deferred
+            // teardown instead of carrying A's tiles into B.
+            .id(ComposerMountIdentity.conversation(vm.conversationID))
             .frame(maxWidth: Constants.Layout.chatContentWidth)
             .frame(maxWidth: .infinity)
         }
@@ -693,8 +702,12 @@ struct MainWindowView: View {
                             onVoiceResult: handleWindowVoiceResult,
                             settingsVM: settingsVM,
                             selectedRef: selectedRef,
+                            newChatGatewaySelectionLocked: $newChatGatewaySelectionLocked,
                             pendingStagedImage: composerImageBridge
                         )
+                        // Keep the VM-less minting composer explicitly distinct
+                        // from every established-conversation mount.
+                        .id(ComposerMountIdentity.newChat)
                     }
                 }
                 .frame(maxWidth: Constants.Layout.chatContentWidth)

@@ -25,7 +25,7 @@ struct AttachmentComposerContainer: View {
     @Bindable var coordinator: ComposerAttachmentCoordinator
     /// Send a turn (text + resolved attachments). The host mints the
     /// conversation + routes to the VM, mirroring the voice/text paths.
-    let onSend: (_ text: String, _ attachments: [PendingAttachment]) async -> Void
+    let onSend: (_ dispatch: ComposerTurnDispatch) async -> Bool
     /// Forward an STT voice result (host routes success/failure + pending retry).
     let onVoiceResult: (Result<String, AppError>) async -> Void
     /// STABLE host-owned Settings VM, reused for the file-transfer setup sheet.
@@ -60,16 +60,30 @@ struct AttachmentComposerContainer: View {
             attachments: $coordinator.staged,
             progressByID: coordinator.progressByID,
             onSendText: { text in
+                let dispatchRef = viewModel == nil ? pendingNewConversationRef : effectiveRef
+                guard coordinator.beginAttachmentDispatch() else { return false }
+                defer { coordinator.endAttachmentDispatch() }
                 // Bounded ~2s upload join: give a freshly-staged dual attachment
                 // (`.dualText` / `.dualImage`) whose eager upload is still in
                 // flight a brief window to land so its storedKey rides this turn's
                 // "also on disk" ref. Never blocks — past the deadline the file
                 // rides inline-only (the disk ref defers to a later turn).
                 await coordinator.awaitPreferredUploads()
-                let pending = coordinator.staged.pendingAttachments
-                coordinator.clear()
-                await onSend(text, pending)
+                guard let dispatch = coordinator.makeDispatch(
+                    text: text,
+                    ref: dispatchRef,
+                    conversationID: viewModel?.conversationID
+                ) else {
+                    viewModel?.reportComposerDispatchRejection()
+                    return false
+                }
+                let accepted = await onSend(dispatch)
+                if accepted {
+                    coordinator.clearAfterSuccessfulHandoff(dispatch)
+                }
+                return accepted
             },
+            attachmentPreparationInProgress: coordinator.isPreparingAttachments,
             onVoiceResult: onVoiceResult,
             onPickLibrary: { coordinator.pickLibrary() },
             onTakePhoto: { coordinator.takePhoto() },
@@ -78,7 +92,7 @@ struct AttachmentComposerContainer: View {
             fileTransferAvailable: fileTransferAvailable,
             onRemoveAttachment: { removeAttachment($0) },
             onRetryUpload: { id in
-                coordinator.retryServerUpload(id: id, vm: viewModel, ref: effectiveRef)
+                coordinator.retryServerUpload(id: id, vm: viewModel)
             },
             onSetUpAttachment: { _ in showingSetupGuide = true }
         )
@@ -120,15 +134,12 @@ struct AttachmentComposerContainer: View {
         // The user can switch the NEW-conversation gateway picker while the
         // composer is VM-less — re-resolve so the menu's discovery item, the setup
         // sheet's scope, and the binary route all track the gateway the next turn
-        // will actually bind to. VM-less tiles RE-STAMP to the new gateway (the
-        // next turn definitionally binds there) and then promote if it has a
-        // server; a conversation-bound composer never re-stamps.
+        // will actually bind to. The host renders the picker read-only while
+        // attachment staging is active, so an existing tile is never silently
+        // restamped or copied to another gateway.
         .onChange(of: pendingNewConversationRef) {
             Task {
                 await refreshFileTransfer()
-                if viewModel == nil {
-                    coordinator.restampNeedsSetupTiles(to: effectiveRef)
-                }
                 await coordinator.promoteNeedsSetupTiles(vm: viewModel, ref: effectiveRef)
             }
         }
@@ -215,7 +226,7 @@ struct AttachmentComposerContainer: View {
     /// cancel-aware remove (cancels the upload + DELETEs an orphan via the ref —
     /// works VM-less too); a plain non-server remove otherwise.
     private func removeAttachment(_ id: UUID) {
-        coordinator.remove(id, vm: viewModel, ref: effectiveRef)
+        coordinator.remove(id)
     }
 
     /// Resolve the effective ref (bound conversation, else the host's pending
@@ -223,6 +234,10 @@ struct AttachmentComposerContainer: View {
     /// test passed — drives the "Set Up File Transfer…" discovery item + the
     /// binary route).
     private func refreshFileTransfer() async {
+        // Route ownership is frozen from the first preparation byte through
+        // local acceptance. A notification/default refresh may update Settings,
+        // but it must not mutate this composer's authoritative ref mid-turn.
+        guard !coordinator.gatewaySelectionLocked else { return }
         guard let vm = viewModel else {
             // Brand-new (VM-less) conversation: scope to the host's AUTHORITATIVE
             // pending gateway (the picker choice the next mint binds to), NOT the
@@ -242,11 +257,7 @@ struct AttachmentComposerContainer: View {
         if let raw = try? await ConversationStore.shared.fetchConversation(id: vm.conversationID)?.backend,
            let bound = RemoteAgentRef(rawString: raw) {
             ref = bound
-        } else {
-            // No persisted backend (brand-new conversation) → the gateway the
-            // first turn will bind to is the default.
-            ref = await SettingsManager.shared.defaultRemoteAgentRef()
-        }
+        } else { return }
         effectiveRef = ref
         fileTransferAvailable = (await SettingsManager.shared.fileTransferReadySnapshot(for: ref)) != nil
     }

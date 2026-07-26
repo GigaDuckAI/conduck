@@ -26,6 +26,19 @@ import Foundation
 struct StagedAttachment: Identifiable, Equatable {
     let id: UUID
     var kind: Kind
+    /// The exact gateway whose file lane owns this staged server-side copy.
+    ///
+    /// This is intentionally attached to the tile itself rather than inferred
+    /// from the composer's current picker value: uploads, retries, and orphan
+    /// DELETEs can finish after the picker/view state has changed. Nil is valid
+    /// only for inline-only/loading/failed tiles that never touched a file lane.
+    var serverOwnerRef: RemoteAgentRef?
+    /// The exact immutable file-lane configuration used to mint/upload this
+    /// tile. A ref alone is insufficient: Settings can repoint the same gateway
+    /// while an upload, retry, or late orphan cleanup is still running. Nil is
+    /// valid for inline-only and `.needsSetup` tiles; every active server upload
+    /// must carry this snapshot.
+    var serverOwnerSnapshot: SettingsManager.FileTransferSnapshot?
 
     /// Eager-upload state for a `.serverFile`, `.dualImage`, OR `.dualText` tile
     /// (the file-transfer routes). Nil for every other kind (plain `.image` /
@@ -131,9 +144,17 @@ struct StagedAttachment: Identifiable, Equatable {
     /// advances.
     var serverUploadState: ServerFileUploadState?
 
-    init(id: UUID = UUID(), kind: Kind, serverUploadState: ServerFileUploadState? = nil) {
+    init(
+        id: UUID = UUID(),
+        kind: Kind,
+        serverOwnerRef: RemoteAgentRef? = nil,
+        serverOwnerSnapshot: SettingsManager.FileTransferSnapshot? = nil,
+        serverUploadState: ServerFileUploadState? = nil
+    ) {
         self.id = id
         self.kind = kind
+        self.serverOwnerRef = serverOwnerRef
+        self.serverOwnerSnapshot = serverOwnerSnapshot
         self.serverUploadState = serverUploadState
     }
 
@@ -184,6 +205,20 @@ struct StagedAttachment: Identifiable, Equatable {
     var needsSetup: Bool {
         if case .needsSetup = kind { return true }
         return false
+    }
+
+    /// Whether this tile is safe to send through `ref`. Every kind that can
+    /// carry a server `storedKey` (including a not-yet-configured binary) must
+    /// retain an exact owner; inline-only kinds are gateway-independent.
+    func serverOwnershipMatches(_ ref: RemoteAgentRef) -> Bool {
+        switch kind {
+        case .needsSetup:
+            return serverOwnerRef == ref
+        case .dualImage, .dualText, .serverFile:
+            return serverOwnerRef == ref && serverOwnerSnapshot != nil
+        case .loading, .image, .file, .failed:
+            return true
+        }
     }
 
     /// True while a `.serverFile` tile's background PUT is in flight — gates
@@ -258,6 +293,163 @@ struct StagedAttachment: Identifiable, Equatable {
     }
 }
 
+/// Pure identity verdict shared by the iOS/iPadOS button + keyboard host and
+/// the macOS window host. Nil owns only the genuine new-chat state; it is not a
+/// wildcard for whichever same-gateway conversation happens to be visible
+/// when an asynchronous submission resumes.
+enum ComposerDispatchOwnership {
+    static func matches(
+        sealedConversationID: UUID?,
+        activeConversationID: UUID?
+    ) -> Bool {
+        sealedConversationID == activeConversationID
+    }
+}
+
+/// Post-mint ownership verdict for a composer that started in the genuine
+/// new-chat state. Conversation creation suspends; while it is in flight the
+/// user can select an existing conversation. The fresh empty row may be
+/// adopted only if the host is STILL new-chat when creation returns. Otherwise
+/// the host deletes that unused mint and leaves the user's newer selection
+/// untouched.
+enum ComposerMintOwnership {
+    enum Resolution: Equatable {
+        case adoptFreshConversation
+        case discardFreshConversation
+    }
+
+    static func resolve(
+        sealedConversationID: UUID?,
+        activeConversationIDAfterMint: UUID?
+    ) -> Resolution {
+        guard sealedConversationID == nil,
+              activeConversationIDAfterMint == nil else {
+            return .discardFreshConversation
+        }
+        return .adoptFreshConversation
+    }
+}
+
+/// Gateway + conversation identity captured as one immutable routing decision.
+/// A nil conversation belongs only to the genuine new-chat composer. Keeping
+/// the pair together prevents an asynchronous upload join from combining the
+/// gateway resolved for conversation A with conversation B's later selection.
+struct ComposerDispatchRoute: Equatable, Sendable {
+    let ref: RemoteAgentRef
+    let conversationID: UUID?
+}
+
+/// SwiftUI identity for the macOS composer's attachment-owning mount. Active
+/// conversations deliberately get distinct identities so an A → B navigation
+/// tears down A's local staging state; new chat remains a separate VM-less
+/// identity whose accepted first turn may mint naturally.
+enum ComposerMountIdentity: Hashable {
+    case newChat
+    case conversation(UUID)
+}
+
+/// Shared deferred-teardown latch for composer navigation/disappearance. A
+/// teardown request during dispatch cannot mutate attachment ownership
+/// immediately: local acceptance may already have handed the sealed storedKeys
+/// to a message. The host first performs successful handoff cleanup (if any),
+/// then consumes this latch at dispatch end; a rejected send therefore discards
+/// the still-unsent sealed items, while an accepted send never deletes its keys.
+struct ComposerDeferredTeardown {
+    private(set) var isPending = false
+
+    /// Returns true when teardown can run immediately. During dispatch it only
+    /// records the request and returns false.
+    mutating func request(whileDispatching: Bool) -> Bool {
+        guard whileDispatching else { return true }
+        isPending = true
+        return false
+    }
+
+    /// Consume the one-shot deferred request at dispatch completion.
+    mutating func consume() -> Bool {
+        let pending = isPending
+        isPending = false
+        return pending
+    }
+}
+
+/// Exact file-lane verdict used by download chips. Both sides must be present;
+/// a legacy nil owner is unprovable and always fails closed.
+enum FileTransferLaneOwnership {
+    static func matches(expectedLaneID: String?, currentLaneID: String?) -> Bool {
+        guard let expectedLaneID, let currentLaneID else { return false }
+        return expectedLaneID == currentLaneID
+    }
+
+    /// Existing blobs remain operable when a later Test Connection verdict
+    /// marks the otherwise unchanged lane unavailable. Readiness gates NEW
+    /// uploads/output promises; it must not brick a key already owned by this
+    /// exact durable lane.
+    static func canAccessExistingBlob(
+        expectedLaneID: String?,
+        snapshot: SettingsManager.FileTransferSnapshot?
+    ) -> Bool {
+        matches(
+            expectedLaneID: expectedLaneID,
+            currentLaneID: snapshot?.durableLaneID
+        )
+    }
+
+    /// Same physical configured lane, ignoring only mutable readiness/capability
+    /// verdicts. Used at the final background-request enqueue boundary.
+    static func samePhysicalLane(
+        captured: SettingsManager.FileTransferSnapshot,
+        current: SettingsManager.FileTransferSnapshot?
+    ) -> Bool {
+        guard let current else { return false }
+        return current.durableLaneID == captured.durableLaneID
+            && current.identitySignature == captured.identitySignature
+    }
+}
+
+/// Immutable hand-off from a composer to the conversation host. It captures
+/// the logical gateway once and, when a landed server reference is present,
+/// the exact durable file lane that owns those keys.
+struct ComposerTurnDispatch: Sendable {
+    let text: String
+    let attachments: [PendingAttachment]
+    let ref: RemoteAgentRef
+    let fileLaneID: String?
+    /// Established conversation identity sealed by the composer. Nil is valid
+    /// only for a genuine new-chat mint.
+    let conversationID: UUID?
+    /// Per-composer staging generation captured with the exact item ids. Hosts
+    /// treat this as opaque ownership evidence; no credential/config enters it.
+    let stagingGeneration: UUID
+    let stagedAttachmentIDs: Set<UUID>
+    /// Local staged-item identities whose uploaded server keys were frozen into
+    /// `attachments` above. Cleanup must use this captured set, not the tile's
+    /// later live upload state: a preferred upload can land after dispatch was
+    /// sealed but before local persistence accepts the turn, and that late key
+    /// was never handed off.
+    let handedOffServerAttachmentIDs: Set<UUID>
+
+    init(
+        text: String,
+        attachments: [PendingAttachment],
+        ref: RemoteAgentRef,
+        fileLaneID: String?,
+        handedOffServerAttachmentIDs: Set<UUID>,
+        conversationID: UUID?,
+        stagingGeneration: UUID,
+        stagedAttachmentIDs: Set<UUID>
+    ) {
+        self.text = text
+        self.attachments = attachments
+        self.ref = ref
+        self.fileLaneID = fileLaneID
+        self.conversationID = conversationID
+        self.stagingGeneration = stagingGeneration
+        self.stagedAttachmentIDs = stagedAttachmentIDs
+        self.handedOffServerAttachmentIDs = handedOffServerAttachmentIDs
+    }
+}
+
 extension Array where Element == StagedAttachment {
     /// True while any staged item is still loading — the host disables Send.
     var hasLoadingItem: Bool { contains { $0.isLoading } }
@@ -286,6 +478,62 @@ extension Array where Element == StagedAttachment {
     /// the gate) or removes the tile. Parallel to `hasUploadingItem` /
     /// `hasFailedUpload`.
     var hasNeedsSetupItem: Bool { contains { $0.needsSetup } }
+
+    /// Fail-closed send guard for a staged collection. The new-chat gateway
+    /// picker is locked while attachments exist, but this remains the final
+    /// defense against programmatic/state-restoration drift.
+    func serverOwnershipMatches(_ ref: RemoteAgentRef) -> Bool {
+        allSatisfy { $0.serverOwnershipMatches(ref) }
+    }
+
+    /// Seal the staged collection for one dispatch. Fails closed if a server
+    /// tile lost its owner snapshot, targets another gateway, or mixes landed
+    /// stored keys from different durable lanes.
+    func makeDispatch(
+        text: String,
+        ref: RemoteAgentRef,
+        conversationID: UUID?,
+        stagingGeneration: UUID
+    ) -> ComposerTurnDispatch? {
+        guard serverOwnershipMatches(ref) else { return nil }
+
+        var landedLaneIDs = Set<String>()
+        var handedOffServerAttachmentIDs = Set<UUID>()
+        for item in self {
+            guard case .uploaded? = item.serverUploadState else { continue }
+            guard let snapshot = item.serverOwnerSnapshot else { return nil }
+            landedLaneIDs.insert(snapshot.durableLaneID)
+            handedOffServerAttachmentIDs.insert(item.id)
+        }
+        guard landedLaneIDs.count <= 1 else { return nil }
+
+        return ComposerTurnDispatch(
+            text: text,
+            attachments: pendingAttachments,
+            ref: ref,
+            fileLaneID: landedLaneIDs.first,
+            handedOffServerAttachmentIDs: handedOffServerAttachmentIDs,
+            conversationID: conversationID,
+            stagingGeneration: stagingGeneration,
+            stagedAttachmentIDs: Set(map(\.id))
+        )
+    }
+
+    /// Route-paired overload used by async composer paths. The gateway and
+    /// conversation were captured together before any upload join, so callers
+    /// cannot accidentally seal a live post-await conversation with a stale ref.
+    func makeDispatch(
+        text: String,
+        route: ComposerDispatchRoute,
+        stagingGeneration: UUID
+    ) -> ComposerTurnDispatch? {
+        makeDispatch(
+            text: text,
+            ref: route.ref,
+            conversationID: route.conversationID,
+            stagingGeneration: stagingGeneration
+        )
+    }
 
     /// The resolved, sendable subset converted to `[PendingAttachment]` in
     /// staged order (loading + failed + still-uploading items are dropped).

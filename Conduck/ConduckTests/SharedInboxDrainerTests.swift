@@ -1368,6 +1368,7 @@ private final class MockConverseDispatcher: ShareConverseDispatching, @unchecked
     private(set) var lastServerFileRefs: [(originalName: String, storedKey: String)]?
     private(set) var lastTextFileServerRefs: [(originalName: String, storedKey: String)]?
     private(set) var lastImageFileRefs: [(storedKey: String, filename: String)]?
+    private(set) var lastFileTransferLaneID: String?
     private(set) var lastConversationID: UUID?
     private(set) var lastShareEnvelopeID: UUID?
 
@@ -1390,6 +1391,7 @@ private final class MockConverseDispatcher: ShareConverseDispatching, @unchecked
         newUserServerFileRefs: [(originalName: String, storedKey: String)],
         newUserImageFileRefs: [(storedKey: String, filename: String)],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)],
+        fileTransferSnapshot: SettingsManager.FileTransferSnapshot?,
         conversationID: UUID,
         shareEnvelopeID: UUID
     ) async throws -> String {
@@ -1403,6 +1405,7 @@ private final class MockConverseDispatcher: ShareConverseDispatching, @unchecked
         lastServerFileRefs = newUserServerFileRefs
         lastTextFileServerRefs = newUserTextFileServerRefs
         lastImageFileRefs = newUserImageFileRefs
+        lastFileTransferLaneID = fileTransferSnapshot?.durableLaneID
         lastConversationID = conversationID
         lastShareEnvelopeID = shareEnvelopeID
         let err = error

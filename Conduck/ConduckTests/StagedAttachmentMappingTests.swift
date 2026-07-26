@@ -31,6 +31,21 @@ import XCTest
 
 final class StagedAttachmentMappingTests: XCTestCase {
 
+    private func lane(
+        url: String = "https://files.example.test/dav/",
+        credential: String = "lane-a",
+        available: Bool = true
+    ) -> SettingsManager.FileTransferSnapshot {
+        SettingsManager.FileTransferSnapshot(
+            baseURL: URL(string: url)!,
+            username: "conduck",
+            credential: credential,
+            certFingerprintHex: nil,
+            available: available,
+            folderCapable: true
+        )
+    }
+
     // MARK: - .serverFile (file-transfer route; rides only once uploaded)
 
     private func serverFile(state: StagedAttachment.ServerFileUploadState?) -> StagedAttachment {
@@ -249,6 +264,385 @@ final class StagedAttachmentMappingTests: XCTestCase {
             return XCTFail("second sendable is the landed server-file")
         }
         XCTAssertEqual(storedKey, "abc12345__report.pdf")
+    }
+
+    // MARK: - gateway ownership (new-chat picker hardening)
+
+    func testServerBackedTileMatchesOnlyItsCapturedGatewayOwner() {
+        let openClaw: RemoteAgentRef = .builtin(.openclaw)
+        let hermes: RemoteAgentRef = .builtin(.hermes)
+        let item = StagedAttachment(
+            kind: .serverFile(
+                url: URL(fileURLWithPath: "/tmp/report.pdf"),
+                originalName: "report.pdf",
+                mimeType: "application/pdf"
+            ),
+            serverOwnerRef: openClaw,
+            serverOwnerSnapshot: lane(),
+            serverUploadState: .uploaded(storedKey: "abc12345__report.pdf")
+        )
+
+        XCTAssertTrue(item.serverOwnershipMatches(openClaw))
+        XCTAssertFalse(item.serverOwnershipMatches(hermes),
+                       "a storedKey uploaded through OpenClaw must never ride a Hermes turn")
+        XCTAssertFalse([item].serverOwnershipMatches(hermes),
+                       "the collection-level send guard fails closed on one mismatched tile")
+    }
+
+    func testServerBackedTileWithoutOwnerFailsClosed() {
+        let ownerless = serverFile(state: .uploaded(storedKey: "abc12345__report.pdf"))
+        XCTAssertFalse(ownerless.serverOwnershipMatches(.builtin(.openclaw)),
+                       "legacy/buggy ownerless server staging must not be guessed onto a gateway")
+    }
+
+    func testInlineOnlyTilesAreGatewayIndependent() {
+        let inline = [
+            StagedAttachment(kind: .image(Data([0x01]))),
+            StagedAttachment(kind: .file(URL(fileURLWithPath: "/tmp/note.txt")))
+        ]
+        XCTAssertTrue(inline.serverOwnershipMatches(.builtin(.openclaw)))
+        XCTAssertTrue(inline.serverOwnershipMatches(.builtin(.hermes)))
+    }
+
+    func testDispatchSealsCapturedRefAndDurableLane() throws {
+        let snapshot = lane()
+        let conversationID = UUID()
+        let stagingGeneration = UUID()
+        let item = StagedAttachment(
+            kind: .serverFile(
+                url: URL(fileURLWithPath: "/tmp/report.pdf"),
+                originalName: "report.pdf",
+                mimeType: "application/pdf"
+            ),
+            serverOwnerRef: .builtin(.openclaw),
+            serverOwnerSnapshot: snapshot,
+            serverUploadState: .uploaded(storedKey: "abc12345__report.pdf")
+        )
+
+        let dispatch = try XCTUnwrap(
+            [item].makeDispatch(
+                text: "read it",
+                ref: .builtin(.openclaw),
+                conversationID: conversationID,
+                stagingGeneration: stagingGeneration
+            )
+        )
+        XCTAssertEqual(dispatch.ref, .builtin(.openclaw))
+        XCTAssertEqual(dispatch.conversationID, conversationID)
+        XCTAssertEqual(dispatch.stagingGeneration, stagingGeneration)
+        XCTAssertEqual(dispatch.stagedAttachmentIDs, [item.id])
+        XCTAssertEqual(dispatch.fileLaneID, snapshot.durableLaneID)
+        XCTAssertEqual(dispatch.attachments.count, 1)
+        XCTAssertEqual(dispatch.handedOffServerAttachmentIDs, [item.id])
+    }
+
+    func testDispatchFreezesWhichPreferredUploadsActuallyLanded() throws {
+        let snapshot = lane()
+        let conversationID = UUID()
+        let stagingGeneration = UUID()
+        var landed = dualImage(state: .uploaded(storedKey: "landed"))
+        landed.serverOwnerRef = .builtin(.openclaw)
+        landed.serverOwnerSnapshot = snapshot
+        var stillUploading = dualImage(state: .uploading(progress: 0.9))
+        stillUploading.serverOwnerRef = .builtin(.openclaw)
+        stillUploading.serverOwnerSnapshot = snapshot
+
+        let dispatch = try XCTUnwrap(
+            [landed, stillUploading].makeDispatch(
+                text: "inspect both",
+                ref: .builtin(.openclaw),
+                conversationID: conversationID,
+                stagingGeneration: stagingGeneration
+            )
+        )
+
+        XCTAssertEqual(dispatch.conversationID, conversationID)
+        XCTAssertEqual(dispatch.stagingGeneration, stagingGeneration)
+        XCTAssertEqual(dispatch.stagedAttachmentIDs, [landed.id, stillUploading.id])
+        XCTAssertEqual(dispatch.attachments.count, 2)
+        XCTAssertEqual(
+            dispatch.handedOffServerAttachmentIDs,
+            [landed.id],
+            "a preferred upload that lands after sealing was inline-only in this dispatch and must be deleted during cleanup"
+        )
+    }
+
+    func testDispatchRejectsMixedDurableLanesAndOwnerlessServerTile() {
+        let conversationID = UUID()
+        let stagingGeneration = UUID()
+        let first = StagedAttachment(
+            kind: .serverFile(
+                url: URL(fileURLWithPath: "/tmp/a.pdf"),
+                originalName: "a.pdf",
+                mimeType: "application/pdf"
+            ),
+            serverOwnerRef: .builtin(.openclaw),
+            serverOwnerSnapshot: lane(credential: "lane-a"),
+            serverUploadState: .uploaded(storedKey: "a")
+        )
+        let second = StagedAttachment(
+            kind: .serverFile(
+                url: URL(fileURLWithPath: "/tmp/b.pdf"),
+                originalName: "b.pdf",
+                mimeType: "application/pdf"
+            ),
+            serverOwnerRef: .builtin(.openclaw),
+            serverOwnerSnapshot: lane(credential: "lane-b"),
+            serverUploadState: .uploaded(storedKey: "b")
+        )
+        XCTAssertNil(
+            [first, second].makeDispatch(
+                text: "",
+                ref: .builtin(.openclaw),
+                conversationID: conversationID,
+                stagingGeneration: stagingGeneration
+            )
+        )
+
+        var ownerless = first
+        ownerless.serverOwnerSnapshot = nil
+        XCTAssertNil(
+            [ownerless].makeDispatch(
+                text: "",
+                ref: .builtin(.openclaw),
+                conversationID: conversationID,
+                stagingGeneration: stagingGeneration
+            )
+        )
+    }
+
+    // MARK: - sealed conversation + deferred teardown ownership
+
+    func testButtonDispatchRejectsSameGatewayConversationSwitchAfterSeal() {
+        let conversationA = UUID()
+        let conversationB = UUID()
+
+        XCTAssertFalse(
+            ComposerDispatchOwnership.matches(
+                sealedConversationID: conversationA,
+                activeConversationID: conversationB
+            ),
+            "the button path must reject A→B even when both conversations use the same gateway"
+        )
+    }
+
+    func testKeyboardDispatchRejectsSameGatewayConversationSwitchAfterSeal() {
+        let conversationA = UUID()
+        let conversationB = UUID()
+
+        XCTAssertFalse(
+            ComposerDispatchOwnership.matches(
+                sealedConversationID: conversationA,
+                activeConversationID: conversationB
+            ),
+            "the keyboard path shares the same final conversation-identity verdict"
+        )
+    }
+
+    func testKeyboardRouteSnapshotKeepsConversationCapturedBeforeUploadJoin() throws {
+        let conversationA = UUID()
+        let conversationB = UUID()
+        let capturedRoute = ComposerDispatchRoute(
+            ref: .builtin(.openclaw),
+            conversationID: conversationA
+        )
+
+        // Simulate the sidebar changing A → B (same gateway) while the keyboard
+        // send is suspended in awaitPreferredUploads(). Dispatch construction
+        // must consume the captured pair, never the now-live selection.
+        let dispatch = try XCTUnwrap(
+            [StagedAttachment]().makeDispatch(
+                text: "sealed before upload join",
+                route: capturedRoute,
+                stagingGeneration: UUID()
+            )
+        )
+
+        XCTAssertEqual(dispatch.ref, .builtin(.openclaw))
+        XCTAssertEqual(dispatch.conversationID, conversationA)
+        XCTAssertFalse(
+            ComposerDispatchOwnership.matches(
+                sealedConversationID: dispatch.conversationID,
+                activeConversationID: conversationB
+            ),
+            "the host must reject the captured A route after selection moves to B"
+        )
+    }
+
+    func testNilSealedConversationMatchesOnlyGenuineNewChatState() {
+        XCTAssertTrue(
+            ComposerDispatchOwnership.matches(
+                sealedConversationID: nil,
+                activeConversationID: nil
+            )
+        )
+        XCTAssertFalse(
+            ComposerDispatchOwnership.matches(
+                sealedConversationID: nil,
+                activeConversationID: UUID()
+            ),
+            "a nil seal must not become a wildcard for a user-selected existing conversation"
+        )
+    }
+
+    func testMacComposerMountIdentityChangesAcrossConversationNavigation() {
+        let conversationA = UUID()
+        let conversationB = UUID()
+
+        XCTAssertNotEqual(
+            ComposerMountIdentity.conversation(conversationA),
+            ComposerMountIdentity.conversation(conversationB),
+            "A → B must remount the attachment-owning composer and run A's teardown"
+        )
+        XCTAssertNotEqual(
+            ComposerMountIdentity.newChat,
+            ComposerMountIdentity.conversation(conversationA),
+            "the VM-less natural-mint composer remains a separate ownership state"
+        )
+    }
+
+    @MainActor
+    func testCoordinatorFreezesRemoveAndClearsOnlyExactSealedIDs() throws {
+        let coordinator = ComposerAttachmentCoordinator()
+        let sealed = StagedAttachment(kind: .image(Data([0x01])))
+        let late = StagedAttachment(kind: .image(Data([0x02])))
+        coordinator.staged = [sealed]
+        XCTAssertTrue(coordinator.beginAttachmentDispatch())
+        let dispatch = try XCTUnwrap(
+            coordinator.makeDispatch(
+                text: "send sealed",
+                ref: .builtin(.openclaw),
+                conversationID: UUID()
+            )
+        )
+
+        // Simulate a late/programmatic stage mutation after sealing. User-facing
+        // remove controls are frozen, so the remove attempt must do nothing.
+        coordinator.staged.append(late)
+        coordinator.remove(late.id)
+        XCTAssertEqual(Set(coordinator.staged.map(\.id)), Set([sealed.id, late.id]))
+
+        coordinator.clearAfterSuccessfulHandoff(dispatch)
+        XCTAssertEqual(coordinator.staged.map(\.id), [late.id],
+                       "successful cleanup consumes only ids frozen into the dispatch")
+        coordinator.endAttachmentDispatch()
+        XCTAssertEqual(coordinator.staged.map(\.id), [late.id],
+                       "without navigation, a late/programmatic item remains for the next turn")
+    }
+
+    @MainActor
+    func testNavigationBeforeRejectedAcceptanceDefersThenDiscardsAtDispatchEnd() {
+        let coordinator = ComposerAttachmentCoordinator()
+        let sealed = StagedAttachment(kind: .image(Data([0x01])))
+        coordinator.staged = [sealed]
+        XCTAssertTrue(coordinator.beginAttachmentDispatch())
+
+        coordinator.discardForNavigation(from: UUID(), to: UUID())
+        XCTAssertEqual(coordinator.staged.map(\.id), [sealed.id],
+                       "navigation cannot mutate ownership before acceptance resolves")
+
+        // Rejected handoff: no successful clear occurs.
+        coordinator.endAttachmentDispatch()
+        XCTAssertTrue(coordinator.staged.isEmpty,
+                      "the deferred navigation discards the still-unsent sealed item")
+    }
+
+    @MainActor
+    func testNilToExistingNavigationDuringDispatchDoesNotStrandAttachments() {
+        let coordinator = ComposerAttachmentCoordinator()
+        let sealed = StagedAttachment(kind: .image(Data([0x01])))
+        coordinator.staged = [sealed]
+        XCTAssertTrue(coordinator.beginAttachmentDispatch())
+
+        coordinator.discardForNavigation(from: nil, to: UUID())
+        XCTAssertEqual(coordinator.staged.map(\.id), [sealed.id],
+                       "nil→non-nil is ambiguous until the host accepts or rejects")
+        coordinator.endAttachmentDispatch()
+
+        XCTAssertTrue(coordinator.staged.isEmpty,
+                      "a rejected nil-sealed dispatch must not strand its attachments in the selected thread")
+    }
+
+    @MainActor
+    func testNavigationDuringDispatchLetsSuccessfulHandoffCleanFirst() throws {
+        let coordinator = ComposerAttachmentCoordinator()
+        let sealed = StagedAttachment(kind: .image(Data([0x01])))
+        coordinator.staged = [sealed]
+        XCTAssertTrue(coordinator.beginAttachmentDispatch())
+        let dispatch = try XCTUnwrap(
+            coordinator.makeDispatch(
+                text: "accepted",
+                ref: .builtin(.openclaw),
+                conversationID: UUID()
+            )
+        )
+
+        coordinator.discardForNavigation(from: dispatch.conversationID, to: UUID())
+        XCTAssertEqual(coordinator.staged.map(\.id), [sealed.id])
+        coordinator.clearAfterSuccessfulHandoff(dispatch)
+        coordinator.endAttachmentDispatch()
+
+        XCTAssertTrue(coordinator.staged.isEmpty,
+                      "handoff cleanup runs before the deferred navigation discard")
+    }
+
+    func testMacAcceptedBeforeDisappearDefersTeardownUntilDispatchEnd() {
+        var lifecycle = ComposerDeferredTeardown()
+        XCTAssertFalse(lifecycle.request(whileDispatching: true))
+        XCTAssertTrue(lifecycle.consume(),
+                      "an accepted send can run exact handed-off cleanup before consuming disappear")
+        XCTAssertFalse(lifecycle.consume(), "the request is one-shot")
+    }
+
+    func testMacDisappearBeforeRejectedAcceptanceDefersDiscardUntilDispatchEnd() {
+        var lifecycle = ComposerDeferredTeardown()
+        XCTAssertFalse(lifecycle.request(whileDispatching: true))
+        XCTAssertTrue(lifecycle.consume(),
+                      "a rejected send consumes the same request and discards unsent staging")
+    }
+
+    func testDownloadLaneOwnershipFailsClosedForNilAndMismatch() {
+        let laneA = String(repeating: "a", count: 64)
+        let laneB = String(repeating: "b", count: 64)
+
+        XCTAssertTrue(FileTransferLaneOwnership.matches(
+            expectedLaneID: laneA,
+            currentLaneID: laneA
+        ))
+        XCTAssertFalse(FileTransferLaneOwnership.matches(
+            expectedLaneID: nil,
+            currentLaneID: laneA
+        ))
+        XCTAssertFalse(FileTransferLaneOwnership.matches(
+            expectedLaneID: laneA,
+            currentLaneID: nil
+        ))
+        XCTAssertFalse(FileTransferLaneOwnership.matches(
+            expectedLaneID: laneA,
+            currentLaneID: laneB
+        ))
+    }
+
+    func testBackgroundInputLaneRevalidationAllowsReadinessDropButRejectsRepoint() {
+        let captured = lane(available: true)
+        let sameIdentityNowUnavailable = lane(available: false)
+
+        XCTAssertTrue(FileTransferLaneOwnership.samePhysicalLane(
+            captured: captured,
+            current: sameIdentityNowUnavailable
+        ), "a failed re-test must not brick already-owned storedKeys")
+        XCTAssertFalse(FileTransferLaneOwnership.samePhysicalLane(
+            captured: captured,
+            current: lane(credential: "replacement-lane")
+        ), "credential rotation must reject the captured lane before enqueue")
+        XCTAssertFalse(FileTransferLaneOwnership.samePhysicalLane(
+            captured: captured,
+            current: lane(url: "https://replacement.example.test/dav/")
+        ), "URL repointing must reject the captured lane before enqueue")
+        XCTAssertFalse(FileTransferLaneOwnership.samePhysicalLane(
+            captured: captured,
+            current: nil
+        ))
     }
 }
 

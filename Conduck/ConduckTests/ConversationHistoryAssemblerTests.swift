@@ -31,6 +31,7 @@ import XCTest
 @testable import Conduck
 
 final class ConversationHistoryAssemblerTests: XCTestCase {
+    private let ownedFileLaneID = String(repeating: "a", count: 64)
 
     /// Fresh isolated in-memory store per test (mirrors ConversationStoreTests).
     private func makeStore() -> ConversationStore {
@@ -125,6 +126,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
                 text: "image turn \(index)",
                 conversationID: conversationID,
                 sourceDevice: "phone",
+                fileTransferLaneID: ownedFileLaneID,
                 attachments: [imageDraft(data: bytes, storedKey: key)]
             )
             seeded.append((bytes: bytes, storedKey: key))
@@ -348,6 +350,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             excludingUserMessageID: nil,
             excludingNewUserText: nil,
             boundRef: ref,
+            dispatchFileLaneID: ownedFileLaneID,
             store: store
         )
 
@@ -373,6 +376,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             excludingUserMessageID: nil,
             excludingNewUserText: nil,
             boundRef: nil,
+            dispatchFileLaneID: ownedFileLaneID,
             store: store
         )
 
@@ -414,6 +418,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             excludingUserMessageID: nil,
             excludingNewUserText: nil,
             boundRef: ref,
+            dispatchFileLaneID: ownedFileLaneID,
             store: store
         )
 

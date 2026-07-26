@@ -95,6 +95,180 @@ import AppKit
 import UserNotifications
 #endif
 
+/// Process-wide ownership of output scans. A macOS reply claims its
+/// caller-generated message ID BEFORE persistence posts the reload notification;
+/// retro recovery must claim the same ID before probing. This closes the
+/// direct-versus-retro race inside one process without pretending Core Data /
+/// CloudKit provides a distributed compare-and-set across devices.
+nonisolated final class OutputScanClaimRegistry: @unchecked Sendable {
+    static let shared = OutputScanClaimRegistry()
+
+    private let lock = NSLock()
+    private var claimedMessageIDs: Set<UUID> = []
+
+    private init() {}
+
+    @discardableResult
+    func claim(_ messageID: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return claimedMessageIDs.insert(messageID).inserted
+    }
+
+    func release(_ messageID: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        claimedMessageIDs.remove(messageID)
+    }
+
+    func isClaimed(_ messageID: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return claimedMessageIDs.contains(messageID)
+    }
+}
+
+/// Orders the macOS foreground reply landing so durable/UI-critical work cannot
+/// sit behind slow output-file probes. `persist` completes first, then the
+/// awaiting UI is released synchronously, and only then an unstructured task
+/// starts detection + attachment patching. Internal + closure-injected so XCTest
+/// can hold the probe open deterministically without a live gateway.
+@MainActor
+enum MacForegroundReplyLanding {
+    struct Dependencies {
+        let persist: @MainActor () async throws -> MessageRecord
+        /// Existing reply-arrived work that must retain its historical ordering
+        /// relative to the send claim (pointer stamp, popover state, speech).
+        /// Runs only after persistence succeeds. A thrown store error bypasses
+        /// every success effect and propagates to the send/retry failure handler.
+        let afterPersistBeforeRelease: @MainActor (_ agentRecord: MessageRecord) async -> Void
+        let reconcileOutputs: (@MainActor (_ agentMessageID: UUID) async -> Void)?
+    }
+
+    @discardableResult
+    static func persistThenScheduleOutputs(
+        dependencies: Dependencies,
+        releaseAwaitingUI: @MainActor () -> Void
+    ) async throws -> MessageRecord {
+        let agentRecord = try await dependencies.persist()
+        await dependencies.afterPersistBeforeRelease(agentRecord)
+        releaseAwaitingUI()
+
+        if let reconcileOutputs = dependencies.reconcileOutputs {
+            Task { @MainActor in
+                await reconcileOutputs(agentRecord.id)
+            }
+        }
+        return agentRecord
+    }
+}
+
+/// Reconstruct the server-backed portion of a FAILED user turn for Retry.
+/// Stored keys are usable only when the caller has captured the exact durable
+/// lane recorded on that message. This pure seam keeps foreground/background
+/// retry parity compiler-visible and lets tests prove that a replacement lane
+/// receives no foreign key.
+enum RetryFileReferenceResolver {
+    struct NamedReference: Equatable, Sendable {
+        let originalName: String
+        let storedKey: String
+    }
+
+    struct ImageReference: Equatable, Sendable {
+        let storedKey: String
+        let filename: String
+    }
+
+    struct References: Equatable, Sendable {
+        var serverFiles: [NamedReference] = []
+        var imageFiles: [ImageReference] = []
+        var textFiles: [NamedReference] = []
+        /// Every non-empty persisted key on the owned user turn, deduplicated
+        /// in attachment order. Retry probes all of them, not just file-only
+        /// rows: dual image and dual text copies can disappear too.
+        var storedKeys: [String] = []
+    }
+
+    static func hasRequiredStoredKeys(
+        _ message: MessageRecord,
+        omittingPhotos: Bool
+    ) -> Bool {
+        message.attachments.contains { attachment in
+            guard attachment.storedKey?.isEmpty == false else { return false }
+            return !(omittingPhotos
+                && attachment.isImage
+                && !attachment.isServerReference)
+        }
+    }
+
+    static func resolve(
+        for message: MessageRecord,
+        capturedLaneID: String?,
+        omittingPhotos: Bool
+    ) -> References {
+        guard let ownerLaneID = message.fileTransferLaneID,
+              ownerLaneID == capturedLaneID else {
+            return References()
+        }
+
+        var references = References()
+        var seenStoredKeys = Set<String>()
+        for attachment in message.attachments {
+            guard let storedKey = attachment.storedKey, !storedKey.isEmpty else {
+                continue
+            }
+            // "Resend without photo" removes both halves of a dual image:
+            // neither its inline JPEG nor its original-file disk ref is sent,
+            // so that omitted key must not require a lane or a presence probe.
+            if omittingPhotos,
+               attachment.isImage,
+               !attachment.isServerReference {
+                continue
+            }
+            if seenStoredKeys.insert(storedKey).inserted {
+                references.storedKeys.append(storedKey)
+            }
+            let fallbackName = attachment.filename.flatMap { $0.isEmpty ? nil : $0 }
+                ?? storedKey
+
+            // Server references are classified first: an output/download chip
+            // may carry image MIME, but it is never a dual inline image.
+            if attachment.isServerFile {
+                references.serverFiles.append(.init(
+                    originalName: fallbackName,
+                    storedKey: storedKey
+                ))
+            } else if attachment.isImage {
+                references.imageFiles.append(.init(
+                    storedKey: storedKey,
+                    filename: attachment.filename.flatMap { $0.isEmpty ? nil : $0 }
+                        ?? legacyFilename(from: storedKey, fallback: "image")
+                ))
+            } else if attachment.isText {
+                references.textFiles.append(.init(
+                    originalName: fallbackName,
+                    storedKey: storedKey
+                ))
+            }
+        }
+        return references
+    }
+
+    /// Modern dual-image rows persist the true original filename. Older rows
+    /// predate that column write but their minted key ends in
+    /// `<opaque>__<sanitized-original>`; recover only that leaf suffix (never a
+    /// parent path) so Retry keeps the extension without exposing extra path
+    /// material.
+    static func legacyFilename(from storedKey: String, fallback: String) -> String {
+        let leaf = (storedKey as NSString).lastPathComponent
+        guard let separator = leaf.range(of: "__", options: .backwards),
+              separator.upperBound < leaf.endIndex else {
+            return fallback
+        }
+        return String(leaf[separator.upperBound...])
+    }
+}
+
 /// Drives one conversation's thread: holds the `conversationID`, fetches its
 /// messages (createdAt-ascending), re-fetches on `.conversationsDidChange`,
 /// and owns the ephemeral in-flight turn state (optimistic bubble + thinking
@@ -291,6 +465,23 @@ final class ConversationDetailViewModel {
     /// later opens (each pass marks the conclusive ones durably).
     private static let retroScanCap = 20
 
+    enum RetroOutputScanRoute: Equatable {
+        case conclusiveWithoutProbe
+        case probeCurrentLane
+        case deferUntilMatchingLane
+    }
+
+    /// Result of the production per-candidate retro-scan executor. The executor
+    /// owns the final route/preflight/claim boundary immediately before the
+    /// injected probe closure, which lets tests prove that a removed or
+    /// repointed durable lane performs zero network work.
+    enum RetroOutputCandidateExecution {
+        case deferred
+        case claimUnavailable
+        case local(ConversationStore.OutputScanReconciliation)
+        case probed(ConversationStore.OutputScanReconciliation)
+    }
+
     #if os(macOS)
     /// User `Message.id`s of turns sent with `speaksReply: true` (the macOS
     /// quick lane with the device-local "speak replies" toggle ON) that haven't
@@ -446,11 +637,14 @@ final class ConversationDetailViewModel {
             if fetched != messages {
                 messages = fetched
             }
-            // Retroactive output scan (non-awaited): agent turns that landed on
-            // Watch / CarPlay never ran output detection, so on this
-            // iPhone/iPad/Mac open we probe them for download chips. Guarded to a
-            // single in-flight pass; the per-instance attempted-set + durable
-            // `outputScanDone` marker stop it re-probing on reload echoes.
+            // Retroactive output scan (non-awaited): any modern dispatch that
+            // persisted an explicit pending marker + exact durable lane may
+            // recover if its asynchronous landing probe did not finish.
+            // Legacy ownerless rows deliberately remain untouched: guessing the
+            // currently configured lane could attach an unrelated file after a
+            // gateway was repointed. Guarded to a single in-flight pass; the
+            // per-instance attempted-set + durable `outputScanDone` marker stop
+            // re-probing on reload echoes.
             Task { [weak self] in await self?.runRetroOutputScan() }
         } catch {
             loadError = String(localized: "Couldn't load this conversation. Try again.")
@@ -460,13 +654,15 @@ final class ConversationDetailViewModel {
         isLoading = false
     }
 
-    /// Pure, unit-testable candidate filter for the retro output scan: agent
-    /// turns that LANDED on a headless surface (Watch / CarPlay — those paths run
-    /// no output detection) and haven't been conclusively scanned or already
-    /// attempted this instance. Newest-first (messages are createdAt-ascending),
-    /// capped. NOT excluded for already carrying server-ref attachments — a prior
-    /// PARTIAL success must still retry its missing candidates (the store's
-    /// per-storedKey dedupe handles re-adds).
+    /// Pure, unit-testable candidate filter for the retro output scan. Every
+    /// surface qualifies only with explicit false AND a durable lane identity,
+    /// atomically persisted when its dispatch latched a READY file lane. This
+    /// recovers a crash between reply persistence and an asynchronous scan
+    /// without probing legacy/v6 Watch, CarPlay, or Mac rows whose lane cannot
+    /// be proven.
+    /// Already-scanned and per-instance-attempted turns are excluded. Newest-first
+    /// (messages are createdAt-ascending), capped. Existing server refs do not
+    /// exclude a partial-success turn; store reconciliation dedupes them.
     static func retroScanCandidates(
         in messages: [MessageRecord],
         attempted: Set<UUID>,
@@ -476,14 +672,99 @@ final class ConversationDetailViewModel {
             messages
                 .reversed()
                 .filter { message in
-                    message.role == "agent"
-                        && ["watch", "carplay"].contains(
-                            MessageRowFormatters.baseDevice(from: message.sourceDevice))
-                        && message.outputScanDone != true
-                        && !attempted.contains(message.id)
+                    guard message.role == "agent",
+                          !attempted.contains(message.id) else {
+                        return false
+                    }
+                    return message.outputScanDone == false
+                        && message.outputScanLaneID != nil
                 }
                 .prefix(cap)
         )
+    }
+
+    /// Decide whether a candidate can finish locally, may probe the currently
+    /// configured lane, or must wait until its dispatch lane is restored.
+    /// Filename-free replies are locally conclusive even after lane removal or
+    /// repointing because they require no network evidence.
+    static func retroOutputScanRoute(
+        for message: MessageRecord,
+        currentLaneID: String?
+    ) -> RetroOutputScanRoute {
+        let hasFilenameCandidates =
+            !FileTransferOutputDetector.extractCandidates(from: message.text).isEmpty
+        if !hasFilenameCandidates {
+            return .conclusiveWithoutProbe
+        }
+
+        guard let storedLaneID = message.outputScanLaneID,
+              storedLaneID == currentLaneID else {
+            return .deferUntilMatchingLane
+        }
+        return .probeCurrentLane
+    }
+
+    /// Execute the production decision boundary for one retro-scan candidate.
+    /// A network-capable route must pass the current-lane identity check before
+    /// it can claim the message or invoke `probe`; mismatched/removed lanes stay
+    /// pending and unattempted. Closure injection keeps the no-I/O guarantee
+    /// deterministic in XCTest while `runRetroOutputScan` uses the live detector.
+    static func executeRetroOutputScanCandidate(
+        _ candidate: MessageRecord,
+        currentLaneID: String?,
+        snapshotAvailable: Bool,
+        laneStillMatches: () async -> Bool,
+        claim: () -> Bool,
+        didClaim: () -> Void,
+        probe: (_ excludedKeys: Set<String>) async -> (
+            drafts: [AttachmentDraft],
+            conclusive: Bool
+        )
+    ) async -> RetroOutputCandidateExecution {
+        guard let expectedLaneID = candidate.outputScanLaneID else {
+            // Compiler-level backstop for callers that bypass candidate
+            // selection: ownerless rows can neither probe nor even receive a
+            // marker-only mutation.
+            return .deferred
+        }
+        let route = retroOutputScanRoute(
+            for: candidate,
+            currentLaneID: currentLaneID
+        )
+        switch route {
+        case .deferUntilMatchingLane:
+            return .deferred
+        case .probeCurrentLane:
+            guard snapshotAvailable, await laneStillMatches() else {
+                return .deferred
+            }
+        case .conclusiveWithoutProbe:
+            break
+        }
+
+        guard claim() else { return .claimUnavailable }
+        didClaim()
+
+        switch route {
+        case .conclusiveWithoutProbe:
+            return .local(.init(
+                messageID: candidate.id,
+                drafts: [],
+                markScanned: true,
+                expectedLaneID: expectedLaneID
+            ))
+        case .probeCurrentLane:
+            let excluded = Set(candidate.attachments.compactMap(\.storedKey))
+            let scan = await probe(excluded)
+            return .probed(.init(
+                messageID: candidate.id,
+                drafts: scan.drafts,
+                markScanned: scan.conclusive,
+                expectedLaneID: expectedLaneID
+            ))
+        case .deferUntilMatchingLane:
+            return .deferred
+        }
     }
 
     /// One retro output-scan pass. Resolves the bound file-server snapshot ONCE,
@@ -505,14 +786,168 @@ final class ConversationDetailViewModel {
     /// chips (macOS FOREGROUND landing paths — the iOS background delegate spawns
     /// its own inside `recordReply`). Detached + best-effort: never blocks the
     /// reply UX, never surfaces errors; no-op when there are no output chips.
-    private func spawnPreviewEnrichment(messageID: UUID?, drafts: [AttachmentDraft]) {
+    private func spawnPreviewEnrichment(
+        messageID: UUID?,
+        drafts: [AttachmentDraft],
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) {
         guard let messageID, !drafts.isEmpty else { return }
-        let conversationID = self.conversationID
         Task.detached {
             await FileTransferOutputDetector.enrichPreviews(
-                drafts: drafts, messageID: messageID, conversationID: conversationID)
+                drafts: drafts,
+                messageID: messageID,
+                ref: ref,
+                snapshot: snapshot
+            )
         }
     }
+
+    #if os(macOS)
+    /// Persist a foreground Mac reply + sent flip before probing any output
+    /// filenames. Output chips are an asynchronous patch on the durable agent
+    /// bubble; a probe timeout can no longer hold the bubble, spinner, unread
+    /// cue, or a subsequent send hostage.
+    private func landMacForegroundReply(
+        reply: String,
+        userMessageID: UUID,
+        dispatchRef: RemoteAgentRef,
+        dispatchFileLane: SettingsManager.FileTransferSnapshot?,
+        stampsQuickPointer: Bool,
+        surfacesInPopover: Bool,
+        speaksReply: Bool
+    ) async throws -> MessageRecord {
+        let conversationID = self.conversationID
+        let agentMessageID = UUID()
+        let laneID = dispatchFileLane?.durableLaneID
+        // Claim before persistence: `completeAgentTurn` posts its reload before
+        // returning, so claiming afterward leaves a direct/retro race window.
+        let ownsOutputClaim = dispatchFileLane == nil
+            ? false
+            : OutputScanClaimRegistry.shared.claim(agentMessageID)
+        let persist: @MainActor () async throws -> MessageRecord = {
+            try await ConversationStore.shared.completeAgentTurn(
+                userMessageID: userMessageID,
+                userStatus: "sent",
+                agentText: reply,
+                conversationID: conversationID,
+                sourceDevice: SourceDevice.current,
+                agentMessageID: agentMessageID,
+                outputScanLaneID: laneID
+            )
+        }
+        let afterPersistBeforeRelease: @MainActor (MessageRecord) async -> Void = {
+            [weak self] agentRecord in
+            guard let self else { return }
+            // The immediate scan owns this turn for this VM instance.
+            // Insert before any suspension so the reload post emitted by
+            // `completeAgentTurn` cannot launch a parallel recovery pass.
+            if dispatchFileLane != nil {
+                self.retroScanAttempted.insert(agentRecord.id)
+            }
+            // Implicit-only pointer: only a quick-capture turn stamps the
+            // per-device pointer; explicit window/in-app turns never do.
+            if stampsQuickPointer {
+                await SettingsManager.shared.recordActiveConversation(conversationID)
+            }
+            self.recordPopoverReplyIfNeeded(
+                agentReply: agentRecord,
+                surfaces: surfacesInPopover
+            )
+            // Terminal success — drop the provenance entries (a failed
+            // turn keeps them for Retry).
+            self.quickStampMessageIDs.remove(userMessageID)
+            self.speakMessageIDs.remove(userMessageID)
+            self.popoverReplyMessageIDs.remove(userMessageID)
+            self.dispatchReplyArrivedEffects()
+            await self.dispatchReplySpeakIfNeeded(
+                reply: reply,
+                speaks: speaksReply
+            )
+        }
+        let reconcileOutputs: (@MainActor (UUID) async -> Void)?
+        if let dispatchFileLane, ownsOutputClaim {
+            reconcileOutputs = { [weak self] agentMessageID in
+                defer { OutputScanClaimRegistry.shared.release(agentMessageID) }
+
+                // A filename-free reply is conclusive without network access,
+                // even if the user removed/repointed the lane after dispatch.
+                let hasCandidates =
+                    !FileTransferOutputDetector.extractCandidates(from: reply).isEmpty
+                if hasCandidates {
+                    guard await FileTransferOutputDetector.configuredLaneStillMatches(
+                        ref: dispatchRef,
+                        snapshot: dispatchFileLane
+                    ) else {
+                        self?.retroScanAttempted.remove(agentMessageID)
+                        return
+                    }
+                }
+                let scan = await FileTransferOutputDetector.reconciliationScan(
+                    reply: reply,
+                    conversationID: conversationID,
+                    snapshot: dispatchFileLane,
+                    excludedKeys: []
+                )
+                if hasCandidates {
+                    guard await FileTransferOutputDetector.configuredLaneStillMatches(
+                        ref: dispatchRef,
+                        snapshot: dispatchFileLane
+                    ) else {
+                        self?.retroScanAttempted.remove(agentMessageID)
+                        return
+                    }
+                }
+                let inserted: Bool
+                do {
+                    inserted = try await ConversationStore.shared.reconcileOutputScan([
+                        .init(
+                            messageID: agentMessageID,
+                            drafts: scan.drafts,
+                            markScanned: scan.conclusive,
+                            expectedLaneID: dispatchFileLane.durableLaneID
+                        )
+                    ])
+                } catch {
+                    // Store failure likewise preserves the pending marker.
+                    self?.retroScanAttempted.remove(agentMessageID)
+                    return
+                }
+                if !scan.conclusive {
+                    self?.retroScanAttempted.remove(agentMessageID)
+                }
+                guard inserted else { return }
+                self?.spawnPreviewEnrichment(
+                    messageID: agentMessageID,
+                    drafts: scan.drafts,
+                    ref: dispatchRef,
+                    snapshot: dispatchFileLane
+                )
+            }
+        } else {
+            reconcileOutputs = nil
+        }
+        let releaseAwaitingUI: @MainActor () -> Void = { [weak self] in
+            self?.isAwaitingReply = false
+            self?.inFlightStartedAt = nil
+        }
+        do {
+            return try await MacForegroundReplyLanding.persistThenScheduleOutputs(
+                dependencies: .init(
+                    persist: persist,
+                    afterPersistBeforeRelease: afterPersistBeforeRelease,
+                    reconcileOutputs: reconcileOutputs
+                ),
+                releaseAwaitingUI: releaseAwaitingUI
+            )
+        } catch {
+            if ownsOutputClaim {
+                OutputScanClaimRegistry.shared.release(agentMessageID)
+            }
+            throw error
+        }
+    }
+    #endif
 
     private func runRetroOutputScan() async {
         guard !retroScanInFlight else { return }
@@ -527,49 +962,106 @@ final class ConversationDetailViewModel {
         retroScanInFlight = true
         defer { retroScanInFlight = false }
 
-        // Resolve the bound ref → file-server snapshot ONCE (mirror
-        // resolveBackendDisplayName's raw-backend → RemoteAgentRef logic). No
-        // snapshot (file transfer not configured on this lane) → abort with NO
-        // marking and NO attempted-set inserts: configuring file transfer LATER
-        // must still let these turns chip on a future open.
+        // Resolve the CURRENT bound lane once. Every candidate may use it only
+        // when its durable dispatch-lane ID matches; ownerless legacy rows were
+        // filtered out before this point. A removed/repointed lane leaves the
+        // reply pending and unattempted so restoring lane A can recover it.
         let rawBackend = try? await ConversationStore.shared.fetchConversation(id: conversationID)?.backend
-        guard let raw = rawBackend,
-              let ref = RemoteAgentRef(rawString: raw),
-              let snapshot = await SettingsManager.shared.fileTransferSnapshot(for: ref) else {
-            return
+        let ref = rawBackend.flatMap { RemoteAgentRef(rawString: $0) }
+        let snapshot: SettingsManager.FileTransferSnapshot?
+        if let ref {
+            snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
+        } else {
+            snapshot = nil
         }
-        let identityBefore = snapshot.identitySignature
+        let currentLaneID = snapshot?.durableLaneID
 
         // Inbound-exclusion token set once for the whole pass.
         let inbound = FileTransferOutputDetector.inboundStoredKeyTokens(in: messages)
 
-        var results: [(messageID: UUID, drafts: [AttachmentDraft], markScanned: Bool)] = []
-        for candidate in candidates {
-            // Mark ATTEMPTED before the probe — a transient failure retries only
-            // on the next thread open (a fresh VM instance), never mid-storm.
-            retroScanAttempted.insert(candidate.id)
-            // Already-attached storedKeys on this message are excluded pre-probe
-            // so a prior partial success neither re-probes nor re-chips a key.
-            let excluded = Set(candidate.attachments.compactMap { $0.storedKey })
-            let (drafts, conclusive) = await FileTransferOutputDetector.detect(
-                reply: candidate.text,
-                snapshot: snapshot,
-                inboundTokens: inbound,
-                excludedKeys: excluded
-            )
-            results.append((messageID: candidate.id, drafts: drafts, markScanned: conclusive))
+        var localResults: [ConversationStore.OutputScanReconciliation] = []
+        var probedResults: [ConversationStore.OutputScanReconciliation] = []
+        var probedMessageIDs: [UUID] = []
+        var claimedMessageIDs: [UUID] = []
+        defer {
+            for messageID in claimedMessageIDs {
+                OutputScanClaimRegistry.shared.release(messageID)
+            }
         }
 
-        // Lane-repoint guard: re-read the snapshot and compare identity. On drift
-        // (URL / credential / pin changed during the pass), ABORT without
-        // persisting or marking — results from the OLD server must not stamp
-        // messages against a repointed lane.
-        guard let after = await SettingsManager.shared.fileTransferSnapshot(for: ref),
-              after.identitySignature == identityBefore else {
+        for candidate in candidates {
+            let execution = await Self.executeRetroOutputScanCandidate(
+                candidate,
+                currentLaneID: currentLaneID,
+                snapshotAvailable: snapshot != nil,
+                laneStillMatches: {
+                    guard let ref, let snapshot else { return false }
+                    return await FileTransferOutputDetector.configuredLaneStillMatches(
+                        ref: ref,
+                        snapshot: snapshot
+                    )
+                },
+                claim: {
+                    OutputScanClaimRegistry.shared.claim(candidate.id)
+                },
+                didClaim: {
+                    claimedMessageIDs.append(candidate.id)
+                    retroScanAttempted.insert(candidate.id)
+                },
+                probe: { excluded in
+                    guard let snapshot else { return ([], false) }
+                    return await FileTransferOutputDetector.detect(
+                        reply: candidate.text,
+                        snapshot: snapshot,
+                        inboundTokens: inbound,
+                        excludedKeys: excluded
+                    )
+                }
+            )
+
+            switch execution {
+            case .local(let result):
+                localResults.append(result)
+            case .probed(let result):
+                probedResults.append(result)
+                probedMessageIDs.append(candidate.id)
+            case .deferred, .claimUnavailable:
+                continue
+            }
+        }
+
+        // A lane drift after probes drops ONLY network-derived results. Locally
+        // conclusive filename-free replies remain safe to stamp. Remove dropped
+        // probe attempts so restoring the exact lane can retry in this VM.
+        var committedProbedResults: [ConversationStore.OutputScanReconciliation] = []
+        if !probedResults.isEmpty,
+           let ref,
+           let snapshot,
+           await FileTransferOutputDetector.configuredLaneStillMatches(
+                ref: ref,
+                snapshot: snapshot
+           ) {
+            committedProbedResults = probedResults
+        } else if !probedResults.isEmpty {
+            for messageID in probedMessageIDs {
+                retroScanAttempted.remove(messageID)
+            }
+        }
+
+        let results = localResults + committedProbedResults
+        guard !results.isEmpty else { return }
+        guard let inserted = try? await ConversationStore.shared.reconcileOutputScan(results) else {
+            for result in results {
+                retroScanAttempted.remove(result.messageID)
+            }
             return
         }
-
-        _ = try? await ConversationStore.shared.reconcileOutputScan(results)
+        // An inconclusive network pass intentionally keeps the durable marker
+        // pending. Release its per-VM attempt ownership after reconciliation so
+        // restoring the lane / a later settings echo can retry without remount.
+        for result in committedProbedResults where !result.markScanned {
+            retroScanAttempted.remove(result.messageID)
+        }
 
         // WS-2 preview enrichment for THIS pass's freshly-reconciled drafts ONLY
         // (no backfill of older preview-less chips). ONE global budget threads
@@ -580,7 +1072,14 @@ final class ConversationDetailViewModel {
         var sourceBudget = Self.retroPassPreviewSourceBudget
         var storedBudget = Self.retroPassPreviewStoredBudget
         var patches: [FileTransferOutputDetector.PreviewPatch] = []
-        for result in results where !result.drafts.isEmpty {
+        guard inserted, let ref, let snapshot,
+              await FileTransferOutputDetector.configuredLaneStillMatches(
+                ref: ref,
+                snapshot: snapshot
+              ) else {
+            return
+        }
+        for result in committedProbedResults where !result.drafts.isEmpty {
             if sourceBudget <= 0 || storedBudget <= 0 { break }
             let built = await FileTransferOutputDetector.buildPreviewPatches(
                 for: result.drafts,
@@ -591,8 +1090,10 @@ final class ConversationDetailViewModel {
             patches.append(contentsOf: built)
         }
         guard !patches.isEmpty else { return }
-        guard let afterEnrich = await SettingsManager.shared.fileTransferSnapshot(for: ref),
-              afterEnrich.identitySignature == identityBefore else {
+        guard await FileTransferOutputDetector.configuredLaneStillMatches(
+            ref: ref,
+            snapshot: snapshot
+        ) else {
             return
         }
         _ = try? await ConversationStore.shared.applyPreviews(patches)
@@ -745,6 +1246,14 @@ final class ConversationDetailViewModel {
         sendErrorMessageID = nil
     }
 
+    /// Surface a fail-closed composer route/lane rejection without consuming the
+    /// draft or staged files. There is deliberately no persisted failed bubble:
+    /// local acceptance never happened, so the user can retry the intact
+    /// composer after the gateway/file settings settle.
+    func reportComposerDispatchRejection() {
+        setSendNotice(String(localized: "Couldn't send that message. Try again."))
+    }
+
     /// Clear the banner and its code together.
     func clearSendError() {
         sendError = nil
@@ -801,6 +1310,19 @@ final class ConversationDetailViewModel {
         _ text: String,
         modality: TurnModality = .voice,
         attachments: [PendingAttachment] = [],
+        // Composer-only route seal. When present, the conversation's persisted
+        // backend must still equal the gateway captured while staging; a stale
+        // picker/default must never reroute stored keys.
+        expectedRef: RemoteAgentRef? = nil,
+        // Composer-only durable file-lane seal. A landed storedKey may dispatch
+        // only while the current configuration still identifies the exact lane
+        // that accepted the upload.
+        expectedFileLaneID: String? = nil,
+        // Called exactly once when supplied: true only after the user turn and
+        // all attachment drafts have been durably appended; false on any
+        // pre-acceptance rejection/write failure. This lets the composer retain
+        // its draft/tiles until local persistence is certain.
+        onLocalAcceptance: (@MainActor (Bool) -> Void)? = nil,
         // True ONLY for the implicit quick-capture lane (the Mac hotkey
         // capture): a successful turn then stamps the per-device
         // quick-capture pointer. In-app/window call sites keep the default
@@ -839,15 +1361,56 @@ final class ConversationDetailViewModel {
         // would otherwise both pass the guard before either sets `inFlightTask`.
         // Setting `isAwaitingReply` here (no await between guard and set) makes
         // the claim atomic; the early no-token return and the `defer` release it.
-        guard inFlightTask == nil, !isAwaitingReply else { return }
+        guard inFlightTask == nil, !isAwaitingReply else {
+            onLocalAcceptance?(false)
+            return
+        }
         isAwaitingReply = true   // atomic claim on MainActor — no await between guard and set
         #endif
 
-        // NOTE: gateway routing is resolved AFTER the optimistic append below —
-        // the composer clears the draft before calling us, so an early return
-        // here used to vanish the user's text with only a banner. Persisting
-        // the turn first means a routing failure renders the standard failed
-        // bubble + Retry chip instead of losing the message.
+        // Capture the established conversation route ONCE before processing any
+        // attachments. Composer sends carry `expectedRef`; generic/legacy sends
+        // leave it nil and retain the historical append-then-fail behavior.
+        let rawBackend = try? await ConversationStore.shared
+            .fetchConversation(id: conversationID)?.backend
+        let establishedRef = rawBackend.flatMap(RemoteAgentRef.init(rawString:))
+        if let expectedRef, establishedRef != expectedRef {
+            #if os(macOS)
+            isAwaitingReply = false
+            #endif
+            reportComposerDispatchRejection()
+            onLocalAcceptance?(false)
+            return
+        }
+        // Capture ONE ready physical lane for the entire dispatch. The same
+        // immutable snapshot drives storedKey ownership, history mapping,
+        // file-delivery instruction, background metadata, and output recovery.
+        let dispatchFileLane: SettingsManager.FileTransferSnapshot?
+        if let establishedRef {
+            dispatchFileLane = await SettingsManager.shared
+                .fileTransferReadySnapshot(for: establishedRef)
+        } else {
+            dispatchFileLane = nil
+        }
+        if let expectedFileLaneID {
+            guard let routeRef = establishedRef,
+                  routeRef == expectedRef,
+                  let dispatchFileLane,
+                  dispatchFileLane.durableLaneID == expectedFileLaneID else {
+                #if os(macOS)
+                isAwaitingReply = false
+                #endif
+                reportComposerDispatchRejection()
+                onLocalAcceptance?(false)
+                return
+            }
+        }
+
+        // NOTE: full gateway configuration is resolved AFTER the optimistic
+        // append below. The composer now waits for the local-acceptance callback
+        // before clearing its draft/tiles; once appended, a later routing failure
+        // renders the standard failed bubble + Retry chip instead of losing the
+        // message.
 
         // Process staged attachments → drafts + the new-turn wire material
         // (image data-URIs + extracted text-file blocks). Heavy work (image
@@ -857,6 +1420,18 @@ final class ConversationDetailViewModel {
         // file-transfer route now sends originals, so only the inline copy is
         // capped, at the de-facto vision sweet spot).
         let processed = await Self.processAttachments(attachments)
+        let handsOffStoredKeys =
+            !processed.serverFileRefs.isEmpty
+            || !processed.imageFileRefs.isEmpty
+            || !processed.textFileServerRefs.isEmpty
+        if handsOffStoredKeys, dispatchFileLane == nil {
+            #if os(macOS)
+            isAwaitingReply = false
+            #endif
+            reportComposerDispatchRejection()
+            onLocalAcceptance?(false)
+            return
+        }
         if processed.droppedCount > 0 {
             // Honest notice — the user saw these chips in the staging strip;
             // the turn still ships with whatever processed cleanly. Non-fatal:
@@ -883,6 +1458,9 @@ final class ConversationDetailViewModel {
                 conversationID: conversationID,
                 sourceDevice: userSourceDevice,
                 status: "sending",
+                fileTransferLaneID: handsOffStoredKeys
+                    ? dispatchFileLane?.durableLaneID
+                    : nil,
                 attachments: processed.drafts
             )
             await reload()
@@ -894,9 +1472,11 @@ final class ConversationDetailViewModel {
             #if os(macOS)
             isAwaitingReply = false   // release the synchronous claim; no Task spawned yet
             #endif
+            onLocalAcceptance?(false)
             return
         }
         let userMessageID = userRecord.id
+        onLocalAcceptance?(true)
 
         // Notification auth (plan D4b) — iOS only. The user has committed a
         // FOREGROUND in-app composer send; request notification permission now
@@ -948,7 +1528,6 @@ final class ConversationDetailViewModel {
         // CLOSED rather than silently sending unauthenticated. Either failure
         // flips the just-appended turn to `failed` (Retry chip) — the text is
         // never lost.
-        let rawBackend = try? await ConversationStore.shared.fetchConversation(id: conversationID)?.backend
         let resolvedSnapshot = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "")
         let resolvedToken = resolvedSnapshot?.token ?? ""
         guard let snapshot = resolvedSnapshot,
@@ -986,7 +1565,8 @@ final class ConversationDetailViewModel {
             conversationID: conversationID,
             excludingUserMessageID: userMessageID,
             excludingNewUserText: text,
-            boundRef: RemoteAgentRef(rawString: rawBackend ?? "")
+            boundRef: RemoteAgentRef(rawString: rawBackend ?? ""),
+            dispatchFileLaneID: dispatchFileLane?.durableLaneID
         )) ?? []
         // Dispatch-time fact for the failure classification: does THIS
         // request carry historical image parts? (Post-policy, post-compat —
@@ -1028,7 +1608,14 @@ final class ConversationDetailViewModel {
                 // instruction rides (mirrors `BackgroundRemoteAgent.send`,
                 // which derives this internally; the foreground client can't —
                 // it has no ref — so the macOS paths derive at the call site).
-                let fileServerReady = await SettingsManager.shared.fileTransferReadySnapshot(for: snapshot.ref) != nil
+                if let dispatchFileLane {
+                    guard await FileTransferOutputDetector.configuredLaneStillMatches(
+                        ref: snapshot.ref,
+                        snapshot: dispatchFileLane
+                    ) else {
+                        throw AppError.fileTransferNotConfigured
+                    }
+                }
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,
@@ -1042,61 +1629,23 @@ final class ConversationDetailViewModel {
                     newUserServerFileRefs: newUserServerFileRefs,
                     newUserImageFileRefs: newUserImageFileRefs,
                     newUserTextFileServerRefs: newUserTextFileServerRefs,
-                    fileServerReady: fileServerReady
+                    fileServerReady: dispatchFileLane != nil
                 )
                 // Cooperative-cancel check: a Cancel tapped between the reply
                 // landing and this point should drop the reply.
                 guard !Task.isCancelled else { return }
-                // Output detection: if the reply names an allowlisted file
-                // that probes `.exists` on the bound file-server, attach it as a
-                // server-reference on the agent bubble (download chip). The
-                // macOS foreground path appends the agent bubble itself (no
-                // background delegate), so it runs detection here to match the
-                // iOS background path's `recordReply` behaviour exactly.
-                let outputs = await FileTransferOutputDetector.detect(reply: reply, conversationID: self.conversationID)
-                // Flip the user turn to `sent` AND append the agent reply in ONE
-                // background-context save + a SINGLE `.conversationsDidChange`
-                // (was two separate main-context saves whose paired posts fanned
-                // into the reload/merge storm behind the macOS beachball). No
-                // explicit `reload()` — the coalesced `.conversationsDidChange`
-                // observer drives the single reload that surfaces the bubble.
-                let agentRecord = try? await ConversationStore.shared.completeAgentTurn(
+                // Persist the reply + sent flip FIRST and release the awaiting UI
+                // before output-file probes begin. The slow, optional detector
+                // patches chips onto the durable bubble asynchronously.
+                _ = try await self.landMacForegroundReply(
+                    reply: reply,
                     userMessageID: userMessageID,
-                    userStatus: "sent",
-                    agentText: reply,
-                    conversationID: self.conversationID,
-                    sourceDevice: SourceDevice.current,
-                    attachments: outputs
+                    dispatchRef: snapshot.ref,
+                    dispatchFileLane: dispatchFileLane,
+                    stampsQuickPointer: stampsQuickPointer,
+                    surfacesInPopover: surfacesInPopover,
+                    speaksReply: speaksReply
                 )
-                // Implicit-only pointer: only a quick-capture turn stamps the
-                // per-device pointer; explicit window/in-app turns never do.
-                if stampsQuickPointer {
-                    await SettingsManager.shared.recordActiveConversation(self.conversationID)
-                }
-                // Retain this reply as the quick-lane popover reply (menu-bar /
-                // hotkey captures only) so reopening the popover re-shows it —
-                // a window/in-app/synced reply passes `surfaces: false` and
-                // never sets the marker.
-                self.recordPopoverReplyIfNeeded(agentReply: agentRecord, surfaces: surfacesInPopover)
-                // Terminal success — drop the provenance entries (a `failed`
-                // turn would keep them for retry).
-                self.quickStampMessageIDs.remove(userMessageID)
-                self.speakMessageIDs.remove(userMessageID)
-                self.popoverReplyMessageIDs.remove(userMessageID)
-                // macOS reply-arrived: raise the menu-bar unread dot (the
-                // popover may be dismissed during the wait). No notification —
-                // macOS surfaces replies via the menu-bar cue; the coordinator
-                // skips the thread the popover is currently showing.
-                self.dispatchReplyArrivedEffects()
-                // Speak-on-arrival (quick lane): rides the PER-SEND latched
-                // verdict (`speaksReply`), never VM state — the registry
-                // shares this VM with the window lane, which must NEVER speak.
-                // Raw reply — `ReplyVoice.speak(sanitize: true)` sanitizes
-                // internally.
-                await self.dispatchReplySpeakIfNeeded(reply: reply, speaks: speaksReply)
-                // WS-2 preview enrichment tail (best-effort, detached) — after
-                // the chips + all completion work above. No-op when no outputs.
-                self.spawnPreviewEnrichment(messageID: agentRecord?.id, drafts: outputs)
             } catch is CancellationError {
                 // User cancelled — leave the user bubble; no agent bubble. Flip
                 // the turn to `failed` (Retry chip): the macOS foreground path
@@ -1138,6 +1687,8 @@ final class ConversationDetailViewModel {
                 newUserServerFileRefs: newUserServerFileRefs,
                 newUserImageFileRefs: newUserImageFileRefs,
                 newUserTextFileServerRefs: newUserTextFileServerRefs,
+                inputFileTransferSnapshot: dispatchFileLane,
+                fileTransferSnapshot: dispatchFileLane,
                 conversationID: conversationID,
                 // EXACT per-message status flips in the background delegate (a
                 // conversation-wide flip would alias a concurrent sibling
@@ -1148,10 +1699,10 @@ final class ConversationDetailViewModel {
                 // when this rides true (quick-capture lane).
                 stampsActiveConversation: stampsQuickPointer
             )
-            // Success — the delegate appended the agent bubble (with any detected
-            // output files) + posted `.conversationsDidChange`; the observer
-            // reloads. Flip the user turn to `sent`.
-            try? await ConversationStore.shared.updateStatus(messageID: userMessageID, status: "sent")
+            // Success resolves only AFTER the delegate's atomic
+            // reply-insert + user-sent transaction persisted. The caller never
+            // writes `sent` independently: that could expose a delivered user
+            // bubble with no assistant reply after a store failure.
             // Terminal success — drop the provenance entry (a `failed` turn
             // would keep it for retry).
             quickStampMessageIDs.remove(userMessageID)
@@ -1167,6 +1718,36 @@ final class ConversationDetailViewModel {
             await recordSendFailure(error, userMessageID: userMessageID, requestHadHistoryImages: requestHadHistoryImages)
         }
         #endif
+    }
+
+    /// Start the full send in a retained task, but return to the composer as
+    /// soon as local persistence accepts (or rejects) the turn. The network
+    /// reply continues under this long-lived VM's existing in-flight ownership.
+    func submitUserTurnAwaitingLocalAcceptance(
+        _ text: String,
+        modality: TurnModality = .text,
+        attachments: [PendingAttachment],
+        expectedRef: RemoteAgentRef,
+        expectedFileLaneID: String?
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                await self.sendUserTurn(
+                    text,
+                    modality: modality,
+                    attachments: attachments,
+                    expectedRef: expectedRef,
+                    expectedFileLaneID: expectedFileLaneID,
+                    onLocalAcceptance: { accepted in
+                        continuation.resume(returning: accepted)
+                    }
+                )
+            }
+        }
     }
 
     // MARK: - Attachment processing + retry
@@ -1267,6 +1848,7 @@ final class ConversationDetailViewModel {
                 // was never gated on the upload, and no key is persisted).
                 var dualDraft = AttachmentDraft(
                     mimeType: "image/jpeg",
+                    filename: filename,
                     data: processedJPEG,
                     thumbnailData: thumbnail,
                     width: width,
@@ -1407,24 +1989,28 @@ final class ConversationDetailViewModel {
     static func uploadServerFile(
         localURL: URL,
         storedKey: String,
-        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        guard let snapshot = await SettingsManager.shared.fileTransferSnapshot(for: ref) else {
-            throw AppError.fileTransferNotConfigured
-        }
+        try Task.checkCancellation()
         // Copy to a throwaway temp file because the background driver deletes the
         // URL it's given; the staged source URL must survive for draft-build +
         // retry.
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("conduck-ftupload-\(UUID().uuidString)")
         try FileManager.default.copyItem(at: localURL, to: tmp)
-        try await BackgroundFileTransfer.shared.uploadFile(
-            localURL: tmp,
-            snapshot: snapshot,
-            storedKey: storedKey,
-            onProgress: onProgress
-        )
+        do {
+            try Task.checkCancellation()
+            try await BackgroundFileTransfer.shared.uploadFile(
+                localURL: tmp,
+                snapshot: snapshot,
+                storedKey: storedKey,
+                onProgress: onProgress
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: tmp)
+            throw error
+        }
     }
 
     /// Best-effort delete of an orphaned uploaded file (e.g. the user removed /
@@ -1433,8 +2019,10 @@ final class ConversationDetailViewModel {
     /// missing snapshot or a server-side failure is silently ignored — an orphan
     /// blob on the user's own server is harmless and never blocks anything.
     /// STATIC (no instance state) so the VM-less composer can clean up too.
-    static func deleteOrphanServerFile(storedKey: String, ref: RemoteAgentRef) async {
-        guard let snapshot = await SettingsManager.shared.fileTransferSnapshot(for: ref) else { return }
+    static func deleteOrphanServerFile(
+        storedKey: String,
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) async {
         await BackgroundFileTransfer.shared.deleteFile(snapshot: snapshot, storedKey: storedKey)
     }
 
@@ -1499,6 +2087,44 @@ final class ConversationDetailViewModel {
             return
         }
 
+        // Existing blobs and NEW output promises have deliberately different
+        // gates. A failed/stale readiness verdict must not brick a key already
+        // owned by this turn, so existing inputs resolve from the RAW saved
+        // snapshot and require the exact persisted durable lane. New output
+        // delivery remains READY-only.
+        let currentRawLane = await SettingsManager.shared
+            .fileTransferSnapshot(for: snapshot.ref)
+        let readyOutputLane = currentRawLane?.available == true
+            ? currentRawLane
+            : nil
+        let hasPersistedStoredKeys =
+            RetryFileReferenceResolver.hasRequiredStoredKeys(
+                message,
+                omittingPhotos: omittingPhotos
+            )
+        let existingInputLane: SettingsManager.FileTransferSnapshot?
+        if hasPersistedStoredKeys {
+            guard FileTransferLaneOwnership.canAccessExistingBlob(
+                expectedLaneID: message.fileTransferLaneID,
+                snapshot: currentRawLane
+            ), let currentRawLane else {
+                #if os(macOS)
+                isAwaitingReply = false
+                #endif
+                await ConversationStore.shared.markPendingUserTurn(
+                    messageID: message.id,
+                    to: "failed"
+                )
+                await reload()
+                setSendError(.fileTransferNotConfigured, messageID: message.id)
+                return
+            }
+            existingInputLane = currentRawLane
+        } else {
+            existingInputLane = nil
+        }
+        let historyFileLane = existingInputLane ?? readyOutputLane
+
         let userMessageID = message.id
         let text = message.text
         // Inherit the ORIGINAL turn's quick-lane provenance (recorded at first
@@ -1517,27 +2143,21 @@ final class ConversationDetailViewModel {
         let surfacesInPopover = popoverReplyMessageIDs.contains(userMessageID)
         #endif
 
-        // Gather THIS turn's persisted server-file references (file-transfer
-        // route) from the stored attachments. These rode the wire as
-        // "saved as <storedKey>" lines and must ride again on a retry — but only
-        // if the bytes are STILL on the user's file-server (a long-failed turn
-        // may be retried after the user cleaned the folder / the server lost the
-        // file). Probe each storedKey BEFORE re-sending: if ANY definitively
-        // probes `.missing`, the agent would be told about a file that no longer
-        // exists, so surface `fileTransferFileUnavailable` (user re-attaches) and
-        // leave the turn `failed`. `.unknown` (transport hiccup / unreachable) is
-        // NOT definitive — it does not block (fail-open on uncertainty).
-        let serverRefs: [(originalName: String, storedKey: String)] = message.attachments
-            .filter { $0.isServerFile }
-            .map { (originalName: $0.filename ?? $0.storedKey ?? "file", storedKey: $0.storedKey ?? "") }
-
-        if !serverRefs.isEmpty,
-           let ref = RemoteAgentRef(rawString: rawBackend ?? ""),
-           let fileSnapshot = await SettingsManager.shared.fileTransferSnapshot(for: ref) {
-            for serverRef in serverRefs {
+        // Rebuild all three server-backed input shapes only after exact-lane
+        // ownership succeeds: server-only files, dual images (original file
+        // ref + inline vision bytes), and dual text (disk ref + inline fence).
+        // Probe EVERY owned key before dispatch. A definitive miss means the
+        // stored retry can no longer truthfully refer to its original bytes.
+        let retryReferences = RetryFileReferenceResolver.resolve(
+            for: message,
+            capturedLaneID: existingInputLane?.durableLaneID,
+            omittingPhotos: omittingPhotos
+        )
+        if let fileSnapshot = existingInputLane {
+            for storedKey in retryReferences.storedKeys {
                 let outcome = await BackgroundFileTransfer.shared.probeExists(
                     snapshot: fileSnapshot,
-                    storedKey: serverRef.storedKey
+                    storedKey: storedKey
                 )
                 if outcome == .missing {
                     #if os(macOS)
@@ -1551,6 +2171,15 @@ final class ConversationDetailViewModel {
                     return
                 }
             }
+        }
+        let serverRefs = retryReferences.serverFiles.map {
+            (originalName: $0.originalName, storedKey: $0.storedKey)
+        }
+        let newUserImageFileRefs = retryReferences.imageFiles.map {
+            (storedKey: $0.storedKey, filename: $0.filename)
+        }
+        let newUserTextFileServerRefs = retryReferences.textFiles.map {
+            (originalName: $0.originalName, storedKey: $0.storedKey)
         }
 
         // (Already flipped to `sending` by the atomic `beginRetry` claim above.)
@@ -1584,17 +2213,6 @@ final class ConversationDetailViewModel {
                 return (filename: filename, text: text)
             }
 
-        // Dual-text disk refs: a persisted text attachment with a non-empty
-        // `storedKey` (the file-server copy minted at original send) re-splices
-        // the "also saved as <storedKey>" line ALONGSIDE its inline fenced block
-        // on retry (mirrors `serverFileRefs` for `.serverFile`). `isText` stays
-        // true for a dual-text row (`isServerReference == false`), so the inline
-        // block above AND this ref both ride. A server-less original (no storedKey)
-        // contributes only the inline block (correct — no file to reference).
-        let newUserTextFileServerRefs: [(originalName: String, storedKey: String)] = message.attachments
-            .filter { $0.isText && ($0.storedKey?.isEmpty == false) }
-            .map { (originalName: $0.filename ?? $0.storedKey ?? "file", storedKey: $0.storedKey ?? "") }
-
         // Prior turns + their retained image data-URIs + the escape hatch
         // (exclude this turn) — the SAME shared assembler as the live send path,
         // so retry produces the same wire shape. `try?` preserves the
@@ -1603,7 +2221,8 @@ final class ConversationDetailViewModel {
             conversationID: conversationID,
             excludingUserMessageID: userMessageID,
             excludingNewUserText: text,
-            boundRef: RemoteAgentRef(rawString: rawBackend ?? "")
+            boundRef: RemoteAgentRef(rawString: rawBackend ?? ""),
+            dispatchFileLaneID: historyFileLane?.durableLaneID
         )) ?? []
         // Dispatch-time fact for the failure classification: does THIS
         // request carry historical image parts? (Post-policy, post-compat —
@@ -1626,7 +2245,23 @@ final class ConversationDetailViewModel {
             do {
                 // Mirrors `sendUserTurn`'s macOS branch — retry must produce
                 // the same wire shape as the original send.
-                let fileServerReady = await SettingsManager.shared.fileTransferReadySnapshot(for: snapshot.ref) != nil
+                if let existingInputLane {
+                    guard await FileTransferOutputDetector.configuredLaneStillMatches(
+                        ref: snapshot.ref,
+                        snapshot: existingInputLane
+                    ) else {
+                        throw AppError.fileTransferNotConfigured
+                    }
+                }
+                if let readyOutputLane,
+                   readyOutputLane.durableLaneID != existingInputLane?.durableLaneID {
+                    guard await FileTransferOutputDetector.configuredLaneStillMatches(
+                        ref: snapshot.ref,
+                        snapshot: readyOutputLane
+                    ) else {
+                        throw AppError.fileTransferNotConfigured
+                    }
+                }
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,
@@ -1638,44 +2273,23 @@ final class ConversationDetailViewModel {
                     newUserImageDataURIs: newUserImageDataURIs,
                     newUserTextFileBlocks: newUserTextFileBlocks,
                     newUserServerFileRefs: serverRefs,
+                    newUserImageFileRefs: newUserImageFileRefs,
                     newUserTextFileServerRefs: newUserTextFileServerRefs,
-                    fileServerReady: fileServerReady
+                    fileServerReady: readyOutputLane != nil
                 )
                 guard !Task.isCancelled else { return }
-                // Output detection on the macOS foreground retry path
-                // (mirrors `sendUserTurn` + the iOS background `recordReply`).
-                let outputs = await FileTransferOutputDetector.detect(reply: reply, conversationID: self.conversationID)
-                // One batched save + single `.conversationsDidChange` (mirrors
-                // `sendUserTurn`); the coalesced observer drives the reload.
-                let agentRecord = try? await ConversationStore.shared.completeAgentTurn(
+                // Same persistence-first ordering as the original-send path.
+                // Output chips patch asynchronously after the durable reply and
+                // sent flip release the awaiting UI.
+                _ = try await self.landMacForegroundReply(
+                    reply: reply,
                     userMessageID: userMessageID,
-                    userStatus: "sent",
-                    agentText: reply,
-                    conversationID: self.conversationID,
-                    sourceDevice: SourceDevice.current,
-                    attachments: outputs
+                    dispatchRef: snapshot.ref,
+                    dispatchFileLane: readyOutputLane,
+                    stampsQuickPointer: stampsQuickPointer,
+                    surfacesInPopover: surfacesInPopover,
+                    speaksReply: speaksReply
                 )
-                // Implicit-only pointer: re-stamp only when the ORIGINAL turn
-                // was a quick capture (inherited provenance above).
-                if stampsQuickPointer {
-                    await SettingsManager.shared.recordActiveConversation(self.conversationID)
-                }
-                // Retain the popover reply iff the ORIGINAL send surfaced there
-                // (inherited verdict above) — a retried window/in-app turn never
-                // populates the popover.
-                self.recordPopoverReplyIfNeeded(agentReply: agentRecord, surfaces: surfacesInPopover)
-                // Terminal success — drop the provenance entries.
-                self.quickStampMessageIDs.remove(userMessageID)
-                self.speakMessageIDs.remove(userMessageID)
-                self.popoverReplyMessageIDs.remove(userMessageID)
-                self.dispatchReplyArrivedEffects()
-                // Speak-on-arrival: the verdict inherited from the ORIGINAL
-                // send (see `speaksReply` above) — a retried quick turn speaks
-                // iff its first dispatch did.
-                await self.dispatchReplySpeakIfNeeded(reply: reply, speaks: speaksReply)
-                // WS-2 preview enrichment tail (best-effort, detached) — after
-                // the chips + all completion work above. No-op when no outputs.
-                self.spawnPreviewEnrichment(messageID: agentRecord?.id, drafts: outputs)
             } catch is CancellationError {
                 // Mirror sendUserTurn's macOS cancel flip — no delegate exists
                 // on this foreground path to terminalize the turn. Status-only:
@@ -1708,14 +2322,16 @@ final class ConversationDetailViewModel {
                 newUserImageDataURIs: newUserImageDataURIs,
                 newUserTextFileBlocks: newUserTextFileBlocks,
                 newUserServerFileRefs: serverRefs,
+                newUserImageFileRefs: newUserImageFileRefs,
                 newUserTextFileServerRefs: newUserTextFileServerRefs,
+                inputFileTransferSnapshot: existingInputLane,
+                fileTransferSnapshot: readyOutputLane,
                 conversationID: conversationID,
                 // Exact per-message flips — same rationale as sendUserTurn.
                 userMessageID: userMessageID,
                 // Inherited quick-lane provenance — see sendUserTurn's twin.
                 stampsActiveConversation: stampsQuickPointer
             )
-            try? await ConversationStore.shared.updateStatus(messageID: userMessageID, status: "sent")
             // Terminal success — drop the provenance entry.
             quickStampMessageIDs.remove(userMessageID)
         } catch is CancellationError {

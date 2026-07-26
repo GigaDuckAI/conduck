@@ -1070,6 +1070,13 @@ final class CarPlayRecordingService {
                 status: "sending"
             )
 
+            // Capture the exact READY file lane BEFORE history assembly. The
+            // same immutable identity decides which historical storedKeys may
+            // ride, enables the newest-turn delivery instruction, and pins
+            // later output recovery.
+            let fileTransferLane = await SettingsManager.shared
+                .fileTransferReadySnapshot(for: snapshot.ref)
+
             // Shared history assembler — also resolves prior-turn image bytes
             // (CarPlay was image-blind before) + the bound ref's
             // image-history policy. A throw rides the surrounding do/catch
@@ -1078,7 +1085,8 @@ final class CarPlayRecordingService {
                 conversationID: conversationID,
                 excludingUserMessageID: userRecord.id,
                 excludingNewUserText: transcript,
-                boundRef: boundRef
+                boundRef: boundRef,
+                dispatchFileLaneID: fileTransferLane?.durableLaneID
             )
 
             // Mint the turn token: the converse delegate carries it so a stale
@@ -1086,12 +1094,18 @@ final class CarPlayRecordingService {
             turnTokenCounter &+= 1
             currentTurnToken = turnTokenCounter
 
-            // Ready-lane truth for the bound gateway — same gate every capable
-            // dispatch surface uses (`fileTransferReadySnapshot != nil`, i.e.
-            // URL + credential present AND the staged test passed). Threaded so
-            // the spoken turn carries the file-delivery instruction only when a
-            // capable device could later render its download chip (retro-scan).
-            let fileServerReady = await SettingsManager.shared.fileTransferReadySnapshot(for: snapshot.ref) != nil
+            // Revalidate the SAME ready physical lane immediately before
+            // enqueue. Never replace A with whatever lane now occupies this
+            // gateway slot; a removal/repoint leaves this turn failed instead
+            // of exposing A-owned history or promising output on B.
+            if let fileTransferLane {
+                guard let currentLane = await SettingsManager.shared
+                    .fileTransferReadySnapshot(for: snapshot.ref),
+                      currentLane.durableLaneID == fileTransferLane.durableLaneID,
+                      currentLane.identitySignature == fileTransferLane.identitySignature else {
+                    throw AppError.fileTransferNotConfigured
+                }
+            }
 
             try CarPlayConverseUploader.shared.uploadConverse(
                 backend: snapshot.backend,
@@ -1107,7 +1121,7 @@ final class CarPlayRecordingService {
                 // conversation-wide fallback would alias a concurrent in-app
                 // turn in the same thread.
                 userMessageID: userRecord.id,
-                fileServerReady: fileServerReady,
+                fileTransferLaneID: fileTransferLane?.durableLaneID,
                 turnToken: currentTurnToken
             )
         } catch {

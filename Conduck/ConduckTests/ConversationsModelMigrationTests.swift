@@ -140,4 +140,66 @@ final class ConversationsModelMigrationTests: XCTestCase {
             try context.save()
         }
     }
+
+    func testV6StoreMigratesToV7WithNilFileTransferAndOutputScanLaneIDs() async throws {
+        let v6 = try model(named: "Conversations 6.mom")
+        let v7 = try model(named: "Conversations 7.mom")
+        let conversationID = UUID()
+        let messageID = UUID()
+
+        do {
+            let container = try await loadStore(model: v6)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let conversation = NSEntityDescription.insertNewObject(
+                    forEntityName: "Conversation",
+                    into: context
+                )
+                conversation.setValue(conversationID, forKey: "id")
+                conversation.setValue("openclaw", forKey: "backend")
+                conversation.setValue(Date(), forKey: "createdAt")
+                conversation.setValue(Date(), forKey: "lastActivityAt")
+                conversation.setValue(conversationID.uuidString, forKey: "sessionID")
+
+                let message = NSEntityDescription.insertNewObject(
+                    forEntityName: "Message",
+                    into: context
+                )
+                message.setValue(messageID, forKey: "id")
+                message.setValue("agent", forKey: "role")
+                message.setValue("legacy output", forKey: "text")
+                message.setValue(Date(), forKey: "createdAt")
+                message.setValue("mac", forKey: "sourceDevice")
+                message.setValue(false, forKey: "outputScanDone")
+                message.setValue(conversation, forKey: "conversation")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v7)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+            let message = try XCTUnwrap(
+                context.fetch(request).first,
+                "the v6 message row must survive migration"
+            )
+            XCTAssertEqual(message.value(forKey: "text") as? String, "legacy output")
+            XCTAssertEqual(message.value(forKey: "outputScanDone") as? Bool, false)
+            XCTAssertNil(message.value(forKey: "fileTransferLaneID") as? String)
+            XCTAssertNil(message.value(forKey: "outputScanLaneID") as? String)
+
+            message.setValue("input-lane-id", forKey: "fileTransferLaneID")
+            message.setValue("lane-id", forKey: "outputScanLaneID")
+            try context.save()
+
+            XCTAssertEqual(message.value(forKey: "fileTransferLaneID") as? String, "input-lane-id")
+            XCTAssertEqual(message.value(forKey: "outputScanLaneID") as? String, "lane-id")
+        }
+    }
 }

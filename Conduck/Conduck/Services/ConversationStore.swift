@@ -256,6 +256,13 @@ actor ConversationStore {
     /// headless intent process and the foreground app share one sqlite.
     static let shared = ConversationStore()
 
+    /// In-process retry claims close the actor-reentrancy window around
+    /// `context.perform`. An actor method can accept another call while awaiting
+    /// Core Data, so the persistent failed→sending predicate alone is not a
+    /// same-process mutex. The store predicate remains the durable/cross-process
+    /// gate; this set guarantees one local claimant reaches it at a time.
+    private var retryClaims: Set<UUID> = []
+
     // MARK: - Errors
 
     /// Store-local errors. Kept here (not on `AppError`) so this store
@@ -264,6 +271,29 @@ actor ConversationStore {
         /// `appendMessage` was handed a `conversationID` that does not exist
         /// in the store. Caller should mint a fresh conversation first.
         case conversationNotFound
+    }
+
+    /// One output-detector result to reconcile transactionally.
+    /// `expectedLaneID` is a mandatory compare-and-set guard: attachments and
+    /// the conclusive marker may be written only while the persisted reply
+    /// still belongs to that exact dispatch-time file lane. Ownerless legacy
+    /// rows cannot construct this value and therefore cannot enter mutation.
+    struct OutputScanReconciliation: Sendable {
+        let messageID: UUID
+        let drafts: [AttachmentDraft]
+        let markScanned: Bool
+        let expectedLaneID: String
+        init(
+            messageID: UUID,
+            drafts: [AttachmentDraft],
+            markScanned: Bool,
+            expectedLaneID: String
+        ) {
+            self.messageID = messageID
+            self.drafts = drafts
+            self.markScanned = markScanned
+            self.expectedLaneID = expectedLaneID
+        }
     }
 
     // MARK: - Core Data Stack
@@ -989,6 +1019,7 @@ actor ConversationStore {
         conversationID: UUID,
         sourceDevice: String,
         status: String? = nil,
+        fileTransferLaneID: String? = nil,
         attachments: [AttachmentDraft] = []
     ) async throws -> MessageRecord {
         try await ensureLoaded()
@@ -1042,6 +1073,7 @@ actor ConversationStore {
             message.setValue(now, forKey: "createdAt")
             message.setValue(sourceDevice, forKey: "sourceDevice")
             message.setValue(status, forKey: "status")
+            message.setValue(fileTransferLaneID, forKey: "fileTransferLaneID")
             message.setValue(conversation, forKey: "conversation")
 
             for draft in attachments {
@@ -1077,6 +1109,7 @@ actor ConversationStore {
             createdAt: now,
             sourceDevice: sourceDevice,
             status: status,
+            fileTransferLaneID: fileTransferLaneID,
             attachments: Self.attachmentRecords(from: attachments, at: now)
         )
     }
@@ -1096,11 +1129,12 @@ actor ConversationStore {
         agentText: String,
         conversationID: UUID,
         sourceDevice: String,
+        agentMessageID: UUID = UUID(),
+        outputScanLaneID: String? = nil,
         attachments: [AttachmentDraft] = []
     ) async throws -> MessageRecord {
         try await ensureLoaded()
 
-        let agentID = UUID()
         let now = Date()
 
         let bgContext = newWriteContext()
@@ -1124,11 +1158,21 @@ actor ConversationStore {
             let message = NSEntityDescription.insertNewObject(
                 forEntityName: "Message", into: bgContext
             )
-            message.setValue(agentID, forKey: "id")
+            message.setValue(agentMessageID, forKey: "id")
             message.setValue("agent", forKey: "role")
             message.setValue(agentText, forKey: "text")
             message.setValue(now, forKey: "createdAt")
             message.setValue(sourceDevice, forKey: "sourceDevice")
+            // A macOS foreground dispatch that latched a READY file lane must
+            // remain recoverable if the process exits before its asynchronous
+            // output probe runs. Persist the one-way lane identity + explicit
+            // FALSE in the SAME transaction as the reply + sent flip. With no
+            // dispatch lane, BOTH fields remain nil; false-without-identity is
+            // therefore impossible for newly-written rows.
+            if let outputScanLaneID {
+                message.setValue(false, forKey: "outputScanDone")
+                message.setValue(outputScanLaneID, forKey: "outputScanLaneID")
+            }
             // `status` left unset → nil (agent replies carry no send-state, same
             // as the `appendMessage(status: nil)` agent-reply callers).
             message.setValue(conversation, forKey: "conversation")
@@ -1147,12 +1191,14 @@ actor ConversationStore {
         await postDidChange()
 
         return MessageRecord(
-            id: agentID,
+            id: agentMessageID,
             role: "agent",
             text: agentText,
             createdAt: now,
             sourceDevice: sourceDevice,
             status: nil,
+            outputScanDone: outputScanLaneID == nil ? nil : false,
+            outputScanLaneID: outputScanLaneID,
             attachments: Self.attachmentRecords(from: attachments, at: now)
         )
     }
@@ -1460,6 +1506,9 @@ actor ConversationStore {
     /// stored classification (frozen rule: cleared only on success — see
     /// `applySendState`).
     func beginRetry(messageID: UUID) async -> Bool {
+        guard retryClaims.insert(messageID).inserted else { return false }
+        defer { retryClaims.remove(messageID) }
+
         do { try await ensureLoaded() } catch { return false }
         let context = newWriteContext()
         let claimed: Bool = await context.perform { [context] in
@@ -1616,13 +1665,13 @@ actor ConversationStore {
     /// ONCE, and ONLY when something was inserted — a marker-only write (conclusive
     /// pass that found no new file) must not trigger a reload echo.
     func reconcileOutputScan(
-        _ results: [(messageID: UUID, drafts: [AttachmentDraft], markScanned: Bool)]
+        _ results: [OutputScanReconciliation]
     ) async throws -> Bool {
         guard !results.isEmpty else { return false }
         try await ensureLoaded()
         let bgContext = newWriteContext()
-        let insertedAny: Bool = try await bgContext.perform { [bgContext] in
-            var inserted = false
+        let changedVisibleState: Bool = try await bgContext.perform { [bgContext] in
+            var changedVisibleState = false
             let now = Date()
             for result in results {
                 let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
@@ -1630,6 +1679,13 @@ actor ConversationStore {
                 request.fetchLimit = 1
                 // A message deleted mid-flight on another device is a silent skip.
                 guard let message = try bgContext.fetch(request).first else { continue }
+                // Exact-lane compare-and-set: a result obtained from lane A
+                // must never mutate a reply persisted for lane B. Ownerless
+                // legacy entries are never network-scanned or claimed.
+                guard message.value(forKey: "outputScanLaneID") as? String
+                    == result.expectedLaneID else {
+                    continue
+                }
 
                 // Re-read the message's CURRENT attachments inside this save: the
                 // present storedKeys (dedupe) + the max sequence (allocation base).
@@ -1658,7 +1714,7 @@ actor ConversationStore {
                     Self.applyDraft(draft, to: attachment, on: message, id: UUID(), sequence: nextSequence, at: now)
                     if let key = draft.storedKey { presentKeys.insert(key) }
                     nextSequence += 1
-                    inserted = true
+                    changedVisibleState = true
                 }
 
                 if result.markScanned {
@@ -1666,11 +1722,11 @@ actor ConversationStore {
                 }
             }
             try bgContext.save()
-            return inserted
+            return changedVisibleState
         }
         // Marker-only writes carry no visible change — never echo a reload.
-        if insertedAny { await postDidChange() }
-        return insertedAny
+        if changedVisibleState { await postDidChange() }
+        return changedVisibleState
     }
 
     /// Apply synced server-reference PREVIEWS onto already-persisted attachment
@@ -1759,11 +1815,14 @@ actor ConversationStore {
         }
     }
 
-    /// Load the FULL bytes of every attachment on a message, ordered by
-    /// `sequence`. The snapshot path never carries image bytes — this is the
-    /// on-demand load for the full-screen viewer AND for assembling prior-turn
-    /// image data-URIs at send time. Returns image bytes only (text-file bytes
-    /// are already surfaced via `AttachmentRecord.extractedText`).
+    /// Load the FULL bytes of every locally-backed image attachment on a
+    /// message, ordered by `sequence`. Server-reference image chips are
+    /// deliberately excluded: their bytes live only on the gateway, and
+    /// treating their nil data as a local image mints an empty data URI on
+    /// Retry and breaks viewer index alignment. The snapshot path never carries
+    /// image bytes — this is the on-demand load for the full-screen viewer AND
+    /// for assembling prior-turn image data-URIs at send time. Text-file bytes
+    /// are already surfaced via `AttachmentRecord.extractedText`.
     ///
     /// Reads on a fresh background context — full image bytes must fault off
     /// the main queue; the bytes are copied into `Data` value types before
@@ -1778,8 +1837,11 @@ actor ConversationStore {
             let objects = try context.fetch(request)
             return objects.compactMap { obj -> Data? in
                 guard let mime = obj.value(forKey: "mimeType") as? String,
-                      mime.hasPrefix("image/") else { return nil }
-                return obj.value(forKey: "data") as? Data
+                      mime.hasPrefix("image/"),
+                      (obj.value(forKey: "isServerReference") as? NSNumber)?.boolValue != true,
+                      let data = obj.value(forKey: "data") as? Data,
+                      !data.isEmpty else { return nil }
+                return data
             }
         }
     }

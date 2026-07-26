@@ -229,7 +229,8 @@ struct ConverseRequest: Encodable, Sendable {
         excludingNewUserText newUserText: String? = nil,
         dataURIsByMessageID: [UUID: [String]] = [:],
         folder: String? = nil,
-        imagePolicy: ImageHistoryPolicy = .default
+        imagePolicy: ImageHistoryPolicy = .default,
+        dispatchFileLaneID: String? = nil
     ) -> [Message] {
         var working = records
         if let newUserText,
@@ -257,6 +258,10 @@ struct ConverseRequest: Encodable, Sendable {
         for record in working.reversed() {
             let isImageBearing = !(dataURIsByMessageID[record.id] ?? []).isEmpty
             guard isImageBearing else { continue }
+            let ownsStoredKeys = Self.fileLaneID(for: record)
+                .flatMap { storedLaneID in
+                    dispatchFileLaneID.map { $0 == storedLaneID }
+                } ?? false
 
             // EVERY image on this turn must have a persisted storedKey before we
             // can convert it to a reference. If even one image is unkeyed (e.g. a
@@ -269,7 +274,7 @@ struct ConverseRequest: Encodable, Sendable {
             let imageAtts = record.attachments.filter { $0.isImage && !$0.isServerReference }
             let allImagesReferenceable = !imageAtts.isEmpty && imageAtts.allSatisfy {
                 $0.storedKey?.isEmpty == false
-            }
+            } && ownsStoredKeys
 
             if let window {
                 if imageBearingSeen < window {
@@ -296,6 +301,15 @@ struct ConverseRequest: Encodable, Sendable {
         // Map `agent` → `assistant` on the wire (OAI role); `user` stays.
         return working.map { record in
             let wireRole = record.role == "agent" ? "assistant" : record.role
+            // A storedKey only has meaning inside the exact file-transfer lane
+            // that minted it. Legacy rows have no provable ownership and are
+            // therefore never re-spliced. This is deliberately per-message:
+            // one conversation can span a gateway replacement without letting
+            // an A-lane path leak into a later B-lane request.
+            let ownsStoredKeys = Self.fileLaneID(for: record)
+                .flatMap { storedLaneID in
+                    dispatchFileLaneID.map { $0 == storedLaneID }
+                } ?? false
 
             // Split this turn's text-file attachments by whether a file-server
             // copy exists (a non-empty `storedKey`, the dual-text route — Codex
@@ -307,8 +321,12 @@ struct ConverseRequest: Encodable, Sendable {
             // holds the byte-faithful original in its working dir (it can re-read
             // on demand). No window needed (unlike images): a disk ref is a few
             // tokens vs an image's on-demand-vision trade, so age it immediately.
-            let inlineTextAtts = record.attachments.filter { $0.isText && !($0.storedKey?.isEmpty == false) }
-            let agedTextAtts = record.attachments.filter { $0.isText && ($0.storedKey?.isEmpty == false) }
+            let inlineTextAtts = record.attachments.filter {
+                $0.isText && (!($0.storedKey?.isEmpty == false) || !ownsStoredKeys)
+            }
+            let agedTextAtts = record.attachments.filter {
+                $0.isText && ($0.storedKey?.isEmpty == false) && ownsStoredKeys
+            }
 
             let textFileBlocks: [(filename: String, text: String)] = inlineTextAtts
                 .compactMap { att in
@@ -316,6 +334,10 @@ struct ConverseRequest: Encodable, Sendable {
                     return (filename: Self.filename(for: att), text: text)
                 }
             var splicedText = Self.spliceText(record.text, textFileBlocks: textFileBlocks)
+            splicedText = Self.spliceFileUnavailableNote(
+                splicedText,
+                fileCount: inlineTextAtts.filter { $0.extractedText == nil }.count
+            )
 
             // Splice this turn's SERVER-FILE references (file-transfer route) AFTER
             // the text-file fenced blocks. A prior-turn server ref must be retained
@@ -333,10 +355,15 @@ struct ConverseRequest: Encodable, Sendable {
             // carries a single, non-duplicated instruction header.
             let agedTextRefs: [(originalName: String, storedKey: String)] = agedTextAtts
                 .map { (originalName: Self.filename(for: $0), storedKey: $0.storedKey ?? "") }
-            let serverFileRefs: [(originalName: String, storedKey: String)] = record.attachments
-                .filter { $0.isServerFile }
+            let serverFileAtts = record.attachments.filter { $0.isServerFile }
+            let serverFileRefs: [(originalName: String, storedKey: String)] = serverFileAtts
+                .filter { _ in ownsStoredKeys }
                 .map { (originalName: $0.filename ?? $0.storedKey ?? "file", storedKey: $0.storedKey ?? "") }
             splicedText = Self.spliceServerFileRefs(splicedText, serverFiles: serverFileRefs + agedTextRefs)
+            splicedText = Self.spliceFileUnavailableNote(
+                splicedText,
+                fileCount: ownsStoredKeys ? 0 : serverFileAtts.count
+            )
 
             let imageURIs = dataURIsByMessageID[record.id] ?? []
             let isImageBearing = !imageURIs.isEmpty
@@ -365,7 +392,8 @@ struct ConverseRequest: Encodable, Sendable {
                     // splices already applied).
                     return Message(role: wireRole, content: .text(splicedText))
                 }
-                let allKeyed = floorImageAtts.allSatisfy { $0.storedKey?.isEmpty == false }
+                let allKeyed = ownsStoredKeys
+                    && floorImageAtts.allSatisfy { $0.storedKey?.isEmpty == false }
                 if allKeyed {
                     let imageRefs: [(storedKey: String, filename: String)] = floorImageAtts
                         .compactMap { att in
@@ -409,6 +437,7 @@ struct ConverseRequest: Encodable, Sendable {
                 let imageRefs: [(storedKey: String, filename: String)] = record.attachments
                     .filter { $0.isImage && !$0.isServerReference }
                     .compactMap { att in
+                        guard ownsStoredKeys else { return nil }
                         guard let key = att.storedKey, !key.isEmpty else { return nil }
                         return (storedKey: key, filename: Self.displayFilename(forStoredKey: key))
                     }
@@ -428,6 +457,7 @@ struct ConverseRequest: Encodable, Sendable {
                 let imageAtts = record.attachments.filter { $0.isImage && !$0.isServerReference }
                 let keyedRefs: [(storedKey: String, filename: String)] = imageAtts
                     .compactMap { att in
+                        guard ownsStoredKeys else { return nil }
                         guard let key = att.storedKey, !key.isEmpty else { return nil }
                         return (storedKey: key, filename: Self.displayFilename(forStoredKey: key))
                     }
@@ -833,6 +863,23 @@ struct ConverseRequest: Encodable, Sendable {
         guard imageCount > 0 else { return base }
         let note = "\(imageCount) image(s) were attached to this message but are not included in this request and are not otherwise available to you. If the user asks about their visual content, say you can no longer see these image(s) and ask the user to re-attach them if needed — do not guess."
         return base.isEmpty ? note : [base, note].joined(separator: "\n\n")
+    }
+
+    /// Honest fallback for prior server-backed files whose durable lane does
+    /// not match this dispatch (including legacy rows with no lane owner).
+    /// Never expose the stale storedKey: it is an opaque path in another
+    /// gateway's namespace and probing or presenting it would cross lanes.
+    static func spliceFileUnavailableNote(_ base: String, fileCount: Int) -> String {
+        guard fileCount > 0 else { return base }
+        let note = "\(fileCount) file(s) were attached to this message but are not available in the current file-transfer lane. Do not claim to have read or created them."
+        return base.isEmpty ? note : [base, note].joined(separator: "\n\n")
+    }
+
+    /// Persisted owner of this message's server-backed references. User inputs
+    /// are owned by the lane captured at upload/handoff; assistant outputs are
+    /// owned by the lane captured when their output scan was scheduled.
+    private static func fileLaneID(for record: MessageRecord) -> String? {
+        record.role == "agent" ? record.outputScanLaneID : record.fileTransferLaneID
     }
 
     /// Splice label for a text attachment: prefer the stored original

@@ -889,6 +889,9 @@ private struct MessageBubble: View, Equatable {
                             ServerFileDownloadChip(
                                 attachment: attachment,
                                 boundRef: boundRef,
+                                expectedLaneID: isUser
+                                    ? message.fileTransferLaneID
+                                    : message.outputScanLaneID,
                                 filePreview: filePreview,
                                 isUserBubble: isUser
                             )
@@ -1362,6 +1365,10 @@ private struct ServerFileDownloadChip: View {
     /// Conversation's bound gateway — resolves the file-server snapshot. Nil
     /// falls back to the Settings default ref.
     let boundRef: RemoteAgentRef?
+    /// Durable owner of this chip's storedKey. A GET requires the exact same
+    /// configured lane. Its mutable READY verdict gates new transfers, not
+    /// access to an already-owned blob. Nil is unprovable and fails closed.
+    let expectedLaneID: String?
     /// The thread-level Quick Look presenter (single panel authority).
     let filePreview: FilePreviewCoordinator
     /// True on a user bubble — mirrors `InlineTextFileChip`'s role styling
@@ -1574,7 +1581,12 @@ private struct ServerFileDownloadChip: View {
             } else {
                 ref = await SettingsManager.shared.defaultRemoteAgentRef()
             }
-            guard let snapshot = await SettingsManager.shared.fileTransferSnapshot(for: ref) else {
+            let snapshot = await SettingsManager.shared.fileTransferSnapshot(for: ref)
+            guard FileTransferLaneOwnership.canAccessExistingBlob(
+                    expectedLaneID: expectedLaneID,
+                    snapshot: snapshot
+                  ),
+                  let snapshot else {
                 presentError(AppError.fileTransferNotConfigured)
                 return
             }

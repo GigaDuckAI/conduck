@@ -109,6 +109,7 @@ protocol ShareConverseDispatching: Sendable {
         newUserServerFileRefs: [(originalName: String, storedKey: String)],
         newUserImageFileRefs: [(storedKey: String, filename: String)],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)],
+        fileTransferSnapshot: SettingsManager.FileTransferSnapshot?,
         conversationID: UUID,
         shareEnvelopeID: UUID
     ) async throws -> String
@@ -157,6 +158,7 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
         newUserServerFileRefs: [(originalName: String, storedKey: String)],
         newUserImageFileRefs: [(storedKey: String, filename: String)],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)],
+        fileTransferSnapshot: SettingsManager.FileTransferSnapshot?,
         conversationID: UUID,
         shareEnvelopeID: UUID
     ) async throws -> String {
@@ -171,10 +173,16 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
         // the inactive menu-bar app re-activates — so the reply never lands (and
         // the menu-bar dot never lights) until the user clicks. The in-process
         // session is not gated by app-active state; it completes immediately.
-        // READY lane on the target gateway → the per-turn file-delivery
-        // instruction rides (parity with the iOS branch below, where
-        // `BackgroundRemoteAgent.send` derives this internally from `ref`).
-        let fileServerReady = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) != nil
+        // Revalidate the ONE snapshot captured by the drainer immediately
+        // before the foreground send. Never re-resolve a replacement lane.
+        if let fileTransferSnapshot {
+            guard let current = await SettingsManager.shared.fileTransferReadySnapshot(for: ref),
+                  current.durableLaneID == fileTransferSnapshot.durableLaneID,
+                  current.identitySignature == fileTransferSnapshot.identitySignature else {
+                throw AppError.fileTransferNotConfigured
+            }
+        }
+        let fileServerReady = fileTransferSnapshot != nil
         let reply = try await RemoteAgentClient.shared.send(
             backend: backend,
             url: url,
@@ -203,7 +211,8 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             conversationID: conversationID,
             backendRawValue: backend.rawValue,
             userMessageID: shareEnvelopeID,
-            stampsActiveConversation: false
+            stampsActiveConversation: false,
+            fileTransferLaneID: fileTransferSnapshot?.durableLaneID
         )
         return reply
         #else
@@ -223,6 +232,8 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             newUserServerFileRefs: newUserServerFileRefs,
             newUserImageFileRefs: newUserImageFileRefs,
             newUserTextFileServerRefs: newUserTextFileServerRefs,
+            inputFileTransferSnapshot: fileTransferSnapshot,
+            fileTransferSnapshot: fileTransferSnapshot,
             conversationID: conversationID,
             shareEnvelopeID: shareEnvelopeID,
             userMessageID: shareEnvelopeID
@@ -695,6 +706,12 @@ actor SharedInboxDrainer {
         // window.
         writeState(EnvelopeState(conversationID: routed.conversationID, submitted: false), into: dir)
 
+        // Capture one READY lane for the whole envelope. Every upload, storedKey
+        // owner marker, history splice, request instruction, and output scan
+        // uses this immutable snapshot. The live dispatcher revalidates it
+        // immediately before the actual send.
+        let dispatchFileLane = await fileTransferSnapshotProvider(routed.ref, settings)
+
         // --- Classify each manifest item → drafts + wire material ---
         // Loaded from `processing/<uuid>/<relPath>` (the CLAIMED dir). A binary
         // routed to a server-less gateway FAILS the whole envelope (notify +
@@ -766,8 +783,15 @@ actor SharedInboxDrainer {
                 // `fileByteCount` is the `.fileSizeKey` value read above (no bytes
                 // touched); the presence check is a local settings read (no network).
                 if fileByteCount > Constants.fileTransferSoftConfirmBytes,
-                   await fileTransferSnapshotProvider(routed.ref, settings) != nil {
-                    switch await handleBinaryItem(item, fileURL: fileURL, fileByteCount: fileByteCount, routed: routed, manifest: manifest) {
+                   dispatchFileLane != nil {
+                    switch await handleBinaryItem(
+                        item,
+                        fileURL: fileURL,
+                        fileByteCount: fileByteCount,
+                        routed: routed,
+                        manifest: manifest,
+                        fileTransferSnapshot: dispatchFileLane
+                    ) {
                     case .appended(let draft, let ref):
                         drafts.append(draft)
                         serverFileRefs.append(ref)
@@ -810,7 +834,7 @@ actor SharedInboxDrainer {
                 // (snapshot race, throwaway copy, or upload) degrades to inline-only
                 // — NEVER a failure (inline is the guaranteed fallback, mirroring
                 // the composer's `.dualImage`, which never gates Send).
-                if let ftSnapshot = await fileTransferSnapshotProvider(routed.ref, settings) {
+                if let ftSnapshot = dispatchFileLane {
                     // Real shared filename when present (deterministic across
                     // re-drains → idempotent re-PUT); else synthesize `image.<ext>`
                     // from the ORIGINAL bytes' sniffed format (also deterministic).
@@ -868,7 +892,7 @@ actor SharedInboxDrainer {
                     // dual (inline + upload); text+server large → file-only upload;
                     // text+no-server → inline (today's behavior). Routed by the
                     // EXTRACTED byte count.
-                    let ftSnapshot = await fileTransferSnapshotProvider(routed.ref, settings)
+                    let ftSnapshot = dispatchFileLane
                     // A capture the appex SYNTHESIZED (vs. a user-shared *.md that
                     // merely happens to be named that way — `sourceKind` is the
                     // identity, filename convention is not). Two webpage-only
@@ -1059,7 +1083,14 @@ actor SharedInboxDrainer {
                     // live in-flight upload → DEFER the whole envelope (next drain
                     // retries). Upload fail → fail the whole envelope. No turn
                     // appended yet → any failure is a no-turn notify + delete.
-                    switch await handleBinaryItem(item, fileURL: fileURL, fileByteCount: fileByteCount, routed: routed, manifest: manifest) {
+                    switch await handleBinaryItem(
+                        item,
+                        fileURL: fileURL,
+                        fileByteCount: fileByteCount,
+                        routed: routed,
+                        manifest: manifest,
+                        fileTransferSnapshot: dispatchFileLane
+                    ) {
                     case .appended(let draft, let ref):
                         drafts.append(draft)
                         serverFileRefs.append(ref)
@@ -1088,6 +1119,9 @@ actor SharedInboxDrainer {
                 conversationID: routed.conversationID,
                 sourceDevice: SourceDevice.current,
                 status: "sending",
+                fileTransferLaneID: drafts.contains(where: { $0.storedKey?.isEmpty == false })
+                    ? dispatchFileLane?.durableLaneID
+                    : nil,
                 attachments: drafts
             )
         } catch {
@@ -1118,6 +1152,7 @@ actor SharedInboxDrainer {
             excludingUserMessageID: manifest.uuid,
             excludingNewUserText: userText,
             boundRef: routed.ref,
+            dispatchFileLaneID: dispatchFileLane?.durableLaneID,
             store: store
         )) ?? []
 
@@ -1153,6 +1188,7 @@ actor SharedInboxDrainer {
                 newUserServerFileRefs: serverFileRefs,
                 newUserImageFileRefs: imageFileServerRefs,
                 newUserTextFileServerRefs: textFileServerRefs,
+                fileTransferSnapshot: dispatchFileLane,
                 conversationID: routed.conversationID,
                 shareEnvelopeID: manifest.uuid
             )
@@ -1216,11 +1252,12 @@ actor SharedInboxDrainer {
         fileURL: URL,
         fileByteCount: Int,
         routed: SharedInboxRouting.Resolved,
-        manifest: SharedInboxManifest
+        manifest: SharedInboxManifest,
+        fileTransferSnapshot: SettingsManager.FileTransferSnapshot?
     ) async -> BinaryOutcome {
         // NIL snapshot → the bound gateway has no file-server → fail the WHOLE
         // envelope (never send the rest silently).
-        guard let ftSnapshot = await fileTransferSnapshotProvider(routed.ref, settings) else {
+        guard let ftSnapshot = fileTransferSnapshot else {
             return .failed(.needsFileServer)
         }
         let originalName = item.originalName ?? "file"

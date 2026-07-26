@@ -21,6 +21,7 @@
 // `textInlineTurnBudgetBytes`).
 
 import Foundation
+import UniformTypeIdentifiers
 
 /// Decides whether a text/code attachment rides inline, uploads a server copy,
 /// or both — from its extracted UTF-8 size, the bound gateway's file-server
@@ -130,5 +131,132 @@ enum AttachmentDeliveryPlanner {
             return DeliveryPlan(inline: true, serverCopy: .preferred)
         }
         return DeliveryPlan(inline: false, serverCopy: .preferred)
+    }
+}
+
+/// The shared I/O preparation seam for composer text/code attachments.
+///
+/// Both Apple composers feed the planner's decision through this helper so a
+/// brand-new conversation (`conversationID == nil`) behaves exactly like an
+/// established one: a READY file lane still produces an upload request, but its
+/// `storedKey` is flat because no conversation folder exists yet. Keeping the
+/// upload request beside the staged tile also makes the contract deterministic
+/// in XCTest without performing a network PUT.
+struct TextAttachmentStagePreparation {
+    struct UploadRequest: Equatable {
+        /// Stable app-temporary copy of the ORIGINAL picked bytes. The upload
+        /// must read this URL, never a re-encoded copy of `extractedText`.
+        let localURL: URL
+        /// Pre-minted server handle. A VM-less first turn deliberately has no
+        /// folder prefix; established conversations use their UUID folder when
+        /// the server's nested-write probe passed.
+        let storedKey: String
+    }
+
+    let attachment: StagedAttachment
+    let uploadRequest: UploadRequest?
+}
+
+enum TextAttachmentStagePreparer {
+    /// Prepare one already-extracted text/code attachment for a composer.
+    ///
+    /// The caller resolves READY by the effective `RemoteAgentRef`, then passes
+    /// the resulting Boolean here. `conversationID` is optional by design: nil
+    /// means the first turn has not minted its conversation yet, not that the
+    /// file lane is unavailable.
+    static func prepare(
+        sourceURL: URL,
+        extracted: TextFileExtractor.ExtractedFile,
+        fileServerReady: Bool,
+        inlineBudgetRemaining: Int,
+        folderCapable: Bool,
+        conversationID: UUID?,
+        uuid: UUID = UUID()
+    ) async -> TextAttachmentStagePreparation {
+        let byteCount = extracted.text.lengthOfBytes(using: .utf8)
+        let plan = AttachmentDeliveryPlanner.plan(
+            extractedByteCount: byteCount,
+            fileServerPresent: fileServerReady,
+            inlineBudgetRemaining: inlineBudgetRemaining
+        )
+
+        guard plan.serverCopy != .none else {
+            return TextAttachmentStagePreparation(
+                attachment: StagedAttachment(kind: .file(sourceURL)),
+                uploadRequest: nil
+            )
+        }
+
+        // The picker's security scope is not guaranteed to outlive staging.
+        // Copy the ORIGINAL bytes once into app temp; both the eager PUT and a
+        // user-triggered Retry read this stable file. A copy failure preserves
+        // the historical inline-only fallback.
+        guard let stagingURL = await Task.detached(
+            operation: { AttachmentStagingFile.copyUnderScope(sourceURL) }
+        ).value else {
+            return TextAttachmentStagePreparation(
+                attachment: StagedAttachment(kind: .file(sourceURL)),
+                uploadRequest: nil
+            )
+        }
+
+        let storedKey = FileServerClient.makeStoredKey(
+            originalName: extracted.filename,
+            uuid: uuid,
+            folder: folderCapable ? conversationID?.uuidString : nil
+        )
+        let upload = TextAttachmentStagePreparation.UploadRequest(
+            localURL: stagingURL,
+            storedKey: storedKey
+        )
+
+        if plan.inline {
+            return TextAttachmentStagePreparation(
+                attachment: StagedAttachment(
+                    kind: .dualText(
+                        url: stagingURL,
+                        extractedText: extracted.text,
+                        filename: extracted.filename,
+                        mimeType: extracted.mimeType
+                    ),
+                    serverUploadState: .uploading(progress: 0)
+                ),
+                uploadRequest: upload
+            )
+        }
+
+        let mimeType = UTType(filenameExtension: sourceURL.pathExtension)?.preferredMIMEType
+            ?? extracted.mimeType
+        return TextAttachmentStagePreparation(
+            attachment: StagedAttachment(
+                kind: .serverFile(
+                    url: stagingURL,
+                    originalName: extracted.filename,
+                    mimeType: mimeType
+                ),
+                serverUploadState: .uploading(progress: 0)
+            ),
+            uploadRequest: upload
+        )
+    }
+}
+
+/// Shared stable-copy helper for composer uploads. It brackets the original
+/// picker URL's security scope and performs a file-to-file copy, so large files
+/// never balloon into an in-memory `Data`.
+enum AttachmentStagingFile {
+    nonisolated static func copyUnderScope(_ url: URL) -> URL? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conduck-ftstage-\(UUID().uuidString)-\(url.lastPathComponent)")
+        do {
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: url, to: destination)
+            return destination
+        } catch {
+            return nil
+        }
     }
 }

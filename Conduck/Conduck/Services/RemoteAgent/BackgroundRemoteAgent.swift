@@ -235,6 +235,16 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         newUserServerFileRefs: [(originalName: String, storedKey: String)] = [],
         newUserImageFileRefs: [(storedKey: String, filename: String)] = [],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)] = [],
+        // Exact configured lane that owns any storedKeys/history references on
+        // this request. Unlike `fileTransferSnapshot` below, it need not be
+        // READY: an existing blob remains usable after a failed re-test. It is
+        // still revalidated against the raw saved tuple immediately before
+        // enqueue so A-owned refs can never leak through replacement lane B.
+        inputFileTransferSnapshot: SettingsManager.FileTransferSnapshot?,
+        // Exact READY physical lane captured by the caller for THIS dispatch.
+        // Nil means the file-delivery instruction is omitted and the reply has
+        // no explicit output-scan lane. Never resolve a replacement here.
+        fileTransferSnapshot: SettingsManager.FileTransferSnapshot?,
         conversationID: UUID,
         shareEnvelopeID: UUID? = nil,
         // The user `Message.id` of THIS turn, when the caller knows it (in-app
@@ -273,14 +283,10 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        // Derived HERE from the ref (not threaded from callers): every
-        // background dispatch surface — in-app VM, retry, share drain, headless
-        // intents, Watch relay — funnels through this method, so deriving once
-        // at the choke point means no caller can forget to pass it. Ready-gated
-        // (`fileTransferReadySnapshot`, not the raw snapshot) to match the
-        // routing/promotion call sites: an untested lane must not trigger the
-        // instruction.
-        let fileServerReady = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) != nil
+        // The caller captures ONE READY lane and threads it through. Re-resolving
+        // by ref here could silently jump from lane A (which owns handed-off
+        // storedKeys) to a newly configured lane B.
+        let fileServerReady = fileTransferSnapshot != nil
 
         let body = ConverseRequest(
             messages: RemoteAgentClient.assembleMessages(
@@ -313,7 +319,8 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
             // Dispatch-time fact for the failure classification (the
             // delegate may classify after a relaunch, long after `priorTurns`
             // is gone): does this request carry historical image parts?
-            requestHadHistoryImages: ConverseRequest.containsImageParts(priorTurns)
+            requestHadHistoryImages: ConverseRequest.containsImageParts(priorTurns),
+            fileTransferLaneID: fileTransferSnapshot?.durableLaneID
         )
         let metadataString: String
         do {
@@ -326,6 +333,29 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
 #if DEBUG
         RemoteAgentDiagnostics.log.log("send(bg): convo=\(conversationID.uuidString, privacy: .public) \(RemoteAgentDiagnostics.shapeSummary(body.messages, bodyBytes: bodyData.count), privacy: .public)")
 #endif
+
+        // Revalidate both independent lane roles immediately before task
+        // creation. Existing-input ownership uses the raw configured snapshot;
+        // new output promises require the still-READY snapshot. Neither may
+        // jump to a replacement lane.
+        if let inputFileTransferSnapshot {
+            let current = await SettingsManager.shared.fileTransferSnapshot(for: ref)
+            guard FileTransferLaneOwnership.samePhysicalLane(
+                captured: inputFileTransferSnapshot,
+                current: current
+            ) else {
+                try? FileManager.default.removeItem(at: bodyURL)
+                throw AppError.fileTransferNotConfigured
+            }
+        }
+        if let fileTransferSnapshot {
+            guard let current = await SettingsManager.shared.fileTransferReadySnapshot(for: ref),
+                  current.durableLaneID == fileTransferSnapshot.durableLaneID,
+                  current.identitySignature == fileTransferSnapshot.identitySignature else {
+                try? FileManager.default.removeItem(at: bodyURL)
+                throw AppError.fileTransferNotConfigured
+            }
+        }
 
         // Fire-and-forget (headless): enqueue + return immediately, registering
         // NO continuation. The background URLSession is owned by the system, so
@@ -663,34 +693,41 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                 return
             }
 
-            resolve(.success(reply))
-
-            // Persist the agent reply + fire the completion notification.
+            // Persist the agent reply before resolving an awaiting in-app
+            // success. `recordReply` invokes `didPersist` immediately after its
+            // atomic reply-insert + user-sent transaction; optional output
+            // probes continue afterward and do not hold the UI hostage.
             // Runs even for headless relaunches (no awaiting continuation).
             // Counted as persistence work so `handleBackgroundEvents()` holds
             // the `.backgroundTask` closure open until the append lands.
             // `.remoteAgentTurnDidComplete` only fires when the reply actually
             // persisted (recordReply returns false on an append failure —
             // announcing completion for a reply that isn't there would lie).
-            if let cid = conversationID {
-                self.beginPersistenceWork()
-                Task {
-                    // `recordReply` persists the reply, flips the user turn, runs
-                    // output detection, fires the user reply notification, AND posts
-                    // `.remoteAgentTurnDidComplete` (only when the reply actually
-                    // persisted — see its tail). It is the SINGLE shared landing
-                    // path: the iOS background delegate (here) and the macOS
-                    // foreground share-drain dispatch (`LiveConverseDispatcher`) both
-                    // call it, so a reply lands identically regardless of transport.
-                    _ = await Self.recordReply(
-                        reply,
-                        conversationID: cid,
-                        backendRawValue: metadata?.backendRawValue,
-                        userMessageID: userMessageID,
-                        stampsActiveConversation: metadata?.stampsActiveConversation ?? false
-                    )
-                    self.endPersistenceWork()
+            guard let cid = conversationID else {
+                resolve(.failure(AppError.remoteAgentInvalidResponse))
+                return
+            }
+            self.beginPersistenceWork()
+            Task {
+                // `recordReply` is the SINGLE success writer. The callback
+                // resumes the live continuation only after the atomic store
+                // transaction has landed; a failed append returns false and
+                // leaves the caller on the ordinary failure path.
+                let persisted = await Self.recordReply(
+                    reply,
+                    conversationID: cid,
+                    backendRawValue: metadata?.backendRawValue,
+                    userMessageID: userMessageID,
+                    stampsActiveConversation: metadata?.stampsActiveConversation ?? false,
+                    fileTransferLaneID: metadata?.fileTransferLaneID,
+                    didPersist: {
+                        resolve(.success(reply))
+                    }
+                )
+                if !persisted {
+                    resolve(.failure(AppError.remoteAgentInvalidResponse))
                 }
+                self.endPersistenceWork()
             }
         }
     }
@@ -751,82 +788,132 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     /// the macOS foreground share-drain dispatch (`LiveConverseDispatcher`), so a
     /// reply lands identically (append → flip → detect → notify) on both
     /// transports. `internal static` (not `private`) so the drainer can reach it.
-    static func recordReply(_ reply: String, conversationID: UUID, backendRawValue: String?, userMessageID: UUID?, stampsActiveConversation: Bool) async -> Bool {
-        // CRASH-SAFETY ORDERING (load-bearing): persist the reply FIRST, flip
-        // the user turn second, run anything slow (network probes) third, and
-        // notify LAST. The old order flipped the user turn to `sent` and then
-        // ran up to 5 output-detector network probes BEFORE the append — an OS
-        // kill in that window left a `sent` user turn with no reply and no
-        // redelivery (silent reply loss).
-
-        // 1. Append the agent reply. Once this lands, a kill can't lose the turn.
-        guard let appended = try? await ConversationStore.shared.appendMessage(
-            role: "agent",
-            text: reply,
-            conversationID: conversationID,
-            sourceDevice: SourceDevice.current
-        ) else {
-            // Append FAILED (conversation deleted on another device mid-flight,
-            // or a store write failure). Mirror the CarPlay twin: EARLY-RETURN
-            // with NO sent-flip and NO reply notification — flipping `sent`
-            // would render a delivered turn with no reply, and the notification
-            // would deep-link to a reply that isn't there. The user turn is
-            // LEFT at `sending` (not flipped `failed`): in the dominant
-            // deleted-conversation case the turn is gone with it anyway, and
-            // `failed` would invite a Retry into a vanished thread; the
-            // residual store-glitch case is resolved by the stale-`sending`
-            // sweep (answered-turn guard can't apply — nothing persisted).
-            return false
+    static func recordReply(
+        _ reply: String,
+        conversationID: UUID,
+        backendRawValue: String?,
+        userMessageID: UUID?,
+        stampsActiveConversation: Bool,
+        fileTransferLaneID: String? = nil,
+        didPersist: (() -> Void)? = nil
+    ) async -> Bool {
+        let agentMessageID = UUID()
+        let ownsOutputClaim = fileTransferLaneID != nil
+            ? OutputScanClaimRegistry.shared.claim(agentMessageID)
+            : false
+        defer {
+            if ownsOutputClaim {
+                OutputScanClaimRegistry.shared.release(agentMessageID)
+            }
         }
-
-        // 2. Authoritative send-state flip: clear the user turn's `sending`
-        // spinner here (delegate path) so it can't stick after an OS
-        // suspend+relaunch killed the foreground continuation that would
-        // otherwise mark it sent. EXACT-message flip when the dispatch site
-        // threaded the user `Message.id` (a conversation-wide flip aliases a
-        // concurrent sibling turn's status); conversation-wide fallback for
-        // old metadata blobs. No-op when the status already resolved.
+        // Persist the reply + exact user sent-flip + explicit output-scan lane
+        // in ONE Core Data transaction whenever modern metadata identifies the
+        // user turn. A process death can therefore never expose a sent user
+        // bubble without its reply, or a reply whose recovery lane was lost.
+        let appended: MessageRecord
         if let userMessageID {
-            await ConversationStore.shared.markPendingUserTurn(messageID: userMessageID, to: "sent")
+            guard let completed = try? await ConversationStore.shared.completeAgentTurn(
+                userMessageID: userMessageID,
+                userStatus: "sent",
+                agentText: reply,
+                conversationID: conversationID,
+                sourceDevice: SourceDevice.current,
+                agentMessageID: agentMessageID,
+                outputScanLaneID: fileTransferLaneID
+            ) else {
+                return false
+            }
+            appended = completed
         } else {
-            await ConversationStore.shared.markPendingUserTurns(conversationID: conversationID, to: "sent")
+            // Backward compatibility for an in-flight pre-upgrade task whose
+            // metadata has no exact user id. Preserve the legacy append then
+            // conversation-wide status transition; no explicit lane can be
+            // trusted for this old shape.
+            guard let legacy = try? await ConversationStore.shared.appendMessage(
+                role: "agent",
+                text: reply,
+                conversationID: conversationID,
+                sourceDevice: SourceDevice.current
+            ) else {
+                return false
+            }
+            appended = legacy
+            await ConversationStore.shared.markPendingUserTurns(
+                conversationID: conversationID,
+                to: "sent"
+            )
         }
+        // The durable reply + success transition now exist together. Release
+        // an awaiting foreground caller here, before optional output probes.
+        didPersist?()
         if stampsActiveConversation {
             await SettingsManager.shared.recordActiveConversation(conversationID)
         }
 
-        // 3. Output detection (conservative): if the bound gateway has a
-        // file-server configured AND the reply names an allowlisted output file
-        // that probes `.exists`, attach it as a server-reference attachment to
-        // the ALREADY-PERSISTED agent bubble so the thread can offer an inline
-        // download chip. The common case (no file-server, or a reply with no
-        // allowlisted filename) does ZERO network work — the detector returns
-        // `[]` before any probe. A kill mid-probe now costs only the chips,
-        // never the reply.
-        let outputs = await FileTransferOutputDetector.detect(reply: reply, conversationID: conversationID)
-        if !outputs.isEmpty {
-            try? await ConversationStore.shared.addAttachments(messageID: appended.id, attachments: outputs)
+        // Resolve the true ref once for both exact-lane output recovery and the
+        // notification title. New metadata may probe ONLY the currently READY
+        // snapshot whose durable id matches the dispatch. Legacy nil metadata
+        // does zero landing-path probing and remains ineligible for retroactive
+        // network scans because its physical owner cannot be proven.
+        let refRawString = (try? await ConversationStore.shared
+            .fetchConversation(id: conversationID))?.backend ?? backendRawValue
+        let ref = refRawString.flatMap(RemoteAgentRef.init(rawString:))
+
+        // User-visible completion is released immediately after durable landing.
+        // Output probes are optional recovery work and must never delay the
+        // notification/menu-bar completion signal by their timeout budget.
+        await Self.finishRecordedReply(
+            reply,
+            conversationID: conversationID,
+            backendRawValue: refRawString
+        )
+
+        var outputs: [AttachmentDraft] = []
+        var outputSnapshot: SettingsManager.FileTransferSnapshot?
+        if let fileTransferLaneID, ownsOutputClaim {
+            let hasCandidates =
+                !FileTransferOutputDetector.extractCandidates(from: reply).isEmpty
+            if !hasCandidates {
+                _ = try? await ConversationStore.shared.reconcileOutputScan([
+                    .init(
+                        messageID: appended.id,
+                        drafts: [],
+                        markScanned: true,
+                        expectedLaneID: fileTransferLaneID
+                    )
+                ])
+            } else if let ref,
+                      let captured = await SettingsManager.shared
+                        .fileTransferReadySnapshot(for: ref),
+                      captured.durableLaneID == fileTransferLaneID {
+                let scan = await FileTransferOutputDetector.reconciliationScan(
+                    reply: reply,
+                    conversationID: conversationID,
+                    snapshot: captured,
+                    excludedKeys: []
+                )
+                guard let current = await SettingsManager.shared
+                    .fileTransferReadySnapshot(for: ref),
+                      current.durableLaneID == fileTransferLaneID else {
+                    // Leave the explicit pending marker untouched. Restoring the
+                    // original lane lets the same VM recover without probing B.
+                    return true
+                }
+                outputs = scan.drafts
+                outputSnapshot = captured
+                _ = try? await ConversationStore.shared.reconcileOutputScan([
+                    .init(
+                        messageID: appended.id,
+                        drafts: outputs,
+                        markScanned: scan.conclusive,
+                        expectedLaneID: fileTransferLaneID
+                    )
+                ])
+            }
         }
 
-        // 4. Reply notification last. Resolve the TRUE bound ref from the
-        // conversation row (`Conversation.backend` stores the ref rawString,
-        // incl. `custom_<uuid>`) — the task metadata carries only the
-        // status-map CARRIER raw value (`.openclaw` for customs), which would
-        // mislabel a custom gateway's notification as "OpenClaw". Falls back
-        // to the metadata value (correct for built-ins) when the conversation
-        // row is gone. Tolerates old in-flight metadata unchanged.
-        let refRawString = (try? await ConversationStore.shared.fetchConversation(id: conversationID))?.backend
-            ?? backendRawValue
-        await Self.postReplyNotification(reply, conversationID: conversationID, backendRawValue: refRawString)
-
-        // 5. Completion signal LAST — the menu-bar reply cue (macOS) + any other
-        // in-app observers. Reached ONLY on a real persist (past the
-        // append-failure early-return). Fired here (was the delegate's separate
-        // call) so the iOS background delegate and the macOS foreground
-        // share-drain dispatch fire it identically, exactly once.
-        await Self.postTurnCompleted(conversationID: conversationID)
-
-        // 6. WS-2 preview enrichment (best-effort, DETACHED). Now that the chips
+        // Preview enrichment is pinned to the same exact captured lane when
+        // modern metadata exists; it may never re-resolve a replacement.
         // AND every completion step (notification, completion signal) have
         // persisted, spawn an UNSTRUCTURED task that pulls bounded preview
         // content and patches the rows. Detached so it never extends the counted
@@ -837,12 +924,31 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // chips simply stay preview-less (no retry state machine, by design).
         if !outputs.isEmpty {
             let outputMessageID = appended.id
-            Task.detached {
-                await FileTransferOutputDetector.enrichPreviews(
-                    drafts: outputs, messageID: outputMessageID, conversationID: conversationID)
+            if let ref, let outputSnapshot {
+                Task.detached {
+                    await FileTransferOutputDetector.enrichPreviews(
+                        drafts: outputs,
+                        messageID: outputMessageID,
+                        ref: ref,
+                        snapshot: outputSnapshot
+                    )
+                }
             }
         }
         return true
+    }
+
+    private static func finishRecordedReply(
+        _ reply: String,
+        conversationID: UUID,
+        backendRawValue: String?
+    ) async {
+        await Self.postReplyNotification(
+            reply,
+            conversationID: conversationID,
+            backendRawValue: backendRawValue
+        )
+        await Self.postTurnCompleted(conversationID: conversationID)
     }
 
     /// The reply-notification title: in a multi-gateway setup (≥2 configured)
@@ -1124,6 +1230,10 @@ enum SourceDevice {
 /// candidate filenames, storedKeys, or the snapshot. Returns the structured
 /// drafts; no `print`/`os_log` anywhere in this path.
 enum FileTransferOutputDetector {
+    struct ReconciliationScan {
+        let drafts: [AttachmentDraft]
+        let conclusive: Bool
+    }
 
     /// Curated set of output-file extensions worth probing. Deliberately narrow:
     /// document / data / archive / image / code types an agent tool realistically
@@ -1140,40 +1250,42 @@ enum FileTransferOutputDetector {
     /// reply that mentions many filenames).
     private static let maxCandidates = 5
 
-    /// Detect server-written output files referenced verbatim in `reply` and
-    /// confirmed present on the conversation's bound file-server. Returns the
-    /// confirmed files as server-reference `AttachmentDraft`s (empty when no
-    /// file-server is configured, no allowlisted token appears, or nothing
-    /// probes `.exists`).
-    ///
-    /// The LANDING-PATH entry point (`recordReply`, the macOS foreground append):
-    /// resolves the snapshot + inbound-exclusion set itself, passes NO
-    /// pre-excluded keys (a landing turn has no attachments yet), and discards
-    /// the conclusiveness verdict (landing never marks `outputScanDone` — that's
-    /// the retro pass's job). Signature + behaviour are frozen so the two reply
-    /// paths keep chipping identically.
-    static func detect(reply: String, conversationID: UUID) async -> [AttachmentDraft] {
-        // Resolve the bound ref → file-server snapshot. No file-server configured
-        // → bail before any scan/probe (the common case pays nothing).
-        let raw = try? await ConversationStore.shared.fetchConversation(id: conversationID)?.backend
-        guard let ref = raw.flatMap({ RemoteAgentRef(rawString: $0) }),
-              let snapshot = await SettingsManager.shared.fileTransferSnapshot(for: ref) else {
-            return []
+    /// True only while the ref still resolves to the exact lane captured by a
+    /// dispatch/probe caller. The stable ID binds URL + credential across
+    /// launches; the per-process signature additionally catches device-local
+    /// pin changes during this run. Readiness/capability verdict changes do not
+    /// repoint an already-dispatched file lane.
+    static func configuredLaneStillMatches(
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) async -> Bool {
+        guard let current = await SettingsManager.shared.fileTransferSnapshot(for: ref) else {
+            return false
         }
+        return current.durableLaneID == snapshot.durableLaneID
+            && current.identitySignature == snapshot.identitySignature
+    }
 
-        // Gate the inbound-exclusion fetch on a filename-shaped candidate
-        // existing (the common no-candidate reply pays only the snapshot resolve
-        // + one regex — no extra store fetch).
-        guard !extractCandidates(from: reply).isEmpty else { return [] }
-
+    /// Run a reconciliation scan against a caller-captured lane. This overload
+    /// never resolves settings and therefore cannot silently jump from dispatch
+    /// lane A to a later lane B. The caller owns pre/post identity guards.
+    static func reconciliationScan(
+        reply: String,
+        conversationID: UUID,
+        snapshot: SettingsManager.FileTransferSnapshot,
+        excludedKeys: Set<String>
+    ) async -> ReconciliationScan {
+        guard !extractCandidates(from: reply).isEmpty else {
+            return ReconciliationScan(drafts: [], conclusive: true)
+        }
         let inbound = await inboundStoredKeyTokens(conversationID: conversationID)
-        let (drafts, _) = await detect(
+        let result = await detect(
             reply: reply,
             snapshot: snapshot,
             inboundTokens: inbound,
-            excludedKeys: []
+            excludedKeys: excludedKeys
         )
-        return drafts
+        return ReconciliationScan(drafts: result.drafts, conclusive: result.conclusive)
     }
 
     /// Core detector on PRE-RESOLVED context — the seam the retroactive scan
@@ -1478,36 +1590,30 @@ enum FileTransferOutputDetector {
         return filename[filename.index(after: dot)...].lowercased()
     }
 
-    /// Best-effort landing-path enrichment for ONE reply's output chips (WS-2):
-    /// the detached tail spawned AFTER the chips + notifications persist.
-    /// Re-resolves the bound ref's READY file-server snapshot, guards against a
-    /// lane repoint (identity signature captured before, re-checked after the
-    /// downloads — mirrors `runRetroOutputScan`), builds per-reply-budgeted
-    /// patches, and applies them first-writer-wins. Aborts silently on a
-    /// missing/unready lane or an identity drift; never throws; must never extend
-    /// the reply path's background-task lifetime (callers spawn it detached).
+    /// Preview enrichment pinned to the exact dispatch-time lane. There is no
+    /// ownerless/current-lane fallback: a replacement gateway must never receive
+    /// output-key reads from an earlier physical lane.
     nonisolated static func enrichPreviews(
         drafts: [AttachmentDraft],
         messageID: UUID,
-        conversationID: UUID
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot
     ) async {
-        guard !drafts.isEmpty else { return }
-        guard let raw = try? await ConversationStore.shared.fetchConversation(id: conversationID)?.backend,
-              let ref = RemoteAgentRef(rawString: raw),
-              let snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) else {
+        guard !drafts.isEmpty,
+              await configuredLaneStillMatches(ref: ref, snapshot: snapshot) else {
             return
         }
-        let identityBefore = snapshot.identitySignature
         var sourceBudget = perReplyPreviewSourceBudget
         var storedBudget = perReplyPreviewStoredBudget
         let patches = await buildPreviewPatches(
-            for: drafts, messageID: messageID, snapshot: snapshot,
-            sourceBudget: &sourceBudget, storedBudget: &storedBudget)
-        guard !patches.isEmpty else { return }
-        // Lane-repoint guard: a URL/credential/pin change during the downloads
-        // must not apply old-server previews to a now-different lane.
-        guard let after = await SettingsManager.shared.fileTransferReadySnapshot(for: ref),
-              after.identitySignature == identityBefore else {
+            for: drafts,
+            messageID: messageID,
+            snapshot: snapshot,
+            sourceBudget: &sourceBudget,
+            storedBudget: &storedBudget
+        )
+        guard !patches.isEmpty,
+              await configuredLaneStillMatches(ref: ref, snapshot: snapshot) else {
             return
         }
         _ = try? await ConversationStore.shared.applyPreviews(patches)

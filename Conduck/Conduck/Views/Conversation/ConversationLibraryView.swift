@@ -26,7 +26,7 @@ struct ConversationLibraryView: View {
     /// converse path (ContentView owns the conversation-minting + shared detail
     /// VM). The `modality` tags the turn (`.text` typed / `.voice` spoken) for
     /// the bubble footer chip.
-    let onSendTurn: (String, TurnModality, [PendingAttachment]) async -> Void
+    let onSendTurn: (ComposerTurnDispatch, TurnModality) async -> Bool
     let isRemoteAgentConfigured: Bool
     /// Active backend display name shown as the detail-column nav title
     /// (fallback "Personal AI"). Host-owned (`ContentView.backendTitle`).
@@ -161,7 +161,8 @@ struct ConversationLibraryView: View {
         } detail: {
             detailColumn
         }
-        .onChange(of: selectedConversationID) { _, _ in
+        .onChange(of: selectedConversationID) { oldID, newID in
+            attachmentCoordinator.discardForNavigation(from: oldID, to: newID)
             composerDraft = ""   // don't carry a half-typed draft into another thread
             syncDetailVM()
         }
@@ -237,8 +238,8 @@ struct ConversationLibraryView: View {
                         recorder: recorder,
                         draft: $composerDraft,
                         coordinator: attachmentCoordinator,
-                        onSend: { text, attachments in
-                            await onSendTurn(text, .text, attachments)
+                        onSend: { dispatch in
+                            await onSendTurn(dispatch, .text)
                         },
                         onVoiceResult: handleVoiceResult,
                         settingsVM: settingsVM,
@@ -349,7 +350,7 @@ struct ConversationLibraryView: View {
     /// static title.
     @ViewBuilder
     private var gatewayTitleControl: some View {
-        if canPickBackend {
+        if canPickBackend && !attachmentCoordinator.gatewaySelectionLocked {
             gatewayPickerMenu
         } else if let vm = detailVM, vm.canSwitchGateway, vm.hasTurns, vm.boundGatewayAvailable {
             Button { vm.showingGatewaySheet = true } label: {
@@ -416,9 +417,17 @@ struct ConversationLibraryView: View {
         #if canImport(UIKit)
         let pb = UIPasteboard.general
         if pb.hasImages, let image = pb.image, let data = image.jpegData(compressionQuality: 0.95) {
-            Task { await attachmentCoordinator.stageImage(data, vm: detailVM, ref: selectedRef) }
+            attachmentCoordinator.stagePastedImage(
+                data,
+                vm: detailVM,
+                resolveRef: authoritativeComposerRef
+            )
         } else if pb.hasURLs, let url = pb.urls?.first, url.isFileURL {
-            attachmentCoordinator.stageServerFiles([url], vm: detailVM, ref: selectedRef)
+            attachmentCoordinator.stagePastedFiles(
+                [url],
+                vm: detailVM,
+                resolveRef: authoritativeComposerRef
+            )
         }
         #endif
     }
@@ -447,17 +456,65 @@ struct ConversationLibraryView: View {
               !attachmentCoordinator.staged.hasFailedUpload,
               !attachmentCoordinator.staged.hasNeedsSetupItem,
               !isCaptureActive,
-              detailVM?.isAwaitingReply != true else { return }
-        composerDraft = ""
+              detailVM?.isAwaitingReply != true,
+              attachmentCoordinator.beginAttachmentDispatch() else { return }
+        let submittedDraft = composerDraft
         Task {
+            defer { attachmentCoordinator.endAttachmentDispatch() }
+            guard let dispatchRoute = await authoritativeComposerRoute() else { return }
             // Bounded ~2s upload join (same as the composer's onSendText): give a
             // freshly-staged dual attachment's eager upload a brief window so its
             // storedKey rides this turn's "also on disk" ref.
             await attachmentCoordinator.awaitPreferredUploads()
-            let pending = attachmentCoordinator.staged.pendingAttachments
-            attachmentCoordinator.clear()
-            await onSendTurn(text, .text, pending)
+            guard let dispatch = attachmentCoordinator.makeDispatch(
+                text: text,
+                route: dispatchRoute
+            ) else {
+                detailVM?.reportComposerDispatchRejection()
+                return
+            }
+            let accepted = await onSendTurn(dispatch, .text)
+            if accepted {
+                attachmentCoordinator.clearAfterSuccessfulHandoff(dispatch)
+                if composerDraft == submittedDraft {
+                    composerDraft = ""
+                }
+            }
         }
+    }
+
+    /// Resolve the route from the persisted conversation backend when a thread
+    /// exists; only a genuinely VM-less composer may use the new-chat picker.
+    /// Rechecks selection after the store hop so a late result cannot stage/send
+    /// onto a conversation the user has already left. The returned gateway +
+    /// conversation pair is immutable and must be sealed unchanged after any
+    /// later preferred-upload join.
+    private func authoritativeComposerRoute() async -> ComposerDispatchRoute? {
+        if let vm = detailVM {
+            let conversationID = vm.conversationID
+            guard selectedConversationID == conversationID else {
+                return nil
+            }
+            guard let raw = try? await ConversationStore.shared
+                .fetchConversation(id: conversationID)?.backend else {
+                vm.reportComposerDispatchRejection()
+                return nil
+            }
+            guard selectedConversationID == conversationID else { return nil }
+            guard let ref = RemoteAgentRef(rawString: raw) else {
+                vm.reportComposerDispatchRejection()
+                return nil
+            }
+            return ComposerDispatchRoute(ref: ref, conversationID: conversationID)
+        }
+        guard selectedConversationID == nil else { return nil }
+        return ComposerDispatchRoute(ref: selectedRef, conversationID: nil)
+    }
+
+    /// Staging needs only the gateway, but shares the same authoritative
+    /// resolution and selection revalidation as dispatch capture.
+    private func authoritativeComposerRef() async -> RemoteAgentRef? {
+        (await authoritativeComposerRoute())?.ref
     }
 
     /// ⌘N — clear the selection so the detail column shows the start empty

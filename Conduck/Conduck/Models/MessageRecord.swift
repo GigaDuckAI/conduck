@@ -49,13 +49,26 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
     /// a render-time thread scan would over-claim). Nil = unknown (legacy /
     /// pre-dispatch failure): poisoned copy falls back to the hedged variant.
     let failureHadHistoryImages: Bool?
+    /// Stable one-way identity of the exact physical file lane that owns this
+    /// USER turn's handed-off storedKeys. Nil for inline/text-only turns and
+    /// legacy rows. Retry must fail closed unless the currently configured lane
+    /// still has this identity.
+    let fileTransferLaneID: String?
     /// Whether the retroactive output-file scan has run to a CONCLUSIVE finish
     /// on this turn (v5 model). Set true only when every probe in a scan pass
     /// returned a definitive verdict, so a marked turn is never re-scanned;
-    /// nil / false = never scanned or a transient probe failure (retry on the
-    /// next thread open). Written only for the retro-scannable turns (agent
-    /// replies that landed on Watch / CarPlay); stays nil everywhere else.
+    /// false = an explicitly pending scan or a transient probe failure (retry on
+    /// the next thread open). Every surface is admitted only by explicit false
+    /// paired with `outputScanLaneID`, atomically stored with a reply whose
+    /// dispatch latched a READY file lane. Legacy/ownerless nil rows stay
+    /// excluded rather than guessing the currently configured server.
     let outputScanDone: Bool?
+    /// Stable one-way identity of the exact file lane used by a recoverable
+    /// dispatch (foreground Mac, in-app/background, and modern CarPlay).
+    /// Non-nil only when `outputScanDone == false` (or after that scan becomes
+    /// true). Legacy rows—and Watch until its broadcast/uploader metadata
+    /// threads the durable ID—remain nil and are not scanned.
+    let outputScanLaneID: String?
     /// Image / text-file attachments on this turn, ordered by `sequence`.
     /// Empty for text-only turns. The snapshots carry thumbnails + extracted
     /// text — never the full image bytes (loaded on demand).
@@ -71,7 +84,9 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
         failureCode: Int? = nil,
         failureWireCode: String? = nil,
         failureHadHistoryImages: Bool? = nil,
+        fileTransferLaneID: String? = nil,
         outputScanDone: Bool? = nil,
+        outputScanLaneID: String? = nil,
         attachments: [AttachmentRecord] = []
     ) {
         self.id = id
@@ -83,7 +98,9 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
         self.failureCode = failureCode
         self.failureWireCode = failureWireCode
         self.failureHadHistoryImages = failureHadHistoryImages
+        self.fileTransferLaneID = fileTransferLaneID
         self.outputScanDone = outputScanDone
+        self.outputScanLaneID = outputScanLaneID
         self.attachments = attachments
     }
 
@@ -105,10 +122,19 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
         self.failureCode = (managedObject.value(forKey: "failureCode") as? NSNumber)?.intValue
         self.failureWireCode = managedObject.value(forKey: "failureWireCode") as? String
         self.failureHadHistoryImages = (managedObject.value(forKey: "failureHadHistoryImages") as? NSNumber)?.boolValue
+        // `fileTransferLaneID` (v7 model): nil-tolerant. A legacy turn cannot
+        // prove which physical lane owns its storedKeys, so retry treats a
+        // server-reference legacy row conservatively.
+        self.fileTransferLaneID = managedObject.value(forKey: "fileTransferLaneID") as? String
         // `outputScanDone` (v5 model): nil-tolerant — a v4 row (or a partially-
-        // synced CloudKit row) has no attribute, which reads as "never scanned"
-        // (nil), the correct default. Non-scalar Boolean → NSNumber through KVC.
+        // synced CloudKit row) has no attribute, which reads as nil. Candidate
+        // selection requires explicit false PLUS the v7 durable lane on every
+        // surface. Non-scalar Boolean → NSNumber.
         self.outputScanDone = (managedObject.value(forKey: "outputScanDone") as? NSNumber)?.boolValue
+        // `outputScanLaneID` (v7 model): nil-tolerant. Any ownerless row cannot
+        // prove which server accepted its dispatch and therefore stays excluded
+        // from recovery.
+        self.outputScanLaneID = managedObject.value(forKey: "outputScanLaneID") as? String
 
         // Map the unordered `attachments` relationship into snapshots and sort
         // by `sequence` (the model relationship is NOT ordered — CloudKit

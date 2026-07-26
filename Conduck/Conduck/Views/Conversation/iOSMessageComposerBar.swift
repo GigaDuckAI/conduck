@@ -48,7 +48,11 @@ struct iOSMessageComposerBar: View {
     var progressByID: [UUID: Double] = [:]
     /// Forward a typed turn to the converse path (host owns minting + VM). The
     /// host reads the staged `attachments` itself; this fires the text payload.
-    let onSendText: (String) async -> Void
+    let onSendText: (String) async -> Bool
+    /// Host-side work can begin before a tile exists (security-scoped copy,
+    /// image processing, route resolution). Every button and ⌘Return fails
+    /// closed during that interval.
+    var attachmentPreparationInProgress: Bool = false
     /// Forward the STT Result from a spoken turn (host routes success/failure +
     /// pending-retry refresh — same contract as ContentView's mic footer).
     let onVoiceResult: (Result<String, AppError>) async -> Void
@@ -89,6 +93,7 @@ struct iOSMessageComposerBar: View {
     /// the Transcribing banner so a hung STT round-trip is never a silent,
     /// inescapable spinner. Reset whenever the capture phase changes.
     @State private var showSlowTranscribeHint = false
+    @State private var sendSubmissionInProgress = false
 
     private var trimmedDraft: String {
         draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -124,7 +129,12 @@ struct iOSMessageComposerBar: View {
     /// make the FIRST typed turn impossible — the headline regression caught in
     /// review.)
     private var isSendDisabled: Bool {
-        viewModel?.isAwaitingReply == true || hasLoadingAttachment || hasBlockingUpload || captureActive
+        viewModel?.isAwaitingReply == true
+            || hasLoadingAttachment
+            || hasBlockingUpload
+            || attachmentPreparationInProgress
+            || sendSubmissionInProgress
+            || captureActive
     }
 
     /// True while the in-app mic is capturing or transcribing (Part 1f). Folded
@@ -175,6 +185,7 @@ struct iOSMessageComposerBar: View {
                 onRetryUpload: onRetryUpload,
                 onSetUp: onSetUpAttachment
             )
+            .allowsHitTesting(!sendSubmissionInProgress)
 
             if case .error(let error) = recorder.state {
                 Text(error.errorDescription ?? String(localized: "Something went wrong."))  // xcstrings
@@ -343,6 +354,7 @@ struct iOSMessageComposerBar: View {
             onSetUpFileTransfer: onSetUpFileTransfer,
             fileTransferAvailable: fileTransferAvailable
         )
+        .disabled(sendSubmissionInProgress)
     }
 
     /// The SUBDUED secondary Send — shown only when attachments are staged with
@@ -646,12 +658,19 @@ struct iOSMessageComposerBar: View {
 
     private func sendTapped() {
         let text = trimmedDraft
+        let submittedDraft = draft
         // An attachment-only turn (empty caption) is valid; only block when
         // there is nothing to send or a turn/load is in flight. The host reads
         // the staged `attachments` binding itself and clears it after send.
         guard hasSendableContent, !isSendDisabled else { return }
-        draft = ""
-        Task { await onSendText(text) }
+        sendSubmissionInProgress = true
+        Task {
+            let accepted = await onSendText(text)
+            if accepted, draft == submittedDraft {
+                draft = ""
+            }
+            sendSubmissionInProgress = false
+        }
     }
 
     // MARK: - Mic (behaviour lifted from ContentView.micButtonTapped)

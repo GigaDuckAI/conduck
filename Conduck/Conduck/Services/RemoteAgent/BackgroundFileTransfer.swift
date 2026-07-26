@@ -46,6 +46,58 @@
 
 import Foundation
 
+/// Thread-safe bridge from Swift task cancellation to the URLSession task that
+/// is created later on the transfer queue. Kept internal as the focused
+/// lifecycle test seam.
+///
+/// The relay deliberately has NO access to the transfer continuation or the
+/// `inFlight` registry. Cancellation can only cancel the underlying task; the
+/// URLSession delegate's terminal callback remains the sole owner of registry
+/// removal + continuation resume.
+nonisolated final class BackgroundTransferCancellationRelay: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancellationAction: (@Sendable () -> Void)?
+    private var cancelled = false
+    private var terminalClaimed = false
+
+    /// Install the underlying-task cancellation. Returns false when the parent
+    /// task was already cancelled, in which case the caller must not start I/O.
+    func install(_ action: @escaping @Sendable () -> Void) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !cancelled else { return false }
+        cancellationAction = action
+        return true
+    }
+
+    func cancel() {
+        let action: (@Sendable () -> Void)?
+        lock.lock()
+        if cancelled {
+            action = nil
+        } else {
+            cancelled = true
+            action = cancellationAction
+            cancellationAction = nil
+        }
+        lock.unlock()
+        action?()
+    }
+
+    /// Claim the delegate-owned terminal completion exactly once. The
+    /// `inFlight` removal already makes duplicate URLSession callbacks harmless;
+    /// this second, focused gate locks the continuation contract independently
+    /// and gives lifecycle tests a deterministic seam.
+    func claimTerminalCompletion() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !terminalClaimed else { return false }
+        terminalClaimed = true
+        cancellationAction = nil
+        return true
+    }
+}
+
 /// Background URLSession driver for file-server uploads/downloads + lightweight
 /// probe/delete helpers.
 final class BackgroundFileTransfer: NSObject {
@@ -81,14 +133,19 @@ final class BackgroundFileTransfer: NSObject {
         let kind: Kind
         let snapshot: SettingsManager.FileTransferSnapshot
         let onProgress: (@Sendable (Double) -> Void)?
+        /// Upload-only cancellation/terminal gate. Downloads do not currently
+        /// expose parent-task cancellation through this driver.
+        let cancellation: BackgroundTransferCancellationRelay?
         /// Set by `didFinishDownloadingTo` once the body is moved to a temp URL.
         var downloadedURL: URL?
         init(kind: Kind,
              snapshot: SettingsManager.FileTransferSnapshot,
-             onProgress: (@Sendable (Double) -> Void)?) {
+             onProgress: (@Sendable (Double) -> Void)?,
+             cancellation: BackgroundTransferCancellationRelay? = nil) {
             self.kind = kind
             self.snapshot = snapshot
             self.onProgress = onProgress
+            self.cancellation = cancellation
         }
     }
 
@@ -173,6 +230,8 @@ final class BackgroundFileTransfer: NSObject {
 
         do {
             try await enqueueUpload(request: request, metadata: metadata, localURL: localURL, snapshot: snapshot, onProgress: onProgress)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch is NestedPutParentMissing {
             // WebDAV create-parent handshake, second half (POLICY carve-out — see
             // header): the nested PUT 409'd despite the best-effort MKCOL above
@@ -187,6 +246,8 @@ final class BackgroundFileTransfer: NSObject {
             await Self.ensureParentCollection(forStoredKey: storedKey, snapshot: snapshot)
             do {
                 try await enqueueUpload(request: request, metadata: metadata, localURL: localURL, snapshot: snapshot, onProgress: onProgress)
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 // A second sentinel lands here too: `mapTransferError` maps it
                 // to the fallback (it is neither AppError nor URLError), so a
@@ -229,16 +290,45 @@ final class BackgroundFileTransfer: NSObject {
                                localURL: URL,
                                snapshot: SettingsManager.FileTransferSnapshot,
                                onProgress: @escaping @Sendable (Double) -> Void) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            queue.async {
-                let task = self.session.uploadTask(with: request, fromFile: localURL)
-                task.taskDescription = metadata.encoded()
-                self.inFlight[task.taskIdentifier] = InFlightTransfer(
-                    kind: .upload(continuation),
-                    snapshot: snapshot,
-                    onProgress: onProgress)
-                task.resume()
+        let cancellation = BackgroundTransferCancellationRelay()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            do {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    queue.async {
+                        let task = self.session.uploadTask(with: request, fromFile: localURL)
+                        task.taskDescription = metadata.encoded()
+
+                        let installed = cancellation.install { [weak task] in
+                            task?.cancel()
+                        }
+                        guard installed else {
+                            task.cancel()
+                            continuation.resume(throwing: CancellationError())
+                            return
+                        }
+
+                        self.inFlight[task.taskIdentifier] = InFlightTransfer(
+                            kind: .upload(continuation),
+                            snapshot: snapshot,
+                            onProgress: onProgress,
+                            cancellation: cancellation)
+                        task.resume()
+                    }
+                }
+            } catch {
+                // A parent-task cancellation completes through URLSession as
+                // URLError.cancelled. Preserve CancellationError for that
+                // caller-owned path while leaving an unrelated `.cancelled`
+                // transport verdict available for the cert-mismatch mapper.
+                try Task.checkCancellation()
+                throw error
             }
+            // Cancellation may win immediately after the delegate resumed a
+            // nominal success; make the parent task's verdict authoritative.
+            try Task.checkCancellation()
+        } onCancel: {
+            cancellation.cancel()
         }
     }
 
@@ -608,6 +698,7 @@ extension BackgroundFileTransfer: URLSessionTaskDelegate {
             // `BackgroundRemoteAgent`); `decoded(from:)` stays available for a
             // future V1.1 recovery surface (e.g. the PROPFIND browser).
             guard let entry = self.inFlight.removeValue(forKey: task.taskIdentifier) else { return }
+            guard entry.cancellation?.claimTerminalCompletion() ?? true else { return }
 
             // HTTP-status mapping for completed-but-non-2xx responses. `isUpload`
             // routes the 409 create-parent-handshake sentinel to uploads only —

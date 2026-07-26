@@ -12,6 +12,7 @@ import XCTest
 @testable import Conduck
 
 final class ConverseWireTests: XCTestCase {
+    private static let ownedFileLaneID = String(repeating: "a", count: 64)
 
     // MARK: - Request encoding (backend-agnostic, full history)
 
@@ -524,10 +525,14 @@ final class ConverseWireTests: XCTestCase {
         let records: [MessageRecord] = [
             MessageRecord(id: msgID, role: "user", text: "here is the file",
                           createdAt: Date(), sourceDevice: "phone",
+                          fileTransferLaneID: Self.ownedFileLaneID,
                           attachments: [serverAttachment]),
         ]
 
-        let turns = ConverseRequest.priorTurns(from: records)
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dispatchFileLaneID: Self.ownedFileLaneID
+        )
         let data = try JSONEncoder().encode(ConverseRequest(messages: turns, stream: false))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let wire = try XCTUnwrap(json["messages"] as? [[String: Any]])
@@ -538,6 +543,84 @@ final class ConverseWireTests: XCTestCase {
         XCTAssertTrue(content.contains("report.pdf"))
         XCTAssertTrue(content.contains("a1b2c3d4__report.pdf"),
                       "The prior-turn server ref's stored key must be retained in context.")
+    }
+
+    func testPriorServerFileMismatchedLaneNeverExposesStoredKey() throws {
+        let secretKey = "lane-a-secret__report.pdf"
+        let attachment = AttachmentRecord(
+            id: UUID(),
+            mimeType: "application/pdf",
+            filename: "report.pdf",
+            thumbnailData: nil,
+            extractedText: nil,
+            width: 0,
+            height: 0,
+            byteSize: 0,
+            sequence: 0,
+            createdAt: Date(),
+            isServerReference: true,
+            storedKey: secretKey
+        )
+        let records = [
+            MessageRecord(
+                id: UUID(),
+                role: "user",
+                text: "here is the file",
+                createdAt: Date(),
+                sourceDevice: "phone",
+                fileTransferLaneID: Self.ownedFileLaneID,
+                attachments: [attachment]
+            )
+        ]
+
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dispatchFileLaneID: String(repeating: "b", count: 64)
+        )
+        let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
+
+        XCTAssertFalse(content.contains(secretKey),
+                       "a lane-A storedKey must never ride a lane-B request")
+        XCTAssertTrue(content.contains("not available in the current file-transfer lane"),
+                      "the model gets an honest file-unavailable note instead")
+    }
+
+    func testPriorServerFileLegacyNilOwnerNeverExposesStoredKey() throws {
+        let secretKey = "legacy-secret__report.pdf"
+        let attachment = AttachmentRecord(
+            id: UUID(),
+            mimeType: "application/pdf",
+            filename: "report.pdf",
+            thumbnailData: nil,
+            extractedText: nil,
+            width: 0,
+            height: 0,
+            byteSize: 0,
+            sequence: 0,
+            createdAt: Date(),
+            isServerReference: true,
+            storedKey: secretKey
+        )
+        let records = [
+            MessageRecord(
+                id: UUID(),
+                role: "user",
+                text: "legacy file",
+                createdAt: Date(),
+                sourceDevice: "phone",
+                attachments: [attachment]
+            )
+        ]
+
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dispatchFileLaneID: Self.ownedFileLaneID
+        )
+        let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
+
+        XCTAssertFalse(content.contains(secretKey),
+                       "a legacy ownerless storedKey is unprovable and must remain private")
+        XCTAssertTrue(content.contains("not available in the current file-transfer lane"))
     }
 
     /// A turn with NO server-file attachments is unchanged — the server-file
@@ -763,11 +846,17 @@ final class ConverseWireTests: XCTestCase {
             ids.append(id)
             records.append(MessageRecord(
                 id: id, role: "user", text: "turn-\(i)", createdAt: Date(), sourceDevice: "phone",
+                fileTransferLaneID: Self.ownedFileLaneID,
                 attachments: [Self.dualImageAttachment(storedKey: "conv/key\(i)__image\(i).heic")]))
             uris[id] = ["data:image/jpeg;base64,IMG\(i)"]
         }
 
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris, folder: "conv")
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dataURIsByMessageID: uris,
+            folder: "conv",
+            dispatchFileLaneID: Self.ownedFileLaneID
+        )
         let wire = try Self.encodeWire(turns)
 
         // 5 image turns, window 3 → exactly 3 inline image_url parts remain.
@@ -969,6 +1058,7 @@ final class ConverseWireTests: XCTestCase {
         let mixedID = UUID()
         records.append(MessageRecord(
             id: mixedID, role: "user", text: "mixed-expired", createdAt: Date(), sourceDevice: "phone",
+            fileTransferLaneID: Self.ownedFileLaneID,
             attachments: [
                 Self.dualImageAttachment(storedKey: "conv/mixedkey__image.heic"),
                 Self.inlineOnlyImageAttachment()
@@ -979,11 +1069,17 @@ final class ConverseWireTests: XCTestCase {
             let id = UUID()
             records.append(MessageRecord(
                 id: id, role: "user", text: "newer-\(i)", createdAt: Date(), sourceDevice: "phone",
+                fileTransferLaneID: Self.ownedFileLaneID,
                 attachments: [Self.dualImageAttachment(storedKey: "conv/k\(i)__image.heic")]))
             uris[id] = ["data:image/jpeg;base64,NEWER\(i)"]
         }
 
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris, folder: "conv")
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dataURIsByMessageID: uris,
+            folder: "conv",
+            dispatchFileLaneID: Self.ownedFileLaneID
+        )
         let wire = try Self.encodeWire(turns)
 
         // The mixed turn (wire[0]) expired to composed `.text`: keyed ref + note.
@@ -1016,12 +1112,18 @@ final class ConverseWireTests: XCTestCase {
             let id = UUID()
             records.append(MessageRecord(
                 id: id, role: "user", text: "keyed-\(i)", createdAt: Date(), sourceDevice: "phone",
+                fileTransferLaneID: Self.ownedFileLaneID,
                 attachments: [Self.dualImageAttachment(storedKey: "conv/e\(i)__image.heic")]))
             uris[id] = ["data:image/jpeg;base64,EXT\(i)"]
         }
 
         let turns = ConverseRequest.priorTurns(
-            from: records, dataURIsByMessageID: uris, folder: "conv", imagePolicy: .extended)
+            from: records,
+            dataURIsByMessageID: uris,
+            folder: "conv",
+            imagePolicy: .extended,
+            dispatchFileLaneID: Self.ownedFileLaneID
+        )
         let wire = try Self.encodeWire(turns)
         let inlineImageCount = wire.compactMap { $0["content"] as? [[String: Any]] }
             .flatMap { $0 }
@@ -1160,10 +1262,15 @@ final class ConverseWireTests: XCTestCase {
         let records = [
             MessageRecord(id: UUID(), role: "user", text: "look at this chart",
                           createdAt: Date(), sourceDevice: "phone",
+                          fileTransferLaneID: Self.ownedFileLaneID,
                           attachments: [Self.dualImageAttachment(storedKey: "conv/feed1234__image.heic")]),
         ]
         // NO map entry — the caller never resolved this turn's image bytes.
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:])
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dataURIsByMessageID: [:],
+            dispatchFileLaneID: Self.ownedFileLaneID
+        )
         let wire = try Self.encodeWire(turns)
 
         XCTAssertNil(wire[0]["content"] as? [[String: Any]],
@@ -1176,6 +1283,33 @@ final class ConverseWireTests: XCTestCase {
                       "keyed floor turns reuse the spliceImageTextRefs imperative wording")
         XCTAssertTrue(content.contains("- image.heic (saved as conv/feed1234__image.heic)"),
                       "the disk ref must name the display filename + the full storedKey path")
+    }
+
+    func testUnresolvedKeyedImageMismatchedLaneHidesStoredKey() throws {
+        let secretKey = "conv/lane-a-secret__image.heic"
+        let records = [
+            MessageRecord(
+                id: UUID(),
+                role: "user",
+                text: "look at this chart",
+                createdAt: Date(),
+                sourceDevice: "phone",
+                fileTransferLaneID: Self.ownedFileLaneID,
+                attachments: [Self.dualImageAttachment(storedKey: secretKey)]
+            )
+        ]
+
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dataURIsByMessageID: [:],
+            dispatchFileLaneID: String(repeating: "b", count: 64)
+        )
+        let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
+
+        XCTAssertFalse(content.contains(secretKey),
+                       "an unresolved lane-A image must not reveal a disk path to lane B")
+        XCTAssertTrue(content.contains("are not included in this request"),
+                      "the image degrades honestly when its storedKey is not owned by this lane")
     }
 
     /// An UNRESOLVED image turn with NO storedKey gets the honest unavailable
@@ -1329,22 +1463,55 @@ final class ConverseWireTests: XCTestCase {
     /// `isServerReference == true`) on a turn not in the map is NOT a user-side
     /// image and must NOT trigger the floor — the turn rides as a `.text` bare
     /// string (its "working directory" server-file ref line is the EXISTING
-    /// `spliceServerFileRefs` path, unchanged by the floor).
+    /// `spliceServerFileRefs` path, owned by the reply's exact output-scan lane).
     func testServerReferenceImageDoesNotTriggerFloor() throws {
+        let storedKey = "conv/out1234__chart.png"
         let records = [
             MessageRecord(id: UUID(), role: "agent", text: "here is the chart I generated",
                           createdAt: Date(), sourceDevice: "phone",
-                          attachments: [Self.serverReferenceImageAttachment(storedKey: "conv/out1234__chart.png")]),
+                          outputScanLaneID: Self.ownedFileLaneID,
+                          attachments: [Self.serverReferenceImageAttachment(storedKey: storedKey)]),
         ]
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:])
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dataURIsByMessageID: [:],
+            dispatchFileLaneID: Self.ownedFileLaneID
+        )
         let wire = try Self.encodeWire(turns)
         let content = try XCTUnwrap(wire[0]["content"] as? String,
                                     "a server-reference image turn stays a bare string")
         XCTAssertTrue(content.contains("here is the chart I generated"), "the base text rides unchanged")
+        XCTAssertTrue(content.contains(storedKey),
+                      "an agent output uses outputScanLaneID ownership, not the user-input field")
         XCTAssertFalse(content.contains("are not included in this request"),
                        "the unavailable note must NOT fire for a server-reference image")
         XCTAssertFalse(content.contains("no longer attached inline"),
                        "the keyed-floor disk-ref splice must NOT fire for a server-reference image")
+    }
+
+    func testAgentOutputMismatchedLaneNeverExposesStoredKey() throws {
+        let storedKey = "conv/lane-a-secret__chart.png"
+        let records = [
+            MessageRecord(
+                id: UUID(),
+                role: "agent",
+                text: "here is the chart",
+                createdAt: Date(),
+                sourceDevice: "phone",
+                outputScanLaneID: Self.ownedFileLaneID,
+                attachments: [Self.serverReferenceImageAttachment(storedKey: storedKey)]
+            )
+        ]
+
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dispatchFileLaneID: String(repeating: "b", count: 64)
+        )
+        let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
+
+        XCTAssertFalse(content.contains(storedKey),
+                       "a reply-side storedKey must remain pinned to its output-scan lane")
+        XCTAssertTrue(content.contains("not available in the current file-transfer lane"))
     }
 
     /// Direct `spliceImageUnavailableNote`: count `<= 0` → base unchanged; empty
@@ -1741,9 +1908,14 @@ final class ConverseWireTests: XCTestCase {
             createdAt: Date(), isServerReference: false, storedKey: "conv/dead1234__notes.md")
         let records: [MessageRecord] = [
             MessageRecord(id: msgID, role: "user", text: "see my notes",
-                          createdAt: Date(), sourceDevice: "phone", attachments: [dualTextAtt]),
+                          createdAt: Date(), sourceDevice: "phone",
+                          fileTransferLaneID: Self.ownedFileLaneID,
+                          attachments: [dualTextAtt]),
         ]
-        let turns = ConverseRequest.priorTurns(from: records)
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dispatchFileLaneID: Self.ownedFileLaneID
+        )
         let wire = try Self.encodeWire(turns)
         let content = try XCTUnwrap(wire[0]["content"] as? String,
                                     "a prior dual-text turn (no images) stays a bare string")
@@ -1754,6 +1926,46 @@ final class ConverseWireTests: XCTestCase {
                       "a concise disk ref naming the storedKey must be spliced instead")
         XCTAssertTrue(content.contains("working directory"),
                       "the disk-ref reuses the 'in your working directory' wording")
+    }
+
+    func testPriorDualTextMismatchedLaneFallsBackInlineWithoutStoredKey() throws {
+        let secretKey = "conv/lane-a-secret__notes.md"
+        let dualTextAtt = AttachmentRecord(
+            id: UUID(),
+            mimeType: "text/markdown",
+            filename: "notes.md",
+            thumbnailData: nil,
+            extractedText: "SAFE_INLINE_BODY",
+            width: 0,
+            height: 0,
+            byteSize: 16,
+            sequence: 0,
+            createdAt: Date(),
+            isServerReference: false,
+            storedKey: secretKey
+        )
+        let records = [
+            MessageRecord(
+                id: UUID(),
+                role: "user",
+                text: "see my notes",
+                createdAt: Date(),
+                sourceDevice: "phone",
+                fileTransferLaneID: Self.ownedFileLaneID,
+                attachments: [dualTextAtt]
+            )
+        ]
+
+        let turns = ConverseRequest.priorTurns(
+            from: records,
+            dispatchFileLaneID: String(repeating: "b", count: 64)
+        )
+        let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
+
+        XCTAssertTrue(content.contains("SAFE_INLINE_BODY"),
+                      "dual text remains usable through its safe inline copy")
+        XCTAssertFalse(content.contains(secretKey),
+                       "the foreign-lane disk path must never be re-spliced")
     }
 
     /// A PRIOR text attachment WITHOUT a storedKey (server-less original) replays

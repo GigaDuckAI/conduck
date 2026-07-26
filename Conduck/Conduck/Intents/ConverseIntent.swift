@@ -322,6 +322,12 @@ struct ConverseIntent: AppIntent {
         let conversationID = routed.conversationID
         let snapshot = routed.snapshot
         let token = routed.token
+        // Capture the READY file lane once for this entire turn. History
+        // references, the per-turn file instruction, and reply output scanning
+        // must all describe the same physical lane; the background sender
+        // revalidates this immutable snapshot immediately before enqueue.
+        let dispatchFileLane = await SettingsManager.shared
+            .fileTransferReadySnapshot(for: routed.ref)
 
         // Append the user turn FIRST so the store is authoritative even if the
         // reply never lands. `sourceDevice` is the local device. When a
@@ -371,7 +377,8 @@ struct ConverseIntent: AppIntent {
             conversationID: conversationID,
             excludingUserMessageID: userTurn.id,
             excludingNewUserText: userText,
-            boundRef: routed.ref
+            boundRef: routed.ref,
+            dispatchFileLaneID: dispatchFileLane?.durableLaneID
         )
 
         // Converse over the background session. FIRE-AND-FORGET: dispatch over
@@ -395,6 +402,8 @@ struct ConverseIntent: AppIntent {
                 priorTurns: priorTurns,
                 newUserText: userText,
                 newUserImageDataURIs: imageDataURIs,
+                inputFileTransferSnapshot: dispatchFileLane,
+                fileTransferSnapshot: dispatchFileLane,
                 conversationID: conversationID,
                 // EXACT per-message status flips in the delegate (a
                 // conversation-wide flip would alias a concurrent in-app

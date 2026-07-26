@@ -85,6 +85,11 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
     /// TOLERANT — same `decodeIfPresent` rationale as `shareEnvelopeID`.
     let requestHadHistoryImages: Bool?
 
+    /// Stable one-way identity of the exact READY file-transfer lane captured
+    /// for this dispatch. Credentials and URLs never enter task metadata.
+    /// Optional for backward compatibility with tasks enqueued before v7.
+    let fileTransferLaneID: String?
+
     /// Explicit memberwise init with `shareEnvelopeID` / `userMessageID` /
     /// `stampsActiveConversation` / `requestHadHistoryImages` DEFAULTED to
     /// `nil` so the existing construction sites (CarPlay uploader, the
@@ -99,7 +104,8 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
         shareEnvelopeID: UUID? = nil,
         userMessageID: UUID? = nil,
         stampsActiveConversation: Bool? = nil,
-        requestHadHistoryImages: Bool? = nil
+        requestHadHistoryImages: Bool? = nil,
+        fileTransferLaneID: String? = nil
     ) {
         self.bodyPath = bodyPath
         self.conversationID = conversationID
@@ -109,6 +115,7 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
         self.userMessageID = userMessageID
         self.stampsActiveConversation = stampsActiveConversation
         self.requestHadHistoryImages = requestHadHistoryImages
+        self.fileTransferLaneID = fileTransferLaneID
     }
 
     /// JSON-encode + UTF-8 stringify for attachment to

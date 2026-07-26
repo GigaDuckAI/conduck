@@ -29,6 +29,23 @@ final class SettingsManagerFileTransferTests: XCTestCase {
     // A custom ref keeps test keys isolated from any built-in backend state.
     private let ref = RemoteAgentRef.custom(UUID())
 
+    private func syntheticSnapshot(
+        url: String = "https://files.example.test/dav",
+        credential: String = "0123456789abcdef0123456789abcdef",
+        pin: String? = nil,
+        available: Bool = true,
+        folderCapable: Bool = true
+    ) -> SettingsManager.FileTransferSnapshot {
+        SettingsManager.FileTransferSnapshot(
+            baseURL: URL(string: url)!,
+            username: Constants.fileServerUsername,
+            credential: credential,
+            certFingerprintHex: pin,
+            available: available,
+            folderCapable: folderCapable
+        )
+    }
+
     override func setUp() {
         super.setUp()
         manager = SettingsManager.shared
@@ -88,6 +105,46 @@ final class SettingsManagerFileTransferTests: XCTestCase {
         manager.setFileServerURL(nil, for: ref)
         XCTAssertNil(manager.fileTransferSnapshot(for: ref),
                      "snapshot must be nil when the file-server URL is missing")
+    }
+
+    // MARK: - Durable lane identity (pure, no Keychain)
+
+    func testDurableLaneIDKnownVectorAndShape() {
+        let laneID = syntheticSnapshot().durableLaneID
+        XCTAssertEqual(
+            laneID,
+            "01b651beac921e838c7ca35be58cf68847149ae9500f1545dce0ab0f5890a44b"
+        )
+        XCTAssertNotNil(
+            laneID.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression),
+            "the persisted identity is lowercase SHA-256 hex"
+        )
+    }
+
+    func testDurableLaneIDIgnoresPinAndMutableVerdicts() {
+        let baseline = syntheticSnapshot().durableLaneID
+        XCTAssertEqual(
+            baseline,
+            syntheticSnapshot(
+                pin: String(repeating: "f", count: 64),
+                available: false,
+                folderCapable: false
+            ).durableLaneID
+        )
+    }
+
+    func testDurableLaneIDChangesWithURLOrCredential() {
+        let baseline = syntheticSnapshot().durableLaneID
+        XCTAssertNotEqual(
+            baseline,
+            syntheticSnapshot(url: "https://other.example.test/dav").durableLaneID
+        )
+        XCTAssertNotEqual(
+            baseline,
+            syntheticSnapshot(
+                credential: "fedcba9876543210fedcba9876543210"
+            ).durableLaneID
+        )
     }
 
     // MARK: - Credential Keychain round-trip (signing-gated)

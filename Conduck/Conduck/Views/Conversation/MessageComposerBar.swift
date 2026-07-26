@@ -43,10 +43,11 @@ private struct MacPendingLargeFile: Identifiable, Equatable {
     let mimeType: String
     let byteSize: Int
     /// The gateway this file would route to (drives `.serverFile` vs
-    /// `.needsSetup` once the user confirms). The server-presence flag is
-    /// deliberately NOT cached here — setup can complete while the alert is up
-    /// (remote sync), so the confirm path re-resolves the snapshot fresh.
+    /// `.needsSetup` once the user confirms). A ready snapshot is captured to
+    /// pin the exact physical lane; only an initially-nil snapshot may resolve
+    /// a newly configured lane while the alert is open.
     let ref: RemoteAgentRef
+    let snapshot: SettingsManager.FileTransferSnapshot?
 }
 
 struct MessageComposerBar: View {
@@ -55,7 +56,7 @@ struct MessageComposerBar: View {
     /// first conversation is minted (composer is always mounted on the window).
     let viewModel: ConversationDetailViewModel?
     /// Mint-on-first-turn send path (host wires this to the coordinator). Lets the composer exist before any conversation does.
-    let onSendText: (String, [PendingAttachment]) async -> Void
+    let onSendText: (ComposerTurnDispatch) async -> Bool
     /// Host-owned in-app recorder (`MainWindowView.windowRecorder`). The mic
     /// button drives it; the same orchestrator the iOS composer uses.
     var recorder: InAppAudioRecorder
@@ -77,6 +78,10 @@ struct MessageComposerBar: View {
     /// file-transfer resolution to the gateway the next mint binds to, not the
     /// compile-time default.
     let selectedRef: RemoteAgentRef
+    /// VM-less host-owned lock for the title-bar gateway picker. Raised while
+    /// attachment work owns the selected gateway; active conversations omit it
+    /// because their gateway is already permanently bound.
+    var newChatGatewaySelectionLocked: Binding<Bool>? = nil
     /// "Type Instead" bridge (⌘⇧2 Screenshot & Ask → typed composer): the host
     /// (`MainWindowView`) parks a screenshot's PNG bytes here; the composer drains
     /// them into `stageImage` (process + stage + eager-upload, for REVIEW — nothing
@@ -115,6 +120,11 @@ struct MessageComposerBar: View {
     /// In-flight eager-upload tasks keyed by the staged item's id (X-cancel +
     /// Retry). PRIVACY: keyed by UUID only — never holds the file URL / storedKey.
     @State private var uploadTasks: [UUID: Task<Void, Never>] = [:]
+    @State private var preparationTasks: [UUID: Task<Void, Never>] = [:]
+    /// NSItemProvider/PhotosPicker loads expose cancellation through `Progress`
+    /// rather than Swift `Task`; retain them so composer teardown can cancel
+    /// pre-tile work instead of allowing a late callback to restage content.
+    @State private var providerLoadProgresses: [UUID: Progress] = [:]
     /// Stable app-temp staging files per server item (copied from the picked /
     /// dropped url so the async upload + send both read a plain file). Cleaned up
     /// on remove / after a turn clears.
@@ -123,13 +133,24 @@ struct MessageComposerBar: View {
     /// Retry re-uploads under the SAME key — overwriting the failed partial blob
     /// rather than orphaning it under a fresh key. In-memory only.
     @State private var serverStoredKeys: [UUID: String] = [:]
-    /// The gateway each `.needsSetup` tile was STAGED for (keyed by item id).
-    /// Promotion only fires when this matches the promote-time ref — staged tiles
-    /// survive context switches, so without the stamp a tile staged for an
-    /// unconfigured gateway A would silently upload to whatever configured
-    /// gateway B the user switched to. The VM-less new-chat composer RE-STAMPS on
-    /// a gateway-picker change instead (the next turn definitionally binds there).
-    @State private var needsSetupRefs: [UUID: RemoteAgentRef] = [:]
+    /// Covers async importer/drop/image work before a tile has appeared.
+    @State private var activeGatewayStages = 0
+    /// Holds the picker lock across clear → host conversation mint/bind.
+    @State private var attachmentDispatchInProgress = false
+    /// A disappearing composer cannot tear down sealed attachment ownership
+    /// until local acceptance resolves. Shared state-machine semantics with the
+    /// iOS/iPadOS coordinator.
+    @State private var deferredAttachmentTeardown = ComposerDeferredTeardown()
+
+    private var shouldLockNewChatGateway: Bool {
+        viewModel == nil
+            && (showingPhotosPicker
+                || showingFileImporter
+                || activeGatewayStages > 0
+                || attachmentDispatchInProgress
+                || !attachments.isEmpty
+                || !pendingLargeFiles.isEmpty)
+    }
     private var isRecording: Bool {
         if case .recording = recorder.state { return true }
         return false
@@ -180,6 +201,9 @@ struct MessageComposerBar: View {
             || attachments.hasFailedUpload    // is still climbing / failed (Retry first)
             || attachments.hasNeedsSetupItem  // a binary picked with no file-server —
                                               // blocks until setup or removal
+            || activeGatewayStages > 0
+            || !preparationTasks.isEmpty
+            || attachmentDispatchInProgress
             || captureActive                  // Part 1f: mic now POPULATES the field —
     }                                         // block Send + onSubmit during capture
 
@@ -200,6 +224,7 @@ struct MessageComposerBar: View {
         .animation(.easeInOut(duration: 0.18), value: isDropTargeted)
         .onAppear {
             fieldFocused = true
+            newChatGatewaySelectionLocked?.wrappedValue = shouldLockNewChatGateway
         }
         // "Type Instead" bridge: drain a screenshot parked by the host into the
         // composer's staging (process + stage + eager-upload, for REVIEW — nothing
@@ -301,17 +326,16 @@ struct MessageComposerBar: View {
         // The user can switch the NEW-chat gateway picker while the composer is
         // VM-less — re-resolve so the menu's discovery item, the setup sheet's
         // scope, and the binary route all track the gateway the next turn will
-        // actually bind to. VM-less tiles RE-STAMP to the new gateway (the next
-        // turn definitionally binds there) and then promote if it has a server;
-        // a conversation-bound composer never re-stamps.
+        // actually bind to. The host renders that picker read-only while
+        // attachment work exists, so an existing tile is never silently moved.
         .onChange(of: selectedRef) {
             Task {
                 await refreshFileTransfer()
-                if viewModel == nil {
-                    restampNeedsSetupTiles(to: effectiveRef)
-                }
                 await promoteNeedsSetupTiles()
             }
+        }
+        .onChange(of: shouldLockNewChatGateway) { _, locked in
+            newChatGatewaySelectionLocked?.wrappedValue = locked
         }
         // Teardown: this bar's mount can be SWAPPED OUT wholesale (the VM-less
         // new-chat placeholder ↔ the conversation-bound mount in
@@ -319,7 +343,16 @@ struct MessageComposerBar: View {
         // so without an explicit clear the staging temps + any in-flight uploads
         // of a swapped-away composer would silently leak.
         .onDisappear {
-            clearAttachments()
+            // Defer every in-flight teardown. This may be the VM-less bar's
+            // natural mint OR user navigation/window close; successful local
+            // acceptance first clears sealed ids with handed-off semantics,
+            // while rejection leaves them for discard at dispatch end.
+            if deferredAttachmentTeardown.request(
+                whileDispatching: attachmentDispatchInProgress
+            ) {
+                clearDiscardedAttachments()
+            }
+            newChatGatewaySelectionLocked?.wrappedValue = false
         }
     }
 
@@ -332,9 +365,16 @@ struct MessageComposerBar: View {
             AttachmentPreviewStrip(
                 attachments: attachments,
                 onRemove: { id in removeAttachment(id) },
-                onRetryUpload: { id in retryServerUpload(id: id) },
-                onSetUp: { _ in showingSetupGuide = true }
+                onRetryUpload: { id in
+                    guard !attachmentDispatchInProgress else { return }
+                    retryServerUpload(id: id)
+                },
+                onSetUp: { _ in
+                    guard !attachmentDispatchInProgress else { return }
+                    showingSetupGuide = true
+                }
             )
+            .allowsHitTesting(!attachmentDispatchInProgress)
 
             errorBanner
 
@@ -453,10 +493,19 @@ struct MessageComposerBar: View {
     private var controlRow: some View {
         HStack(spacing: 10) {
             AttachmentMenu(
-                onPickLibrary: { showingPhotosPicker = true },
+                onPickLibrary: {
+                    guard !attachmentDispatchInProgress else { return }
+                    showingPhotosPicker = true
+                },
                 onTakePhoto: { },   // no camera on macOS — item is hidden
-                onPickFiles: { showingFileImporter = true },
-                onSetUpFileTransfer: { showingSetupGuide = true },
+                onPickFiles: {
+                    guard !attachmentDispatchInProgress else { return }
+                    showingFileImporter = true
+                },
+                onSetUpFileTransfer: {
+                    guard !attachmentDispatchInProgress else { return }
+                    showingSetupGuide = true
+                },
                 fileTransferAvailable: fileTransferAvailable,
                 // Bare glyph sits BELOW the trailing discs' point size: a
                 // `.circle.fill` renders a disc ~3-4pt smaller than its nominal
@@ -464,6 +513,7 @@ struct MessageComposerBar: View {
                 iconPointSize: 20,
                 iconFrame: 32
             )
+            .disabled(attachmentDispatchInProgress)
 
             Spacer(minLength: 8)
 
@@ -497,26 +547,40 @@ struct MessageComposerBar: View {
             // Image data (incl. Safari file-promise drags).
             if provider.canLoadObject(ofClass: NSImage.self) {
                 handled = true
-                provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
-                    guard let data else { return }
+                let ref = effectiveRef
+                let preparationID = UUID()
+                activeGatewayStages += 1
+                let progress = provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
                     Task { @MainActor in
+                        defer {
+                            activeGatewayStages -= 1
+                            providerLoadProgresses[preparationID] = nil
+                        }
+                        guard providerLoadProgresses[preparationID] != nil else { return }
+                        guard let data else { return }
                         // DUAL route (inline vision + editable file copy) via
                         // `stageImage`; falls back to inline-only when no
                         // file-server is configured.
-                        await stageImage(data)
+                        await stageImage(data, ref: ref)
                     }
                 }
+                providerLoadProgresses[preparationID] = progress
             } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
                 handled = true
-                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                    var url: URL?
-                    if let data = item as? Data {
-                        url = URL(dataRepresentation: data, relativeTo: nil)
-                    } else if let u = item as? URL {
-                        url = u
+                let ref = effectiveRef
+                let preparationID = UUID()
+                activeGatewayStages += 1
+                let progress = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                    let resolvedURL = data.flatMap {
+                        URL(dataRepresentation: $0, relativeTo: nil)
                     }
-                    guard let url else { return }
                     Task { @MainActor in
+                        defer {
+                            activeGatewayStages -= 1
+                            providerLoadProgresses[preparationID] = nil
+                        }
+                        guard providerLoadProgresses[preparationID] != nil else { return }
+                        guard let resolvedURL else { return }
                         // ONE classifier for every dropped file — identical to the
                         // "Choose Files…" importer: image → DUAL/inline via
                         // `stageImage`; text/code → planner via `stageTextFile`
@@ -526,9 +590,10 @@ struct MessageComposerBar: View {
                         // unconfigured one (no more silent doomed `.file(url)`
                         // that failed at send with a misleading "couldn't be
                         // read" banner). >100 MB → soft-confirm.
-                        stageServerFiles([url])
+                        stageServerFiles([resolvedURL], ref: ref)
                     }
                 }
+                providerLoadProgresses[preparationID] = progress
             }
         }
         return handled
@@ -576,12 +641,14 @@ struct MessageComposerBar: View {
 
     private func stagePickerSelection(_ items: [PhotosPickerItem]) {
         guard !items.isEmpty else { return }
+        let ref = effectiveRef
         for item in items {
             let placeholder = StagedAttachment(kind: .loading)
             let id = placeholder.id
             attachments.append(placeholder)
-            _ = item.loadTransferable(type: Data.self) { result in
+            let progress = item.loadTransferable(type: Data.self) { result in
                 Task { @MainActor in
+                    providerLoadProgresses[id] = nil
                     guard let index = attachments.firstIndex(where: { $0.id == id }) else { return }
                     switch result {
                     case .success(let data?):
@@ -589,11 +656,12 @@ struct MessageComposerBar: View {
                         // bytes via the dual-route helper (process + eager upload
                         // when a file-server is configured, else inline-only).
                         attachments.remove(at: index)
-                        await stageImage(data)
+                        await stageImage(data, ref: ref)
                     case .success(nil), .failure: attachments[index].kind = .failed
                     }
                 }
             }
+            providerLoadProgresses[id] = progress
         }
         pickerSelection.removeAll()
     }
@@ -698,17 +766,38 @@ struct MessageComposerBar: View {
 
     private func send() {
         let text = trimmedDraft
-        guard hasSendableContent, !isSendDisabled else { return }
-        // Clear the visible draft immediately (snappy UX); the attachment strip
-        // is cleared only AFTER the bounded join reads the resolved pending set,
-        // so a still-uploading dual tile gets its ~2s window to land its
-        // storedKey. Never blocks: past the deadline the file rides inline-only.
-        draft = ""
+        let submittedDraft = draft
+        let dispatchRef = viewModel == nil ? selectedRef : effectiveRef
+        guard hasSendableContent,
+              !isSendDisabled,
+              attachments.serverOwnershipMatches(dispatchRef) else { return }
+        attachmentDispatchInProgress = true
         Task {
+            defer { finishAttachmentDispatch() }
             await awaitPreferredUploads()
-            let pending = attachments.pendingAttachments
-            clearAttachments()
-            await onSendText(text, pending)
+            guard let dispatch = attachments.makeDispatch(
+                text: text,
+                ref: dispatchRef,
+                conversationID: viewModel?.conversationID,
+                stagingGeneration: UUID()
+            ) else {
+                viewModel?.reportComposerDispatchRejection()
+                return
+            }
+            let accepted = await onSendText(dispatch)
+            if accepted {
+                clearAfterSuccessfulHandoff(dispatch)
+                if draft == submittedDraft {
+                    draft = ""
+                }
+            }
+        }
+    }
+
+    private func finishAttachmentDispatch() {
+        attachmentDispatchInProgress = false
+        if deferredAttachmentTeardown.consume() {
+            clearDiscardedAttachments()
         }
     }
 
@@ -735,23 +824,31 @@ struct MessageComposerBar: View {
     /// (unconfigured gateway), with a >100 MB soft-confirm. Works WITHOUT a VM
     /// (brand-new chat): the binary route still uploads eagerly — under a FLAT
     /// storedKey, since no conversation folder exists yet.
-    private func stageServerFiles(_ urls: [URL]) {
+    private func stageServerFiles(_ urls: [URL], ref stagedRef: RemoteAgentRef? = nil) {
+        guard !attachmentDispatchInProgress else { return }
+        let ref = stagedRef ?? effectiveRef
+        activeGatewayStages += 1
+        let preparationID = UUID()
         // ONE ordered task drains the urls SEQUENTIALLY so tiles append in the
         // user's SELECTION order — per-url concurrent tasks let a fast small file
         // overtake a slow large one (which reordered a multi-file drop — see
         // code-review). The blocking file I/O still hops off-main per url (the UI
         // never beachballs on an iCloud-not-downloaded / external / network
         // volume); the urls are just no longer raced against each other.
-        Task { @MainActor in
+        let task = Task { @MainActor in
+            defer {
+                activeGatewayStages -= 1
+                preparationTasks[preparationID] = nil
+            }
+            let capturedLane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
+            guard !Task.isCancelled else { return }
             for url in urls {
+                guard !Task.isCancelled else { return }
                 // FOLDERS are unstageable (the staging copy would recursively
                 // duplicate the whole tree into tmp; the upload can't send one) —
                 // skip defensively; the importer's type set already excludes them.
                 if isDirectoryURL(url) { continue }
 
-                // Capture the gateway per-url BEFORE the async hop (`effectiveRef`
-                // may move under a queued file).
-                let ref = effectiveRef
                 // Image → DUAL route (inline vision + editable file copy) via
                 // `stageImage`; inline-only fallback when no file-server / no VM.
                 // The inline route NEEDS the bytes in memory (vision processing),
@@ -767,7 +864,8 @@ struct MessageComposerBar: View {
                         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                         return try? Data(contentsOf: url)
                     }.value
-                    if let data { await stageImage(data) }
+                    guard !Task.isCancelled else { return }
+                    if let data { await stageImage(data, ref: ref) }
                     continue
                 }
 
@@ -779,8 +877,9 @@ struct MessageComposerBar: View {
                 // so the file is never read twice.
                 if shouldAttemptTextProbe(url) {
                     let extracted = await Task.detached { try? TextFileExtractor.extract(from: url) }.value
+                    guard !Task.isCancelled else { return }
                     if let extracted {
-                        await stageTextFile(url, extracted: extracted)
+                        await stageTextFile(url, extracted: extracted, ref: ref)
                         continue
                     }
                 }
@@ -790,6 +889,10 @@ struct MessageComposerBar: View {
                 // gateway file-server presence + size. Order preserved: copy →
                 // byteSize check → soft-confirm / finalize.
                 guard let stagingURL = await Task.detached { Self.copyUnderScope(url) }.value else { continue }
+                guard !Task.isCancelled else {
+                    try? FileManager.default.removeItem(at: stagingURL)
+                    return
+                }
                 let originalName = url.lastPathComponent
                 let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
                     ?? "application/octet-stream"
@@ -797,15 +900,17 @@ struct MessageComposerBar: View {
                 if byteSize > Constants.fileTransferSoftConfirmBytes {
                     pendingLargeFiles.append(MacPendingLargeFile(
                         stagingURL: stagingURL, originalName: originalName,
-                        mimeType: mimeType, byteSize: byteSize, ref: ref))
+                        mimeType: mimeType, byteSize: byteSize, ref: ref,
+                        snapshot: capturedLane))
                     continue
                 }
-                let hasServer = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) != nil
                 finalizeBinaryStage(
                     stagingURL: stagingURL, originalName: originalName,
-                    mimeType: mimeType, byteSize: byteSize, hasServer: hasServer, ref: ref)
+                    mimeType: mimeType, byteSize: byteSize,
+                    snapshot: capturedLane, ref: ref)
             }
         }
+        preparationTasks[preparationID] = task
     }
 
     /// Stage a (size-cleared) binary: READY gateway (Test Connection passed) →
@@ -820,31 +925,40 @@ struct MessageComposerBar: View {
         originalName: String,
         mimeType: String,
         byteSize: Int,
-        hasServer: Bool,
+        snapshot: SettingsManager.FileTransferSnapshot?,
         ref: RemoteAgentRef
     ) {
-        guard hasServer else {
+        guard let snapshot else {
             let item = StagedAttachment(kind: .needsSetup(
                 url: stagingURL, originalName: originalName,
-                mimeType: mimeType, byteSize: byteSize))
+                mimeType: mimeType, byteSize: byteSize),
+                serverOwnerRef: ref)
             attachments.append(item)
             serverStagingFiles[item.id] = stagingURL
-            needsSetupRefs[item.id] = ref
             return
         }
         let item = StagedAttachment(
             kind: .serverFile(url: stagingURL, originalName: originalName, mimeType: mimeType),
+            serverOwnerRef: ref,
+            serverOwnerSnapshot: snapshot,
             serverUploadState: .uploading(progress: 0))
         let id = item.id
         attachments.append(item)
         serverStagingFiles[id] = stagingURL
 
-        let vm = viewModel
-        Task { @MainActor in
-            let storedKey = await Self.mintStoredKey(originalName: originalName, vm: vm, ref: ref)
-            serverStoredKeys[id] = storedKey
-            kickUpload(id: id, localURL: stagingURL, storedKey: storedKey, ref: ref)
-        }
+        let storedKey = Self.mintStoredKey(
+            originalName: originalName,
+            vm: viewModel,
+            snapshot: snapshot
+        )
+        serverStoredKeys[id] = storedKey
+        kickUpload(
+            id: id,
+            localURL: stagingURL,
+            storedKey: storedKey,
+            ref: ref,
+            snapshot: snapshot
+        )
     }
 
     /// Mint a storedKey for a server upload: namespaced under the conversation's
@@ -853,13 +967,12 @@ struct MessageComposerBar: View {
     private static func mintStoredKey(
         originalName: String,
         vm: ConversationDetailViewModel?,
-        ref: RemoteAgentRef
-    ) async -> String {
-        let folderCapable = await SettingsManager.shared.getFileServerFolderCapable(for: ref)
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) -> String {
         return FileServerClient.makeStoredKey(
             originalName: originalName,
             uuid: UUID(),
-            folder: (folderCapable && vm != nil) ? vm?.conversationID.uuidString : nil
+            folder: (snapshot.folderCapable && vm != nil) ? vm?.conversationID.uuidString : nil
         )
     }
 
@@ -867,24 +980,41 @@ struct MessageComposerBar: View {
 
     /// Confirm the head soft-confirm: stage it (`.serverFile` / `.needsSetup`) and
     /// advance the queue. Routes to the gateway captured at ENQUEUE (`file.ref`)
-    /// but re-resolves the server READINESS fresh — setup can complete
-    /// while the alert is up (remote sync), and a stale flag would stage a
-    /// misleading `.needsSetup` tile (or a guaranteed-fail upload). A nil VM
-    /// (brand-new chat) still uploads — under a FLAT storedKey.
+    /// and reuses an already-captured physical lane. Only a file queued before
+    /// transfer was ready resolves a newly configured lane at confirmation time.
+    /// A nil VM (brand-new chat) still uploads under a FLAT storedKey.
     private func confirmPendingLargeFile() {
+        guard !attachmentDispatchInProgress else { return }
         guard let file = pendingLargeFiles.first else { return }
         pendingLargeFiles.removeFirst()
-        Task { @MainActor in
-            let hasServer = await SettingsManager.shared.fileTransferReadySnapshot(for: file.ref) != nil
+        let preparationID = UUID()
+        activeGatewayStages += 1
+        let task = Task { @MainActor in
+            defer {
+                activeGatewayStages -= 1
+                preparationTasks[preparationID] = nil
+            }
+            let lane: SettingsManager.FileTransferSnapshot?
+            if let captured = file.snapshot {
+                lane = captured
+            } else {
+                lane = await SettingsManager.shared.fileTransferReadySnapshot(for: file.ref)
+            }
+            guard !Task.isCancelled else {
+                try? FileManager.default.removeItem(at: file.stagingURL)
+                return
+            }
             finalizeBinaryStage(
                 stagingURL: file.stagingURL, originalName: file.originalName,
                 mimeType: file.mimeType, byteSize: file.byteSize,
-                hasServer: hasServer, ref: file.ref)
+                snapshot: lane, ref: file.ref)
         }
+        preparationTasks[preparationID] = task
     }
 
     /// Cancel (discard) the head soft-confirm: reclaim its staging temp + advance.
     private func cancelPendingLargeFile() {
+        guard !attachmentDispatchInProgress else { return }
         guard let file = pendingLargeFiles.first else { return }
         pendingLargeFiles.removeFirst()
         try? FileManager.default.removeItem(at: file.stagingURL)
@@ -901,13 +1031,13 @@ struct MessageComposerBar: View {
     /// still-absent snapshot keeps a tile `.needsSetup`.
     private func promoteNeedsSetupTiles() async {
         let ref = effectiveRef
-        guard await SettingsManager.shared.fileTransferReadySnapshot(for: ref) != nil else { return }
-        // Only tiles STAMPED for THIS ref promote — a tile staged for a different
+        guard let snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) else { return }
+        // Only tiles OWNED by THIS ref promote — a tile staged for a different
         // gateway stays `.needsSetup` (still blocks Send) rather than uploading
-        // somewhere its turn will never reference (see `needsSetupRefs`).
+        // somewhere its turn will never reference.
         let promotable: [(id: UUID, url: URL, name: String, mime: String)] = attachments.compactMap { item in
             guard case .needsSetup(let url, let name, let mime, _) = item.kind,
-                  (needsSetupRefs[item.id] ?? ref) == ref else { return nil }
+                  item.serverOwnerRef == ref else { return nil }
             return (item.id, url, name, mime)
         }
         for entry in promotable {
@@ -919,25 +1049,25 @@ struct MessageComposerBar: View {
             // may have X-removed it mid-mint. The `.needsSetup` re-check makes
             // promotion idempotent (never a double upload / a kick from a
             // reclaimed staging temp).
-            let storedKey = await Self.mintStoredKey(originalName: entry.name, vm: viewModel, ref: ref)
+            let storedKey = Self.mintStoredKey(
+                originalName: entry.name,
+                vm: viewModel,
+                snapshot: snapshot
+            )
             guard let index = attachments.firstIndex(where: { $0.id == entry.id }),
-                  case .needsSetup = attachments[index].kind else { continue }
+                  case .needsSetup = attachments[index].kind,
+                  attachments[index].serverOwnerRef == ref else { continue }
             attachments[index].kind = .serverFile(url: entry.url, originalName: entry.name, mimeType: entry.mime)
+            attachments[index].serverOwnerSnapshot = snapshot
             attachments[index].serverUploadState = .uploading(progress: 0)
             serverStoredKeys[entry.id] = storedKey
-            needsSetupRefs[entry.id] = nil
-            kickUpload(id: entry.id, localURL: entry.url, storedKey: storedKey, ref: ref)
-        }
-    }
-
-    /// Re-stamp every `.needsSetup` tile to `ref`. ONLY for the VM-less new-chat
-    /// composer when the user flips the gateway picker — there the next turn
-    /// definitionally binds to the new gateway, so its tiles should follow (and
-    /// then promote, if the new gateway has a server). A conversation-bound
-    /// composer must NOT re-stamp (its tiles belong to the bound gateway).
-    private func restampNeedsSetupTiles(to ref: RemoteAgentRef) {
-        for item in attachments where item.needsSetup {
-            needsSetupRefs[item.id] = ref
+            kickUpload(
+                id: entry.id,
+                localURL: entry.url,
+                storedKey: storedKey,
+                ref: ref,
+                snapshot: snapshot
+            )
         }
     }
 
@@ -947,17 +1077,25 @@ struct MessageComposerBar: View {
     /// — the SAME planner the iOS composer + share drainer use, so a `.txt`/`.md`/
     /// `.csv`/source file lands IDENTICALLY regardless of surface/picker.
     /// Extracts the text ONCE here (inline/persist copy + planner routing size),
-    /// then routes: no file-server / no VM / extraction fails → inline-only
+    /// then routes: no file-server / extraction fails → inline-only
     /// `.file(url)` (today's behavior); server + small → `.dualText` (inline +
     /// eager upload, never gates Send); server + large/over-budget → `.serverFile`
     /// (file-only). Routed by EXTRACTED UTF-8 byte count, not raw file size.
-    private func stageTextFile(_ url: URL, extracted precomputed: TextFileExtractor.ExtractedFile? = nil) async {
-        let snapshot: SettingsManager.FileTransferSnapshot?
-        if viewModel != nil {
-            snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: effectiveRef)
-        } else {
-            snapshot = nil
-        }
+    private func stageTextFile(
+        _ url: URL,
+        extracted precomputed: TextFileExtractor.ExtractedFile? = nil,
+        ref stagedRef: RemoteAgentRef? = nil
+    ) async {
+        guard !attachmentDispatchInProgress else { return }
+        activeGatewayStages += 1
+        defer { activeGatewayStages -= 1 }
+        // Capture the effective gateway before any suspension. A brand-new chat
+        // has no VM yet, but READY belongs to this ref and still supports a flat
+        // storedKey + eager upload.
+        let ref = stagedRef ?? effectiveRef
+        let lane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
+        guard !Task.isCancelled else { return }
+        let fileServerReady = lane != nil
 
         // Extract ONCE. The caller (`stageServerFiles`) already ran it OFF-main as
         // the text-vs-binary probe and threads the result in (file never read
@@ -971,65 +1109,56 @@ struct MessageComposerBar: View {
         } else {
             resolved = await Task.detached { try? TextFileExtractor.extract(from: url) }.value
         }
+        guard !Task.isCancelled else { return }
         guard let extracted = resolved else {
             attachments.append(StagedAttachment(kind: .file(url)))
             return
         }
-        let byteCount = extracted.text.lengthOfBytes(using: .utf8)
-        let plan = AttachmentDeliveryPlanner.plan(
-            extractedByteCount: byteCount,
-            fileServerPresent: snapshot != nil,
-            inlineBudgetRemaining: inlineTextBudgetRemaining
+        let folderCapable = lane?.folderCapable ?? false
+        let prepared = await TextAttachmentStagePreparer.prepare(
+            sourceURL: url,
+            extracted: extracted,
+            fileServerReady: fileServerReady,
+            inlineBudgetRemaining: inlineTextBudgetRemaining,
+            folderCapable: folderCapable,
+            conversationID: viewModel?.conversationID
         )
-
-        guard plan.serverCopy != .none, let vm = viewModel else {
-            attachments.append(StagedAttachment(kind: .file(url)))
+        guard !Task.isCancelled else {
+            if let upload = prepared.uploadRequest {
+                try? FileManager.default.removeItem(at: upload.localURL)
+            }
             return
         }
+        var item = prepared.attachment
+        if prepared.uploadRequest != nil {
+            item.serverOwnerRef = ref
+            item.serverOwnerSnapshot = lane
+        }
+        attachments.append(item)
 
-        if plan.inline {
-            // DUAL: inline fenced text NOW + eager upload of the raw file bytes.
-            // Off-main copy (BLOCKS on a remote volume; scope is process-wide, so
-            // the whole bracketed copy is correct in one detached call).
-            guard let stagingURL = await Task.detached { Self.copyUnderScope(url) }.value else {
-                attachments.append(StagedAttachment(kind: .file(url)))
-                return
-            }
-            let item = StagedAttachment(
-                kind: .dualText(
-                    url: stagingURL,
-                    extractedText: extracted.text,
-                    filename: extracted.filename,
-                    mimeType: extracted.mimeType
-                ),
-                serverUploadState: .uploading(progress: 0))
-            let id = item.id
-            attachments.append(item)
-            serverStagingFiles[id] = stagingURL
+        guard let upload = prepared.uploadRequest, let lane else {
+            return
+        }
+        let id = item.id
+        serverStagingFiles[id] = upload.localURL
+        serverStoredKeys[id] = upload.storedKey
 
-            let storedKey = await Self.mintStoredKey(originalName: extracted.filename, vm: vm, ref: effectiveRef)
-            serverStoredKeys[id] = storedKey
-            kickDualUpload(id: id, localURL: stagingURL, storedKey: storedKey)
+        if item.isDualText {
+            kickDualUpload(
+                id: id,
+                localURL: upload.localURL,
+                storedKey: upload.storedKey,
+                ref: ref,
+                snapshot: lane
+            )
         } else {
-            // FILE-ONLY (large / over-budget) → `.serverFile` (inline suppressed).
-            // Off-main copy (BLOCKS on a remote volume; scope is process-wide, so
-            // the whole bracketed copy is correct in one detached call).
-            guard let stagingURL = await Task.detached { Self.copyUnderScope(url) }.value else {
-                attachments.append(StagedAttachment(kind: .file(url)))
-                return
-            }
-            let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                ?? extracted.mimeType
-            let item = StagedAttachment(
-                kind: .serverFile(url: stagingURL, originalName: extracted.filename, mimeType: mimeType),
-                serverUploadState: .uploading(progress: 0))
-            let id = item.id
-            attachments.append(item)
-            serverStagingFiles[id] = stagingURL
-
-            let storedKey = await Self.mintStoredKey(originalName: extracted.filename, vm: vm, ref: effectiveRef)
-            serverStoredKeys[id] = storedKey
-            kickUpload(id: id, localURL: stagingURL, storedKey: storedKey, ref: effectiveRef)
+            kickUpload(
+                id: id,
+                localURL: upload.localURL,
+                storedKey: upload.storedKey,
+                ref: ref,
+                snapshot: lane
+            )
         }
     }
 
@@ -1048,22 +1177,33 @@ struct MessageComposerBar: View {
     /// Eager upload for a `.dualText` tile (mirrors `kickImageUpload`): FAILURE →
     /// `.failed` (NO degrade-to-inline; the text already rides inline); SUCCESS →
     /// `.uploaded(storedKey)`. Never gates Send.
-    private func kickDualUpload(id: UUID, localURL: URL, storedKey: String) {
-        let ref = effectiveRef
+    private func kickDualUpload(
+        id: UUID,
+        localURL: URL,
+        storedKey: String,
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) {
         let task = Task { @MainActor in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, ref: ref) { progress in
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
                     Task { @MainActor in
-                        guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+                        guard let i = attachments.firstIndex(where: { $0.id == id }),
+                              attachments[i].serverOwnerRef == ref,
+                              attachments[i].serverOwnerSnapshot == snapshot else { return }
                         attachments[i].serverUploadState = .uploading(progress: progress)
                     }
                 }
-                guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+                guard let i = attachments.firstIndex(where: { $0.id == id }),
+                      attachments[i].serverOwnerRef == ref,
+                      attachments[i].serverOwnerSnapshot == snapshot else { return }
                 attachments[i].serverUploadState = .uploaded(storedKey: storedKey)
             } catch is CancellationError {
                 // Tile is being removed — leave it.
             } catch {
-                guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+                guard let i = attachments.firstIndex(where: { $0.id == id }),
+                      attachments[i].serverOwnerRef == ref,
+                      attachments[i].serverOwnerSnapshot == snapshot else { return }
                 attachments[i].serverUploadState = .failed
             }
             uploadTasks[id] = nil
@@ -1111,24 +1251,45 @@ struct MessageComposerBar: View {
     private func drainPendingStagedImage() {
         guard let binding = pendingStagedImage, let data = binding.wrappedValue else { return }
         binding.wrappedValue = nil
-        Task { await stageImage(data) }
+        let preparationID = UUID()
+        activeGatewayStages += 1
+        let task = Task { @MainActor in
+            defer {
+                activeGatewayStages -= 1
+                preparationTasks[preparationID] = nil
+            }
+            guard let ref = await authoritativeComposerRef(), !Task.isCancelled else { return }
+            await stageImage(data, ref: ref)
+        }
+        preparationTasks[preparationID] = task
     }
 
-    private func stageImage(_ original: Data) async {
+    private func stageImage(_ original: Data, ref stagedRef: RemoteAgentRef? = nil) async {
+        guard !attachmentDispatchInProgress else { return }
+        activeGatewayStages += 1
+        defer { activeGatewayStages -= 1 }
+        let ref = stagedRef ?? effectiveRef
         // No file-server configured → inline-only (unchanged). WHY no `viewModel`
         // gate: a VM-less brand-new conversation STILL dual-routes — `mintStoredKey`
         // yields a FLAT storedKey (folder:nil) when vm==nil and the binary path
         // already uploads VM-less, so the spec gives images no VM-less carve-out.
         // Gating on `viewModel` here wrongly short-circuited the FIRST image turn to
         // inline-only and never uploaded the byte-faithful original.
-        guard await SettingsManager.shared.fileTransferReadySnapshot(for: effectiveRef) != nil else {
+        let resolvedLane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
+        guard !Task.isCancelled else { return }
+        guard let lane = resolvedLane else {
             attachments.append(StagedAttachment(kind: .image(original)))
             return
         }
         // Process ONCE for the INLINE/persist copy (fixed `defaultMaxPixel` — the
         // "Max image dimension" setting was removed; the file-transfer route now
         // sends originals, so only the inline copy is capped).
-        guard let processed = try? await ImageProcessor.shared.process(original, maxPixel: ImageProcessor.defaultMaxPixel) else {
+        let processedResult = try? await ImageProcessor.shared.process(
+            original,
+            maxPixel: ImageProcessor.defaultMaxPixel
+        )
+        guard !Task.isCancelled else { return }
+        guard let processed = processedResult else {
             attachments.append(StagedAttachment(kind: .image(original)))
             return
         }
@@ -1141,7 +1302,11 @@ struct MessageComposerBar: View {
         // Per-conversation folder unless this gateway's nested-PUT probe failed.
         // Pass the OPTIONAL `viewModel` straight through — `mintStoredKey` yields a
         // FLAT storedKey (folder:nil) when it's nil (VM-less first turn).
-        let storedKey = await Self.mintStoredKey(originalName: filename, vm: viewModel, ref: effectiveRef)
+        let storedKey = Self.mintStoredKey(
+            originalName: filename,
+            vm: viewModel,
+            snapshot: lane
+        )
         // Write the ORIGINAL bytes (not the processed JPEG) to a throwaway temp
         // file under the sniffed extension; the upload reads the real file.
         // sim-QA verified: the upload body is the ORIGINAL (true format), distinct
@@ -1161,6 +1326,10 @@ struct MessageComposerBar: View {
             attachments.append(StagedAttachment(kind: .image(original)))
             return
         }
+        guard !Task.isCancelled else {
+            try? FileManager.default.removeItem(at: tmp)
+            return
+        }
 
         let item = StagedAttachment(
             kind: .dualImage(
@@ -1172,34 +1341,53 @@ struct MessageComposerBar: View {
                 byteSize: processed.byteSize,
                 filename: filename
             ),
+            serverOwnerRef: ref,
+            serverOwnerSnapshot: lane,
             serverUploadState: .uploading(progress: 0))
         let id = item.id
         attachments.append(item)
         serverStagingFiles[id] = tmp
         serverStoredKeys[id] = storedKey
-        kickImageUpload(id: id, localURL: tmp, storedKey: storedKey)
+        kickImageUpload(
+            id: id,
+            localURL: tmp,
+            storedKey: storedKey,
+            ref: ref,
+            snapshot: lane
+        )
     }
 
     /// Eager upload for a `.dualImage` tile — modeled on `kickUpload` but on
     /// FAILURE just sets `.failed` (NO degrade-to-inline): the image already
     /// rides inline, so a failed upload simply means no editable file copy this
     /// turn. On success → `.uploaded(storedKey)`.
-    private func kickImageUpload(id: UUID, localURL: URL, storedKey: String) {
-        let ref = effectiveRef
+    private func kickImageUpload(
+        id: UUID,
+        localURL: URL,
+        storedKey: String,
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) {
         let task = Task { @MainActor in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, ref: ref) { progress in
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
                     Task { @MainActor in
-                        guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+                        guard let i = attachments.firstIndex(where: { $0.id == id }),
+                              attachments[i].serverOwnerRef == ref,
+                              attachments[i].serverOwnerSnapshot == snapshot else { return }
                         attachments[i].serverUploadState = .uploading(progress: progress)
                     }
                 }
-                guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+                guard let i = attachments.firstIndex(where: { $0.id == id }),
+                      attachments[i].serverOwnerRef == ref,
+                      attachments[i].serverOwnerSnapshot == snapshot else { return }
                 attachments[i].serverUploadState = .uploaded(storedKey: storedKey)
             } catch is CancellationError {
                 // Tile is being removed — leave it.
             } catch {
-                guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+                guard let i = attachments.firstIndex(where: { $0.id == id }),
+                      attachments[i].serverOwnerRef == ref,
+                      attachments[i].serverOwnerSnapshot == snapshot else { return }
                 attachments[i].serverUploadState = .failed
             }
             uploadTasks[id] = nil
@@ -1212,45 +1400,73 @@ struct MessageComposerBar: View {
     /// `serverStoredKeys` so the retry overwrites the partial blob rather than
     /// orphaning it under a fresh key).
     private func retryServerUpload(id: UUID) {
+        guard !attachmentDispatchInProgress else { return }
         guard let index = attachments.firstIndex(where: { $0.id == id }),
               case .serverFile(let url, let originalName, _) = attachments[index].kind,
-              attachments[index].serverUploadFailed else { return }
+              attachments[index].serverUploadFailed,
+              let ref = attachments[index].serverOwnerRef,
+              let snapshot = attachments[index].serverOwnerSnapshot else { return }
         attachments[index].serverUploadState = .uploading(progress: 0)
 
         // Reuse the key minted at stage time (retry overwrites the partial blob).
         // The fallback mint (key somehow absent) resolves folder-capability so a
         // re-minted key still lands in THIS conversation's folder (flat VM-less).
-        let ref = effectiveRef
         if let storedKey = serverStoredKeys[id] {
-            kickUpload(id: id, localURL: url, storedKey: storedKey, ref: ref)
+            kickUpload(
+                id: id,
+                localURL: url,
+                storedKey: storedKey,
+                ref: ref,
+                snapshot: snapshot
+            )
             return
         }
-        Task { @MainActor in
-            let storedKey = await Self.mintStoredKey(originalName: originalName, vm: viewModel, ref: ref)
-            serverStoredKeys[id] = storedKey
-            kickUpload(id: id, localURL: url, storedKey: storedKey, ref: ref)
-        }
+        let storedKey = Self.mintStoredKey(
+            originalName: originalName,
+            vm: viewModel,
+            snapshot: snapshot
+        )
+        serverStoredKeys[id] = storedKey
+        kickUpload(
+            id: id,
+            localURL: url,
+            storedKey: storedKey,
+            ref: ref,
+            snapshot: snapshot
+        )
     }
 
     /// Spin up (and retain) the eager background upload for a staged server tile.
     /// On success → `.uploaded(storedKey)`; cancel → silent; error → `.failed`.
     /// `ref` is caller-provided (the gateway the file was staged/promoted FOR) —
     /// never re-read from `effectiveRef`, which may have moved meanwhile.
-    private func kickUpload(id: UUID, localURL: URL, storedKey: String, ref: RemoteAgentRef) {
+    private func kickUpload(
+        id: UUID,
+        localURL: URL,
+        storedKey: String,
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) {
         let task = Task { @MainActor in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, ref: ref) { progress in
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
                     Task { @MainActor in
-                        guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+                        guard let i = attachments.firstIndex(where: { $0.id == id }),
+                              attachments[i].serverOwnerRef == ref,
+                              attachments[i].serverOwnerSnapshot == snapshot else { return }
                         attachments[i].serverUploadState = .uploading(progress: progress)
                     }
                 }
-                guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+                guard let i = attachments.firstIndex(where: { $0.id == id }),
+                      attachments[i].serverOwnerRef == ref,
+                      attachments[i].serverOwnerSnapshot == snapshot else { return }
                 attachments[i].serverUploadState = .uploaded(storedKey: storedKey)
             } catch is CancellationError {
                 // Tile is being removed — leave it.
             } catch {
-                guard let i = attachments.firstIndex(where: { $0.id == id }) else { return }
+                guard let i = attachments.firstIndex(where: { $0.id == id }),
+                      attachments[i].serverOwnerRef == ref,
+                      attachments[i].serverOwnerSnapshot == snapshot else { return }
                 attachments[i].serverUploadState = .failed
             }
             uploadTasks[id] = nil
@@ -1263,31 +1479,23 @@ struct MessageComposerBar: View {
     /// reclaims the local staging temp file — so an X-cancel never orphans a blob
     /// on the gateway.
     private func removeAttachment(_ id: UUID) {
-        if let task = uploadTasks[id] {
-            task.cancel()
-            uploadTasks[id] = nil
-        }
-        // Only `.serverFile` and `.dualImage` ever set `serverUploadState`, so
-        // gating on `.uploaded` alone DELETEs the orphan for BOTH routes (a tile
-        // X-removed after its PUT landed is a pure orphan the user never sent).
-        if let item = attachments.first(where: { $0.id == id }),
-           case .uploaded(let storedKey)? = item.serverUploadState {
-            let ref = effectiveRef
-            Task { await ConversationDetailViewModel.deleteOrphanServerFile(storedKey: storedKey, ref: ref) }
-        }
-        cleanupStagingFile(id)
+        guard !attachmentDispatchInProgress else { return }
+        providerLoadProgresses.removeValue(forKey: id)?.cancel()
+        releaseServerResources(for: id, wasHandedOff: false)
         attachments.removeAll { $0.id == id }
     }
 
-    /// Clear ALL staging after a send: cancel any in-flight uploads (the resolved
-    /// `.uploaded` tiles already rode the wire) + reclaim every staging temp file.
-    private func clearAttachments() {
-        for task in uploadTasks.values { task.cancel() }
+    /// Discard ALL unsent staging: every minted server key is an orphan, including
+    /// an eager upload that lands just after cancellation.
+    private func clearDiscardedAttachments() {
+        for task in preparationTasks.values { task.cancel() }
+        preparationTasks.removeAll()
+        for progress in providerLoadProgresses.values { progress.cancel() }
+        providerLoadProgresses.removeAll()
+        for id in attachments.map(\.id) {
+            releaseServerResources(for: id, wasHandedOff: false)
+        }
         uploadTasks.removeAll()
-        for url in serverStagingFiles.values { try? FileManager.default.removeItem(at: url) }
-        serverStagingFiles.removeAll()
-        serverStoredKeys.removeAll()
-        needsSetupRefs.removeAll()
         // Reclaim any not-yet-confirmed large-file staging temps too.
         for file in pendingLargeFiles { try? FileManager.default.removeItem(at: file.stagingURL) }
         pendingLargeFiles.removeAll()
@@ -1295,13 +1503,50 @@ struct MessageComposerBar: View {
         pickerSelection.removeAll()
     }
 
+    private func clearAfterSuccessfulHandoff(_ dispatch: ComposerTurnDispatch) {
+        let sealedIDs = dispatch.stagedAttachmentIDs
+        for id in attachments.map(\.id) where sealedIDs.contains(id) {
+            releaseServerResources(
+                for: id,
+                wasHandedOff: dispatch.handedOffServerAttachmentIDs.contains(id)
+            )
+        }
+        attachments.removeAll { sealedIDs.contains($0.id) }
+        for id in sealedIDs {
+            providerLoadProgresses.removeValue(forKey: id)?.cancel()
+            preparationTasks.removeValue(forKey: id)?.cancel()
+        }
+        if attachments.isEmpty {
+            pickerSelection.removeAll()
+        }
+    }
+
     private func cleanupStagingFile(_ id: UUID) {
         serverStoredKeys[id] = nil
-        needsSetupRefs[id] = nil
         if let url = serverStagingFiles[id] {
             try? FileManager.default.removeItem(at: url)
             serverStagingFiles[id] = nil
         }
+    }
+
+    private func releaseServerResources(for id: UUID, wasHandedOff: Bool) {
+        let item = attachments.first(where: { $0.id == id })
+        let task = uploadTasks.removeValue(forKey: id)
+        let storedKey = serverStoredKeys[id]
+        let snapshot = item?.serverOwnerSnapshot
+        if !wasHandedOff {
+            task?.cancel()
+            if let storedKey, let snapshot {
+                Task {
+                    if let task { await task.value }
+                    await ConversationDetailViewModel.deleteOrphanServerFile(
+                        storedKey: storedKey,
+                        snapshot: snapshot
+                    )
+                }
+            }
+        }
+        cleanupStagingFile(id)
     }
 
     /// Copy `url` UNDER its security scope into a stable app-temp file using a
@@ -1337,6 +1582,13 @@ struct MessageComposerBar: View {
     /// passed — drives the "Set Up File Transfer…" discovery item + the binary
     /// route).
     private func refreshFileTransfer() async {
+        guard attachments.isEmpty,
+              pendingLargeFiles.isEmpty,
+              activeGatewayStages == 0,
+              preparationTasks.isEmpty,
+              !attachmentDispatchInProgress else {
+            return
+        }
         guard let vm = viewModel else {
             // Brand-new (VM-less) chat: scope to the host's AUTHORITATIVE pending
             // gateway (`selectedRef`), NOT the compile-time default — so a setup
@@ -1355,13 +1607,18 @@ struct MessageComposerBar: View {
         if let raw = try? await ConversationStore.shared.fetchConversation(id: vm.conversationID)?.backend,
            let bound = RemoteAgentRef(rawString: raw) {
             ref = bound
-        } else {
-            // No persisted backend (brand-new conversation) → the gateway the
-            // first turn will bind to is the default.
-            ref = await SettingsManager.shared.defaultRemoteAgentRef()
-        }
+        } else { return }
         effectiveRef = ref
         fileTransferAvailable = (await SettingsManager.shared.fileTransferReadySnapshot(for: ref)) != nil
+    }
+
+    private func authoritativeComposerRef() async -> RemoteAgentRef? {
+        guard let vm = viewModel else { return selectedRef }
+        guard let raw = try? await ConversationStore.shared
+            .fetchConversation(id: vm.conversationID)?.backend else {
+            return nil
+        }
+        return RemoteAgentRef(rawString: raw)
     }
 }
 #endif

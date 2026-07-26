@@ -219,15 +219,11 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
         // the conversation-wide flip aliases a concurrent in-app sibling turn.
         // Optional + defaulted → source-compatible; nil falls back wide.
         userMessageID: UUID? = nil,
-        // Whether THIS turn's bound gateway has a READY file lane
-        // (`SettingsManager.fileTransferReadySnapshot(for: ref) != nil`),
-        // computed by the caller (`CarPlayRecordingService.startConverseHop`,
-        // which is on the SettingsManager-actor-awaiting path). Threads the
-        // per-turn file-delivery instruction onto the newest turn when true.
-        // A capable device that later opens this thread renders a download chip
-        // for the car turn via the retroactive output-scan, so the instruction
-        // is no longer "a promise that can never appear" here.
-        fileServerReady: Bool,
+        // Stable one-way identity of THIS turn's exact READY file lane,
+        // captured by the caller. Non-nil both enables the per-turn delivery
+        // instruction and rides recovery metadata so a later capable device
+        // probes only that physical lane; nil never guesses a replacement.
+        fileTransferLaneID: String?,
         turnToken: UInt64
     ) throws {
         let endpoint = url.appending(path: "v1/chat/completions")
@@ -249,7 +245,7 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
             messages: RemoteAgentClient.assembleMessages(
                 priorTurns: priorTurns,
                 newUserText: newUserText,
-                fileServerReady: fileServerReady,
+                fileServerReady: fileTransferLaneID != nil,
                 surface: .spoken
             ),
             stream: false,
@@ -269,7 +265,8 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
             userMessageID: userMessageID,
             // Dispatch-time fact for the failure classification (the
             // delegate classifies long after `priorTurns` is gone).
-            requestHadHistoryImages: ConverseRequest.containsImageParts(priorTurns)
+            requestHadHistoryImages: ConverseRequest.containsImageParts(priorTurns),
+            fileTransferLaneID: fileTransferLaneID
         )
         let metadataString: String
         do {
@@ -401,6 +398,9 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
         // flip — which can alias a concurrent in-app sibling turn, hence the
         // exact path is preferred whenever available.
         let userMessageID: UUID? = metadata?.userMessageID
+        // Exact dispatch-time file lane. Old in-flight metadata decodes nil and
+        // intentionally gets no output-recovery work.
+        let fileTransferLaneID = metadata?.fileTransferLaneID
         let turnToken = entry?.turnToken
 
         // --- Transport error path ---
@@ -520,12 +520,30 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
         beginPersistenceWork()
         Task {
             do {
-                _ = try await ConversationStore.shared.appendMessage(
-                    role: "agent",
-                    text: reply,
-                    conversationID: cid,
-                    sourceDevice: "carplay"
-                )
+                if let userMessageID {
+                    _ = try await ConversationStore.shared.completeAgentTurn(
+                        userMessageID: userMessageID,
+                        userStatus: "sent",
+                        agentText: reply,
+                        conversationID: cid,
+                        sourceDevice: "carplay",
+                        outputScanLaneID: fileTransferLaneID
+                    )
+                } else {
+                    // Backward-compatible landing for a pre-upgrade in-flight
+                    // task. Its owner lane cannot be proven, so append without
+                    // an output marker and use the legacy broad status flip.
+                    _ = try await ConversationStore.shared.appendMessage(
+                        role: "agent",
+                        text: reply,
+                        conversationID: cid,
+                        sourceDevice: "carplay"
+                    )
+                    await ConversationStore.shared.markPendingUserTurns(
+                        conversationID: cid,
+                        to: "sent"
+                    )
+                }
             } catch {
                 // Append failed (e.g. conversation deleted on another device
                 // mid-flight). Don't claim success / don't speak.
@@ -535,18 +553,6 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
                 self.endPersistenceWork()
                 return
             }
-            // Authoritative send-state flip AFTER the reply is persisted
-            // (mirrors `BackgroundRemoteAgent.recordReply` ordering): clears
-            // the `sending` user turn the CarPlay append site writes — this
-            // flip is LOAD-BEARING (without it every CarPlay turn would spin
-            // forever in the iPhone thread). Exact-message flip when the id
-            // was threaded; conversation-wide fallback otherwise.
-            if let mid = userMessageID {
-                await ConversationStore.shared.markPendingUserTurn(messageID: mid, to: "sent")
-            } else {
-                await ConversationStore.shared.markPendingUserTurns(conversationID: cid, to: "sent")
-            }
-
             // Route on scene state: foreground + voice root + matching active
             // in-flight turn → speak; else persist+sync only (NO TTS — the
             // unsolicited-audio guard). The recording service owns that check.

@@ -16,6 +16,7 @@
 // raw key string is the Mistral wire-format request inside `STTClient`.
 
 import Foundation
+import CryptoKit
 import Security
 #if !os(watchOS)
 // Speech framework is `@available(watchOS, unavailable)`. Imported only on
@@ -2215,10 +2216,11 @@ actor SettingsManager {
     //   - Available flag → App Groups + iCloud KVS (non-secret).
     //
     // Privacy (load-bearing — see the spec.md "Privacy & Security" section): the credential is NEVER logged,
-    // printed, or surfaced in error messages. Its only consumers are the
-    // file-server wire request (basic-auth header) and the setup guide's
-    // masked credential row the user deliberately copies. Every writer posts
-    // `.settingsDidChangeRemotely` so observers refresh from a single source.
+    // printed, or surfaced in error messages. Its consumers are the file-server
+    // wire request (basic-auth header), the setup guide's masked credential row
+    // the user deliberately copies, and the LOCAL one-way lane-ID derivation
+    // below. Every writer posts `.settingsDidChangeRemotely` so observers
+    // refresh from a single source.
 
     /// Atomic snapshot of a ref's file-server configuration. Single actor hop —
     /// mirrors `remoteAgentSnapshot(for:)` so the upload / download / probe
@@ -2226,7 +2228,7 @@ actor SettingsManager {
     /// combination during a Settings-side change. `username` is always
     /// `Constants.fileServerUsername` (carried for convenience so call sites
     /// don't re-reference Constants). Privacy: never log any field.
-    struct FileTransferSnapshot: Sendable {
+    struct FileTransferSnapshot: Sendable, Equatable {
         /// File-server base URL (https). The PUT/GET/PROBE/DELETE path is
         /// `baseURL.appending(path: storedKey)`.
         let baseURL: URL
@@ -2261,6 +2263,29 @@ actor SettingsManager {
             hasher.combine(credential)
             hasher.combine(certFingerprintHex)
             return "\(hasher.finalize())"
+        }
+
+        /// Stable, one-way identity for the durable file lane (URL +
+        /// credential). Stored with a pending macOS output scan so crash
+        /// recovery can prove that the CURRENT lane is the one used for that
+        /// dispatch. The pin and mutable readiness/capability verdicts are
+        /// deliberately excluded: a pin is device-local, while the durable
+        /// server namespace is defined by URL + credential.
+        ///
+        /// Domain separation + UInt64 big-endian length prefixes make the byte
+        /// encoding unambiguous. Only the SHA-256 digest is persisted or synced;
+        /// the credential itself remains Keychain-only and is never logged.
+        var durableLaneID: String {
+            var input = Data("conduck.file-lane.v1\0".utf8)
+            Self.appendLengthPrefixed(Data(baseURL.absoluteString.utf8), to: &input)
+            Self.appendLengthPrefixed(Data(credential.utf8), to: &input)
+            return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
+        }
+
+        private static func appendLengthPrefixed(_ value: Data, to data: inout Data) {
+            var length = UInt64(value.count).bigEndian
+            withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
+            data.append(value)
         }
     }
 

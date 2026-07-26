@@ -64,6 +64,7 @@ enum ConversationHistoryAssembler {
         excludingUserMessageID: UUID?,
         excludingNewUserText: String?,
         boundRef: RemoteAgentRef?,
+        dispatchFileLaneID: String? = nil,
         store: ConversationStore = .shared
     ) async throws -> [ConverseRequest.Message] {
         let allMessages = try await store.fetchMessages(for: conversationID)
@@ -111,7 +112,8 @@ enum ConversationHistoryAssembler {
             excludingNewUserText: excludingNewUserText,
             dataURIsByMessageID: dataURIsByMessageID,
             folder: conversationID.uuidString,
-            imagePolicy: policy
+            imagePolicy: policy,
+            dispatchFileLaneID: dispatchFileLaneID
         )
 
         // Compat mode ("Keep chatting without photos"): when this

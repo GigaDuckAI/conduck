@@ -49,7 +49,9 @@ enum ComposerAttachmentTypes {
 @MainActor
 final class ComposerAttachmentCoordinator {
     /// Staged-but-unsent attachments (mirrors the composer's `attachments`).
-    var staged: [StagedAttachment] = []
+    var staged: [StagedAttachment] = [] {
+        didSet { stagingGeneration = UUID() }
+    }
     /// Per-loading-item determinate progress (0…1) for the strip.
     var progressByID: [UUID: Double] = [:]
 
@@ -75,10 +77,13 @@ final class ComposerAttachmentCoordinator {
         let mimeType: String
         let byteSize: Int
         /// The gateway this file would route to (drives `.serverFile` vs
-        /// `.needsSetup` once the user confirms). The server-presence flag is
-        /// deliberately NOT cached here — setup can complete while the alert is
-        /// up (remote sync), so the confirm path re-resolves the snapshot fresh.
+        /// `.needsSetup` once the user confirms). A ready snapshot is captured
+        /// to pin the exact physical lane; only an initially-nil snapshot may
+        /// resolve a newly configured lane while the alert is open.
         let ref: RemoteAgentRef
+        /// Exact lane captured for this staged choice. Nil means file transfer
+        /// was not ready then; confirmation may resolve a newly-created lane.
+        let snapshot: SettingsManager.FileTransferSnapshot?
     }
 
     /// FIFO queue of large files awaiting the user's soft-confirm. The head is the
@@ -95,6 +100,14 @@ final class ComposerAttachmentCoordinator {
     /// `staged[…].serverUploadState` as the PUT advances. PRIVACY: keyed by UUID
     /// only — never holds (or logs) the file URL / storedKey.
     private var uploadTasks: [UUID: Task<Void, Never>] = [:]
+    /// Retained pre-tile preparation tasks (camera/paste/import copies). They are
+    /// cancelled on teardown and keep every send path fail-closed even before a
+    /// visible loading tile exists.
+    private var preparationTasks: [UUID: Task<Void, Never>] = [:]
+    /// PhotosPicker owns its asynchronous load through `Progress`, not a Swift
+    /// `Task`. Retain those handles so removing/tearing down staging cancels the
+    /// underlying load as well as removing the visible placeholder.
+    private var pickerLoadProgresses: [UUID: Progress] = [:]
     /// Stable app-temp staging files (one per staged server item, keyed by item
     /// id), copied from the user's security-scoped pick so the async upload +
     /// send both read a plain file. Cleaned up on remove / after the turn clears.
@@ -103,18 +116,87 @@ final class ComposerAttachmentCoordinator {
     /// Retry re-uploads under the SAME key — overwriting the failed partial blob
     /// rather than orphaning it under a fresh key. PRIVACY: in-memory only.
     private var serverStoredKeys: [UUID: String] = [:]
-    /// The gateway each `.needsSetup` tile was STAGED for (keyed by item id).
-    /// Promotion only fires when this matches the promote-time ref — staged tiles
-    /// survive conversation switches, so without the stamp a tile staged for an
-    /// unconfigured gateway A would silently upload to whatever configured
-    /// gateway B the user switched to (and A's later turn would reference a key
-    /// that only exists on B). The VM-less new-chat composer RE-STAMPS on a
-    /// gateway-picker change instead (the next turn definitionally binds there).
-    private var needsSetupRefs: [UUID: RemoteAgentRef] = [:]
+    /// Covers the async interval before a picked file has produced a tile (for
+    /// example, while copying from iCloud Drive). Without this counter the
+    /// new-chat gateway picker could move before `staged` became non-empty.
+    private var activeStagingBatches = 0
+    /// Keeps the picker locked after the strip is cleared but before the host
+    /// has finished minting/binding the new conversation.
+    private var dispatchInProgress = false
+    /// Navigation cannot tear down attachment ownership while local acceptance
+    /// is unresolved. The deferred request is consumed by
+    /// `endAttachmentDispatch()` after successful handoff cleanup (if any).
+    private var deferredTeardown = ComposerDeferredTeardown()
+    /// Rotates on every staged-array mutation. A dispatch seals this opaque
+    /// generation together with the exact staged ids after preferred uploads
+    /// have joined.
+    private var stagingGeneration = UUID()
+
+    /// The host uses this to render the new-chat gateway pill read-only from the
+    /// instant attachment staging begins until the staged turn has been handed
+    /// off. We deliberately lock instead of silently moving already-uploaded
+    /// bytes between gateways.
+    var gatewaySelectionLocked: Bool {
+        activeStagingBatches > 0
+            || dispatchInProgress
+            || !staged.isEmpty
+            || !pendingLargeFiles.isEmpty
+    }
+
+    var isPreparingAttachments: Bool {
+        activeStagingBatches > 0 || !preparationTasks.isEmpty
+    }
+
+    @discardableResult
+    func beginAttachmentDispatch() -> Bool {
+        guard !dispatchInProgress,
+              !isPreparingAttachments,
+              !staged.hasLoadingItem,
+              !staged.hasUploadingItem,
+              !staged.hasFailedUpload,
+              !staged.hasNeedsSetupItem else {
+            return false
+        }
+        dispatchInProgress = true
+        return true
+    }
+    func endAttachmentDispatch() {
+        dispatchInProgress = false
+        if deferredTeardown.consume() {
+            clearDiscarded()
+        }
+    }
+
+    func makeDispatch(
+        text: String,
+        ref: RemoteAgentRef,
+        conversationID: UUID?
+    ) -> ComposerTurnDispatch? {
+        guard dispatchInProgress else { return nil }
+        return staged.makeDispatch(
+            text: text,
+            ref: ref,
+            conversationID: conversationID,
+            stagingGeneration: stagingGeneration
+        )
+    }
+
+    func makeDispatch(
+        text: String,
+        route: ComposerDispatchRoute
+    ) -> ComposerTurnDispatch? {
+        guard dispatchInProgress else { return nil }
+        return staged.makeDispatch(
+            text: text,
+            route: route,
+            stagingGeneration: stagingGeneration
+        )
+    }
 
     // MARK: - Menu actions
 
     func pickLibrary() {
+        guard !dispatchInProgress else { return }
         // PhotosPicker is presented via the `.photosPicker` modifier bound to
         // a flag; we flip it through a dedicated trigger so a re-pick re-opens.
         showingPhotosPicker = true
@@ -124,9 +206,13 @@ final class ComposerAttachmentCoordinator {
 
     /// Open the UNIFIED "Choose Files…" importer (accepts any file; the host's
     /// classifier routes each pick).
-    func pickFiles() { showingFileImporter = true }
+    func pickFiles() {
+        guard !dispatchInProgress else { return }
+        showingFileImporter = true
+    }
 
     func takePhoto() {
+        guard !dispatchInProgress else { return }
         switch CameraPermission.current {
         case .proceed: showingCamera = true
         case .denied: showingCameraDeniedAlert = true
@@ -136,39 +222,27 @@ final class ComposerAttachmentCoordinator {
     /// Remove a staged item by id. For a server-file or uploaded dual-image tile
     /// this ALSO cancels its in-flight upload, best-effort DELETEs an
     /// already-uploaded orphan blob, and deletes the local staging temp file — so
-    /// a user X-cancel never leaves an orphan on the gateway. `vm` + `ref` are
-    /// needed only for the orphan DELETE;
-    /// nil → a plain non-server remove (the menu callers pass them when the bound
-    /// gateway + VM are known).
-    func remove(_ id: UUID, vm: ConversationDetailViewModel? = nil, ref: RemoteAgentRef? = nil) {
-        // Cancel an in-flight upload + reclaim its staging file.
-        if let task = uploadTasks[id] {
-            task.cancel()
-            uploadTasks[id] = nil
-        }
-        // If the upload already landed, best-effort delete the orphan blob. Only
-        // `.serverFile` and `.dualImage` ever set `serverUploadState`, so gating
-        // on `.uploaded` alone covers BOTH routes — a tile X-removed after its PUT
-        // landed is a pure orphan the user never sent (symmetry with `.serverFile`).
-        // Needs only the ref (static helper), so a VM-less new chat cleans up too.
-        if let item = staged.first(where: { $0.id == id }),
-           case .uploaded(let storedKey)? = item.serverUploadState,
-           let ref {
-            Task { await ConversationDetailViewModel.deleteOrphanServerFile(storedKey: storedKey, ref: ref) }
-        }
-        cleanupStagingFile(id)
+    /// a user X-cancel never leaves an orphan on the gateway. The DELETE always
+    /// uses the owner captured on the tile at stage time, never live picker state.
+    func remove(_ id: UUID) {
+        guard !dispatchInProgress else { return }
+        pickerLoadProgresses.removeValue(forKey: id)?.cancel()
+        releaseServerResources(for: id, wasHandedOff: false)
         staged.removeAll { $0.id == id }
         progressByID[id] = nil
     }
 
-    func clear() {
-        // Cancel any in-flight uploads + reclaim every server staging temp file.
-        for task in uploadTasks.values { task.cancel() }
+    /// Discard unsent staging (X/teardown/new-thread): every minted key is an
+    /// orphan, including an upload that lands just after cancellation.
+    func clearDiscarded() {
+        for task in preparationTasks.values { task.cancel() }
+        preparationTasks.removeAll()
+        for progress in pickerLoadProgresses.values { progress.cancel() }
+        pickerLoadProgresses.removeAll()
+        for id in staged.map(\.id) {
+            releaseServerResources(for: id, wasHandedOff: false)
+        }
         uploadTasks.removeAll()
-        for url in serverStagingFiles.values { try? FileManager.default.removeItem(at: url) }
-        serverStagingFiles.removeAll()
-        serverStoredKeys.removeAll()
-        needsSetupRefs.removeAll()
         // Reclaim any not-yet-confirmed large-file staging temps too.
         for file in pendingLargeFiles { try? FileManager.default.removeItem(at: file.stagingURL) }
         pendingLargeFiles.removeAll()
@@ -177,20 +251,134 @@ final class ComposerAttachmentCoordinator {
         pickerSelection.removeAll()
     }
 
+    /// Clear only after the VM reports durable local acceptance. Landed keys
+    /// were handed off and must remain; unresolved dual-route uploads were not
+    /// referenced, so cancel them and issue an exact-lane late DELETE.
+    func clearAfterSuccessfulHandoff(_ dispatch: ComposerTurnDispatch) {
+        // Only the generation's sealed ids are consumed. A programmatic race
+        // that stages a fresh item after sealing must preserve that new tile.
+        let sealedIDs = dispatch.stagedAttachmentIDs
+        for id in staged.map(\.id) where sealedIDs.contains(id) {
+            releaseServerResources(
+                for: id,
+                wasHandedOff: dispatch.handedOffServerAttachmentIDs.contains(id)
+            )
+        }
+        staged.removeAll { sealedIDs.contains($0.id) }
+        for id in sealedIDs {
+            progressByID[id] = nil
+            pickerLoadProgresses.removeValue(forKey: id)?.cancel()
+            preparationTasks.removeValue(forKey: id)?.cancel()
+        }
+        if staged.isEmpty {
+            pickerSelection.removeAll()
+        }
+    }
+
+    /// Backward-compatible call sites are discard semantics. Successful sends
+    /// must call `clearAfterSuccessfulHandoff(_:)` explicitly.
+    func clear() { clearDiscarded() }
+
+    /// Explicit navigation owns staging teardown. During dispatch, defer ALL
+    /// mutation until dispatch completion: a same-gateway A→B switch may race
+    /// either a rejection or a successful local handoff, and nil→non-nil may
+    /// be either a natural mint or user navigation. Successful acceptance gets
+    /// first chance to clear sealed ids with handed-off semantics; otherwise
+    /// `endAttachmentDispatch()` discards the still-unsent tiles.
+    func discardForNavigation(from oldID: UUID?, to newID: UUID?) {
+        guard oldID != newID else { return }
+        if deferredTeardown.request(whileDispatching: dispatchInProgress) {
+            clearDiscarded()
+        }
+    }
+
     /// Delete + forget the local staging temp file for `id` (best-effort).
     private func cleanupStagingFile(_ id: UUID) {
         serverStoredKeys[id] = nil
-        needsSetupRefs[id] = nil
         if let url = serverStagingFiles[id] {
             try? FileManager.default.removeItem(at: url)
             serverStagingFiles[id] = nil
         }
     }
 
+    private func releaseServerResources(for id: UUID, wasHandedOff: Bool) {
+        let item = staged.first(where: { $0.id == id })
+        let task = uploadTasks.removeValue(forKey: id)
+        let storedKey = serverStoredKeys[id]
+        let snapshot = item?.serverOwnerSnapshot
+
+        if !wasHandedOff {
+            task?.cancel()
+            if let storedKey, let snapshot {
+                Task {
+                    if let task { await task.value }
+                    await ConversationDetailViewModel.deleteOrphanServerFile(
+                        storedKey: storedKey,
+                        snapshot: snapshot
+                    )
+                }
+            }
+        }
+        cleanupStagingFile(id)
+    }
+
     // MARK: - Camera
 
     func stageCameraImage(_ data: Data, vm: ConversationDetailViewModel?, ref: RemoteAgentRef) {
-        Task { await stageImage(data, vm: vm, ref: ref) }
+        guard !dispatchInProgress else { return }
+        schedulePreparation {
+            await self.stageImage(data, vm: vm, ref: ref)
+        }
+    }
+
+    /// Used by hardware paste paths so preparation ownership is established
+    /// synchronously, before the async image pipeline can yield.
+    func stagePastedImage(_ data: Data, vm: ConversationDetailViewModel?, ref: RemoteAgentRef) {
+        guard !dispatchInProgress else { return }
+        schedulePreparation {
+            await self.stageImage(data, vm: vm, ref: ref)
+        }
+    }
+
+    func stagePastedImage(
+        _ data: Data,
+        vm: ConversationDetailViewModel?,
+        resolveRef: @escaping @MainActor () async -> RemoteAgentRef?
+    ) {
+        guard !dispatchInProgress else { return }
+        schedulePreparation {
+            guard let ref = await resolveRef(), !Task.isCancelled else { return }
+            await self.stageImage(data, vm: vm, ref: ref)
+        }
+    }
+
+    func stagePastedFiles(
+        _ urls: [URL],
+        vm: ConversationDetailViewModel?,
+        resolveRef: @escaping @MainActor () async -> RemoteAgentRef?
+    ) {
+        guard !dispatchInProgress else { return }
+        schedulePreparation {
+            guard let ref = await resolveRef(), !Task.isCancelled else { return }
+            self.stageServerFiles(urls, vm: vm, ref: ref)
+        }
+    }
+
+    private func schedulePreparation(
+        _ operation: @escaping @MainActor () async -> Void
+    ) {
+        let id = UUID()
+        activeStagingBatches += 1
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.activeStagingBatches -= 1
+                self.preparationTasks[id] = nil
+            }
+            guard !Task.isCancelled else { return }
+            await operation()
+        }
+        preparationTasks[id] = task
     }
 
     // MARK: - Image staging (dual-route when a file-server is configured)
@@ -223,6 +411,9 @@ final class ComposerAttachmentCoordinator {
     /// stripped; the uploaded original keeps its metadata (the user PUTs it to
     /// their OWN server, deliberately).
     func stageImage(_ original: Data, vm: ConversationDetailViewModel?, ref: RemoteAgentRef) async {
+        guard !dispatchInProgress else { return }
+        activeStagingBatches += 1
+        defer { activeStagingBatches -= 1 }
         // No READY file-server (unconfigured, untested, or failed its test) →
         // inline-only. WHY no `let vm`
         // gate: a VM-less brand-new conversation STILL dual-routes — `mintStoredKey`
@@ -230,14 +421,21 @@ final class ComposerAttachmentCoordinator {
         // already uploads VM-less, so the spec gives images no VM-less carve-out.
         // Gating on `let vm` here wrongly short-circuited the FIRST image turn to
         // inline-only and never uploaded the byte-faithful original.
-        guard await SettingsManager.shared.fileTransferReadySnapshot(for: ref) != nil else {
+        let resolvedLane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
+        guard !Task.isCancelled else { return }
+        guard let lane = resolvedLane else {
             staged.append(StagedAttachment(kind: .image(original)))
             return
         }
         // Process ONCE at staging for the INLINE/persist copy. A processing
         // failure is NOT fatal — fall back to the inline-only path so the image
         // still rides vision (the VM re-processes a plain `.image`).
-        guard let processed = try? await ImageProcessor.shared.process(original, maxPixel: ImageProcessor.defaultMaxPixel) else {
+        let processedResult = try? await ImageProcessor.shared.process(
+            original,
+            maxPixel: ImageProcessor.defaultMaxPixel
+        )
+        guard !Task.isCancelled else { return }
+        guard let processed = processedResult else {
             staged.append(StagedAttachment(kind: .image(original)))
             return
         }
@@ -250,7 +448,7 @@ final class ComposerAttachmentCoordinator {
         let position = staged.filter(\.isDualImage).count
         let filename = position == 0 ? "image.\(format.ext)" : "image-\(position + 1).\(format.ext)"
         // Per-conversation folder unless this gateway's nested-PUT probe failed.
-        let storedKey = await Self.mintStoredKey(originalName: filename, vm: vm, ref: ref)
+        let storedKey = Self.mintStoredKey(originalName: filename, vm: vm, snapshot: lane)
         // Write the ORIGINAL bytes (not the processed JPEG) to a throwaway temp
         // file under the sniffed extension — `uploadServerFile` copies it again
         // before handing the copy to the background driver (which DELETES its
@@ -274,6 +472,10 @@ final class ComposerAttachmentCoordinator {
             staged.append(StagedAttachment(kind: .image(original)))
             return
         }
+        guard !Task.isCancelled else {
+            try? FileManager.default.removeItem(at: tmp)
+            return
+        }
 
         let item = StagedAttachment(
             kind: .dualImage(
@@ -285,12 +487,14 @@ final class ComposerAttachmentCoordinator {
                 byteSize: processed.byteSize,
                 filename: filename
             ),
+            serverOwnerRef: ref,
+            serverOwnerSnapshot: lane,
             serverUploadState: .uploading(progress: 0))
         let id = item.id
         staged.append(item)
         serverStagingFiles[id] = tmp
         serverStoredKeys[id] = storedKey
-        kickImageUpload(id: id, localURL: tmp, storedKey: storedKey, ref: ref)
+        kickImageUpload(id: id, localURL: tmp, storedKey: storedKey, ref: ref, snapshot: lane)
     }
 
     /// Eager upload for a `.dualImage` tile — modeled on `kickUpload` but on
@@ -301,18 +505,24 @@ final class ComposerAttachmentCoordinator {
         id: UUID,
         localURL: URL,
         storedKey: String,
-        ref: RemoteAgentRef
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot
     ) {
         let task = Task { @MainActor [weak self] in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, ref: ref) { progress in
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
                     Task { @MainActor [weak self] in
                         guard let self,
-                              let i = self.staged.firstIndex(where: { $0.id == id }) else { return }
+                              let i = self.staged.firstIndex(where: { $0.id == id }),
+                              self.staged[i].serverOwnerRef == ref,
+                              self.staged[i].serverOwnerSnapshot == snapshot else { return }
                         self.staged[i].serverUploadState = .uploading(progress: progress)
                     }
                 }
-                guard let self, let i = self.staged.firstIndex(where: { $0.id == id }) else { return }
+                guard let self,
+                      let i = self.staged.firstIndex(where: { $0.id == id }),
+                      self.staged[i].serverOwnerRef == ref,
+                      self.staged[i].serverOwnerSnapshot == snapshot else { return }
                 self.staged[i].serverUploadState = .uploaded(storedKey: storedKey)
             } catch is CancellationError {
                 // Tile is being removed — leave it.
@@ -320,7 +530,10 @@ final class ComposerAttachmentCoordinator {
                 // Upload failed → mark `.failed`. Does NOT block Send (a
                 // `.dualImage` tile is excluded from the send-gating helpers); the
                 // image rides inline-only this turn. NO silent retry, NO revert.
-                guard let self, let i = self.staged.firstIndex(where: { $0.id == id }) else { return }
+                guard let self,
+                      let i = self.staged.firstIndex(where: { $0.id == id }),
+                      self.staged[i].serverOwnerRef == ref,
+                      self.staged[i].serverOwnerSnapshot == snapshot else { return }
                 self.staged[i].serverUploadState = .failed
             }
             self?.uploadTasks[id] = nil
@@ -341,6 +554,7 @@ final class ComposerAttachmentCoordinator {
     /// eagerly under a FLAT storedKey (no conversation folder exists yet) when the
     /// gateway has a file-server, else stages a `.needsSetup` tile.
     func handleUnifiedImport(_ result: Result<[URL], Error>, vm: ConversationDetailViewModel?, ref: RemoteAgentRef) {
+        guard !dispatchInProgress else { return }
         guard case .success(let urls) = result else { return }
         stageServerFiles(urls, vm: vm, ref: ref)
     }
@@ -350,7 +564,7 @@ final class ComposerAttachmentCoordinator {
     /// Stage one picked/dropped text-or-code file via `AttachmentDeliveryPlanner`.
     /// Extracts the text ONCE here (the inline/persist copy + the size the planner
     /// routes by), then:
-    ///   - no file-server / no VM / extraction fails → inline-only `.file(url)`
+    ///   - no file-server / extraction fails → inline-only `.file(url)`
     ///     (today's behavior — no regression);
     ///   - server + small (planner `inline:true`) → `.dualText` tile in
     ///     `.uploading(0)` + eager background PUT of the RAW file bytes (so the
@@ -363,16 +577,16 @@ final class ComposerAttachmentCoordinator {
     /// Route is decided by EXTRACTED UTF-8 byte count, not raw file size. The
     /// per-turn inline budget is consulted via the live `staged` inline total so a
     /// turn that staples many small files demotes the overflow to ref-only.
-    func stageTextFile(_ url: URL, extracted precomputed: TextFileExtractor.ExtractedFile? = nil, vm: ConversationDetailViewModel?, ref: RemoteAgentRef?) async {
-        // Resolve file-server READINESS up front (drives the planner; a saved-
-        // but-failed server routes inline-only, like no server). No VM →
-        // no eager-upload capability → inline-only regardless.
-        let snapshot: SettingsManager.FileTransferSnapshot?
-        if let vm, let ref {
-            snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
-        } else {
-            snapshot = nil
-        }
+    func stageTextFile(_ url: URL, extracted precomputed: TextFileExtractor.ExtractedFile? = nil, vm: ConversationDetailViewModel?, ref: RemoteAgentRef) async {
+        guard !dispatchInProgress else { return }
+        activeStagingBatches += 1
+        defer { activeStagingBatches -= 1 }
+        // Resolve READY by the EFFECTIVE gateway ref, independently of whether
+        // the first turn has minted a ConversationDetailViewModel yet. A nil VM
+        // means "flat storedKey", not "no upload capability".
+        let lane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
+        guard !Task.isCancelled else { return }
+        let fileServerReady = lane != nil
 
         // Extract ONCE (the inline/persist copy + the planner's routing size). The
         // caller (`stageServerFiles`) already ran the extraction OFF-main as its
@@ -389,81 +603,56 @@ final class ComposerAttachmentCoordinator {
         } else {
             resolved = await Task.detached { try? TextFileExtractor.extract(from: url) }.value
         }
+        guard !Task.isCancelled else { return }
         guard let extracted = resolved else {
             staged.append(StagedAttachment(kind: .file(url)))
             return
         }
-        let byteCount = extracted.text.lengthOfBytes(using: .utf8)
-
-        let plan = AttachmentDeliveryPlanner.plan(
-            extractedByteCount: byteCount,
-            fileServerPresent: snapshot != nil,
-            inlineBudgetRemaining: inlineTextBudgetRemaining
+        let folderCapable = lane?.folderCapable ?? false
+        let prepared = await TextAttachmentStagePreparer.prepare(
+            sourceURL: url,
+            extracted: extracted,
+            fileServerReady: fileServerReady,
+            inlineBudgetRemaining: inlineTextBudgetRemaining,
+            folderCapable: folderCapable,
+            conversationID: vm?.conversationID
         )
-
-        // No server copy → inline-only `.file` (unchanged path).
-        guard plan.serverCopy != .none, let vm, let ref else {
-            staged.append(StagedAttachment(kind: .file(url)))
+        guard !Task.isCancelled else {
+            if let upload = prepared.uploadRequest {
+                try? FileManager.default.removeItem(at: upload.localURL)
+            }
             return
         }
+        var item = prepared.attachment
+        if prepared.uploadRequest != nil {
+            item.serverOwnerRef = ref
+            item.serverOwnerSnapshot = lane
+        }
+        staged.append(item)
 
-        if plan.inline {
-            // DUAL: inline fenced text NOW + eager upload of the raw file bytes.
-            // Copy the picked bytes UNDER scope to a stable temp so the async
-            // upload + a later Retry both read a plain file (the picked scope may
-            // not outlive the upload). The temp is reclaimed on remove / clear.
-            // WHY off-main: the file-to-file copy BLOCKS on an iCloud-not-downloaded
-            // / external / network volume (security scope is process-wide, so the
-            // whole bracketed copy is correct in one detached call).
-            guard let stagingURL = await Task.detached { Self.copyUnderScope(url) }.value else {
-                // Couldn't copy the source — fall back to inline-only `.file`.
-                staged.append(StagedAttachment(kind: .file(url)))
-                return
-            }
-            let item = StagedAttachment(
-                kind: .dualText(
-                    url: stagingURL,
-                    extractedText: extracted.text,
-                    filename: extracted.filename,
-                    mimeType: extracted.mimeType
-                ),
-                serverUploadState: .uploading(progress: 0))
-            let id = item.id
-            staged.append(item)
-            serverStagingFiles[id] = stagingURL
+        guard let upload = prepared.uploadRequest, let lane else {
+            return
+        }
+        let id = item.id
+        serverStagingFiles[id] = upload.localURL
+        serverStoredKeys[id] = upload.storedKey
 
-            let storedKey = await Self.mintStoredKey(originalName: extracted.filename, vm: vm, ref: ref)
-            serverStoredKeys[id] = storedKey
-            kickDualUpload(id: id, localURL: stagingURL, storedKey: storedKey, ref: ref)
+        if item.isDualText {
+            kickDualUpload(
+                id: id,
+                localURL: upload.localURL,
+                storedKey: upload.storedKey,
+                ref: ref,
+                snapshot: lane
+            )
         } else {
-            // FILE-ONLY (`inline:false`): the extracted text does NOT ride inline.
-            // Both the large (`.required`) case and the small-but-over-budget
-            // (`.preferred`) case land here — in both the inline copy is suppressed
-            // on the wire and the file rides as a `.serverFile` tile (the agent's
-            // tools reach the real bytes). A `.required` large file SHOULD gate
-            // Send (no inline fallback exists for it); a `.preferred`-over-budget
-            // small file also routes here for simplicity — an over-budget turn
-            // already carries ≥`textInlineTurnBudgetBytes` of inline text, so
-            // gating on its small overflow upload is acceptable. (The common dual
-            // case — small + within budget — is the `plan.inline` branch above and
-            // never gates Send.)
-            // Off-main copy (BLOCKS on a remote volume; scope is process-wide).
-            guard let stagingURL = await Task.detached { Self.copyUnderScope(url) }.value else {
-                staged.append(StagedAttachment(kind: .file(url)))
-                return
-            }
-            let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                ?? extracted.mimeType
-            let item = StagedAttachment(
-                kind: .serverFile(url: stagingURL, originalName: extracted.filename, mimeType: mimeType),
-                serverUploadState: .uploading(progress: 0))
-            let id = item.id
-            staged.append(item)
-            serverStagingFiles[id] = stagingURL
-
-            let storedKey = await Self.mintStoredKey(originalName: extracted.filename, vm: vm, ref: ref)
-            serverStoredKeys[id] = storedKey
-            kickUpload(id: id, localURL: stagingURL, storedKey: storedKey, ref: ref)
+            kickUpload(
+                id: id,
+                localURL: upload.localURL,
+                storedKey: upload.storedKey,
+                ref: ref,
+                snapshot: lane
+            )
         }
     }
 
@@ -494,18 +683,24 @@ final class ComposerAttachmentCoordinator {
         id: UUID,
         localURL: URL,
         storedKey: String,
-        ref: RemoteAgentRef
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot
     ) {
         let task = Task { @MainActor [weak self] in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, ref: ref) { progress in
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
                     Task { @MainActor [weak self] in
                         guard let self,
-                              let i = self.staged.firstIndex(where: { $0.id == id }) else { return }
+                              let i = self.staged.firstIndex(where: { $0.id == id }),
+                              self.staged[i].serverOwnerRef == ref,
+                              self.staged[i].serverOwnerSnapshot == snapshot else { return }
                         self.staged[i].serverUploadState = .uploading(progress: progress)
                     }
                 }
-                guard let self, let i = self.staged.firstIndex(where: { $0.id == id }) else { return }
+                guard let self,
+                      let i = self.staged.firstIndex(where: { $0.id == id }),
+                      self.staged[i].serverOwnerRef == ref,
+                      self.staged[i].serverOwnerSnapshot == snapshot else { return }
                 self.staged[i].serverUploadState = .uploaded(storedKey: storedKey)
             } catch is CancellationError {
                 // Tile is being removed — leave it.
@@ -513,7 +708,10 @@ final class ComposerAttachmentCoordinator {
                 // Upload failed → mark `.failed`. Does NOT block Send (a `.dualText`
                 // tile is excluded from the send-gating helpers); the file rides
                 // inline-only this turn. NO silent retry, NO revert.
-                guard let self, let i = self.staged.firstIndex(where: { $0.id == id }) else { return }
+                guard let self,
+                      let i = self.staged.firstIndex(where: { $0.id == id }),
+                      self.staged[i].serverOwnerRef == ref,
+                      self.staged[i].serverOwnerSnapshot == snapshot else { return }
                 self.staged[i].serverUploadState = .failed
             }
             self?.uploadTasks[id] = nil
@@ -556,6 +754,7 @@ final class ComposerAttachmentCoordinator {
     /// flips to `.failed`. `vm` + `ref` thread the dual-route through (nil vm →
     /// inline-only fallback inside `stageImage`).
     func handlePickerSelection(_ items: [PhotosPickerItem], vm: ConversationDetailViewModel?, ref: RemoteAgentRef) {
+        guard !dispatchInProgress else { return }
         guard !items.isEmpty else { return }
         for item in items {
             let placeholder = StagedAttachment(kind: .loading)
@@ -565,6 +764,7 @@ final class ComposerAttachmentCoordinator {
             let progress = item.loadTransferable(type: Data.self) { [weak self] result in
                 Task { @MainActor in
                     guard let self else { return }
+                    self.pickerLoadProgresses[id] = nil
                     self.progressByID[id] = nil
                     guard let index = self.staged.firstIndex(where: { $0.id == id }) else { return }
                     switch result {
@@ -581,6 +781,7 @@ final class ComposerAttachmentCoordinator {
                 }
             }
             // Seed the determinate bar; observe completion fraction.
+            pickerLoadProgresses[id] = progress
             progressByID[id] = progress.fractionCompleted
             observeProgress(progress, for: id)
         }
@@ -616,6 +817,7 @@ final class ComposerAttachmentCoordinator {
     /// `vm` may be nil (brand-new conversation): the binary route still works —
     /// the eager upload mints a FLAT storedKey (no conversation folder yet).
     func stageServerFiles(_ urls: [URL], vm: ConversationDetailViewModel?, ref: RemoteAgentRef) {
+        guard !dispatchInProgress else { return }
         // ONE ordered task drains the urls SEQUENTIALLY so tiles append — and the
         // wire `sequence` assigned at send — preserve the user's SELECTION order.
         // The blocking file I/O still hops off-main per url (the UI never freezes
@@ -623,9 +825,18 @@ final class ComposerAttachmentCoordinator {
         // are NOT raced against each other: a fast small file must not overtake a
         // slow large one (per-url concurrent tasks reordered a multi-file drop —
         // see code-review). Cheap metadata probes stay on main.
-        Task { @MainActor [weak self] in
+        activeStagingBatches += 1
+        let preparationID = UUID()
+        let task = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                self.activeStagingBatches -= 1
+                self.preparationTasks[preparationID] = nil
+            }
+            let capturedLane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
+            guard !Task.isCancelled else { return }
             for url in urls {
+                guard !Task.isCancelled else { return }
                 // FOLDERS are unstageable (the staging copy would recursively
                 // duplicate the whole tree into tmp; the upload can't send one) —
                 // skip defensively; the importer's type set already excludes them.
@@ -647,6 +858,7 @@ final class ComposerAttachmentCoordinator {
                         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                         return try? Data(contentsOf: url)
                     }.value
+                    guard !Task.isCancelled else { return }
                     if let data { await self.stageImage(data, vm: vm, ref: ref) }
                     continue
                 }
@@ -662,6 +874,7 @@ final class ComposerAttachmentCoordinator {
                 // never read twice.
                 if self.shouldAttemptTextProbe(url) {
                     let extracted = await Task.detached { try? TextFileExtractor.extract(from: url) }.value
+                    guard !Task.isCancelled else { return }
                     if let extracted {
                         await self.stageTextFile(url, extracted: extracted, vm: vm, ref: ref)
                         continue
@@ -676,6 +889,10 @@ final class ComposerAttachmentCoordinator {
                 // gateway → `.serverFile` + eager upload; an UNCONFIGURED gateway →
                 // a `.needsSetup` tile (blocks Send, auto-promotes once setup done).
                 guard let stagingURL = await Task.detached { Self.copyUnderScope(url) }.value else { continue }
+                guard !Task.isCancelled else {
+                    try? FileManager.default.removeItem(at: stagingURL)
+                    return
+                }
                 let originalName = url.lastPathComponent
                 let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
                     ?? "application/octet-stream"
@@ -688,20 +905,21 @@ final class ComposerAttachmentCoordinator {
                         originalName: originalName,
                         mimeType: mimeType,
                         byteSize: byteSize,
-                        ref: ref))
+                        ref: ref,
+                        snapshot: capturedLane))
                     continue
                 }
-                let hasServer = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) != nil
                 self.finalizeBinaryStage(
                     stagingURL: stagingURL,
                     originalName: originalName,
                     mimeType: mimeType,
                     byteSize: byteSize,
-                    hasServer: hasServer,
+                    snapshot: capturedLane,
                     vm: vm,
                     ref: ref)
             }
         }
+        preparationTasks[preparationID] = task
     }
 
     /// Stage a (size-cleared) binary: a configured gateway → `.serverFile` +
@@ -716,40 +934,45 @@ final class ComposerAttachmentCoordinator {
         originalName: String,
         mimeType: String,
         byteSize: Int,
-        hasServer: Bool,
+        snapshot: SettingsManager.FileTransferSnapshot?,
         vm: ConversationDetailViewModel?,
         ref: RemoteAgentRef
     ) {
-        guard hasServer else {
+        guard let snapshot else {
             // No file-server on the bound gateway → a `.needsSetup` tile. It blocks
             // Send and carries the staging URL so promotion can upload from it once
             // file transfer is set up. Stamped with the gateway it was staged FOR —
-            // promotion only fires for a matching ref (see `needsSetupRefs`).
+            // promotion only fires for a matching owner.
             let item = StagedAttachment(kind: .needsSetup(
                 url: stagingURL,
                 originalName: originalName,
                 mimeType: mimeType,
-                byteSize: byteSize))
+                byteSize: byteSize),
+                serverOwnerRef: ref)
             staged.append(item)
             serverStagingFiles[item.id] = stagingURL
-            needsSetupRefs[item.id] = ref
             return
         }
 
         // Configured gateway → `.serverFile` + eager upload (unchanged route).
         let item = StagedAttachment(
             kind: .serverFile(url: stagingURL, originalName: originalName, mimeType: mimeType),
+            serverOwnerRef: ref,
+            serverOwnerSnapshot: snapshot,
             serverUploadState: .uploading(progress: 0))
         let id = item.id
         staged.append(item)
         serverStagingFiles[id] = stagingURL
 
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let storedKey = await Self.mintStoredKey(originalName: originalName, vm: vm, ref: ref)
-            self.serverStoredKeys[id] = storedKey
-            self.kickUpload(id: id, localURL: stagingURL, storedKey: storedKey, ref: ref)
-        }
+        let storedKey = Self.mintStoredKey(originalName: originalName, vm: vm, snapshot: snapshot)
+        serverStoredKeys[id] = storedKey
+        kickUpload(
+            id: id,
+            localURL: stagingURL,
+            storedKey: storedKey,
+            ref: ref,
+            snapshot: snapshot
+        )
     }
 
     /// Mint a storedKey for a server upload: namespaced under the conversation's
@@ -758,13 +981,12 @@ final class ComposerAttachmentCoordinator {
     private static func mintStoredKey(
         originalName: String,
         vm: ConversationDetailViewModel?,
-        ref: RemoteAgentRef
-    ) async -> String {
-        let folderCapable = await SettingsManager.shared.getFileServerFolderCapable(for: ref)
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) -> String {
         return FileServerClient.makeStoredKey(
             originalName: originalName,
             uuid: UUID(),
-            folder: (folderCapable && vm != nil) ? vm?.conversationID.uuidString : nil
+            folder: (snapshot.folderCapable && vm != nil) ? vm?.conversationID.uuidString : nil
         )
     }
 
@@ -779,31 +1001,51 @@ final class ComposerAttachmentCoordinator {
 
     /// Confirm the head soft-confirm: stage it (`.serverFile` / `.needsSetup`),
     /// then advance the queue. Routes to the gateway captured at ENQUEUE
-    /// (`file.ref`), but re-resolves the server-presence snapshot FRESH — setup
-    /// can complete while the alert is up (remote sync), and a stale flag would
-    /// stage a misleading `.needsSetup` tile (or a guaranteed-fail upload). A nil
-    /// VM (brand-new conversation) still uploads — under a FLAT storedKey
-    /// (`finalizeBinaryStage` handles it).
+    /// (`file.ref`) and reuses an already-captured physical lane. Only a file
+    /// queued before transfer was ready resolves a newly configured lane at
+    /// confirmation time. A nil VM (brand-new conversation) still uploads under
+    /// a FLAT storedKey (`finalizeBinaryStage` handles it).
     func confirmPendingLargeFile(vm: ConversationDetailViewModel?) {
+        guard !dispatchInProgress else { return }
         guard let file = pendingLargeFiles.first else { return }
         pendingLargeFiles.removeFirst()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let hasServer = await SettingsManager.shared.fileTransferReadySnapshot(for: file.ref) != nil
+        let preparationID = UUID()
+        activeStagingBatches += 1
+        let task = Task { @MainActor [weak self] in
+            guard let self else {
+                try? FileManager.default.removeItem(at: file.stagingURL)
+                return
+            }
+            defer {
+                self.activeStagingBatches -= 1
+                self.preparationTasks[preparationID] = nil
+            }
+            let lane: SettingsManager.FileTransferSnapshot?
+            if let captured = file.snapshot {
+                lane = captured
+            } else {
+                lane = await SettingsManager.shared.fileTransferReadySnapshot(for: file.ref)
+            }
+            guard !Task.isCancelled else {
+                try? FileManager.default.removeItem(at: file.stagingURL)
+                return
+            }
             self.finalizeBinaryStage(
                 stagingURL: file.stagingURL,
                 originalName: file.originalName,
                 mimeType: file.mimeType,
                 byteSize: file.byteSize,
-                hasServer: hasServer,
+                snapshot: lane,
                 vm: vm,
                 ref: file.ref)
         }
+        preparationTasks[preparationID] = task
     }
 
     /// Cancel (discard) the head soft-confirm: reclaim its staging temp file and
     /// advance the queue. The file is never staged.
     func cancelPendingLargeFile() {
+        guard !dispatchInProgress else { return }
         guard let file = pendingLargeFiles.first else { return }
         pendingLargeFiles.removeFirst()
         try? FileManager.default.removeItem(at: file.stagingURL)
@@ -820,14 +1062,15 @@ final class ComposerAttachmentCoordinator {
     /// new-chat composer unblocks immediately; only a still-absent snapshot keeps
     /// a tile `.needsSetup`.
     func promoteNeedsSetupTiles(vm: ConversationDetailViewModel?, ref: RemoteAgentRef) async {
-        guard await SettingsManager.shared.fileTransferReadySnapshot(for: ref) != nil else { return }
-        // Snapshot the ids first (the loop mutates `staged`). Only tiles STAMPED
+        guard !dispatchInProgress else { return }
+        guard let snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) else { return }
+        // Snapshot the ids first (the loop mutates `staged`). Only tiles OWNED
         // for THIS ref promote — a tile staged for a different gateway stays
         // `.needsSetup` (still blocks Send) rather than uploading somewhere its
-        // turn will never reference (see `needsSetupRefs`).
+        // turn will never reference.
         let promotable: [(id: UUID, url: URL, name: String, mime: String)] = staged.compactMap { item in
             guard case .needsSetup(let url, let name, let mime, _) = item.kind,
-                  (needsSetupRefs[item.id] ?? ref) == ref else { return nil }
+                  item.serverOwnerRef == ref else { return nil }
             return (item.id, url, name, mime)
         }
         for entry in promotable {
@@ -839,25 +1082,21 @@ final class ComposerAttachmentCoordinator {
             // may have X-removed it mid-mint. The `.needsSetup` re-check makes
             // promotion idempotent (never a double upload / a kick from a
             // reclaimed staging temp).
-            let storedKey = await Self.mintStoredKey(originalName: entry.name, vm: vm, ref: ref)
+            let storedKey = Self.mintStoredKey(originalName: entry.name, vm: vm, snapshot: snapshot)
             guard let index = staged.firstIndex(where: { $0.id == entry.id }),
-                  case .needsSetup = staged[index].kind else { continue }
+                  case .needsSetup = staged[index].kind,
+                  staged[index].serverOwnerRef == ref else { continue }
             staged[index].kind = .serverFile(url: entry.url, originalName: entry.name, mimeType: entry.mime)
+            staged[index].serverOwnerSnapshot = snapshot
             staged[index].serverUploadState = .uploading(progress: 0)
             serverStoredKeys[entry.id] = storedKey
-            needsSetupRefs[entry.id] = nil
-            kickUpload(id: entry.id, localURL: entry.url, storedKey: storedKey, ref: ref)
-        }
-    }
-
-    /// Re-stamp every `.needsSetup` tile to `ref`. ONLY for the VM-less new-chat
-    /// composer when the user flips the gateway picker — there the next turn
-    /// definitionally binds to the new gateway, so its tiles should follow (and
-    /// then promote, if the new gateway has a server). A conversation-bound
-    /// composer must NOT re-stamp (its tiles belong to the bound gateway).
-    func restampNeedsSetupTiles(to ref: RemoteAgentRef) {
-        for item in staged where item.needsSetup {
-            needsSetupRefs[item.id] = ref
+            kickUpload(
+                id: entry.id,
+                localURL: entry.url,
+                storedKey: storedKey,
+                ref: ref,
+                snapshot: snapshot
+            )
         }
     }
 
@@ -866,10 +1105,13 @@ final class ComposerAttachmentCoordinator {
     /// `serverStoredKeys` — so the retry overwrites the partial blob instead of
     /// orphaning it under a fresh key), flipping the tile back to `.uploading(0)`.
     /// `vm` may be nil (VM-less new chat): the fallback mint goes flat.
-    func retryServerUpload(id: UUID, vm: ConversationDetailViewModel?, ref: RemoteAgentRef) {
+    func retryServerUpload(id: UUID, vm: ConversationDetailViewModel?) {
+        guard !dispatchInProgress else { return }
         guard let index = staged.firstIndex(where: { $0.id == id }),
               case .serverFile(let url, let originalName, _) = staged[index].kind,
-              staged[index].serverUploadFailed else { return }
+              staged[index].serverUploadFailed,
+              let ref = staged[index].serverOwnerRef,
+              let snapshot = staged[index].serverOwnerSnapshot else { return }
         staged[index].serverUploadState = .uploading(progress: 0)
 
         // Reuse the key minted at stage time (so the retry overwrites the partial
@@ -877,15 +1119,24 @@ final class ComposerAttachmentCoordinator {
         // somehow absent) resolves the gateway's folder-capability so a re-minted
         // key still lands in THIS conversation's folder.
         if let storedKey = serverStoredKeys[id] {
-            kickUpload(id: id, localURL: url, storedKey: storedKey, ref: ref)
+            kickUpload(
+                id: id,
+                localURL: url,
+                storedKey: storedKey,
+                ref: ref,
+                snapshot: snapshot
+            )
             return
         }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let storedKey = await Self.mintStoredKey(originalName: originalName, vm: vm, ref: ref)
-            self.serverStoredKeys[id] = storedKey
-            self.kickUpload(id: id, localURL: url, storedKey: storedKey, ref: ref)
-        }
+        let storedKey = Self.mintStoredKey(originalName: originalName, vm: vm, snapshot: snapshot)
+        serverStoredKeys[id] = storedKey
+        kickUpload(
+            id: id,
+            localURL: url,
+            storedKey: storedKey,
+            ref: ref,
+            snapshot: snapshot
+        )
     }
 
     /// Spin up (and retain) the eager background upload for a staged server tile.
@@ -896,23 +1147,32 @@ final class ComposerAttachmentCoordinator {
         id: UUID,
         localURL: URL,
         storedKey: String,
-        ref: RemoteAgentRef
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot
     ) {
         let task = Task { @MainActor [weak self] in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, ref: ref) { progress in
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
                     Task { @MainActor [weak self] in
                         guard let self,
-                              let i = self.staged.firstIndex(where: { $0.id == id }) else { return }
+                              let i = self.staged.firstIndex(where: { $0.id == id }),
+                              self.staged[i].serverOwnerRef == ref,
+                              self.staged[i].serverOwnerSnapshot == snapshot else { return }
                         self.staged[i].serverUploadState = .uploading(progress: progress)
                     }
                 }
-                guard let self, let i = self.staged.firstIndex(where: { $0.id == id }) else { return }
+                guard let self,
+                      let i = self.staged.firstIndex(where: { $0.id == id }),
+                      self.staged[i].serverOwnerRef == ref,
+                      self.staged[i].serverOwnerSnapshot == snapshot else { return }
                 self.staged[i].serverUploadState = .uploaded(storedKey: storedKey)
             } catch is CancellationError {
                 // Tile is being removed — leave it.
             } catch {
-                guard let self, let i = self.staged.firstIndex(where: { $0.id == id }) else { return }
+                guard let self,
+                      let i = self.staged.firstIndex(where: { $0.id == id }),
+                      self.staged[i].serverOwnerRef == ref,
+                      self.staged[i].serverOwnerSnapshot == snapshot else { return }
                 self.staged[i].serverUploadState = .failed
             }
             self?.uploadTasks[id] = nil
