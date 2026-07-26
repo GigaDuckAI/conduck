@@ -185,6 +185,7 @@ struct VoiceProviderDetailView: View {
                     onClear: {
                         Task { try? await viewModel.clearKey(for: metadata.id) }
                     },
+                    clearAlsoResetsTTS: viewModel.clearingKeyResetsActiveTTS(for: metadata.id),
                     appleModelState: metadata.isOnDevice
                         ? (viewModel.appleModelStates[viewModel.appleTargetKey] ?? .notDownloaded)
                         : nil,

@@ -29,30 +29,6 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// `.backgroundTask(.urlSession(...))` handler in `ConduckWatchApp.swift`.
     static let converseSessionIdentifier = Constants.remoteAgentWatchConverseSessionIdentifier
 
-    /// Accumulated response data per task (taskIdentifier → data).
-    /// MAIN-CONFINED: mutated from the upload entry points (MainActor — this
-    /// class inherits the target's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`)
-    /// and from the delegate callbacks, which BOTH sessions deliver on
-    /// `OperationQueue.main` (see the session initializers) — one serial queue
-    /// for every access. The iOS counterpart (`BackgroundSTT`) confines on a
-    /// private queue instead because it is explicitly `nonisolated`; here the
-    /// main queue IS the class's isolation, so it's the correct single queue.
-    private var responseData: [Int: Data] = [:]
-
-    /// Multipart-body temp files to clean up after upload completes
-    /// (separate from the captured audio file recovered via `taskDescription`).
-    /// MAIN-CONFINED — same contract as `responseData` above.
-    private var multipartTempFiles: [Int: URL] = [:]
-
-    /// Capture-supersede token per STT task (taskIdentifier → the
-    /// `WatchRecordingService.captureGeneration` captured at enqueue).
-    /// Consulted by `handleSTTCompletion` so a cancelled capture's transcript
-    /// is dropped instead of chaining the converse hop into a thread the
-    /// routing pins no longer describe. In-memory only — a task resurrected
-    /// across a launch recovers nil and proceeds (no live machine could have
-    /// cancelled it). MAIN-CONFINED — same contract as `responseData` above.
-    private var sttTaskGenerations: [Int: Int] = [:]
-
     /// Which background session a `.backgroundTask(.urlSession)` wake targets.
     /// Keys the drain-waiter bookkeeping below — the Watch has TWO background
     /// sessions, unlike the single-session iOS `BackgroundRemoteAgent`.
@@ -60,6 +36,70 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         case stt
         case converse
     }
+
+    /// Registry key for every per-task dictionary below.
+    ///
+    /// LOAD-BEARING that it is not a bare `taskIdentifier`: that value is unique
+    /// only WITHIN one `URLSession` (both sessions number their tasks from 1),
+    /// and this ONE delegate serves BOTH background sessions. A bare `Int` key
+    /// therefore let an STT task and a converse task alias each other — cross-
+    /// feeding response bytes into one buffer (both bodies then fail to decode),
+    /// summing both bodies against the ONE over-cap ceiling, and letting an STT
+    /// enqueue overwrite a live converse task's tracked body-file URL (deleting
+    /// the wrong temp file, and flipping the `.cancelled` disambiguation the
+    /// converse verdict reads out of `multipartTempFiles`). The sibling iOS
+    /// lanes need no such key because each owns exactly one session.
+    ///
+    /// The two id spaces align easily in practice: they are staggered on the
+    /// steady-state STT→converse chain, but a background relaunch re-numbers
+    /// only the session that has no resurrected tasks, so a fresh STT task 1
+    /// meets a resurrected converse task 1.
+    private struct TaskKey: Hashable {
+        let wake: BackgroundWake
+        let id: Int
+    }
+
+    /// The wake (i.e. the session identity) a delegate callback belongs to.
+    /// Single definition so every registry read/write keys identically.
+    private func wake(for session: URLSession) -> BackgroundWake {
+        session === converseSession ? .converse : .stt
+    }
+
+    /// Accumulated response data per task.
+    /// MAIN-CONFINED: mutated from the upload entry points (MainActor — this
+    /// class inherits the target's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`)
+    /// and from the delegate callbacks, which BOTH sessions deliver on
+    /// `OperationQueue.main` (see the session initializers) — one serial queue
+    /// for every access. The iOS counterpart (`BackgroundSTT`) confines on a
+    /// private queue instead because it is explicitly `nonisolated`; here the
+    /// main queue IS the class's isolation, so it's the correct single queue.
+    /// Bounded by `Constants.maxBackgroundResponseBytes` — see `overCapTaskKeys`.
+    private var responseData: [TaskKey: Data] = [:]
+
+    /// Multipart-body temp files to clean up after upload completes
+    /// (separate from the captured audio file recovered via `taskDescription`).
+    /// MAIN-CONFINED — same contract as `responseData` above.
+    private var multipartTempFiles: [TaskKey: URL] = [:]
+
+    /// Tasks whose response body exceeded `Constants.maxBackgroundResponseBytes`
+    /// and were cancelled for it. Recorded BEFORE `cancel()` and consumed by
+    /// `didCompleteWithError`, for the same reason as
+    /// `BackgroundRemoteAgent.overCapTaskIDs`: URLSession reports our own cancel
+    /// as a plain `URLError.cancelled`, byte-identical to a live in-process
+    /// cancel — which the converse verdict drops SILENTLY (`.cleanupOnly`: no
+    /// bubble, no notification, no Retry). Without this note a peer fabricating
+    /// an oversized body made the user's spoken turn vanish off the wrist with
+    /// no error anywhere. MAIN-CONFINED.
+    private var overCapTaskKeys: Set<TaskKey> = []
+
+    /// Capture-supersede token per STT task (the
+    /// `WatchRecordingService.captureGeneration` captured at enqueue).
+    /// Consulted by `handleSTTCompletion` so a cancelled capture's transcript
+    /// is dropped instead of chaining the converse hop into a thread the
+    /// routing pins no longer describe. In-memory only — a task resurrected
+    /// across a launch recovers nil and proceeds (no live machine could have
+    /// cancelled it). MAIN-CONFINED — same contract as `responseData` above.
+    private var sttTaskGenerations: [TaskKey: Int] = [:]
 
     /// Continuation-resumers registered by `handleBackgroundEvents(_:)` (the
     /// two `.backgroundTask(.urlSession)` closures in `ConduckWatchApp`).
@@ -287,9 +327,20 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         // the task. JSON-encoded `STTBackgroundTaskMetadata` survives cross-
         // launch via `taskDescription` (the URLSession daemon preserves it
         // across app process recycles).
+        // `bodyPath` rides the envelope alongside `audioPath`, byte-for-byte the
+        // shape `handleConverseCompletion` already relies on
+        // (`RemoteAgentBackgroundMetadata.bodyPath`). LOAD-BEARING: the body file
+        // holds a complete second copy of the recording (raw bytes for multipart,
+        // base64 for JSON), it was tracked ONLY in `multipartTempFiles`, and that
+        // registry dies with the process — while suspend+relaunch is the DESIGNED
+        // path for a wrist background upload. Every cross-launch completion
+        // therefore orphaned one voice recording in `temporaryDirectory`, against
+        // the never-persist-audio invariant this file's own cleanup mandate
+        // asserts.
         let metadata = STTBackgroundTaskMetadata(
             audioPath: audioFileURL.path,
-            providerID: provider.id
+            providerID: provider.id,
+            bodyPath: bodyFileURL.path
         )
         do {
             task.taskDescription = try metadata.encodedString()
@@ -299,8 +350,9 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // will use the default in `STTProvider.lookup(id:)`).
             task.taskDescription = audioFileURL.path
         }
-        multipartTempFiles[task.taskIdentifier] = bodyFileURL
-        sttTaskGenerations[task.taskIdentifier] = generation
+        let key = TaskKey(wake: .stt, id: task.taskIdentifier)
+        multipartTempFiles[key] = bodyFileURL
+        sttTaskGenerations[key] = generation
         task.resume()
 
         WatchLog.note(.stt, "stt.bg.start", ["task": task.taskIdentifier, "provider": provider.id])
@@ -415,7 +467,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         task.taskDescription = metadataString
         // Track the body file for cleanup (belt-and-suspenders alongside
         // the `taskDescription` recovery path).
-        multipartTempFiles[task.taskIdentifier] = bodyURL
+        multipartTempFiles[TaskKey(wake: .converse, id: task.taskIdentifier)] = bodyURL
         task.resume()
 
         WatchLog.note(.converse, "converse.bg.start", ["task": task.taskIdentifier])
@@ -423,10 +475,33 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
 
     // MARK: - URLSessionDataDelegate
 
+    /// Shared by BOTH sessions (STT + converse) — hence the session-derived
+    /// `TaskKey`. Accumulation is BOUNDED by
+    /// `Constants.maxBackgroundResponseBytes`: the body is peer-controlled and was
+    /// appended with no ceiling, and the wrist is the tightest memory budget of
+    /// any surface — so a fabricated multi-MB answer jetsams here first. Over the
+    /// ceiling the task is cancelled and the partial buffer dropped (it can never
+    /// decode), and the key is noted in `overCapTaskKeys` BEFORE `cancel()` so
+    /// `didCompleteWithError` can tell OUR cancel from a live in-process one.
+    /// Same shape as `BackgroundRemoteAgent` / `CarPlayConverseUploader` /
+    /// `STTClient+Background`; the wrist carries its verdict through the pure
+    /// `WatchConverseCompletionVerdict` rather than a per-lane branch.
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        var existing = responseData[dataTask.taskIdentifier] ?? Data()
-        existing.append(data)
-        responseData[dataTask.taskIdentifier] = existing
+        let key = TaskKey(wake: wake(for: session), id: dataTask.taskIdentifier)
+        // Already over cap and cancelled — drop straggler chunks the daemon had
+        // already queued (re-accumulating them would defeat the cap).
+        guard !overCapTaskKeys.contains(key) else { return }
+        let buffered = responseData[key]?.count ?? 0
+        guard buffered + data.count <= Constants.maxBackgroundResponseBytes else {
+            overCapTaskKeys.insert(key)
+            responseData[key] = Data()
+            dataTask.cancel()
+            return
+        }
+        // Subscript-with-default `_modify` appends in place. Copying the value out
+        // and back (the previous shape) re-allocated the whole buffer per chunk,
+        // making a large body quadratic in its own size.
+        responseData[key, default: Data()].append(data)
     }
 
     /// Server-trust challenge. The converse session pins against the gateway's
@@ -475,36 +550,50 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             return
         }
 
-        let taskID = task.taskIdentifier
+        let key = TaskKey(wake: .stt, id: task.taskIdentifier)
 
         // Capture-supersede token registered at enqueue. Nil for a task
         // resurrected across a launch — the registry died with the process,
         // and nothing live could have cancelled that capture, so it proceeds.
-        let generation = sttTaskGenerations.removeValue(forKey: taskID)
+        let generation = sttTaskGenerations.removeValue(forKey: key)
+
+        // Consume OUR over-cap note (recorded in `didReceive data:` before the
+        // cancel). Read here, not in the `defer`, because the transport branch
+        // below returns before it runs — and removed on EVERY path so the set
+        // cannot grow across dropped tasks.
+        let responseOverCap = overCapTaskKeys.remove(key) != nil
 
         // Recover provider context + audio path from `taskDescription`. JSON-
         // encoded `STTBackgroundTaskMetadata` is the canonical form; the
         // raw-path fallback is the encoding-failure escape hatch from
         // `uploadSTT` (still lets us clean up the audio file even if we
         // can't recover the provider — falls back to `mistralVoxtral`).
-        let (audioPath, provider): (String?, STTProvider) = {
+        let (audioPath, bodyPath, provider): (String?, String?, STTProvider) = {
             guard let desc = task.taskDescription, !desc.isEmpty else {
-                return (nil, .mistralVoxtral)
+                return (nil, nil, .mistralVoxtral)
             }
             if let meta = try? STTBackgroundTaskMetadata.decode(desc) {
-                return (meta.audioPath, STTProvider.lookup(id: meta.providerID))
+                return (meta.audioPath, meta.bodyPath, STTProvider.lookup(id: meta.providerID))
             }
             // Legacy / fallback: raw audio path with no provider info.
-            return (desc, .mistralVoxtral)
+            return (desc, nil, .mistralVoxtral)
         }()
 
         // AUDIO-CLEANUP MANDATE: BOTH temp files (audio + body) are removed
         // in a single `defer`, on success OR failure. A thrown decode error
-        // inside `handleSTTCompletion` cannot bypass this.
+        // inside `handleSTTCompletion` cannot bypass this. The body is pulled
+        // from the tracked registry AND from the envelope's `bodyPath` — the same
+        // belt-and-braces `handleConverseCompletion` uses below, and required for
+        // the same reason: the registry dies with the process, and this task is
+        // EXPECTED to complete after a suspend+relaunch, so the registry-only
+        // version left a full copy of the recording orphaned in tmp.
         defer {
-            responseData.removeValue(forKey: taskID)
-            if let bodyURL = multipartTempFiles.removeValue(forKey: taskID) {
+            responseData.removeValue(forKey: key)
+            if let bodyURL = multipartTempFiles.removeValue(forKey: key) {
                 try? FileManager.default.removeItem(at: bodyURL)
+            }
+            if let bodyPath, !bodyPath.isEmpty {
+                try? FileManager.default.removeItem(at: URL(fileURLWithPath: bodyPath))
             }
             if let audioPath, !audioPath.isEmpty {
                 try? FileManager.default.removeItem(at: URL(fileURLWithPath: audioPath))
@@ -526,6 +615,19 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         }
 
         if let error {
+            // OUR over-cap cancel — a transcript body past
+            // `Constants.maxBackgroundResponseBytes`, i.e. a provider fabricating
+            // a response, NOT a connectivity problem. Surfaced as the plain
+            // could-not-process copy (mirrors the iPhone lane's `.invalidResponse`)
+            // instead of the honest-but-wrong "check your connection" wording.
+            if responseOverCap {
+                WatchLog.error(.stt, "stt.bg.overcap")
+                surfaceTurnFailure(
+                    message: String(localized: "Could not process response."),
+                    conversationID: nil
+                )
+                return
+            }
             WatchLog.error(.stt, "stt.bg.transport", ["domain": (error as NSError).domain, "code": (error as NSError).code])
             // The same companion-routing trap can sink a direct cloud-STT upload;
             // honest connectivity copy, generic fallback otherwise. STT tasks carry
@@ -542,7 +644,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         }
 
         // Parse server response — dispatch by provider transport.
-        guard let data = responseData[taskID] else {
+        guard let data = responseData[key] else {
             // xcstrings
             surfaceTurnFailure(
                 message: String(localized: "No response received from server."),
@@ -652,7 +754,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// (success / failure / cancel). No 423 / no lock-retry — client-owned
     /// history pins no server session (that case is retired).
     private func handleConverseCompletion(task: URLSessionTask, error: Error?) {
-        let taskID = task.taskIdentifier
+        let key = TaskKey(wake: .converse, id: task.taskIdentifier)
 
         // Recover the metadata envelope (body path + conversationID + backend)
         // from `taskDescription` — survives a cross-launch process recycle.
@@ -665,8 +767,8 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         // tracked-registry URL and the metadata path so cleanup works even when
         // the in-memory entry was lost to a relaunch.
         defer {
-            responseData.removeValue(forKey: taskID)
-            if let bodyURL = multipartTempFiles.removeValue(forKey: taskID) {
+            responseData.removeValue(forKey: key)
+            if let bodyURL = multipartTempFiles.removeValue(forKey: key) {
                 try? FileManager.default.removeItem(at: bodyURL)
             }
             if let bodyPath = metadata?.bodyPath {
@@ -675,17 +777,20 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         }
 
         // Classify FIRST via the pure `WatchConverseCompletionVerdict` (unit-
-        // tested branch ordering: cancel disambiguation → transport → missing
-        // response → status map → decode → conversationID), then EXECUTE the
-        // verdict below. The registry-presence read for the `.cancelled`
-        // disambiguation happens here, BEFORE the `defer` above removes the
-        // entry (ordering contract).
+        // tested branch ordering: over-cap → cancel disambiguation → transport →
+        // missing response → status map → decode → conversationID), then EXECUTE
+        // the verdict below. Both reads that the `defer` above destroys — the
+        // registry presence for the `.cancelled` disambiguation and OUR over-cap
+        // note — happen here, BEFORE it runs (ordering contract). The over-cap
+        // note is consumed (removed) so the set cannot grow across dropped tasks.
+        let responseOverCap = overCapTaskKeys.remove(key) != nil
         let verdict = WatchConverseCompletionVerdict.make(
             metadata: metadata,
             httpStatus: (task.response as? HTTPURLResponse)?.statusCode,
-            body: responseData[taskID],
+            body: responseData[key],
             transportError: error,
-            registryEntryPresent: multipartTempFiles[taskID] != nil
+            registryEntryPresent: multipartTempFiles[key] != nil,
+            responseOverCap: responseOverCap
         )
 
         switch verdict {
@@ -799,6 +904,14 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                 for: error,
                 fallback: String(localized: "Couldn't reach your personal AI. Try again.")
             )
+        case .responseOverCap:
+            // A body past `Constants.maxBackgroundResponseBytes` — the reply is
+            // unreadable, not unreachable, so it takes the same copy as an
+            // undecodable one (the iPhone lane's `.remoteAgentInvalidResponse`).
+            // The point of the branch is that the turn FAILS VISIBLY, with the
+            // ordinary Retry affordance, instead of vanishing as a cancel.
+            WatchLog.error(.converse, "converse.bg.overcap")
+            return String(localized: "Couldn't read the reply from your personal AI.")
         case .cancelledAcrossLaunch, .missingHTTPResponse:
             return String(localized: "Couldn't reach your personal AI. Try again.")
         case .httpStatus(let status):

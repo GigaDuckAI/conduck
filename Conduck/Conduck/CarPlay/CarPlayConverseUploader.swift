@@ -69,8 +69,23 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
 
     private let stateLock = NSLock()
     private var inFlight: [Int: InFlightTurn] = [:]
+    /// Bounded by `Constants.maxBackgroundResponseBytes` — see `overCapTaskIDs`.
     private var responseBuffers: [Int: Data] = [:]
     private var bodyURLs: [Int: URL] = [:]
+
+    /// Task identifiers whose server-trust challenge THIS delegate cancelled (a
+    /// pinned-cert mismatch, or a cross-host hop that could not present the
+    /// pinned key). Kept in lockstep with `BackgroundRemoteAgent.pinRejectedTaskIDs`
+    /// — the two converse lanes must label a refused certificate identically, or
+    /// the same MITM reads as "untrusted certificate" in the app and "tap to
+    /// retry" in the car. Guarded by `stateLock` like every other registry here.
+    private var pinRejectedTaskIDs = Set<Int>()
+
+    /// Task identifiers whose response body exceeded
+    /// `Constants.maxBackgroundResponseBytes` and were cancelled for it. Needed
+    /// for the same reason as `pinRejectedTaskIDs`: a bare `task.cancel()` is
+    /// indistinguishable from the driver pressing End.
+    private var overCapTaskIDs = Set<Int>()
 
     /// Drain bookkeeping for the `.backgroundTask(.urlSession)` wake handler
     /// (mirrors `BackgroundRemoteAgent`): waiters registered by
@@ -323,16 +338,37 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let id = dataTask.taskIdentifier
         stateLock.lock()
+        // BOUNDED accumulate (mirrors `BackgroundRemoteAgent`): the body is
+        // gateway-controlled and was appended with no ceiling, so a fabricated
+        // answer grew until the OS jetsammed the app. Straggler chunks after the
+        // cancel are dropped; the verdict is recorded BEFORE `cancel()` so
+        // `didCompleteWithError` can tell it from the driver pressing End.
+        if overCapTaskIDs.contains(id) {
+            stateLock.unlock()
+            return
+        }
+        let buffered = responseBuffers[id]?.count ?? 0
+        guard buffered + data.count <= Constants.maxBackgroundResponseBytes else {
+            overCapTaskIDs.insert(id)
+            responseBuffers[id] = Data()
+            stateLock.unlock()
+            dataTask.cancel()
+            return
+        }
+        // Subscript-with-default `_modify` keeps the append in place; copying the
+        // value out and back would make accumulation quadratic.
         responseBuffers[id, default: Data()].append(data)
         stateLock.unlock()
     }
 
-    /// TASK-level server-trust challenge handler — host-scoped per-ref pinning
-    /// for the CarPlay converse hop (self-signed support). Recovers the
-    /// turn's `refRawValue` from `taskDescription` and resolves that ref's
-    /// pinned SPKI fingerprint LIVE from the App Group (host-guarded), so a
-    /// pin set / rotated after launch is always honoured and a cross-launch
-    /// resume re-reads the durable pin. nil → default ATS. Mirrors
+    /// TASK-level server-trust challenge handler — per-ref pinning for the
+    /// CarPlay converse hop (self-signed support). Recovers the turn's
+    /// `refRawValue` from `taskDescription` and resolves that ref's pinned SPKI
+    /// fingerprint LIVE from the App Group, so a pin set / rotated after launch
+    /// is always honoured and a cross-launch resume re-reads the durable pin.
+    /// nil → default ATS. The pin is applied HOST-BLIND so a cross-host redirect
+    /// must present the pinned key (rationale + honest limits on
+    /// `converseTaskPin(for:metadata:)`). Mirrors
     /// `BackgroundRemoteAgent` + `STTClient+Background`. A session-level
     /// handler would take precedence, so only this task-level one exists.
     func urlSession(
@@ -347,7 +383,20 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
             return
         }
         let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: pin)
-        evaluator.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+        let taskID = task.taskIdentifier
+        evaluator.urlSession(session, didReceive: challenge) { disposition, credential in
+            // A cancel from the evaluator is a PIN REJECTION by construction (it
+            // only cancels a server-trust challenge on a mismatch, and it is only
+            // reached when a pin was recovered). Noted BEFORE the handler is
+            // forwarded, because URLSession then reports plain `.cancelled` —
+            // indistinguishable from the driver pressing End.
+            if disposition == .cancelAuthenticationChallenge {
+                self.stateLock.lock()
+                self.pinRejectedTaskIDs.insert(taskID)
+                self.stateLock.unlock()
+            }
+            completionHandler(disposition, credential)
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -368,6 +417,8 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
             responseBuffers.removeValue(forKey: id)
             let bodyURL = bodyURLs.removeValue(forKey: id)
             inFlight.removeValue(forKey: id)
+            pinRejectedTaskIDs.remove(id)
+            overCapTaskIDs.remove(id)
             stateLock.unlock()
             if let bodyURL {
                 try? FileManager.default.removeItem(at: bodyURL)
@@ -380,6 +431,12 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
         stateLock.lock()
         let entry = inFlight[id]
         let buffered = responseBuffers[id] ?? Data()
+        // Read (the `defer` above clears) both per-task delegate notes. Each
+        // records a reason THIS delegate cancelled the task, and both surface as
+        // `.cancelled`, so they must be consulted before the End-vs-failure
+        // disambiguation below.
+        let pinRejected = pinRejectedTaskIDs.contains(id)
+        let responseOverCap = overCapTaskIDs.contains(id)
         stateLock.unlock()
 
         // Resolve the status-map carrier backend from the stamped ref string. A
@@ -405,6 +462,30 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
 
         // --- Transport error path ---
         if let error {
+            // OUR over-cap cancel — a body past
+            // `Constants.maxBackgroundResponseBytes`, i.e. a peer fabricating a
+            // response. Routed as an ordinary invalid-response failure (spoken by
+            // `handleBackgroundError` when the scene is live, durable `failed`
+            // turn with a Retry chip either way) rather than aborting silently.
+            if error is URLError, responseOverCap {
+                routeError(.remoteAgentInvalidResponse, conversationID: conversationID, userMessageID: userMessageID, turnToken: turnToken)
+                return
+            }
+            // OUR pin rejection. Classification delegated to the ONE shared
+            // classifier the foreground hop and `BackgroundRemoteAgent` use, so
+            // the lanes cannot drift. With `pinRejected == false` the classifier
+            // returns `.cancelled` and everything below is unchanged.
+            if let urlError = error as? URLError,
+               pinRejected,
+               RemoteAgentTrustEvaluator.classifyTransportError(
+                   urlError.code,
+                   hasPin: true,
+                   systemTrustRejected: false,
+                   pinRejected: true
+               ) == .certMismatch {
+                routeError(.remoteAgentCertMismatch, conversationID: conversationID, userMessageID: userMessageID, turnToken: turnToken)
+                return
+            }
             if let urlError = error as? URLError, urlError.code == .cancelled {
                 if entry == nil {
                     // Post-kill resurrect: after a force-quit, background tasks

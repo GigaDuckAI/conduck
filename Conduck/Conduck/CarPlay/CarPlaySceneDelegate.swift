@@ -335,7 +335,14 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // later, after the present transaction has drained.
             Task { @MainActor in
                 guard success else {
-                    Self.log.error("presentTemplate(voice) failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
+                    // NSError domain/code, never `localizedDescription` — see the
+                    // same reduction in `CarPlayRecordingService`. A
+                    // `CPInterfaceController` error cannot name a network host
+                    // today, but the exemption that allowed the error TEXT here was
+                    // file-scoped, so any future error logged in this file went
+                    // unchecked. Domain + code are unconditionally safe.
+                    let nsError = error.map { $0 as NSError }
+                    Self.log.error("presentTemplate(voice) failed: \(nsError?.domain ?? "unknown", privacy: .public) \(nsError?.code ?? 0, privacy: .public)")
                     // No voice modal is up, so do NOT run the completion — for
                     // `startSession` that completion is `beginSession()`, and
                     // starting a recording session with no modal to host it is
@@ -380,7 +387,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // `deactivateAudioSession()` so the audio teardown can't run off-main.
             Task { @MainActor in
                 if !success {
-                    Self.log.error("dismissTemplate(voice) failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
+                    // NSError domain/code, never `localizedDescription` — see the
+                    // sibling reduction above.
+                    let nsError = error.map { $0 as NSError }
+                    Self.log.error("dismissTemplate(voice) failed: \(nsError?.domain ?? "unknown", privacy: .public) \(nsError?.code ?? 0, privacy: .public)")
                 }
                 self?.recordingService?.deactivateAudioSession()
             }

@@ -118,16 +118,14 @@ struct ConduckConnectCommandBlock: View {
         }
     }
 
-    /// Copy to the system clipboard. Same cross-platform split the rest of the
-    /// app uses (`FileTransferSetupGuideView.writeToPasteboard`, `ConversationDetailViewModel.copy`).
+    /// Copy to the system clipboard through the shared helper — the setup command
+    /// is NON-secret (a public download-and-run line, no token), so the plain
+    /// unbounded `Pasteboard.copy` is correct here. Secrets take
+    /// `Pasteboard.copySensitive` instead; routing both through `Pasteboard`
+    /// keeps that choice visible at the call site rather than hidden in a
+    /// per-file `#if` duplicate.
     private func copyCommand() {
-        let command = setupCommand
-        #if canImport(UIKit)
-        UIPasteboard.general.string = command
-        #elseif canImport(AppKit)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
-        #endif
+        Pasteboard.copy(setupCommand)
         withAnimation { didCopy = true }
         Task {
             try? await Task.sleep(for: .seconds(2))

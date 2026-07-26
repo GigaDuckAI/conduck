@@ -89,6 +89,20 @@ struct ProviderConfigBody: View {
     let onSetActive: () -> Void
     let onClear: () -> Void
 
+    /// Does clearing this vendor's key ALSO fall the active TTS pointer back to
+    /// the Apple voice — i.e. is the active TTS provider reading this vendor's
+    /// shared key slot? Feeds `clearKeyConfirmMessage` only.
+    ///
+    /// A separate input rather than something derived from `state`, because
+    /// `state` answers the STT question and the two pointers move
+    /// independently: the vendor can be the active VOICE while some other
+    /// provider does the dictation, which renders as `.storedInactive` while
+    /// clearing still switches the user's reply voice. Callers pass
+    /// `SettingsViewModel.clearingKeyResetsActiveTTS(for:)`, the same predicate
+    /// `clearKey(for:)` acts on. Defaults to `false` so the previews and the
+    /// legacy `.full` picker (neither renders Clear key) compile unchanged.
+    var clearAlsoResetsTTS: Bool = false
+
     var appleModelState: AppleModelInstallState? = nil
     var onDownloadAppleModel: (() -> Void)? = nil
     var onDeleteAppleModel: (() -> Void)? = nil
@@ -402,6 +416,48 @@ struct ProviderConfigBody: View {
             Button(LocalizedStringResource("settings.stt.provider.apple.deleteAlert.cancel", defaultValue: "Cancel"),
                    role: .cancel) { }
         } message: {
+            clearKeyConfirmMessage
+        }
+    }
+
+    /// The STT half of the fallback question: is THIS preset the active one?
+    private var clearResetsSTTPointer: Bool {
+        if case .storedActive = state { return true }
+        return false
+    }
+
+    /// Confirmation copy for Clear key. Clearing a vendor's key falls BOTH
+    /// active pointers that read its shared key slot back to Apple — STT to
+    /// `apple-on-device`, TTS to `apple-tts` (see
+    /// `SettingsViewModel.clearKey(for:)`; that fallback is what stops a paired
+    /// Watch from continuing to upload under the cleared key). The two pointers
+    /// move INDEPENDENTLY, so the copy branches on both: a user can be listening
+    /// to this vendor's voice while dictating through another, and a
+    /// confirmation that doesn't name the switch it is about to make is consent
+    /// to something the user was not told.
+    ///
+    /// `clearResetsSTTPointer` answers the STT half off `state`;
+    /// `clearAlsoResetsTTS` answers the TTS half, derived by the same predicate
+    /// `clearKey(for:)` acts on.
+    @ViewBuilder
+    private var clearKeyConfirmMessage: some View {
+        switch (clearResetsSTTPointer, clearAlsoResetsTTS) {
+        case (true, true):
+            Text(LocalizedStringResource(
+                "settings.voice.access.clearKey.message.active",
+                defaultValue: "Speech-to-text and text-to-speech for \(metadata.displayName) will stop working until you add a key again. Conduck switches speech-to-text back to Apple on-device and the reply voice back to the Apple voice, on this device and on your Apple Watch."
+            ))
+        case (true, false):
+            Text(LocalizedStringResource(
+                "settings.voice.access.clearKey.message.activeSTT",
+                defaultValue: "Speech-to-text and text-to-speech for \(metadata.displayName) will stop working until you add a key again. Conduck switches speech-to-text back to Apple on-device, on this device and on your Apple Watch."
+            ))
+        case (false, true):
+            Text(LocalizedStringResource(
+                "settings.voice.access.clearKey.message.activeTTS",
+                defaultValue: "Speech-to-text and text-to-speech for \(metadata.displayName) will stop working until you add a key again. Conduck reads replies in the Apple voice instead, on this device and on your Apple Watch."
+            ))
+        case (false, false):
             Text(LocalizedStringResource(
                 "settings.voice.access.clearKey.message",
                 defaultValue: "Speech-to-text and text-to-speech for \(metadata.displayName) will stop working until you add a key again."

@@ -15,6 +15,11 @@
 //      (URLSession surfaces this as a transport error that
 //      `RemoteAgentClient` maps to `.remoteAgentCertMismatch`).
 //
+// It is also the app's REDIRECT policy: a cross-ORIGIN 3xx is refused
+// (`willPerformHTTPRedirection`), so no endpoint can re-point a request's body
+// + `Authorization` header at a host the user never configured. Every session
+// that installs this evaluator inherits both policies at once.
+//
 // When no fingerprint is configured (`pinnedFingerprintHex == nil`), the
 // evaluator falls through to `.performDefaultHandling` and the system's
 // standard ATS chain validation applies. This is the recommended setup
@@ -38,7 +43,12 @@ import CryptoKit
 /// URLSessionDelegate implementing optional SHA-256 public-key pinning for
 /// the Personal AI gateway. Pass `pinnedFingerprintHex: nil` to fall
 /// through to default ATS validation.
-final class RemoteAgentTrustEvaluator: NSObject, URLSessionDelegate, @unchecked Sendable {
+///
+/// Also carries the app's redirect policy (`URLSessionTaskDelegate`, below):
+/// a cross-ORIGIN 3xx is REFUSED so a compromised endpoint cannot re-point a
+/// request — with its body, its bearer header, and the user's pin scope — at
+/// a host the user never configured.
+final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
 
     /// Expected SHA-256 (lowercase hex, no separators) of the leaf cert's
     /// public-key DER. `nil` disables pinning → default ATS validation.
@@ -94,34 +104,60 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionDelegate, @unchecked 
         super.init()
     }
 
-    // MARK: - Converse background-task pin resolution
+    // MARK: - Per-ref pin resolution (durable, live)
+
+    /// The pinned SPKI SHA-256 (lowercase hex) stored for `ref`, read LIVE from
+    /// App-Group `UserDefaults`. `nil` when unset or empty → default ATS.
+    ///
+    /// Defaults-only by design (no iCloud-KVS fallback, unlike
+    /// `getRemoteAgentURL(for:)`): a cert pin is a per-DEVICE TOFU artefact and
+    /// is never synced. Nonisolated synchronous read, so it is safe both inside
+    /// a trust delegate (no MainActor hop into `SettingsManager`) and on the
+    /// foreground send path — and reading it at challenge/dispatch time rather
+    /// than caching it means a re-pin between compose and send is honored, and a
+    /// cross-launch background resume re-reads the durable value.
+    static func storedConversePin(for ref: RemoteAgentRef) -> String? {
+        let defaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        guard let pin = defaults.string(forKey: Constants.remoteAgentCertFingerprintKey(for: ref)),
+              !pin.isEmpty
+        else { return nil }
+        return pin
+    }
 
     /// Resolve the pinned SHA-256 fingerprint to apply to a converse
     /// background-upload task's server-trust `challenge`, given the task's
     /// recovered `metadata`. Returns nil (→ caller should `performDefaultHandling`,
-    /// i.e. default ATS) UNLESS all hold:
+    /// i.e. default ATS) unless all hold:
     ///   1. the challenge is a server-trust challenge (client-cert/HTTP-auth → nil);
     ///   2. the metadata carries a `refRawValue` that parses to a `RemoteAgentRef`;
-    ///   3. that ref has a non-empty per-ref pin in App-Group UserDefaults; AND
-    ///   4. the challenge host matches the ref's configured URL host
-    ///      (defensive redirect / cross-host guard).
+    ///   3. that ref has a non-empty per-ref pin (`storedConversePin(for:)`).
     /// Shared by `BackgroundRemoteAgent` + `CarPlayConverseUploader` so both
-    /// converse delegates pin identically; mirrors the per-ref/host-scoped
-    /// resolution `STTClient+Background` does for the custom STT endpoint.
-    /// Nonisolated synchronous UserDefaults read — safe in the trust delegate
-    /// (no MainActor hop into `SettingsManager`); relaunch-safe + honors a
-    /// post-enqueue re-pin because it reads the durable store live.
+    /// converse delegates pin identically; mirrors the per-ref resolution
+    /// `STTClient+Background` does for the custom STT endpoint.
     ///
-    /// INVARIANT (load-bearing): the host-guard reads the ref's URL from
-    /// App-Group `defaults` ONLY (no iCloud-KVS fallback, unlike
-    /// `getRemoteAgentURL(for:)`). This stays equivalent to the request's
-    /// `snapshot.url` host because (a) the per-ref pin is defaults-only (never
-    /// KVS-synced), so the host-guard is only reached when the pin — and thus
-    /// the co-written defaults URL — is present, and (b) no `.userPinnable`
-    /// backend has a fixed (defaults-absent) URL. If a future change syncs the
-    /// pin to KVS, or makes a fixed-URL built-in pinnable, this guard would
-    /// return nil → default ATS → a self-signed turn would fail; resolve the
-    /// URL with the same source the snapshot used if either invariant changes.
+    /// HOST-BLIND, deliberately (load-bearing): the resolved pin applies to EVERY
+    /// server-trust challenge this task raises, including one raised by a redirect
+    /// target. A background `URLSession` always follows redirects and never
+    /// delivers `willPerformHTTPRedirection` (SDK contract), so the trust callback
+    /// is the only place a background converse task can push back on a cross-host
+    /// hop at all. Host-SCOPING the pin here instead returned nil for the redirect
+    /// host and degraded that hop to default ATS — i.e. the user's pin stopped
+    /// applying exactly when it mattered, letting a compromised gateway replay the
+    /// request body (full conversation history + images + bearer header) to any
+    /// host holding an ordinary publicly-trusted cert. Host-blind, that redirect
+    /// target must present the PINNED KEY or the evaluator cancels. Matches the
+    /// interactive lanes (Test Connection, custom STT/TTS, file-server probes),
+    /// which have always applied their pin host-blind.
+    ///
+    /// HONEST LIMIT — this is a mitigation, not a redirect veto. A pin compare
+    /// proves "same key", not "same origin": a wildcard / multi-SAN cert, or the
+    /// same private key deployed behind several proxy names, satisfies the pin at a
+    /// different host, and URLSession may reuse a connection or a trust decision
+    /// without emitting a fresh challenge at all. The complete answer is the
+    /// `willPerformHTTPRedirection` refusal below, which background sessions
+    /// cannot receive. Treat "point Conduck at the TERMINAL gateway URL, not one
+    /// that redirects" as the actual contract; Test Connection surfaces a
+    /// redirecting endpoint rather than silently following it.
     static func converseTaskPin(
         for challenge: URLAuthenticationChallenge,
         metadata: RemoteAgentBackgroundMetadata?
@@ -131,20 +167,7 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionDelegate, @unchecked 
               let ref = RemoteAgentRef(rawString: refRaw)
         else { return nil }
 
-        let defaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
-        guard let pin = defaults.string(forKey: Constants.remoteAgentCertFingerprintKey(for: ref)),
-              !pin.isEmpty
-        else { return nil }
-
-        // Host-guard: pin ONLY when the challenge host matches this ref's
-        // configured URL host. A mismatch (e.g. a redirect to another host) →
-        // nil → default ATS rather than pinning the wrong host.
-        guard let urlString = defaults.string(forKey: Constants.remoteAgentURLKey(for: ref)),
-              let host = URL(string: urlString)?.host(percentEncoded: false),
-              challenge.protectionSpace.host == host
-        else { return nil }
-
-        return pin
+        return storedConversePin(for: ref)
     }
 
     // MARK: - Pure helpers (independently unit-testable)
@@ -350,8 +373,18 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionDelegate, @unchecked 
         // cert / NTLM / HTTP-auth challenges hit default handling — we
         // don't want a pinned-fingerprint user to accidentally block a
         // bearer-token 401 retry, for example.
+        //
+        // A PROXY server-trust challenge is likewise default-handled: the pin is
+        // a statement about the GATEWAY's public key, not about an HTTPS forward
+        // proxy the OS/MDM configured on this network. Comparing the gateway pin
+        // against the proxy's own cert would refuse the CONNECT hop and lock a
+        // proxied user out entirely, and it buys nothing — the tunnelled
+        // end-to-end TLS session to the gateway raises its OWN challenge (with
+        // `isProxy == false`), which IS pinned. A transparent MITM with no
+        // CONNECT also reports `isProxy == false`, so it stays pinned/refused.
         guard
             challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+            !challenge.protectionSpace.isProxy(),
             let serverTrust = challenge.protectionSpace.serverTrust
         else {
             completionHandler(.performDefaultHandling, nil)
@@ -413,5 +446,84 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionDelegate, @unchecked 
             pinRejected = true
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
+    }
+
+    // MARK: - URLSessionTaskDelegate (redirect policy)
+
+    /// Refuse a redirect that leaves the ORIGIN the request was sent to; follow a
+    /// same-origin one unchanged.
+    ///
+    /// WHY: a user-configured endpoint answering `307 Location: https://elsewhere`
+    /// otherwise gets URLSession to replay the request — the full client-owned
+    /// conversation history, inline images, raw audio, file bytes, and the
+    /// preset `Authorization` header — to a host the user never configured, and
+    /// with the pin no longer meaningfully in scope (a redirect target holding
+    /// an ordinary publicly-trusted cert passes default ATS). Refusing turns
+    /// that into a VISIBLE outcome instead: passing `nil` completes the task
+    /// with the 3xx response itself, which every caller already classifies
+    /// (`FileServerClient.classifyReachability` maps 3xx → `.suspicious`; the
+    /// gateway probes fail the body-envelope verdict; `RemoteAgentStatusMap`
+    /// turns it into an HTTP error). Matches `conduck-connect --check-server`,
+    /// which never follows redirects either.
+    ///
+    /// Same-ORIGIN redirects stay allowed because they are ordinary and benign —
+    /// a reverse proxy canonicalising a path, adding/removing a trailing slash,
+    /// or a WebDAV server relocating a collection. Compared on
+    /// `(scheme, host, effective port)`, not host alone: `:443` → `:8443` on the
+    /// same name is a different service, and https is mandatory app-wide so a
+    /// 3xx must never be able to downgrade the hop.
+    ///
+    /// Scope: every session that installs this evaluator as its delegate
+    /// inherits the policy — Test Connection, model discovery, custom STT/TTS,
+    /// file-server probes, and the macOS foreground converse session. BACKGROUND
+    /// sessions never receive this callback (SDK: "For tasks in background
+    /// sessions, redirections will always be followed and this method will not
+    /// be called"), which is why the background lanes additionally rely on the
+    /// unscoped pin in `converseTaskPin(for:metadata:)`. That mitigation is
+    /// weaker than a redirect veto and is documented as such there.
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        // `response.url` is the URL that ANSWERED with the 3xx — i.e. the origin
+        // we were actually talking to on this hop (which, across a redirect
+        // chain, is not necessarily the original request's).
+        let from = response.url ?? task.currentRequest?.url ?? task.originalRequest?.url
+        guard let target = request.url,
+              let source = from,
+              Self.sameOrigin(source, target),
+              target.scheme?.lowercased() == "https"
+        else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
+
+    /// Scheme + host + EFFECTIVE port equality (the URL origin), case-folded.
+    /// `URL.port` is nil for a default port, so it is resolved against the
+    /// scheme — otherwise `https://host` and `https://host:443` read as
+    /// different origins and a legitimate canonicalising redirect would be
+    /// refused. Only https/http are resolvable here, which is all this app speaks.
+    static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        func effectivePort(_ url: URL) -> Int? {
+            if let port = url.port { return port }
+            switch url.scheme?.lowercased() {
+            case "https": return 443
+            case "http": return 80
+            default: return nil
+            }
+        }
+        guard let lhsHost = lhs.host(percentEncoded: false)?.lowercased(),
+              let rhsHost = rhs.host(percentEncoded: false)?.lowercased(),
+              let lhsPort = effectivePort(lhs),
+              let rhsPort = effectivePort(rhs)
+        else { return false }
+        return lhs.scheme?.lowercased() == rhs.scheme?.lowercased()
+            && lhsHost == rhsHost
+            && lhsPort == rhsPort
     }
 }

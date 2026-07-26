@@ -714,7 +714,7 @@ final class WatchSettingsReader {
     /// per-ref model cache (nil for built-ins → gateway default; omitted from the
     /// converse body).
     func remoteAgentConfig(for ref: String) -> (url: URL, token: String, authScheme: RemoteAgentAuthScheme, cert: String?, model: String?)? {
-        guard let url = remoteAgentURLs[ref] else { return nil }
+        guard let url = remoteAgentURLs[ref], Self.urlIsAdmissible(url) else { return nil }
         let scheme = remoteAgentAuthSchemes[ref] ?? .bearer
         let storedToken = WatchIdentityResolver.getRemoteAgentToken(for: ref)
         // `.bearer` requires a non-empty token (fail closed — keyless is NEVER
@@ -723,6 +723,30 @@ final class WatchSettingsReader {
             return nil
         }
         return (url, storedToken ?? "", scheme, remoteAgentCertFingerprints[ref], remoteAgentModels[ref])
+    }
+
+    /// Watch-local twin of the iPhone's `EndpointURLPolicy.isAdmissible(_:)`:
+    /// https, a non-empty host, and no `user:password@` userinfo. Applied at
+    /// `remoteAgentConfig(for:)` — the dispatch chokepoint — because a gateway
+    /// URL reaches this Watch by THREE routes (a multi-gateway WCSession
+    /// envelope, a legacy single envelope, and cold App-Group/KVS hydration);
+    /// gating the resolver covers all three, whereas gating one ingest leaves
+    /// the others open. Nil-ing the tuple here routes to the existing "not
+    /// configured" error path, matching what an upgraded iPhone reports for the
+    /// same value — the two must not disagree.
+    ///
+    /// A THIRD copy of the predicate rather than a call: the iPhone's canonical
+    /// `EndpointURLPolicy` lives in the phone-side sources, and this reader must
+    /// not take a cross-target dependency to enforce a four-line rule. If the
+    /// rule ever changes, all copies move together — the policy type's doc
+    /// comment is the contract.
+    private static func urlIsAdmissible(_ url: URL) -> Bool {
+        guard let host = url.host, !host.isEmpty else { return false }
+        guard url.scheme?.lowercased() == "https" else { return false }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return true
+        }
+        return components.user == nil && components.password == nil
     }
 
     /// Whether the gateway bound to `ref` (a `rawString`) has a READY file lane,

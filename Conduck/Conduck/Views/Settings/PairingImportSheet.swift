@@ -602,8 +602,12 @@ struct PairingImportSheet: View {
                 ForEach(visibleStages, id: \.self) { stage in
                     stageRow(stage)
                 }
-                if stageStatus[.gateway] == .untrustedCert, presentedUntrustedFP != nil {
-                    trustRetryButton
+                // `phase == .done` = the run has PAUSED on the amber row. Gating
+                // on it keeps the card off screen during a trust-and-retry
+                // re-run, which clears `presentedUntrustedFP` before the stage
+                // flips back to `.running`.
+                if stageStatus[.gateway] == .untrustedCert, phase == .done {
+                    tofuCard
                 }
             }
             .padding(.vertical, 4)
@@ -787,6 +791,77 @@ struct PairingImportSheet: View {
         default:
             return AppColors.textTertiary
         }
+    }
+
+    // MARK: - TOFU disclosure (what the tap actually pins)
+    //
+    // `trustAndRetry()` writes a PERMANENT per-device pin, and a pin REPLACES
+    // chain validation — so the one tap that reaches it is the whole trust
+    // decision. It therefore has to say what is being pinned before the tap, not
+    // after. One-tap TOFU (no separate review sheet) is the blessed pattern here
+    // — `STTTestSuiteResultView` ships the same shape — and this card mirrors it:
+    // explanatory body copy + the captured SPKI fingerprint inline + the action.
+    // The fingerprint is a PUBLIC value, so rendering it leaks nothing.
+    //
+    // The contradiction line is the signal a user can actually act on. A
+    // `conduck-connect` payload that carries `certFP` (or declares the
+    // self-signed transport) means the wizard expected an untrusted cert here,
+    // and a pin already set makes this state unreachable anyway
+    // (`classifyTransportError(hasPin: true, …)` never returns `.untrustedCert`).
+    // So reaching TOFU during an import of a payload with NO `certFP` means the
+    // wizard read the gateway's cert as publicly trusted while this device
+    // rejects it — a disagreement worth naming, because interception is one of
+    // the things that produces it.
+    @ViewBuilder
+    private var tofuCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let fingerprint = presentedUntrustedFP, !fingerprint.isEmpty {
+                Text(LocalizedStringResource(
+                    "settings.pairing.tofu.body",
+                    defaultValue: "This gateway presented a self-signed certificate this device doesn't recognize. Trusting it pins this exact certificate on this device — from then on Conduck accepts only this one."
+                ))
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if unexpectedSelfSignedCert {
+                    Text(LocalizedStringResource(
+                        "settings.pairing.tofu.unexpected",
+                        defaultValue: "Your setup code expected a publicly-trusted certificate here, not a self-signed one. On an untrusted network that can mean something is intercepting the connection. Re-run the setup on your server to confirm before you trust this."
+                    ))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppColors.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(fingerprint)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(AppColors.textTertiary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                trustRetryButton
+            } else {
+                // No pinnable fingerprint (key algorithm outside the V1 SPKI
+                // prefix table) — there is nothing to pin, so offer no action
+                // and name the two ways out instead of leaving a dead row.
+                Text(LocalizedStringResource(
+                    "settings.pairing.tofu.noFingerprint",
+                    defaultValue: "This gateway uses a self-signed certificate with an unsupported key type. Pin it manually in the gateway's Server certificate row, or give the server a publicly-trusted certificate."
+                ))
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.leading, 30)   // aligns under the stage row's title column
+    }
+
+    /// True when the pairing payload gave no reason to expect a self-signed
+    /// certificate — no `certFP` AND a transport other than `.selfsigned`.
+    /// `conduck-connect` computes and emits `certFP` for any self-signed gateway
+    /// it detects, so its absence means the wizard saw a trusted chain.
+    private var unexpectedSelfSignedCert: Bool {
+        guard let payload = activePayload else { return false }
+        return payload.certFP == nil && payload.transport != .selfsigned
     }
 
     private var trustRetryButton: some View {

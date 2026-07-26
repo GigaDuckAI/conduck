@@ -90,6 +90,23 @@ struct ConduckWatchApp: App {
         // conversational surface backed by `ConversationStore`).
         Task { await ConversationStore.shared.warmUp() }
 
+        // Privacy hygiene — reclaim capture audio and request bodies an abnormal
+        // termination stranded in `temporaryDirectory` (see TempScratchSweeper).
+        // The wrist needs this MORE than the phone, not less: every cleanup for
+        // `watch-capture-` / `watch-stt-audio-` / `stt-json-body-` /
+        // `conduck-watch-converse-body-` is in-process, watchOS jetsams a
+        // backgrounded app aggressively mid-upload, and the user has no way to
+        // inspect or clear a Watch's `tmp` themselves.
+        //
+        // Runs on EVERY process launch — including the background-URLSession
+        // relaunches below, which are the wrist's usual way back into memory
+        // after the very jetsam that stranded the file. `sweepInBackground` puts
+        // the scan on a background executor (a plain `Task { }` here would only
+        // DEFER it — this initializer is main-actor isolated and a `Task`
+        // inherits that); safe to race a rehydrated upload because the 24 h age
+        // floor sits orders of magnitude above any resource timeout.
+        TempScratchSweeper.sweepInBackground()
+
         // Synchronous Keychain check (~<1ms) to pick the right initial view
         _hasIdentity = State(initialValue: WatchIdentityResolver.hasKeychainIdentity())
 

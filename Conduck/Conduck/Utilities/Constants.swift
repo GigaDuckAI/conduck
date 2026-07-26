@@ -108,9 +108,14 @@ enum Constants {
     /// the priming step moved out of onboarding.)
     static let notificationsDeferredKey = "notifications_deferred_in_onboarding"
 
-    /// Identity-stability flag (NOT feature-usage). Set once after first successful API call;
-    /// gates whether `UserIdentityManager.handleiCloudChange` adopts an incoming iCloud UUID.
-    /// Without this, two devices launched in parallel could ping-pong UUIDs forever.
+    /// Identity-stability flag (NOT feature-usage): intended to gate whether
+    /// `UserIdentityManager.handleiCloudChange` adopts an incoming iCloud UUID, so
+    /// two devices launched in parallel can't ping-pong UUIDs forever. **Read-only
+    /// in practice** — nothing writes this key, so the gate always reads false and
+    /// adoption is unconditional; the read also targets `UserDefaults.standard`
+    /// while the App-Group store is this flag's documented home. Wiring a writer
+    /// changes identity resolution (watch-pairing blast radius), so it belongs in
+    /// its own change with coverage for the newly-reachable branch.
     static let hasBeenUsedKey = "device_has_been_used"
 
     /// App Groups flag set once after the one-time iCloud-Keychain secret
@@ -722,6 +727,25 @@ enum Constants {
     /// single round-trip without resurrecting a session the user has
     /// abandoned.
     static let remoteAgentConverseResourceTimeout: TimeInterval = 600
+
+    /// Hard ceiling on the bytes a BACKGROUND `URLSession` delegate will
+    /// accumulate for ONE JSON response body, before the body is decoded.
+    /// Applies to all four background ingest hops (converse on iOS/macOS ·
+    /// CarPlay converse · Watch converse · background STT), each of which
+    /// buffers the whole body in memory. Past the ceiling the task is cancelled
+    /// and the turn fails with `remoteAgentInvalidResponse` / `invalidResponse`
+    /// (a normal, retryable failure) instead of growing until the OS jetsams the
+    /// app — the surface with the tightest memory budget, watchOS, fails first.
+    ///
+    /// 16 MiB is deliberately far above any legitimate reply: a model's maximum
+    /// output (~128 k tokens) is roughly 0.5 MB of text, and JSON escaping does
+    /// not multiply that by 30. So no real long answer, code dump, or verbose
+    /// STT transcript can be rejected by this — it only bites a peer that is
+    /// fabricating a body, which the threat model treats as hostile. Nothing
+    /// caps the DECODED reply string: a length gate there would turn a genuine
+    /// long answer into a hard failure the user cannot get past, and one bound
+    /// at the transport layer is sufficient.
+    nonisolated static let maxBackgroundResponseBytes = 16 * 1024 * 1024
 
     /// Default listening port for an OpenClaw gateway (the project's
     /// upstream-documented port). Surfaced as the Settings URL-field

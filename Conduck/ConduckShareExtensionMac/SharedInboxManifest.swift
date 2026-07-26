@@ -89,6 +89,58 @@ struct SharedInboxManifest: Codable, Sendable {
             case sourceKind
         }
 
+        /// Character bound applied to `originalName` at CAPTURE — see
+        /// `boundedOriginalName`. 120 is generous for any real filename while
+        /// keeping the minted stored key's filename component (this name,
+        /// sanitized, behind an `<8hex>-<seq>__` prefix) far inside the 255-byte
+        /// path-component limit real file servers enforce.
+        static let originalNameMaxCharacters = 120
+
+        /// Bound a source app's suggested filename, preserving a trailing
+        /// extension.
+        ///
+        /// **Why this exists.** `originalName` is the ONE attacker-reachable
+        /// string in an envelope that is otherwise unbounded: it comes from
+        /// `NSItemProvider.suggestedName` (free-form, chosen by whatever app
+        /// presented the share sheet) and is stored as a JSON string, NOT as a
+        /// filename — the bytes go to `relPath` (`att-<n>.<ext>`) — so the
+        /// filesystem's 255-byte component limit never clips it. It then flows
+        /// into `FileServerClient.deterministicStoredKey`, and the resulting key
+        /// is spliced into the turn's text on EVERY later turn of the
+        /// conversation. Unbounded, that is a per-turn token/latency/cost tax and
+        /// a persistent carrier for a hostile name, for as long as the turn stays
+        /// inside the history window.
+        ///
+        /// **Why HERE and not at mint.** Bounding at capture makes the bounded
+        /// string the canonical, persisted manifest value, so a re-drain after a
+        /// crash re-mints the IDENTICAL key from the IDENTICAL input. Bounding
+        /// inside the mint instead would change the key an already-written
+        /// envelope re-derives on replay — and because
+        /// `ConversationStore.appendMessage(id:)` is idempotent on the envelope
+        /// UUID, a crash after the append leaves the persisted attachment naming
+        /// the OLD key while the replay uploads a second copy under the new one.
+        /// Old envelopes already in the inbox are untouched by this cap (it runs
+        /// only on the memberwise init, never on `init(from:)`), so every
+        /// already-queued envelope replays byte-identically.
+        ///
+        /// PRIVACY: pure transform, never logs (a filename is never logged).
+        static func boundedOriginalName(_ raw: String?) -> String? {
+            guard let raw, raw.count > originalNameMaxCharacters else { return raw }
+            // Keep a plausible trailing extension: the agent's tooling and the
+            // drainer's type classification both key on it, so a truncation that
+            // ate `.pdf` would be worse than the length it saved.
+            if let dot = raw.lastIndex(of: "."), dot != raw.startIndex {
+                let ext = raw[raw.index(after: dot)...]
+                let stemBudget = originalNameMaxCharacters - ext.count - 1
+                if (1...8).contains(ext.count),
+                   ext.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }),
+                   stemBudget > 0 {
+                    return String(raw.prefix(stemBudget)) + "." + String(ext)
+                }
+            }
+            return String(raw.prefix(originalNameMaxCharacters))
+        }
+
         init(
             relPath: String,
             originalName: String?,
@@ -98,7 +150,11 @@ struct SharedInboxManifest: Codable, Sendable {
             sourceKind: String? = nil
         ) {
             self.relPath = relPath
-            self.originalName = originalName
+            // Bound at CAPTURE only. `init(from:)` below deliberately does NOT
+            // bound: an envelope already on disk must decode to exactly the
+            // bytes it was written with, or its replay would mint a different
+            // stored key than the one its attachment already names.
+            self.originalName = Self.boundedOriginalName(originalName)
             self.mimeType = mimeType
             self.utTypeIdentifier = utTypeIdentifier
             self.sequence = sequence
@@ -108,6 +164,10 @@ struct SharedInboxManifest: Codable, Sendable {
         /// `relPath` is the only required field (an item without bytes is
         /// meaningless); every other field default-fills so a future schema
         /// addition can't break an old envelope.
+        ///
+        /// `originalName` is decoded VERBATIM — `boundedOriginalName` runs at
+        /// capture only. Bounding here would change the value an already-written
+        /// envelope replays with, and therefore the stored key it re-mints.
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             self.relPath = try c.decode(String.self, forKey: .relPath)

@@ -428,15 +428,48 @@ struct ConversationListView: View {
         }
     }
 
+    /// Characters KEPT in the cached preview string. The row renders
+    /// `.lineLimit(2)` at `.subheadline`, so even the widest surface (the macOS
+    /// split-view sidebar) shows well under 200 characters — 500 is generous
+    /// headroom and nothing the user could see is lost. Load-bearing because
+    /// this row's `.task` runs on the main actor during scene setup on
+    /// iPad/macOS (the conversation list is the always-visible sidebar there):
+    /// it bounds what `Text` ever has to lay out, however long the reply is.
+    static let previewCharacterCount = 500
+
+    /// The sidebar subtitle for a reply: collapse Markdown links to their
+    /// label, THEN cut to `previewCharacterCount`.
+    ///
+    /// THE ORDER IS THE POINT. Cutting first can slice a `[label](target)` in
+    /// half, and a half-link is not collapsible — the scanner needs the closing
+    /// `)` — so the raw target survives into the sidebar. That target is
+    /// attacker-influenced and is exactly the string this collapse exists to
+    /// keep off a glance surface: an agent's file link carries its host-side
+    /// filesystem path (`[poem.md](/Users/…/poem.md)`), and a web link carries a
+    /// host the user never chose to see. Collapsing first, the 500-character cut
+    /// only ever lands in text the user would have read anyway.
+    ///
+    /// Cost: `ReplySanitizer.linkCollapsed` sees the whole reply, not a
+    /// 500-character head. It carries NO input cap by design — capping a display
+    /// scan would strand the raw target this collapse exists to remove, at a
+    /// length the author of the reply picks. What bounds it instead: the scan
+    /// walks `String.UnicodeScalarView` indices without materializing them, bails
+    /// with no allocation when the text holds no `[`, and allocates an output
+    /// only when a link actually collapsed. Reply size itself is bounded at the
+    /// transport layer (`Constants.maxBackgroundResponseBytes`). This preview is
+    /// computed ONCE per conversation and cached by `loadPreviewIfNeeded`, so it
+    /// is the cheaper of the two callers — the Watch bubble runs the same scan
+    /// per render pass.
+    static func previewText(forReply reply: String) -> String {
+        String(ReplySanitizer.linkCollapsed(reply).prefix(previewCharacterCount))
+    }
+
     private func loadPreviewIfNeeded(_ id: UUID) async {
         guard previews[id] == nil else { return }
         let messages = (try? await ConversationStore.shared.fetchMessages(for: id)) ?? []
         if let last = messages.last {
-            // Collapse Markdown links to their label for the two-line preview —
-            // a raw `[name](target)` is unreadable subtitle noise and an agent's
-            // file link can carry its host-side filesystem path. (The thread
-            // view renders the full Markdown; this is preview-only.)
-            previews[id] = ReplySanitizer.linkCollapsed(last.text)
+            // (The thread view renders the full Markdown; this is preview-only.)
+            previews[id] = Self.previewText(forReply: last.text)
         } else {
             previews[id] = ""
         }

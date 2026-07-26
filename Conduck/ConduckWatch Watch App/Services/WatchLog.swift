@@ -17,6 +17,13 @@ import os
 /// bearer tokens, audio, language hints, backend refs, or full IDs. The composed
 /// line is marked `privacy: .public` ONLY because composition is guaranteed
 /// metadata-only by this contract (the same discipline as the iOS call sites).
+///
+/// That makes this spine fail-OPEN: because the whole line is stamped once here,
+/// a NEW field at a call site is public by default rather than redacted by
+/// default. `ConduckTests/LoggingPrivacyDriftGuardTests` therefore scans the
+/// `WatchLog.*` CALL SITES themselves (Rule 3) and fails on any key or value
+/// shaped like a URL, host, credential, file name or transcript — so the
+/// contract above is machine-checked, not comment-only.
 enum WatchLog {
 
     enum Category: String {

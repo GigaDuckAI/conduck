@@ -363,4 +363,86 @@ final class SettingsManagerRemoteAgentTests: XCTestCase {
         XCTAssertNil(SettingsManager.resolveStoredURL(local: nil, iCloud: nil, iCloudAvailable: true),
                      "No stored value anywhere → not configured.")
     }
+
+    // MARK: - Stored-URL read fence (`EndpointURLPolicy`)
+    //
+    // `resolveStoredURL` is the read fence for EVERY persisted endpoint URL —
+    // gateway (legacy + per-ref), file server, and custom voice endpoint. The
+    // write-side guards only bind THIS build; a value can still be sitting in
+    // the store from before the policy existed, or arrive through iCloud KVS
+    // from a peer device running an older build. The fence is what makes such a
+    // value unrequestable regardless.
+
+    func testResolveStoredURLRejectsUserinfoInLocalValue() {
+        XCTAssertNil(
+            SettingsManager.resolveStoredURL(
+                local: "https://u:p@gw.example.test",
+                iCloud: nil,
+                iCloudAvailable: true
+            ),
+            "A stored `user:password@` URL must never resolve — that password is in App-Group defaults and iCloud KVS, and resolving it would also send it on the wire."
+        )
+    }
+
+    func testResolveStoredURLRejectsUserinfoInICloudValue() {
+        XCTAssertNil(
+            SettingsManager.resolveStoredURL(
+                local: nil,
+                iCloud: "https://u:p@gw.example.test",
+                iCloudAvailable: true
+            ),
+            "The KVS side is the version-skew path — a peer on an older build is exactly how a contaminated value arrives on an upgraded device."
+        )
+    }
+
+    func testResolveStoredURLRejectsHostlessValue() {
+        XCTAssertNil(
+            SettingsManager.resolveStoredURL(local: "https://", iCloud: nil, iCloudAvailable: true),
+            "`https://` parses but has no host — resolving it yields a gateway that reports itself configured and fails every request."
+        )
+        XCTAssertNil(
+            SettingsManager.resolveStoredURL(local: "https:///v1", iCloud: nil, iCloudAvailable: true)
+        )
+    }
+
+    func testResolveStoredURLRejectsNonHTTPSValue() {
+        XCTAssertNil(
+            SettingsManager.resolveStoredURL(local: "http://gw.example.test", iCloud: nil, iCloudAvailable: true),
+            "https-only is a storage invariant, not just a save-time one."
+        )
+    }
+
+    /// An inadmissible value must be SKIPPED, not terminal. A contaminated local
+    /// slot masking a perfectly good synced one would turn a privacy fix into a
+    /// config-loss bug on the device that happens to hold the bad copy.
+    func testResolveStoredURLFallsThroughAContaminatedLocalToACleaniCloudValue() {
+        let url = SettingsManager.resolveStoredURL(
+            local: "https://u:p@gw.example.test",
+            iCloud: "https://cloud.example.test:18789",
+            iCloudAvailable: true
+        )
+        XCTAssertEqual(url?.absoluteString, "https://cloud.example.test:18789",
+                       "A rejected local value must fall through to the iCloud value, exactly as an empty one does.")
+    }
+
+    func testResolveStoredURLCleanLocalStillWinsOverContaminatediCloud() {
+        let url = SettingsManager.resolveStoredURL(
+            local: "https://local.example.test:18789",
+            iCloud: "https://u:p@gw.example.test",
+            iCloudAvailable: true
+        )
+        XCTAssertEqual(url?.absoluteString, "https://local.example.test:18789",
+                       "Defaults-first is unchanged; the fence only removes candidates, it never reorders them.")
+    }
+
+    func testResolveStoredURLBothSidesContaminatedYieldsNil() {
+        XCTAssertNil(
+            SettingsManager.resolveStoredURL(
+                local: "https://u:p@gw.example.test",
+                iCloud: "https://admin@gw.example.test",
+                iCloudAvailable: true
+            ),
+            "With no admissible candidate anywhere the ref reads as not configured — the same state an upgraded peer reports, so the two devices agree."
+        )
+    }
 }

@@ -3,11 +3,48 @@ xcuserdata/
 __pycache__/
 build/
 DerivedData/
-.env
-.env.*
+
+# Environment files. `.env*` (not `.env` + `.env.*`) so `.envrc` and friends are
+# caught too; the template is the one deliberate exception.
+.env*
 !.env.example
-# Official-identity override lives only in the private overlay — never commit here.
-Identity-Override.xcconfig
+
+# Keys, certificates, and provisioning — matched by PATTERN, not by filename, so
+# a credential dropped in the tree under any name is still ignored. This repo is
+# public: an accidental `git add -A` must not be able to stage one.
+*.p8
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+*.certSigningRequest
+*.cer
+*.crt
+*.pem
+*.der
+*.key
+
+# Re-include the SPKI-pinning test fixtures. `RemoteAgentFingerprintTests`
+# requires `test-cert.der` in the test bundle and documents regenerating the
+# expected digest from a `test-cert.pem`, so the cert globs above must not block a
+# contributor adding a second fixture (e.g. a pin-MISMATCH cert) — a silent
+# `git add` refusal there is a hostile-onboarding trap, and a self-signed cert is
+# public key material, not a secret. `*.key` is deliberately NOT re-included: a
+# private key has no business in a fixture directory.
+!Conduck/ConduckTests/Resources/*.der
+!Conduck/ConduckTests/Resources/*.pem
+!Conduck/ConduckTests/Resources/*.cer
+!Conduck/ConduckTests/Resources/*.crt
+
+# Official-identity override lives only in the private overlay — never commit
+# here. Pattern, not filename, so any `*-Override.xcconfig` is covered.
+*-Override.xcconfig
+
+# Private sibling-tree directories. Dead rules by topology today (these live
+# outside this repo), kept as belt-and-braces against a future copy or symlink
+# landing inside the public working tree.
+secrets-backup/
+brand-overlay/
 
 # Local agent-instruction overlays (private, never committed)
 CLAUDE.md

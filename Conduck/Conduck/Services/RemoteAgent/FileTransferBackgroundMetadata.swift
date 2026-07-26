@@ -56,6 +56,27 @@ struct FileTransferBackgroundMetadata: Codable, Sendable {
     /// non-share uploads.
     let sequence: Int?
 
+    /// The pinned SPKI SHA-256 (lowercase hex) this transfer was started under —
+    /// the enqueueing snapshot's `certFingerprintHex`. `nil` = unpinned lane
+    /// (Tailscale Serve / Let's Encrypt → default ATS), which is the recommended
+    /// posture and stays untouched.
+    ///
+    /// WHY it rides the task rather than being looked up by challenge host: the
+    /// task-level trust handler applies it HOST-BLIND, so a cross-origin redirect
+    /// target must present the PINNED key or the challenge is cancelled. Resolving
+    /// by challenge host instead returned "no pin" for a redirect target and
+    /// degraded that hop to default ATS — i.e. the pin silently stopped applying
+    /// exactly when a compromised endpoint re-pointed the task, replaying the file
+    /// bytes AND the `Authorization: Basic` credential to a host the user never
+    /// configured. Same rationale, and the same honest limit ("same key" is not
+    /// "same origin"), as `RemoteAgentTrustEvaluator.converseTaskPin`.
+    ///
+    /// A fingerprint is a digest of a PUBLIC key — no secret rides
+    /// `taskDescription`. ADDITIVE + TOLERANT like the two fields above: absent
+    /// in a blob written before this field existed → `nil` → the handler falls
+    /// back to the legacy host lookup.
+    let pinnedFingerprintHex: String?
+
     /// Explicit memberwise init with `shareEnvelopeID` + `sequence` DEFAULTED to
     /// `nil` so the existing construction sites (the in-app upload/download in
     /// `BackgroundFileTransfer`, tests) stay byte-identical — only the
@@ -66,13 +87,15 @@ struct FileTransferBackgroundMetadata: Codable, Sendable {
         refSuffix: String,
         direction: Direction,
         shareEnvelopeID: UUID? = nil,
-        sequence: Int? = nil
+        sequence: Int? = nil,
+        pinnedFingerprintHex: String? = nil
     ) {
         self.storedKey = storedKey
         self.refSuffix = refSuffix
         self.direction = direction
         self.shareEnvelopeID = shareEnvelopeID
         self.sequence = sequence
+        self.pinnedFingerprintHex = pinnedFingerprintHex
     }
 
     // MARK: - taskDescription bridging

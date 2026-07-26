@@ -51,6 +51,22 @@ final class EndOfSpeechDetector {
         }
     }
 
+    /// Model-load failures surfaced out of `start()`.
+    enum LoadError: Error {
+        /// The bundled Silero `.mlmodelc` did not resolve in `Bundle.main`.
+        ///
+        /// Deliberately fail-closed: FluidAudio's *other* `VadManager` init
+        /// (`init(config:)`, async) resolves the model by DOWNLOADING it from
+        /// `huggingface.co` — a host the user never configured. Conduck's
+        /// egress posture is Apple + user-configured endpoints only, so that
+        /// initializer is never called from this app and this error takes its
+        /// place. A build that trips this is broken (`VadModelBundleTests`
+        /// fails the suite before it can ship); the CarPlay session then ends
+        /// via the documented silent `startListening` setup-bailout path
+        /// rather than phoning home from the car.
+        case vadModelMissingFromBundle
+    }
+
     private let onEndOfSpeech: Callback
     private let onSpeechStart: Callback?
     /// Resolved VAD speech threshold. Either a `SensitivityLevel`'s threshold
@@ -103,9 +119,15 @@ final class EndOfSpeechDetector {
     /// capture pipeline awaits this before installing its input tap, so
     /// `processFixedBuffer` will not fire until setup is complete.
     ///
-    /// Throws on model-load failure. Caller treats throws as non-fatal — the
-    /// 5-min hard cap on the recorder still terminates the turn even with a
-    /// dead VAD.
+    /// Throws on model-load failure. A throw ENDS the CarPlay session: the sole
+    /// caller (`CarPlayRecordingService.startListening`) treats it as a setup
+    /// bailout and calls `endSession(speak: nil)` — silent by design, because
+    /// speaking an error over a wedged audio session escalates it (see the
+    /// CarPlay section of `spec.md`). Recording never starts, so the 300 s
+    /// recorder cap is not the backstop here; the only throwing paths are a
+    /// broken build (`LoadError.vadModelMissingFromBundle`) and a CoreML
+    /// compile/load failure, both of which mean there is no working VAD to
+    /// degrade to.
     ///
     /// Idempotent: calling twice is a no-op.
     func start() async throws {
@@ -114,7 +136,7 @@ final class EndOfSpeechDetector {
         didFire = false
         didLogFirstBuffer = false
 
-        let manager = try await loadManager()
+        let manager = try loadManager()
         try Task.checkCancellation()
 
         let (sequence, continuation) = AsyncStream<[Float]>.makeStream()
@@ -184,7 +206,11 @@ final class EndOfSpeechDetector {
                     }
                 }
             } catch {
-                Self.log.error("VAD task failed: \(error.localizedDescription, privacy: .public)")
+                // Domain + code, never `localizedDescription` — a CoreML or
+                // cancellation error's localized string can carry file paths and
+                // is a `.public` interpolation, so it would land in the unified
+                // log verbatim. Same shape both share extensions use.
+                Self.log.error("VAD task failed: \((error as NSError).domain, privacy: .public) code \((error as NSError).code, privacy: .public)")
             }
         }
     }
@@ -236,11 +262,25 @@ final class EndOfSpeechDetector {
 
     // MARK: - Model loading
 
-    /// Load the Silero `.mlmodelc` from the app bundle. Falls back to the
-    /// runtime HuggingFace download path only if the bundled resource is
-    /// missing — which would indicate a build-config bug, but we degrade
-    /// gracefully so the rest of the turn still works.
-    private func loadManager() async throws -> VadManager {
+    /// Load the Silero `.mlmodelc` from the app bundle — the ONLY way this app
+    /// obtains the VAD model. A missing resource throws
+    /// `LoadError.vadModelMissingFromBundle`; we never reach for FluidAudio's
+    /// download-on-demand init.
+    ///
+    /// Why fail closed rather than degrade: the only alternative resolver
+    /// FluidAudio offers fetches the model from `huggingface.co`, so "degrade
+    /// gracefully" would mean a silent third-party request from a car. Conduck
+    /// claims every outbound byte goes to Apple or to an endpoint the user
+    /// configured; keeping the downloading initializer out of the call graph is
+    /// what makes that claim checkable by a reader of this file. The
+    /// precondition is a packaging defect, not a runtime condition —
+    /// `VadModelBundleTests` fails the suite if the resource ever leaves the
+    /// bundle, so this branch is unreachable in any build that ships.
+    ///
+    /// Synchronous — every step is local (bundle lookup + CoreML compile-load).
+    /// Nothing here suspends, and nothing here does I/O beyond reading the app's
+    /// own bundle.
+    private func loadManager() throws -> VadManager {
         if let modelURL = Bundle.main.url(
             forResource: "silero-vad-unified-256ms-v6.0.0",
             withExtension: "mlmodelc"
@@ -263,10 +303,12 @@ final class EndOfSpeechDetector {
             )
         }
 
-        Self.log.error("VAD model missing from app bundle; falling back to runtime download")
-        return try await VadManager(
-            config: VadConfig(defaultThreshold: resolvedThreshold)
-        )
+        // No fallback by construction. `VadManager(config:)` (the async init)
+        // would download the model from `huggingface.co`; it is never called
+        // from Conduck, so no code path in this app can originate a request to
+        // a host the user did not configure.
+        Self.log.error("VAD model missing from app bundle — failing closed (no runtime download)")
+        throw LoadError.vadModelMissingFromBundle
     }
 }
 #endif

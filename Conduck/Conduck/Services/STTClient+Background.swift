@@ -29,14 +29,23 @@ import Foundation
 /// Background URLSession singleton + delegate for STT uploads.
 ///
 /// Trust note (Custom STT, Feature 2): the shared background session cannot
-/// carry a per-request delegate, so server-trust pinning for the BYO custom
-/// endpoint is host-scoped inside the task-level
-/// `urlSession(_:task:didReceive:)` challenge handler — it pins ONLY when the
-/// challenge host matches the stored custom base-URL host AND the task's
-/// recovered `STTBackgroundTaskMetadata.pinnedFingerprintHex` is non-nil. Every
-/// other host (the 5 cloud providers) → `performDefaultHandling`, so cloud STT
-/// is completely unaffected. The `dynamicEndpointKey == nil` invariant (cloud
-/// never carries a pin) is protected by a test.
+/// carry a per-request delegate, so the task-level
+/// `urlSession(_:task:didReceive:)` challenge handler resolves the pin PER TASK
+/// from the recovered `STTBackgroundTaskMetadata.pinnedFingerprintHex` — nil
+/// (every cloud provider, or an unpinned custom endpoint) →
+/// `performDefaultHandling`, so cloud STT is completely unaffected, and the
+/// `dynamicEndpointKey == nil` invariant (cloud never carries a pin) is
+/// protected by a test.
+///
+/// A resolved pin is applied **HOST-BLIND**, deliberately. A background session
+/// always follows redirects and never delivers
+/// `willPerformHTTPRedirection`, so host-SCOPING the pin would resolve "no pin"
+/// for a redirect target and degrade exactly that hop to default ATS — the pin
+/// ceasing to apply at the one moment it matters. Host-blind, a cross-host
+/// target must present the PINNED key or the challenge is cancelled. That is a
+/// mitigation, not a veto: a pin proves same-KEY, not same-ORIGIN (a wildcard
+/// or multi-SAN cert satisfies it at another host), so the contract to give
+/// users is to point Conduck at the TERMINAL endpoint, never a redirector.
 /// Lives outside the `STTClient` actor because URLSession delegate methods
 /// are nonisolated by contract; running them through an actor would require
 /// wrapping every callback. Explicitly `nonisolated` so the Swift 6 default
@@ -55,8 +64,25 @@ nonisolated final class BackgroundSTT: NSObject, @unchecked Sendable {
 
     /// Response data accumulator per task, in case the delegate splits the
     /// payload across multiple `didReceive data:` callbacks. Cleared by the
-    /// completion callback after consumption.
+    /// completion callback after consumption. Bounded by
+    /// `Constants.maxBackgroundResponseBytes` — see `overCapTaskIDs`.
     private var responseBuffers: [Int: Data] = [:]
+
+    /// Task identifiers whose server-trust challenge THIS delegate cancelled —
+    /// a custom-endpoint pin mismatch, or a cross-host hop that could not present
+    /// the pinned key. URLSession surfaces a cancelled challenge as
+    /// `URLError.cancelled`, which the mapping below otherwise collapses into the
+    /// generic retryable `networkError`; with this note it maps to the specific
+    /// `sttCustomCertMismatch` the certificate-named codes already produce.
+    /// Same registry shape as `BackgroundRemoteAgent.pinRejectedTaskIDs`.
+    /// Confined to `queue` — mutated with `queue.async`, never `queue.sync`.
+    private var pinRejectedTaskIDs = Set<Int>()
+
+    /// Task identifiers whose response body exceeded
+    /// `Constants.maxBackgroundResponseBytes` and were cancelled for it. Needed
+    /// so the over-cap bail surfaces as `invalidResponse` rather than as an
+    /// indistinguishable cancellation. Queue-confined.
+    private var overCapTaskIDs = Set<Int>()
 
     /// Body file URLs keyed by task identifier. Cleaned up alongside the
     /// audio file in `urlSession(_:task:didCompleteWithError:)`.
@@ -83,7 +109,7 @@ nonisolated final class BackgroundSTT: NSObject, @unchecked Sendable {
         let config = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
         config.sessionSendsLaunchEvents = true
         config.isDiscretionary = false
-        // Raised to the shared 300/600 s ceiling (was 120/240) so a self-hosted
+        // The shared 300/600 s ceiling, so a self-hosted
         // Whisper on modest hardware (the BYO custom endpoint) has headroom.
         // SAFE for cloud STT: a higher ceiling never slows a fast upload — it
         // only widens the worst-case window before a stuck request gives up.
@@ -162,7 +188,8 @@ extension STTClient {
     ///     the custom provider. Carries the resolved transcribe URL, effective
     ///     auth scheme, and optional cert pin (the pin rides into
     ///     `STTBackgroundTaskMetadata` so the shared-session delegate can
-    ///     host-scope it at challenge time). Nil for the 6 frozen providers.
+    ///     recover it at challenge time and apply it HOST-BLIND — see the
+    ///     trust-challenge handler below). Nil for the 6 frozen providers.
     /// - Returns: `STTResponse` with transcribed text and (optional) language.
     /// - Throws: `AppError` — same taxonomy as foreground `transcribe(...)`.
     func transcribeBackground(
@@ -287,12 +314,17 @@ extension STTClient {
         // / decoder dispatch, AND (custom endpoint only) recover the pinned
         // fingerprint at server-trust-challenge time after a cross-launch
         // resume. The pin is written ONLY for the custom provider — frozen
-        // providers carry `nil` so the shared-session delegate's host-scope
-        // check never pins a cloud host.
+        // providers carry `nil`, which is what keeps a cloud upload on default
+        // ATS: the delegate applies whatever pin it recovers HOST-BLIND, so a
+        // pin written onto a cloud task would govern that task's challenges too.
+        // `bodyPath` rides the envelope so the cross-launch completion can delete
+        // the request body too — it holds a full second copy of the recording, and
+        // the in-memory `bodyURLs` registry dies with the process.
         let metadata = STTBackgroundTaskMetadata(
             audioPath: audioFileURL.path,
             providerID: provider.id,
-            pinnedFingerprintHex: provider.dynamicEndpointKey != nil ? customConfig?.certFingerprint : nil
+            pinnedFingerprintHex: provider.dynamicEndpointKey != nil ? customConfig?.certFingerprint : nil,
+            bodyPath: bodyFileURL.path
         )
         let metadataString: String
         do {
@@ -357,18 +389,45 @@ extension BackgroundSTT: URLSessionDataDelegate {
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let id = dataTask.taskIdentifier
         queue.async {
+            // BOUNDED accumulate (mirrors `BackgroundRemoteAgent`): a transcript
+            // body is provider-controlled and was appended with no ceiling. The
+            // verdict is recorded BEFORE `cancel()` so the completion handler can
+            // tell it from a real cancellation; straggler chunks are dropped.
+            guard !self.overCapTaskIDs.contains(id) else { return }
+            let buffered = self.responseBuffers[id]?.count ?? 0
+            guard buffered + data.count <= Constants.maxBackgroundResponseBytes else {
+                self.overCapTaskIDs.insert(id)
+                self.responseBuffers[id] = Data()
+                dataTask.cancel()
+                return
+            }
+            // Subscript-with-default `_modify` keeps the append in place; copying
+            // the value out and back would make accumulation quadratic.
             self.responseBuffers[id, default: Data()].append(data)
         }
     }
 
-    /// TASK-level server-trust challenge handler — host-scoped pinning for the
+    /// TASK-level server-trust challenge handler — per-TASK pinning for the
     /// BYO custom STT endpoint. The shared background session serves all 6+
-    /// network providers, so pinning MUST be host-scoped: pin ONLY when the
-    /// challenge host matches the stored custom base-URL host AND the task's
-    /// recovered metadata carries a pin. Every other host (the 5 cloud
-    /// providers) → `performDefaultHandling`, leaving cloud STT on default ATS,
+    /// network providers, so pinning MUST be resolved per task: pin ONLY when the
+    /// task's recovered metadata carries one. A pin rides ONLY custom-endpoint
+    /// tasks (`STTBackgroundTaskMetadata.pinnedFingerprintHex` is populated from
+    /// `customConfig`, resolved solely for the dynamic-endpoint provider), so the
+    /// 5 cloud providers reach `performDefaultHandling` and stay on default ATS,
     /// completely unaffected. The actual SHA-256 leaf-cert compare is delegated
     /// to a `RemoteAgentTrustEvaluator` (reused verbatim).
+    ///
+    /// The pin is applied HOST-BLIND, by design. A background session always
+    /// follows redirects and never delivers `willPerformHTTPRedirection` (SDK
+    /// contract), so this callback is the only place the lane can push back on a
+    /// cross-host hop. Host-SCOPING the pin to the stored custom base-URL host
+    /// instead returned "no pin" for a redirect target and degraded that hop to
+    /// default ATS — the user's pin silently stopped applying exactly when a
+    /// compromised endpoint re-pointed the task, and the raw recorded audio was
+    /// replayed to a host the user never configured. Host-blind, that target must
+    /// present the PINNED KEY or the evaluator cancels. Same honest limit as
+    /// `RemoteAgentTrustEvaluator.converseTaskPin` — a pin compare proves "same
+    /// key", not "same origin"; the endpoint URL must be the terminal one.
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -392,28 +451,22 @@ extension BackgroundSTT: URLSessionDataDelegate {
             return
         }
 
-        // Host-scope the pin: it applies ONLY to the configured custom STT
-        // host. If the challenge is for any other host (defensive — should be
-        // impossible since the pin only rides custom-endpoint tasks), fall
-        // through to default handling rather than pinning the wrong host. The
-        // custom base-URL host is read straight from App Group defaults (the
-        // delegate is nonisolated and can't `await` the actor) — mirrors
-        // `BackgroundRemoteAgent`'s defaults-read trust posture.
-        let defaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
-        guard
-            let baseURLString = defaults.string(forKey: Constants.customSTTURLKey),
-            let customHost = URL(string: baseURLString)?.host(percentEncoded: false),
-            challenge.protectionSpace.host == customHost
-        else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-
         // Delegate the actual SPKI SHA-256 compare to the generic evaluator
         // (reused verbatim). It pins (match → useCredential; mismatch → cancel)
         // because a non-nil pin was recovered above.
         let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: pin)
-        evaluator.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+        let taskID = task.taskIdentifier
+        evaluator.urlSession(session, didReceive: challenge) { disposition, credential in
+            // A cancel from the evaluator is a PIN REJECTION by construction (it
+            // only cancels on a mismatch, and it is only reached with a non-nil
+            // pin). Noted BEFORE forwarding, because URLSession then reports plain
+            // `.cancelled`, which the mapping below would otherwise treat as a
+            // generic retryable transport error.
+            if disposition == .cancelAuthenticationChallenge {
+                self.queue.async { self.pinRejectedTaskIDs.insert(taskID) }
+            }
+            completionHandler(disposition, credential)
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -428,8 +481,18 @@ extension BackgroundSTT: URLSessionDataDelegate {
 
         // Audio-cleanup mandate (load-bearing): delete the audio AND the
         // multipart/json body file on EVERY exit path — success or failure.
+        // BOTH paths come from the ENVELOPE here, not only from the in-memory
+        // registry below: the registry dies with the process, and the request
+        // body holds a complete second copy of the recording, so a cross-launch
+        // completion would otherwise leave that copy orphaned in
+        // `temporaryDirectory` — a privacy defect against the never-persist-audio
+        // invariant, not just disk waste. Same shape as
+        // `BackgroundRemoteAgent`'s converse cleanup.
         if let audioPath = metadata?.audioPath {
             try? FileManager.default.removeItem(atPath: audioPath)
+        }
+        if let bodyPath = metadata?.bodyPath {
+            try? FileManager.default.removeItem(atPath: bodyPath)
         }
 
         let provider: STTProvider = metadata
@@ -441,6 +504,11 @@ extension BackgroundSTT: URLSessionDataDelegate {
                 try? FileManager.default.removeItem(at: bodyURL)
             }
 
+            // Consume both per-task delegate notes BEFORE the no-continuation
+            // early return, so neither set can grow across dropped tasks.
+            let pinRejected = self.pinRejectedTaskIDs.remove(id) != nil
+            let responseOverCap = self.overCapTaskIDs.remove(id) != nil
+
             guard let continuation = self.pendingContinuations.removeValue(forKey: id) else {
                 self.responseBuffers.removeValue(forKey: id)
                 return
@@ -451,6 +519,29 @@ extension BackgroundSTT: URLSessionDataDelegate {
             if let error {
                 if let urlError = error as? URLError {
                     let isCustomEndpoint = provider.dynamicEndpointKey != nil
+                    // OUR over-cap cancel (`didReceive data:`) — a body past
+                    // `Constants.maxBackgroundResponseBytes`. Surfaced as a plain
+                    // invalid response, not as the generic retryable transport
+                    // error a bare cancel would produce.
+                    if responseOverCap {
+                        continuation.resume(throwing: AppError.invalidResponse)
+                        return
+                    }
+                    // OUR pin rejection: the trust handler cancelled the
+                    // challenge, so this `.cancelled` DOES name the certificate.
+                    // A pin only ever rides a custom-endpoint task, so no cloud
+                    // provider can reach this. Classification delegated to the
+                    // shared classifier the converse lanes use.
+                    if pinRejected,
+                       RemoteAgentTrustEvaluator.classifyTransportError(
+                           urlError.code,
+                           hasPin: true,
+                           systemTrustRejected: false,
+                           pinRejected: true
+                       ) == .certMismatch {
+                        continuation.resume(throwing: AppError.sttCustomCertMismatch)
+                        return
+                    }
                     switch urlError.code {
                     case .notConnectedToInternet, .networkConnectionLost:
                         continuation.resume(throwing: AppError.noInternetConnection)

@@ -373,6 +373,155 @@ final class PairingPayloadTests: XCTestCase {
         assertFails(pairingString(dict), with: .insecureURL)
     }
 
+    // MARK: - URL userinfo (BOTH URLs reject — one policy, no exceptions)
+
+    /// A hand-crafted code (the parser's input is attacker-supplyable — a QR in
+    /// the wild, a pasted string) must not be able to smuggle `user:password@`
+    /// into the file-server URL: `executePairingImport` writes that URL verbatim
+    /// into App-Group UserDefaults AND iCloud KVS, which is Apple-key
+    /// server-side-encrypted, not the developer-blind Keychain path secrets ride.
+    /// Rejecting at PARSE time is what keeps it out of both stores — nothing
+    /// downstream of a `.failure` ever runs.
+    func testFileServerURLWithUserinfoIsMalformed() {
+        var dict = minimalDict()
+        dict["fileServer"] = [
+            "url": "https://u:p@files.example.com",
+            "credential": "cred-test-456",
+        ]
+        assertFails(pairingString(dict), with: .malformed,
+                    "user:password@ in the file-server URL must reject the code")
+    }
+
+    func testFileServerURLWithUserOnlyIsMalformed() {
+        var dict = minimalDict()
+        dict["fileServer"] = [
+            "url": "https://admin@files.example.com",
+            "credential": "cred-test-456",
+        ]
+        assertFails(pairingString(dict), with: .malformed,
+                    "a bare username is still userinfo — no password needed to reject")
+    }
+
+    /// The rejection is the WHOLE payload, not a silent drop of the file lane.
+    /// A lane-drop would hand the sheet a `.success` whose `fileServer` is nil:
+    /// the gateway would import, file transfer would be silently absent, and the
+    /// user would get no reason for either.
+    func testFileServerUserinfoRejectsPayloadRatherThanDroppingTheLane() {
+        var dict = minimalDict()
+        dict["fileServer"] = [
+            "url": "https://u:p@files.example.com",
+            "credential": "cred-test-456",
+        ]
+        switch PairingPayload.parse(pairingString(dict)) {
+        case .success(let payload):
+            XCTFail("Userinfo file-server URL parsed; fileServer block "
+                    + (payload.fileServer == nil ? "silently dropped" : "kept verbatim"))
+        case .failure(let error):
+            XCTAssertEqual(error, .malformed)
+        }
+    }
+
+    /// NO asymmetry: the GATEWAY URL is held to the same `EndpointURLPolicy` as
+    /// the file-server URL. A pairing string is untrusted input (anyone can
+    /// hand-craft one), the gateway URL dual-writes verbatim into App-Group
+    /// UserDefaults AND iCloud KVS, and it rides back out of any setup code this
+    /// device later exports — so a `user:password@` gateway URL would park a
+    /// plaintext password in the one store the privacy invariant says never
+    /// holds one, and would make the apparent host differ from the real one on
+    /// every surface that displays it.
+    ///
+    /// This deliberately removes URL-userinfo as a way to reach a gateway behind
+    /// an HTTP-Basic reverse proxy. That capability was never specified, has no
+    /// UI, and only ever worked for a keyless upstream (CFNetwork's 401 retry
+    /// REPLACES the app's `Authorization: Bearer`). Supporting it properly means
+    /// a first-class `.basic` auth scheme with the password in the Keychain.
+    ///
+    /// The app rejects on its OWN terms — it does not depend on `conduck-connect`
+    /// having been aligned first. The wizard's interactive URL prompt still
+    /// accepts userinfo today, so this case is reachable from a real wizard run,
+    /// not only from a hand-crafted string.
+    func testGatewayURLWithUserinfoIsMalformed() {
+        var dict = minimalDict()
+        dict["gateway"] = [
+            "kind": "openclaw",
+            "url": "https://proxyuser:proxypass@gw.example.com",
+            "auth": "bearer",
+            "token": "tok-test-123",
+        ]
+        assertFails(pairingString(dict), with: .malformed,
+                    "user:password@ in the gateway URL must reject the code")
+    }
+
+    func testGatewayURLWithUserOnlyIsMalformed() {
+        var dict = minimalDict()
+        dict["gateway"] = [
+            "kind": "openclaw",
+            "url": "https://admin@gw.example.com",
+            "auth": "bearer",
+            "token": "tok-test-123",
+        ]
+        assertFails(pairingString(dict), with: .malformed,
+                    "a bare username is still userinfo — no password needed to reject")
+    }
+
+    /// The host-confusion shape specifically: this connects to `evil.com` while
+    /// reading as `gw.trusted.example` in a truncated single-line field.
+    func testGatewayURLWhoseUserinfoImpersonatesAHostIsMalformed() {
+        var dict = minimalDict()
+        dict["gateway"] = [
+            "kind": "openclaw",
+            "url": "https://gw.trusted.example@evil.example.com",
+            "auth": "bearer",
+            "token": "tok-test-123",
+        ]
+        assertFails(pairingString(dict), with: .malformed,
+                    "a userinfo segment shaped like a hostname is the whole point of the rule")
+    }
+
+    /// An `@` in the PATH is not userinfo — the policy parses, it does not scan
+    /// for a literal character, so an ordinary address must still import.
+    func testGatewayURLWithAtSignInPathStillParses() {
+        var dict = minimalDict()
+        dict["gateway"] = [
+            "kind": "openclaw",
+            "url": "https://gw.example.com/agents/a@b",
+            "auth": "bearer",
+            "token": "tok-test-123",
+        ]
+        guard let payload = assertParses(pairingString(dict)) else { return }
+        XCTAssertEqual(payload.url.absoluteString, "https://gw.example.com/agents/a@b")
+    }
+
+    // MARK: - URL host (both URLs)
+    //
+    // `URL(string: "https://")` and `URL(string: "https:///v1")` both PARSE and
+    // both carry a nil `URL.host`. Persisting one leaves a gateway that reports
+    // itself configured and fails every request at the TLS layer, so the policy
+    // requires a non-empty host. (Note `URLComponents.host` is `Optional("")`
+    // for these — a `!= nil` test would let them through.)
+
+    func testGatewayURLWithNoHostIsMalformed() {
+        var dict = minimalDict()
+        dict["gateway"] = [
+            "kind": "openclaw",
+            "url": "https:///v1",
+            "auth": "bearer",
+            "token": "tok-test-123",
+        ]
+        assertFails(pairingString(dict), with: .malformed,
+                    "a hostless URL parses but can never be requested")
+    }
+
+    func testFileServerURLWithNoHostIsMalformed() {
+        var dict = minimalDict()
+        dict["fileServer"] = [
+            "url": "https://",
+            "credential": "cred-test-456",
+        ]
+        assertFails(pairingString(dict), with: .malformed,
+                    "the file-server URL is held to the same host requirement")
+    }
+
     // MARK: - certFP normalization
 
     func testCertFPWithColonsAndUppercaseNormalizes() {

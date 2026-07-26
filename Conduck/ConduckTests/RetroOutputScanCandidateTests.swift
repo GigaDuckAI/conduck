@@ -261,7 +261,12 @@ final class RetroOutputScanCandidateTests: XCTestCase {
 
     // MARK: - durable lane routing
 
-    func testMacCandidateRoutesOnlyToMatchingCurrentLane() {
+    // `retroOutputScanRoute` is `async` because the candidate extraction is
+    // hopped off the main actor (its regex is superlinear in untrusted reply
+    // length). Every awaited value is hoisted into a `let` BEFORE the assertion:
+    // `XCTAssert*` autoclosures are not concurrency-aware and will not compile
+    // with an `await` inside them.
+    func testMacCandidateRoutesOnlyToMatchingCurrentLane() async {
         let laneA = String(repeating: "a", count: 64)
         let turn = message(
             role: "agent",
@@ -271,32 +276,34 @@ final class RetroOutputScanCandidateTests: XCTestCase {
             outputScanLaneID: laneA
         )
 
-        XCTAssertEqual(
-            ConversationDetailViewModel.retroOutputScanRoute(
-                for: turn,
-                currentLaneID: laneA
-            ),
-            .probeCurrentLane
+        let matchingLane = await ConversationDetailViewModel.retroOutputScanRoute(
+            for: turn,
+            currentLaneID: laneA
+        )
+        XCTAssertEqual(matchingLane, .probeCurrentLane)
+
+        let repointedLane = await ConversationDetailViewModel.retroOutputScanRoute(
+            for: turn,
+            currentLaneID: String(repeating: "b", count: 64)
         )
         XCTAssertEqual(
-            ConversationDetailViewModel.retroOutputScanRoute(
-                for: turn,
-                currentLaneID: String(repeating: "b", count: 64)
-            ),
+            repointedLane,
             .deferUntilMatchingLane,
             "repointing A to B must result in zero B probes"
         )
+
+        let removedLane = await ConversationDetailViewModel.retroOutputScanRoute(
+            for: turn,
+            currentLaneID: nil
+        )
         XCTAssertEqual(
-            ConversationDetailViewModel.retroOutputScanRoute(
-                for: turn,
-                currentLaneID: nil
-            ),
+            removedLane,
             .deferUntilMatchingLane,
             "removing the current lane leaves A recoverable when restored"
         )
     }
 
-    func testFilenameFreeMacReplyIsConclusiveWithoutCurrentLane() {
+    func testFilenameFreeMacReplyIsConclusiveWithoutCurrentLane() async {
         let turn = message(
             role: "agent",
             sourceDevice: "mac",
@@ -304,13 +311,11 @@ final class RetroOutputScanCandidateTests: XCTestCase {
             outputScanDone: false,
             outputScanLaneID: String(repeating: "a", count: 64)
         )
-        XCTAssertEqual(
-            ConversationDetailViewModel.retroOutputScanRoute(
-                for: turn,
-                currentLaneID: nil
-            ),
-            .conclusiveWithoutProbe
+        let route = await ConversationDetailViewModel.retroOutputScanRoute(
+            for: turn,
+            currentLaneID: nil
         )
+        XCTAssertEqual(route, .conclusiveWithoutProbe)
     }
 
     func testProductionExecutorPerformsZeroProbesForRemovedOrRepointedMacLane() async {

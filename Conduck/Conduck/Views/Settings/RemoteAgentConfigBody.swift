@@ -477,16 +477,21 @@ struct RemoteAgentConfigBody: View {
         )
     }
 
+    /// Forget copy must enumerate EVERY slot the action wipes. `clearRemoteAgent`
+    /// is the terminal per-ref wipe and takes the file-transfer lane with it
+    /// (server address + generated password + pin), so the alert names it — an
+    /// alert that lists only URL/token/pin would understate a destructive action
+    /// that also drops the user's file-server password.
     private var forgetAlertMessage: Text {
         if isCustom {
             return Text(LocalizedStringResource(
                 "settings.remoteAgent.forgetAlert.message.custom",
-                defaultValue: "Conduck will delete this gateway and its saved URL, token, and pin. Conversations bound to it stay readable but can't send new turns."
+                defaultValue: "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). Conversations bound to it stay readable but can't send new turns."
             ))
         }
         return Text(LocalizedStringResource(
             "settings.remoteAgent.forgetAlert.message",
-            defaultValue: "Conduck will erase the saved URL, token, and pin. You'll re-enter them next time."
+            defaultValue: "Conduck will erase the saved URL, token, and pin, plus any file-transfer setup for this gateway (server address and generated password). You'll re-enter them next time."
         ))
     }
 

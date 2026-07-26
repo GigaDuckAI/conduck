@@ -82,6 +82,51 @@ final class WatchConverseCompletionVerdictTests: XCTestCase {
         XCTAssertEqual(conversationID, cid)
     }
 
+    // MARK: - Over-cap cancel (must NOT read as a user cancel)
+
+    /// THE regression this branch exists for: the delegate's own over-cap cancel
+    /// arrives as `.cancelled` WITH the registry entry still present — byte-
+    /// identical to a live in-process cancel, which drops the turn silently. It
+    /// must classify as a visible failure instead, or the user's spoken turn
+    /// disappears off the wrist with no error and no Retry.
+    func testOverCapCancelWithLiveRegistryEntryIsNotSilentCleanup() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.cancelled), registryEntryPresent: true,
+            responseOverCap: true
+        )
+        guard case .failure(.responseOverCap, let conversationID) = verdict else {
+            return XCTFail("An over-cap cancel must surface a failure, got \(verdict)")
+        }
+        XCTAssertEqual(conversationID, cid)
+    }
+
+    /// Over-cap outranks the cross-launch arm too: the cap verdict is the
+    /// specific reason, and it holds whether or not the registry survived.
+    func testOverCapOutranksCrossLaunchCancel() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.cancelled), registryEntryPresent: false,
+            responseOverCap: true
+        )
+        guard case .failure(.responseOverCap, _) = verdict else {
+            return XCTFail("Over-cap must outrank the cross-launch cancel arm, got \(verdict)")
+        }
+    }
+
+    /// The flag is inert on a healthy turn — it only ever arrives set when the
+    /// delegate itself cancelled, so a 2xx reply must still decode normally.
+    func testNotOverCapLeavesHappyPathUntouched() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(stamps: true), httpStatus: 200,
+            body: replyBody("Hi there"), transportError: nil,
+            registryEntryPresent: true, responseOverCap: false
+        )
+        guard case .reply = verdict else {
+            return XCTFail("Expected .reply, got \(verdict)")
+        }
+    }
+
     // MARK: - Transport / HTTP / decode branches
 
     /// The field case: NSURLErrorDomain -1001 against the gateway.

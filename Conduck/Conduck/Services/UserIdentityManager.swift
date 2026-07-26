@@ -2,7 +2,17 @@ import Foundation
 import Security
 
 /// Manages a stable user identity (UUID) persisted in Keychain and synced via iCloud KVS.
-/// This UUID is sent as `transaction_id` to the backend for rate limiting and analytics.
+///
+/// The UUID is a device-local pseudonymous identifier, NOT a credential — gateway auth is
+/// the bearer token `SettingsManager` keeps in the Keychain. Its single purpose is to
+/// correlate an iPhone with its paired Watch: `PhoneSessionManager` puts it on the WCSession
+/// `applicationContext` and answers the Watch's identity request with it.
+///
+/// It never enters a network request. The only sinks in this file are the device Keychain
+/// (`kSecAttrAccessibleAfterFirstUnlock`, non-synchronizable) and the user's own iCloud
+/// key-value store — Conduck has no operator backend, so there is nowhere off-device to send
+/// it. Keep it that way: this value plus a network sink would be exactly the outbound
+/// identifier the "no backend, no account, no telemetry" posture rules out.
 actor UserIdentityManager {
     static let shared = UserIdentityManager()
 
@@ -89,7 +99,15 @@ actor UserIdentityManager {
             return
         }
 
-        // If this device hasn't been used for API calls yet, adopt the incoming UUID
+        // Intended gate: a device that has already established its own identity keeps it, so
+        // two devices launched in parallel can't ping-pong UUIDs forever. `hasBeenUsedKey`
+        // has NO writer anywhere in the repo, so `hasBeenUsed` always reads false and
+        // adoption is in fact UNCONDITIONAL — the ping-pong guard is inert. Benign as it
+        // stands (the UUID is a Watch-pairing correlator, not a credential, and writing this
+        // KVS key at all requires the user's own Apple ID), and the read targets
+        // `UserDefaults.standard` where the App-Group store is the documented home. Wiring a
+        // writer is a live change to identity resolution with watch-pairing blast radius —
+        // land it deliberately, with coverage for the newly-reachable `else` branch.
         let hasBeenUsed = UserDefaults.standard.bool(forKey: Constants.hasBeenUsedKey)
         if !hasBeenUsed {
             cachedUserID = incomingID

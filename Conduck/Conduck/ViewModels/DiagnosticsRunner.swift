@@ -42,7 +42,6 @@ import Network
 import Observation
 import SwiftUI   // Transaction / withTransaction — disable the row-insert animation on a structural re-derive
 import UserNotifications
-import os        // OSAllocatedUnfairLock — the watch-query one-shot latch
 
 #if canImport(UIKit)
 import UIKit
@@ -90,22 +89,6 @@ enum WatchHealthTransportResult: Sendable, Equatable {
 /// whole reachability-dependent path).
 protocol WatchHealthTransport: Sendable {
     func query(timeout: TimeInterval) async -> WatchHealthTransportResult
-}
-
-/// Thread-safe single-fire latch — the file's ONE once-primitive, used by the
-/// watch-query transport (whose reply/error/deadline paths race on DIFFERENT
-/// queues) and the `NWPathMonitor` probe alike. Internal (not private) so the
-/// concurrency test can hammer it directly.
-final class LockedOnce: @unchecked Sendable {
-    private let fired = OSAllocatedUnfairLock(initialState: false)
-    /// True exactly once, for exactly one caller.
-    func claim() -> Bool {
-        fired.withLock { alreadyFired in
-            if alreadyFired { return false }
-            alreadyFired = true
-            return true
-        }
-    }
 }
 
 #if os(iOS)

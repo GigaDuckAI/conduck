@@ -53,10 +53,19 @@ class AudioRecorder: NSObject, ObservableObject {
         try audioSession.setActive(true)
         #endif
 
-        // Create temporary file URL
-        let tempDir = FileManager.default.temporaryDirectory
-        let fileName = "test_recording_\(Date().timeIntervalSince1970).m4a"
-        let fileURL = tempDir.appendingPathComponent(fileName)
+        // Create temporary file URL. The `conduck-recorder-` prefix is
+        // load-bearing: this is the raw microphone capture for menu-bar dictation
+        // and both Settings STT test sections, and it is deleted only in-process
+        // (`stopRecording`, `cancelRecording`, the delegate). A jetsam or
+        // force-quit mid-capture strands it, and only `TempScratchSweeper` can
+        // reclaim it — by prefix. A UUID rather than a timestamp because a
+        // directory listing of timestamped names would itself reveal when the
+        // user recorded. Written inline rather than via a `fileName` local so the
+        // prefix is readable AT the call site — `TempScratchLeafDriftGuardTests`
+        // reads leaves from source, and a leaf hidden behind a variable is exactly
+        // the shape that let this site sit unclaimed for so long.
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conduck-recorder-\(UUID().uuidString).m4a")
 
         // Configure recorder settings (AAC format, 48kHz)
         let settings: [String: Any] = [

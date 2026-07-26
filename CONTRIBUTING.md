@@ -85,12 +85,59 @@ Reviews are best-effort by a small maintainer team. Expect a response, but not
 always a fast one — please be patient, and feel free to ping a quiet PR after a
 couple of weeks.
 
+## Logging and privacy
+
+Conduck talks to a gateway that **you** run, so the things it handles are about
+as private as software gets: your gateway's address, your API keys, and every
+word you say to it. One rule follows from that, and it is not negotiable:
+
+> **Never log a gateway URL or hostname, an API key or bearer token, a
+> transcript, a reply, or a file name — not even at debug level.**
+
+Hostnames count as private data here. A self-hosted gateway is usually named
+after the machine it runs on (`box.local`, `mini.tail9f2c.ts.net`), so logging
+it publishes the shape of someone's home network or VPN. And logs are not as
+transient as they look: entries at `notice` and `error` level persist in the
+system log, which means they end up inside any sysdiagnose a user later attaches
+to a public bug report.
+
+What that means in practice:
+
+- **`print`, `debugPrint` and `dump` must sit inside `#if DEBUG` … `#endif`.**
+  They write to stdout with no privacy controls at all.
+- **Prefer `os.Logger` (or `WatchLog` on watchOS) and log a reduction, not the
+  value.** A count, a duration, an enum case name, an HTTP status, an error
+  code, or a short correlation prefix tells you what you need for debugging and
+  cannot identify anyone.
+- **Be careful with `privacy:`.** In `os_log` string interpolations, strings are
+  redacted by default — but other types are **public** by default, and an
+  explicit `privacy: .public` overrides the default either way. If you log
+  something that could be identifying, annotate it `privacy: .private`.
+- **Don't log an error's `localizedDescription` on a network path.** A
+  certificate error embeds the server's hostname in its message text, so that
+  one string is enough to leak the gateway address.
+- **User-visible error text follows the same rule.** Notifications and alerts
+  use fixed copy for network failures rather than passing an underlying error
+  through — a lock-screen notification is readable by anyone standing nearby.
+
+`ConduckTests/LoggingPrivacyDriftGuardTests` enforces the mechanical parts of
+this by scanning the source, so CI will tell you if a change trips it. Its
+failure messages explain what it found and how to fix it. It is a safety net,
+not the whole rule — it cannot recognise every way a transcript might be spelled,
+so the judgement is still yours.
+
 ## Style and dependencies
 
 - Match the surrounding code. Consistency with the file you're editing beats
   any external style guide.
 - **No new dependencies without prior discussion in an issue.** Every
   dependency is a long-term maintenance commitment, so additions are deliberate.
+- **Adding or bumping a dependency? Update `THIRD_PARTY_NOTICES.md`.** A test
+  checks that every `Package.resolved` pin is named there, but it cannot see
+  third-party code or assets embedded *inside* a package (bundled JavaScript,
+  vendored C++, fonts). Those live in the notices under "Components embedded via
+  dependencies" and need a manual look — reproducing their notices is an
+  obligation of every distributed build, not a one-time write.
 
 ## License and trademarks
 

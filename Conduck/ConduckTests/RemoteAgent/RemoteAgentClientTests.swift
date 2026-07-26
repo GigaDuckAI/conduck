@@ -434,10 +434,12 @@ final class RemoteAgentClientTests: XCTestCase {
     }
 
     func testSendSecureConnectionFailedIsUnreachableNotCertMismatch() async {
-        // Live converse hop: a transient `.secureConnectionFailed` over a cold
-        // tunnel must be retryable, NOT a false cert mismatch (the converse
-        // path can't read the trust signals, so the generic code is treated as
-        // transport-transient).
+        // Live converse hop with NO trust evaluator supplied (an unpinned ref, or
+        // a mock session): a transient `.secureConnectionFailed` over a cold
+        // tunnel must be retryable, NOT a false cert mismatch. Even WITH a
+        // pinning session the converse hop keeps this posture unless the
+        // evaluator confirms `pinRejected` — see
+        // `testGenericTLSFailureOnAPinnedSessionWithoutRejectionStaysRetryable`.
         MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
         await assertThrowsAppError(.remoteAgentUnreachable) {
             try await RemoteAgentClient.shared.send(
@@ -544,6 +546,124 @@ final class RemoteAgentClientTests: XCTestCase {
                 XCTFail("Expected AppError for status \(status), got: \(error)")
             }
         }
+    }
+
+    // MARK: - Foreground pinning session (the macOS converse trust posture)
+    //
+    // `URLSession.shared` cannot carry a delegate, so a converse send issued on
+    // it silently disables the user's cert pin AND the cross-host-redirect
+    // refusal. Every production call site therefore builds its session from
+    // `makePinnedForegroundSession(...)`; these lock that factory's contract.
+    // (The call sites themselves are `#if os(macOS)` branches inside the VM /
+    // drainer with no injection seam, so the factory is the assertable surface.)
+
+    func testPinnedForegroundSessionInstallsTheTrustEvaluator() {
+        let pin = String(repeating: "cd", count: 32)
+        let (session, evaluator) = RemoteAgentClient.makePinnedForegroundSession(pinnedFingerprintHex: pin)
+        defer { session.invalidateAndCancel() }
+
+        XCTAssertTrue((session.delegate as? RemoteAgentTrustEvaluator) === evaluator,
+                      "The returned session MUST carry the returned evaluator as its delegate — otherwise the pin and the redirect policy are dead code on the live send path. (Also a drift guard: the delegate must be the SHARED trust component, not a look-alike that could diverge from it.)")
+        XCTAssertEqual(evaluator.pinnedFingerprintHex, pin,
+                       "The resolved per-ref pin must reach the evaluator verbatim.")
+    }
+
+    func testPinnedForegroundSessionIsDelegateBearingEvenWithNoPin() {
+        // An UNPINNED ref still gets a delegate-bearing session: the redirect
+        // policy applies regardless of pinning, and it means a later re-pin needs
+        // no new wiring at the call site.
+        let (session, evaluator) = RemoteAgentClient.makePinnedForegroundSession(pinnedFingerprintHex: nil)
+        defer { session.invalidateAndCancel() }
+        XCTAssertNotNil(session.delegate,
+                        "Even an unpinned foreground converse session must carry the evaluator (redirect policy + future re-pin).")
+        XCTAssertNil(evaluator.pinnedFingerprintHex,
+                     "nil pin → default ATS chain validation, the recommended posture for a publicly-trusted gateway.")
+    }
+
+    func testPinnedForegroundSessionUsesConverseTimeoutsNotTheProbeBudget() {
+        let (session, _) = RemoteAgentClient.makePinnedForegroundSession(pinnedFingerprintHex: nil)
+        defer { session.invalidateAndCancel() }
+        let config = session.configuration
+        XCTAssertEqual(config.timeoutIntervalForRequest,
+                       Constants.remoteAgentConverseRequestTimeout, accuracy: 0.001,
+                       "Load-bearing: a self-hosted LLM routinely thinks for minutes. `.ephemeral` defaults to 60s, so the 300s converse budget MUST be set explicitly or a live turn dies as a phantom 'Network Offline'.")
+        XCTAssertEqual(config.timeoutIntervalForResource,
+                       Constants.remoteAgentConverseResourceTimeout, accuracy: 0.001,
+                       "The 600s resource ceiling must match the other converse lanes.")
+        XCTAssertNotEqual(config.timeoutIntervalForRequest,
+                          Constants.remoteAgentTestConnectionTimeout,
+                          "Drift guard: never inherit Test Connection's 15s interactive budget on the send path.")
+        XCTAssertEqual(config.requestCachePolicy, .reloadIgnoringLocalAndRemoteCacheData,
+                       "A converse turn must never be answered from a cache (`.shared` previously carried the system cache + cookies onto this hop).")
+    }
+
+    // MARK: - Transport-error mapping (pin rejection vs. benign cancel)
+    //
+    // A pin mismatch is answered with `cancelAuthenticationChallenge`, which
+    // URLSession surfaces as `.cancelled` (-999) — byte-identical to the
+    // chat-thread Cancel button. Only a CONFIRMED `pinRejected` may upgrade it.
+
+    func testCancelWithConfirmedPinRejectionMapsToCertMismatch() {
+        let mapped = RemoteAgentClient.mapTransportError(.cancelled, hasPin: true, pinRejected: true)
+        XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertMismatch.errorCode,
+                       "A pin mismatch must surface as a cert error, not vanish as a benign cancel — otherwise a MITM reads as 'the user cancelled'.")
+    }
+
+    func testCancelOnAPinnedSessionWithoutRejectionStaysBenign() {
+        // REGRESSION GUARD: the user tapping Cancel on a PINNED gateway must
+        // still be a benign `CancellationError`. Broadening the `.cancelled` arm
+        // would raise a spurious "Untrusted certificate" banner on every cancel
+        // and clobber any prior failure classification.
+        let mapped = RemoteAgentClient.mapTransportError(.cancelled, hasPin: true, pinRejected: false)
+        XCTAssertTrue(mapped is CancellationError,
+                      "Cancel without a confirmed pin rejection is a user abort, not a cert failure.")
+    }
+
+    func testUnpinnedTransportMappingIsUnchanged() {
+        // The unpinned converse path (every existing caller, incl. all tests)
+        // must map EXACTLY as it did before the trust signals were threaded in.
+        let expected: [(URLError.Code, Int?)] = [
+            (.timedOut, AppError.remoteAgentTimeout.errorCode),
+            (.cannotConnectToHost, AppError.remoteAgentUnreachable.errorCode),
+            (.notConnectedToInternet, AppError.remoteAgentUnreachable.errorCode),
+            (.networkConnectionLost, AppError.remoteAgentUnreachable.errorCode),
+            (.cannotFindHost, AppError.remoteAgentUnreachable.errorCode),
+            (.dnsLookupFailed, AppError.remoteAgentUnreachable.errorCode),
+            (.resourceUnavailable, AppError.remoteAgentUnreachable.errorCode),
+            (.serverCertificateUntrusted, AppError.remoteAgentCertMismatch.errorCode),
+            (.serverCertificateHasBadDate, AppError.remoteAgentCertMismatch.errorCode),
+            (.serverCertificateHasUnknownRoot, AppError.remoteAgentCertMismatch.errorCode),
+            (.serverCertificateNotYetValid, AppError.remoteAgentCertMismatch.errorCode),
+            // GENERIC SSL failure stays RETRYABLE — a cold tunnel produces it on
+            // a perfectly-trusted cert, and the converse hop deliberately does
+            // not consult `systemTrustRejected`.
+            (.secureConnectionFailed, AppError.remoteAgentUnreachable.errorCode),
+            (.badServerResponse, AppError.remoteAgentUnreachable.errorCode),
+            (.cancelled, nil),   // nil = CancellationError, not an AppError
+        ]
+        for (code, expectedCode) in expected {
+            let mapped = RemoteAgentClient.mapTransportError(code, hasPin: false, pinRejected: false)
+            if let expectedCode {
+                XCTAssertEqual((mapped as? AppError)?.errorCode, expectedCode,
+                               "Unpinned mapping drifted for \(code)")
+            } else {
+                XCTAssertTrue(mapped is CancellationError,
+                              "Unpinned `.cancelled` must stay a benign CancellationError")
+            }
+        }
+    }
+
+    func testGenericTLSFailureWithConfirmedPinRejectionIsCertMismatch() {
+        // With a pin set AND the evaluator confirming it cancelled, the generic
+        // `-1200` is a real mismatch rather than a cold-tunnel hiccup.
+        let mapped = RemoteAgentClient.mapTransportError(.secureConnectionFailed, hasPin: true, pinRejected: true)
+        XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertMismatch.errorCode)
+    }
+
+    func testGenericTLSFailureOnAPinnedSessionWithoutRejectionStaysRetryable() {
+        let mapped = RemoteAgentClient.mapTransportError(.secureConnectionFailed, hasPin: true, pinRejected: false)
+        XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentUnreachable.errorCode,
+                       "A pinned gateway over a cold tunnel must stay retryable — `pinRejected == false` means the trust layer never rejected anything.")
     }
 
     // MARK: - Stream helpers (existing)

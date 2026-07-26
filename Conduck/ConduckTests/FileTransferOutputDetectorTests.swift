@@ -84,6 +84,79 @@ final class FileTransferOutputDetectorTests: XCTestCase {
         XCTAssertEqual(out, names, "extraction returns ALL allowlisted tokens; the cap lives in detect")
     }
 
+    // MARK: - Cost bound (boundedRunInput)
+
+    /// The bound must be INVISIBLE on real content: no over-long run, so the
+    /// input is returned unchanged (identical instance semantics aside) and the
+    /// extracted tokens are byte-identical.
+    func testRunBoundLeavesRealContentUntouched() {
+        let reply = "Wrote report.pdf, archive.tar.gz and a-long_file.name.v2.csv for you."
+        XCTAssertEqual(FileTransferOutputDetector.boundedRunInput(reply), reply,
+                       "a reply with no over-long token run must pass through verbatim")
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: reply),
+                       ["report.pdf", "archive.tar.gz", "a-long_file.name.v2.csv"])
+    }
+
+    /// A run at exactly the ceiling is a filename a server could actually hold,
+    /// so it must survive.
+    func testRunAtTheCeilingSurvives() {
+        let base = String(repeating: "a", count: FileTransferOutputDetector.maxFilenameRunScalars - 4)
+        let name = base + ".csv"          // exactly maxFilenameRunScalars scalars
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: "wrote \(name) ok"), [name],
+                       "a name at POSIX NAME_MAX is storable and must still be a candidate")
+    }
+
+    /// THE bound: a hostile unbroken run is excised, and — the part that makes it
+    /// free — a real filename elsewhere in the SAME reply is still found.
+    func testHostileRunIsExcisedButRealCandidateSurvives() {
+        let hostile = String(repeating: "a", count: 400_000)
+        let reply = "\(hostile) but also report.pdf"
+        let started = Date()
+        let out = FileTransferOutputDetector.extractCandidates(from: reply)
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertEqual(out, ["report.pdf"],
+                       "the over-long run yields no storable name; the real one is untouched")
+        // Unbounded, 400 KB of one run is ~20 minutes of ICU backtracking; the
+        // bound makes it milliseconds. A very loose ceiling keeps this from
+        // flaking on a loaded CI machine while still failing loudly on a
+        // regression to quadratic.
+        XCTAssertLessThan(elapsed, 5.0,
+                          "extraction must be linear in the reply length, not quadratic in its longest run")
+    }
+
+    /// The excision inserts a SPACE, so the text on either side cannot fuse into
+    /// a token that was never in the reply.
+    func testExcisionCannotFuseNeighbouringTokens() {
+        let reply = "note" + String(repeating: "z", count: 300) + ".pdf"
+        // One single run (the letters, the digits-free filler and `.pdf` are all
+        // token scalars) → excised whole, nothing left to match.
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: reply), [],
+                       "a >NAME_MAX run yields no storable candidate")
+        let split = "note " + String(repeating: "z", count: 300) + " .pdf"
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: split), [],
+                       "excising the middle run must not join `note` to `.pdf`")
+    }
+
+    /// The case a silent file loss would hide in: a hostile run GLUED to a real
+    /// filename with no separator. It is one single run either way, so the
+    /// filename is not a distinguishable token to begin with — the unbounded
+    /// pattern yields the whole run as one >NAME_MAX "filename" (verified as an
+    /// oracle at 8 KB: a single 8202-character token, never `report.pdf`), and
+    /// the bound yields nothing. Both are conclusive with zero chips, so the
+    /// `outputScanDone` bookkeeping does not diverge either. ONE separator —
+    /// whitespace or punctuation, anything outside the token class — is all it
+    /// takes to make the name extractable, under both.
+    func testAGluedHostileRunHidesTheFilenameFromEitherPass() {
+        let hostile = String(repeating: "a", count: 8 * 1024)
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: hostile + "report.pdf"), [],
+                       "a name glued to a >NAME_MAX run is not a separate token — no pass could extract it")
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: "report.pdf" + hostile), [],
+                       "reverse adjacency likewise: the greedy tail eats the extension")
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: hostile + " report.pdf"), ["report.pdf"])
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: hostile + ")report.pdf"), ["report.pdf"],
+                       "any non-token character ends the run — the separator need not be whitespace")
+    }
+
     // MARK: - inboundStoredKeyTokens
 
     func testUserTurnFlatKeyIsExcluded() {

@@ -609,10 +609,46 @@ final class AppleRelayPendingQueue {
         UNUserNotificationCenter.current().add(req)
     }
 
+    /// Notification body for a failed relay, hostname-bearing cases collapsed to
+    /// fixed copy.
+    ///
+    /// PRIVACY (never reveal gateway URLs — see the spec's Privacy & Security
+    /// section): `.networkError` / `.decodingError` / `.unknown` interpolate the
+    /// WRAPPED error's `localizedDescription`, and a cert-class `URLError` embeds
+    /// the server hostname in that text. On the Watch that text renders on the
+    /// wrist AND mirrors to the paired iPhone's lock screen — visible without an
+    /// unlock — so those three map to the fixed `remoteAgentUnreachable` copy.
+    /// Every other case already carries fixed, hostname-free copy and passes
+    /// through UNCHANGED, which is what keeps this queue's real payloads
+    /// (`.appleSpeechModelNotInstalled`, `.audioProcessingFailed`) on their own
+    /// deliberate wording rather than a generic gateway message.
+    ///
+    /// Defensive: today's feeders cannot produce the three hazard cases — the
+    /// relay wire carries an Int `errorCode` only, so `reconcile` rebuilds errors
+    /// through `AppError.from(errorCode:message:)`, which cannot reconstruct an
+    /// `Error` payload from an Int. This is the CHOKE POINT if a raw error is ever
+    /// routed here, the same guarantee `BackgroundRemoteAgent.postFailureNotification`
+    /// and `CarPlayConverseUploader.postFailureNotification` hold at their posters.
+    ///
+    /// `static` (rather than inlined at the sink like the two siblings) so
+    /// `ConduckWatchTests` can regression-lock the mapping without a notification
+    /// centre or the queue singleton's disk-touching `init`.
+    static func notificationBody(for error: AppError, fallback: String) -> String {
+        switch error {
+        case .networkError, .decodingError, .unknown:
+            return AppError.remoteAgentUnreachable.errorDescription ?? fallback
+        default:
+            return error.errorDescription ?? fallback
+        }
+    }
+
     private func postErrorNotification(error: AppError) {
         let content = UNMutableNotificationContent()
         content.title = String(localized: "Conduck")
-        content.body = error.errorDescription ?? String(localized: "Could not process response.")
+        content.body = Self.notificationBody(
+            for: error,
+            fallback: String(localized: "Could not process response.")
+        )
         content.sound = .default
         let req = UNNotificationRequest(
             identifier: UUID().uuidString,

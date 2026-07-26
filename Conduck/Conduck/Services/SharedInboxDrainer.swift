@@ -183,6 +183,15 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             }
         }
         let fileServerReady = fileTransferSnapshot != nil
+        // Pinning session for the LIVE hop (same recipe as the in-app composer's
+        // macOS branch): `URLSession.shared` cannot carry a delegate, so a send
+        // on it silently ignores the user's per-ref cert pin. Pin resolved from
+        // the DISPATCHED ref at send time from the durable store. Session owned
+        // here and invalidated on every exit path from this macOS branch.
+        let (pinnedSession, trustEvaluator) = RemoteAgentClient.makePinnedForegroundSession(
+            pinnedFingerprintHex: RemoteAgentTrustEvaluator.storedConversePin(for: ref)
+        )
+        defer { pinnedSession.invalidateAndCancel() }
         let reply = try await RemoteAgentClient.shared.send(
             backend: backend,
             url: url,
@@ -196,7 +205,9 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             newUserServerFileRefs: newUserServerFileRefs,
             newUserImageFileRefs: newUserImageFileRefs,
             newUserTextFileServerRefs: newUserTextFileServerRefs,
-            fileServerReady: fileServerReady
+            fileServerReady: fileServerReady,
+            session: pinnedSession,
+            trustEvaluator: trustEvaluator
         )
         // Land in-process via the SHARED landing path (append → flip → output
         // detect → user reply notification → post `.remoteAgentTurnDidComplete`,

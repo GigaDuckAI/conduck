@@ -16,6 +16,19 @@
 //       license and this fails — Apache-2.0 §4 / MIT notice preservation is a
 //       per-distribution obligation, not a one-time write.
 //
+// (b) earns its keep because its input is MACHINE-GENERATED: `Package.resolved`
+// is written by the resolver, so the guard cannot be satisfied by wishful
+// thinking. It has one structural blind spot, deliberately left unguarded:
+// third-party code and assets EMBEDDED INSIDE those packages (Prism.js in
+// Textual, fastcluster and VBx in FluidAudio, the `mathFonts.bundle` fonts in
+// swiftui-math) reach the binary without ever appearing as a pin, so pin
+// iteration can never see them. THIRD_PARTY_NOTICES.md documents them under
+// "Components embedded via dependencies". A hand-maintained name list asserted
+// present here would be tautological — a human typing the same strings on both
+// sides proves nothing and cannot catch the case that matters, a NEW embedded
+// artifact arriving with a dependency bump. Re-audit that section by hand when
+// bumping a dependency; do not add a test that only looks like a control.
+//
 // Reads files off disk via `#filePath` anchoring (same idiom as
 // `WebPageCaptureTests`' mirror guard). Pure Foundation — no Keychain, no
 // network, no store. Runs on the unsigned Simulator.

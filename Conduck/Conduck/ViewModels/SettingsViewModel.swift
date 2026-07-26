@@ -1016,15 +1016,82 @@ final class SettingsViewModel {
 
     // MARK: - Clear
 
-    /// Remove the persisted API key for a single preset. If that preset was
-    /// the active one, the next transcribe attempt will surface
-    /// `sttMissingAPIKey` — the user is expected to either set another
-    /// preset active or paste a new key.
+    /// Remove the persisted API key for a single preset, and fall any ACTIVE
+    /// pointer that depended on it back to Apple.
+    ///
+    /// The pointer fallback is the security half, not a convenience. The Watch
+    /// holds its OWN copy of every cloud STT key it has ever been broadcast
+    /// (non-sync Keychain — iCloud Keychain can't reach it) and routes wrist
+    /// captures purely on `activePresetID`, reading the key straight from that
+    /// Watch slot at upload time. If the cleared preset stayed active, the phone
+    /// would hard-fail with `sttMissingAPIKey` while the WRIST kept uploading
+    /// audio to the provider under the very key the user just told Conduck to
+    /// forget — indefinitely, with no UI anywhere revealing the divergence.
+    /// Falling the pointer back to `apple-on-device` emits a POSITIVE
+    /// `presetID: "apple-on-device"` envelope (`currentBroadcastEnvelope`'s
+    /// dedicated branch, which exists for exactly this "audio + a stale key to a
+    /// deselected provider" hazard), and the wrist re-routes to the iPhone relay
+    /// on its next capture. Positive-signal by construction, so it cannot regress
+    /// the "never infer keyless from a missing token/key" invariant.
+    ///
+    /// The TTS pointer gets the same treatment because a cloud TTS provider reads
+    /// its key from the vendor's SHARED `stt.apiKey.<presetID>` slot — clearing
+    /// the STT half strands the TTS half on a key that no longer exists.
+    ///
+    /// Mirrors `SettingsManager.deleteCustomVoiceEndpoint`, which already falls
+    /// both pointers back to Apple for its own delete. Apple on-device is the
+    /// right target rather than "the next configured cloud provider": silently
+    /// re-pointing a user's speech at a DIFFERENT third party would be a worse
+    /// privacy outcome than the bug being fixed.
+    ///
+    /// Attached HERE (the user-intent site) and NOT inside
+    /// `SettingsManager.clearAPIKey(forPresetID:)`, which is also called when a
+    /// custom voice endpoint is saved as `.none`/keyless — that endpoint keeps
+    /// working keyless and must NOT be deactivated.
+    ///
+    /// Residue not covered: the Watch's own copy of the cleared key stays in its
+    /// Keychain (dead — nothing routes to it once the pointer moved). Purging
+    /// those bytes needs a wire-level signal in `STTBroadcastEnvelope`; see the
+    /// security review's follow-up note.
     func clearKey(for presetID: String) async throws {
         try await SettingsManager.shared.clearAPIKey(forPresetID: presetID)
+
+        if await SettingsManager.shared.getActivePresetID() == presetID {
+            await setActive(Constants.sttActivePresetIDDefault)
+        }
+        let activeTTS = await SettingsManager.shared.getActiveTTSProviderID()
+        if Self.clearingKeyResetsTTSPointer(activeTTSProviderID: activeTTS, clearedPresetID: presetID) {
+            await setActiveTTS(providerID: Constants.ttsActiveProviderIDDefault)
+        }
+
         storedPresetIDs = await SettingsManager.shared.presetIDsWithStoredKey()
         maskedTails.removeValue(forKey: presetID)
         keyStates[presetID] = .unset
+    }
+
+    /// Would clearing `clearedPresetID`'s key fall the ACTIVE TTS pointer back
+    /// to the Apple voice? True exactly when the active TTS provider reads that
+    /// vendor's shared key slot.
+    ///
+    /// Pure and shared ON PURPOSE: `clearKey(for:)` above decides the fallback
+    /// with it, and `ProviderConfigBody`'s confirmation copy decides what to
+    /// PROMISE with it. A confirmation that names a consequence the action
+    /// doesn't have — or omits one it does — is the user agreeing to something
+    /// they were not told, so the two must not be able to drift apart.
+    static func clearingKeyResetsTTSPointer(
+        activeTTSProviderID: String,
+        clearedPresetID: String
+    ) -> Bool {
+        TTSProvider.lookup(id: activeTTSProviderID).sharedKeySTTPresetID == clearedPresetID
+    }
+
+    /// The same question against this view model's cached TTS pointer — what the
+    /// Settings UI passes to `ProviderConfigBody` so the Clear-key confirmation
+    /// can name the Apple-voice fallback in the one branch where the STT row is
+    /// INACTIVE but the TTS pointer still sits on this vendor.
+    func clearingKeyResetsActiveTTS(for presetID: String) -> Bool {
+        Self.clearingKeyResetsTTSPointer(activeTTSProviderID: activeTTSProviderID,
+                                         clearedPresetID: presetID)
     }
 
     // MARK: - Row-State Derivation
@@ -1287,8 +1354,9 @@ final class SettingsViewModel {
     /// state after the alert dismisses is `checkAppleModelStatus`, which
     /// re-queries `AssetInventory` and reflects the actual on-disk truth.
     func clearAppleModelState() {
-        // Intentional no-op on state. Kept as a hook for future telemetry
-        // / analytics IF Apple ever exposes a programmatic uninstall API.
+        // Intentional no-op — state is re-derived by `checkAppleModelStatus`.
+        // Kept as the named call site the alert's confirm action binds to, so a
+        // future programmatic-uninstall API has one place to land.
     }
 
     // MARK: - Apple On-Device Engine Mode (dictation ↔ high-quality)
@@ -2132,14 +2200,16 @@ final class SettingsViewModel {
         }
 
         let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Only `https://` is valid. `http://` is rejected client-side
-        // at save so the bearer token can never leave the device in cleartext.
+        // `EndpointURLPolicy` — https (so the bearer token never leaves the
+        // device in cleartext), a real host, and no `user:password@`. The SAME
+        // gate the Save path applies: a draft Save would refuse must not be
+        // Testable either, or a green verdict would be earned against a tuple
+        // the commit rejects.
         guard !trimmedURL.isEmpty,
               let candidateURL = URL(string: trimmedURL),
-              let scheme = candidateURL.scheme?.lowercased(),
-              scheme == "https" else {
+              EndpointURLPolicy.isAdmissible(candidateURL) else {
             remoteAgentValidationStates[ref] = .invalid(
-                message: String(localized: "Enter the full gateway URL including https://.")
+                message: Self.remoteAgentURLRejectionMessage(trimmedURL)
             )
             return
         }
@@ -2395,11 +2465,13 @@ final class SettingsViewModel {
             return RemoteAgentBackendRegistry.lookup(id: backend)
         }()
 
-        // `https://`-only so the bearer token never leaves the device
-        // in cleartext (verbatim from the validate guard). A fixed-endpoint
-        // built-in (OpenRouter) uses its app-fixed URL authoritatively — the
-        // buffer was seeded to it, but pin to the descriptor so a tampered /
-        // stale buffer can't redirect the request.
+        // `EndpointURLPolicy` — verbatim from the validate guard. This is the
+        // SINGLE commit point for a gateway URL (the typed editor AND the
+        // pairing import both land here), so it is the one gate that decides
+        // what can ever reach App-Group defaults + iCloud KVS from the app side.
+        // A fixed-endpoint built-in (OpenRouter) uses its app-fixed URL
+        // authoritatively — the buffer was seeded to it, but pin to the
+        // descriptor so a tampered / stale buffer can't redirect the request.
         let parsedURL: URL
         if let fixedURL = builtinDescriptor?.fixedURL {
             parsedURL = fixedURL
@@ -2407,10 +2479,9 @@ final class SettingsViewModel {
             let trimmedURL = (remoteAgentURLStrings[ref] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmedURL.isEmpty,
                   let candidate = URL(string: trimmedURL),
-                  let scheme = candidate.scheme?.lowercased(),
-                  scheme == "https" else {
+                  EndpointURLPolicy.isAdmissible(candidate) else {
                 remoteAgentValidationStates[ref] = .invalid(
-                    message: String(localized: "Enter the full gateway URL including https://.")
+                    message: Self.remoteAgentURLRejectionMessage(trimmedURL)
                 )
                 return false
             }
@@ -3022,12 +3093,24 @@ final class SettingsViewModel {
         }
     }
 
-    /// Wipe a SINGLE backend's Personal AI configuration: URL, token, cert.
-    /// Used by the per-backend "Forget gateway" destructive action. Each
-    /// writer posts `.settingsDidChangeRemotely`; the Watch picks up the
-    /// cleared state from the next envelope absence
-    /// (`currentRemoteAgentEnvelope()` returns nil when the default backend's
-    /// URL is missing).
+    /// Wipe a SINGLE backend's Personal AI configuration: URL, token, cert —
+    /// AND the file-server lane bound to the same ref. Used by the per-backend
+    /// "Forget gateway" destructive action. Each writer posts
+    /// `.settingsDidChangeRemotely`; the Watch picks up the cleared state from
+    /// the next envelope absence (`currentRemoteAgentEnvelope()` returns nil
+    /// when the default backend's URL is missing).
+    ///
+    /// File lane: Forget is the TERMINAL per-ref wipe, so it must reach every
+    /// slot keyed by `ref.storageKeySuffix` — including
+    /// `fileServer.{url,credential,certFingerprint,available,…}`. Leaving them
+    /// behind is not merely residue: a built-in's ref is REUSED, so
+    /// `fileTransferReadySnapshot(for:)` (url + credential + `available`, all
+    /// three survivors) would re-arm the lane against the OLD file server on the
+    /// next reconfigure, and the next document would PUT to a host the user's
+    /// Forget said they were done with. For a deleted CUSTOM the suffix is never
+    /// reused, so the slots would be orphaned with no UI able to reach them (the
+    /// only purge route, the file-transfer page, is gated on
+    /// `isRemoteAgentConfigured(ref)`).
     ///
     /// Default-pointer policy (Decision B, recommended path): if the cleared
     /// backend was the default AND another backend remains configured, repoint
@@ -3047,6 +3130,21 @@ final class SettingsViewModel {
             activeConvBackend: activeConvBackend,
             changedRef: ref
         )
+
+        // File lane FIRST (invalidate-first ordering, same doctrine as
+        // `clearFileTransferConfig` itself): `available=false` must reach iCloud
+        // KVS no later than the gateway teardown, so no peer can pair a
+        // reconfigured gateway with a Ready the forgotten server earned.
+        //
+        // Deliberately attached HERE — at the user-intent Forget site — and NOT
+        // inside `SettingsManager.deleteCustomGateway(id:)` or
+        // `clearRemoteAgentAuthScheme(for:)`. Both of those double as the
+        // token-write-FAILURE rollback for a brand-new save (see
+        // `validateAndSaveRemoteAgent`), and a 32-hex credential destroyed by a
+        // transient Keychain error is unrecoverable — the user would have to
+        // re-provision their server. A destructive credential wipe must hang off
+        // an explicit user intent, never off a shared rollback helper.
+        await clearFileTransferConfig(for: ref)
 
         if case .custom(let id) = ref {
             // `deleteCustomGateway` clears the per-ref url/token/cert slots +
@@ -3172,18 +3270,123 @@ final class SettingsViewModel {
         fileTransferTestSignatures.removeValue(forKey: ref)
     }
 
+    /// Does this URL carry `user:password@` userinfo? Thin forwarder to the
+    /// canonical `EndpointURLPolicy` so the save path, the draft signature, and
+    /// the Test path cannot drift on the answer — and so the file-server field's
+    /// existing call sites keep reading as one predicate rather than three.
+    ///
+    /// Why REJECT rather than silently strip: a user who typed a password
+    /// believes they configured auth. Stripping it leaves them debugging a 401
+    /// with no explanation; the reject names the real model and points them at
+    /// the row where the secret actually belongs.
+    ///
+    /// Applies to the GATEWAY URL too — see `EndpointURLPolicy` for why that is
+    /// not an exception and what capability it removes.
+    static func urlCarriesUserinfo(_ url: URL) -> Bool {
+        EndpointURLPolicy.carriesUserinfo(url)
+    }
+
+    /// WHICH defect the three field derivations below should NAME for
+    /// `trimmedURL`, or nil when the generic "enter the full URL including
+    /// https://" prompt is the honest answer. Factored out so the three cannot
+    /// drift on the diagnosis; the copy itself stays per-field (each names its
+    /// own example host, and its own place for the secret).
+    ///
+    /// Two inputs deliberately land on the generic prompt rather than on the
+    /// `.noHost` copy:
+    ///
+    ///   - The EMPTY field. "Not filled in" is not "missing a host name".
+    ///
+    ///   - Anything whose scheme is not `https` — which is what the COMMONEST
+    ///     typo looks like. `gateway.example.com` parses with `scheme` AND
+    ///     `host` both nil (the whole string becomes the path), and
+    ///     `gw.example.com:18789` parses with the HOST as its scheme, so
+    ///     `EndpointURLPolicy` answers `.noHost` for a user who typed nothing
+    ///     BUT a host name. Telling them their host name is missing names the
+    ///     one part they got right and hides the part they omitted.
+    ///
+    /// The correction belongs here rather than in the policy: that
+    /// `Rejection` precedence (`noHost` → `notHTTPS` → `carriesUserinfo`) is
+    /// load-bearing for `PairingPayload`'s `.malformed` / `.insecureURL` split
+    /// and is pinned by `EndpointURLPolicyTests`. Admissibility and diagnosis
+    /// are different questions; only the second one is copy.
+    private static func namedURLRejection(_ trimmedURL: String) -> EndpointURLPolicy.Rejection? {
+        guard !trimmedURL.isEmpty,
+              let url = URL(string: trimmedURL),
+              let rejection = EndpointURLPolicy.rejection(for: url)
+        else { return nil }
+        // A hostless verdict is only worth naming when the string already IS an
+        // https URL (`https://`, `https:///v1`). Otherwise the scheme is the
+        // actionable defect.
+        if rejection == .noHost, url.scheme?.lowercased() != "https" { return nil }
+        return rejection
+    }
+
+    /// The inline `.invalid` copy for a custom voice-endpoint URL the app won't
+    /// accept. Third twin of the gateway / file-server derivations below —
+    /// same policy, same one-story-per-string rule across Test and Save.
+    static func customSTTURLRejectionMessage(_ trimmedURL: String) -> String {
+        switch namedURLRejection(trimmedURL) {
+        case .carriesUserinfo?:
+            return String(localized: "settings.stt.custom.url.userinfo",
+                          defaultValue: "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your endpoint's key goes in the API key field.")
+        case .noHost?:
+            return String(localized: "settings.stt.custom.url.noHost",
+                          defaultValue: "That address is missing its host name — it should look like https://voice.example.com.")
+        default:
+            return String(localized: "settings.stt.custom.url.invalid",
+                          defaultValue: "Enter the full endpoint URL including https://.")
+        }
+    }
+
+    /// The inline `.invalid` copy for a gateway URL the app won't accept —
+    /// specific for userinfo, specific for a hostless address, generic
+    /// otherwise (which defect gets named: `namedURLRejection`). ONE derivation
+    /// so Save and Test can never tell the user two different stories about the
+    /// same string (twin of `fileServerURLRejectionMessage`).
+    static func remoteAgentURLRejectionMessage(_ trimmedURL: String) -> String {
+        switch namedURLRejection(trimmedURL) {
+        case .carriesUserinfo?:
+            return String(localized: "settings.remoteAgent.url.userinfo",
+                          defaultValue: "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your gateway's token goes in the Token field.")
+        case .noHost?:
+            return String(localized: "settings.remoteAgent.url.noHost",
+                          defaultValue: "That address is missing its host name — it should look like https://ai.example.com.")
+        default:
+            return String(localized: "Enter the full gateway URL including https://.")
+        }
+    }
+
+    /// The inline `.invalid` copy for a file-server URL the app won't accept —
+    /// specific for userinfo, specific for a hostless address, generic
+    /// otherwise (which defect gets named: `namedURLRejection`). ONE derivation
+    /// so the save path and the Test path can never tell the user two different
+    /// stories about the same string.
+    private static func fileServerURLRejectionMessage(_ trimmedURL: String) -> String {
+        switch namedURLRejection(trimmedURL) {
+        case .carriesUserinfo?:
+            return String(localized: "fileTransfer.url.userinfo",
+                          defaultValue: "Don't include a username or password in the URL — Conduck manages the credential for you. Use the address only, and give the generated password to your server.")
+        case .noHost?:
+            return String(localized: "fileTransfer.url.noHost",
+                          defaultValue: "That address is missing its host name — it should look like https://files.example.com.")
+        default:
+            return String(localized: "fileTransfer.url.invalid",
+                          defaultValue: "Enter the full file-server URL including https://.")
+        }
+    }
+
     func validateAndSaveFileTransferConfig(urlString: String, for ref: RemoteAgentRef) async {
         let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Only `https://` is valid. `http://` is rejected
-        // client-side at save so the basic-auth credential can never leave the
-        // device in cleartext. Verbatim shape from `validateAndSaveRemoteAgent`.
+        // `EndpointURLPolicy` — https (so the basic-auth credential can never
+        // leave the device in cleartext), a real host, and no `user:password@`
+        // (the URL is dual-written to App-Group defaults + iCloud KVS, so it
+        // must never carry a secret). Verbatim shape from the gateway's guard.
         guard !trimmedURL.isEmpty,
               let parsedURL = URL(string: trimmedURL),
-              let scheme = parsedURL.scheme?.lowercased(),
-              scheme == "https" else {
+              EndpointURLPolicy.isAdmissible(parsedURL) else {
             fileServerValidationStates[ref] = .invalid(
-                message: String(localized: "fileTransfer.url.invalid",
-                                defaultValue: "Enter the full file-server URL including https://.")
+                message: Self.fileServerURLRejectionMessage(trimmedURL)
             )
             return
         }
@@ -3359,9 +3562,12 @@ final class SettingsViewModel {
     /// gating re-renders reactively with every keystroke.
     func fileTransferDraftSignature(for ref: RemoteAgentRef) -> FileTransferTestSignature? {
         let trimmedURL = (fileServerURLStrings[ref] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Same admissibility gate as the save path (`EndpointURLPolicy`) — a
+        // draft Save can't reject must not be Testable either, or a passing
+        // verdict would be earned against a tuple the commit refuses.
         guard !trimmedURL.isEmpty,
               let parsedURL = URL(string: trimmedURL),
-              parsedURL.scheme?.lowercased() == "https" else { return nil }
+              EndpointURLPolicy.isAdmissible(parsedURL) else { return nil }
         let pin: String
         switch Self.normalizeCertFingerprint(fileServerCertFingerprints[ref]) {
         case .none: pin = ""
@@ -3435,8 +3641,9 @@ final class SettingsViewModel {
         // never sees a stale earlier verdict as this attempt's outcome.
         guard let signature = fileTransferDraftSignature(for: ref) else {
             fileServerValidationStates[ref] = .invalid(
-                message: String(localized: "fileTransfer.url.invalid",
-                                defaultValue: "Enter the full file-server URL including https://.")
+                message: Self.fileServerURLRejectionMessage(
+                    (fileServerURLStrings[ref] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                )
             )
             fileTransferTestResults[ref] = FileTransferTestResult(
                 reachedStage: .reachability,
@@ -3794,16 +4001,17 @@ final class SettingsViewModel {
         }
 
         let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Only `https://` is valid; reject `http://` client-side so a
-        // bearer key can never leave the device in cleartext. (Verbatim from
-        // `validateAndSaveRemoteAgent`.)
+        // `EndpointURLPolicy` — https (so a bearer key can never leave the
+        // device in cleartext), a real host, and no `user:password@`. This URL
+        // dual-writes to App-Group defaults + iCloud KVS exactly like the
+        // gateway's, so it is held to the same rule; the storage read fence
+        // (`SettingsManager.resolveStoredURL`) would refuse anything looser,
+        // and a Save the read path won't honour is worse than a clear reject.
         guard !trimmedURL.isEmpty,
               let parsedURL = URL(string: trimmedURL),
-              let scheme = parsedURL.scheme?.lowercased(),
-              scheme == "https" else {
+              EndpointURLPolicy.isAdmissible(parsedURL) else {
             customSTTValidationStates[uuid] = .invalid(
-                message: String(localized: "settings.stt.custom.url.invalid",
-                                defaultValue: "Enter the full endpoint URL including https://.")
+                message: Self.customSTTURLRejectionMessage(trimmedURL)
             )
             return
         }
@@ -3908,15 +4116,13 @@ final class SettingsViewModel {
             customVoiceEndpoints[idx].name = String(candidateName.prefix(40))
         }
 
-        // `https://`-only (verbatim from the old save guard).
+        // `EndpointURLPolicy` (verbatim from the Test guard above).
         let trimmedURL = (customSTTURLStrings[uuid] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedURL.isEmpty,
               let parsedURL = URL(string: trimmedURL),
-              let scheme = parsedURL.scheme?.lowercased(),
-              scheme == "https" else {
+              EndpointURLPolicy.isAdmissible(parsedURL) else {
             customSTTValidationStates[uuid] = .invalid(
-                message: String(localized: "settings.stt.custom.url.invalid",
-                                defaultValue: "Enter the full endpoint URL including https://.")
+                message: Self.customSTTURLRejectionMessage(trimmedURL)
             )
             return false
         }

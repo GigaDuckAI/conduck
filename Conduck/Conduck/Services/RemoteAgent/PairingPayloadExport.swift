@@ -239,7 +239,14 @@ enum PairingPayloadExport {
             model = gateway.model
         }
 
-        guard let url = await manager.getRemoteAgentURL(for: ref) else {
+        // `getRemoteAgentURL` already resolves through the storage read fence,
+        // so an inadmissible stored value arrives here as nil. Re-asserting
+        // `EndpointURLPolicy` keeps the contract LOCAL: this emitter must never
+        // mint a code carrying a `user:password@` URL, whatever the fence does
+        // — a setup code is the one artifact that carries a URL off the device
+        // and onto another one (and onto a screen, as a QR).
+        guard let url = await manager.getRemoteAgentURL(for: ref),
+              EndpointURLPolicy.isAdmissible(url) else {
             throw ExportError.notConfigured
         }
 
@@ -287,6 +294,7 @@ enum PairingPayloadExport {
         // `if FS_URL and FS_CRED`); its pin rides only when one is stored.
         var fileServer: FileServer?
         if let fsURL = await manager.getFileServerURL(for: ref),
+           EndpointURLPolicy.isAdmissible(fsURL),
            let credential = await manager.getFileServerCredential(for: ref), !credential.isEmpty {
             fileServer = FileServer(
                 url: fsURL.absoluteString,

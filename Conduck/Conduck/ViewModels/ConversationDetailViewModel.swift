@@ -687,12 +687,16 @@ final class ConversationDetailViewModel {
     /// configured lane, or must wait until its dispatch lane is restored.
     /// Filename-free replies are locally conclusive even after lane removal or
     /// repointing because they require no network evidence.
+    /// `async` ONLY because the candidate extraction is hopped off the main
+    /// actor: its regex is superlinear in reply length and reply text is
+    /// untrusted, so running it inline froze this pass (up to `retroScanCap`
+    /// replies) on every thread open. The routing decision itself is pure.
     static func retroOutputScanRoute(
         for message: MessageRecord,
         currentLaneID: String?
-    ) -> RetroOutputScanRoute {
+    ) async -> RetroOutputScanRoute {
         let hasFilenameCandidates =
-            !FileTransferOutputDetector.extractCandidates(from: message.text).isEmpty
+            !(await FileTransferOutputDetector.extractCandidatesOffMainActor(from: message.text)).isEmpty
         if !hasFilenameCandidates {
             return .conclusiveWithoutProbe
         }
@@ -727,7 +731,7 @@ final class ConversationDetailViewModel {
             // marker-only mutation.
             return .deferred
         }
-        let route = retroOutputScanRoute(
+        let route = await retroOutputScanRoute(
             for: candidate,
             currentLaneID: currentLaneID
         )
@@ -873,7 +877,7 @@ final class ConversationDetailViewModel {
                 // A filename-free reply is conclusive without network access,
                 // even if the user removed/repointed the lane after dispatch.
                 let hasCandidates =
-                    !FileTransferOutputDetector.extractCandidates(from: reply).isEmpty
+                    !(await FileTransferOutputDetector.extractCandidatesOffMainActor(from: reply)).isEmpty
                 if hasCandidates {
                     guard await FileTransferOutputDetector.configuredLaneStillMatches(
                         ref: dispatchRef,
@@ -1616,6 +1620,21 @@ final class ConversationDetailViewModel {
                         throw AppError.fileTransferNotConfigured
                     }
                 }
+                // Pinning session for the LIVE hop. The pin is resolved from the
+                // DISPATCHED ref here, at send time, from the durable store —
+                // never captured earlier in the turn — so a re-pin between
+                // compose and send is honoured. `URLSession.shared` must never
+                // carry this send: it cannot hold a delegate, so the user's pin
+                // (and the cross-host-redirect refusal) would be a no-op on
+                // macOS while Settings' Test Connection still pinned.
+                // Session ownership: created and invalidated INSIDE this
+                // `do` block, so the `defer` runs only after the send (and the
+                // landing below) has finished — a `defer` outside the awaiting
+                // scope would tear down a healthy in-flight turn.
+                let (pinnedSession, trustEvaluator) = RemoteAgentClient.makePinnedForegroundSession(
+                    pinnedFingerprintHex: RemoteAgentTrustEvaluator.storedConversePin(for: snapshot.ref)
+                )
+                defer { pinnedSession.invalidateAndCancel() }
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,
@@ -1629,7 +1648,9 @@ final class ConversationDetailViewModel {
                     newUserServerFileRefs: newUserServerFileRefs,
                     newUserImageFileRefs: newUserImageFileRefs,
                     newUserTextFileServerRefs: newUserTextFileServerRefs,
-                    fileServerReady: dispatchFileLane != nil
+                    fileServerReady: dispatchFileLane != nil,
+                    session: pinnedSession,
+                    trustEvaluator: trustEvaluator
                 )
                 // Cooperative-cancel check: a Cancel tapped between the reply
                 // landing and this point should drop the reply.
@@ -2262,6 +2283,15 @@ final class ConversationDetailViewModel {
                         throw AppError.fileTransferNotConfigured
                     }
                 }
+                // Same pinning session as `sendUserTurn`'s macOS branch — a
+                // retry must reproduce the original send's TRUST posture, not
+                // just its wire shape. Pin resolved from the dispatched ref at
+                // send time; session owned by (and invalidated inside) this
+                // awaiting `do` block.
+                let (pinnedSession, trustEvaluator) = RemoteAgentClient.makePinnedForegroundSession(
+                    pinnedFingerprintHex: RemoteAgentTrustEvaluator.storedConversePin(for: snapshot.ref)
+                )
+                defer { pinnedSession.invalidateAndCancel() }
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,
@@ -2275,7 +2305,9 @@ final class ConversationDetailViewModel {
                     newUserServerFileRefs: serverRefs,
                     newUserImageFileRefs: newUserImageFileRefs,
                     newUserTextFileServerRefs: newUserTextFileServerRefs,
-                    fileServerReady: readyOutputLane != nil
+                    fileServerReady: readyOutputLane != nil,
+                    session: pinnedSession,
+                    trustEvaluator: trustEvaluator
                 )
                 guard !Task.isCancelled else { return }
                 // Same persistence-first ordering as the original-send path.

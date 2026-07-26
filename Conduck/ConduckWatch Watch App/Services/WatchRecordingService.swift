@@ -631,9 +631,14 @@ final class WatchRecordingService {
                 // anyway.
                 if bailIfStaleArm(generation: generation, claim: claim) { return }
 
-                // Create temp file
+                // Create temp file. The `watch-capture-` prefix is load-bearing,
+                // not cosmetic: this is the raw voice recording, and every
+                // cleanup path for it is in-process (`cleanupRecordingFile`, the
+                // upload defers). A jetsam or force-quit mid-turn therefore
+                // orphans it, and only `TempScratchSweeper` can reclaim it — by
+                // prefix. A bare UUID name is invisible to that sweep forever.
                 let fileURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("watch-capture-\(UUID().uuidString)")
                     .appendingPathExtension("m4a")
 
                 // Recording settings (M4A, 48kHz mono AAC — compressed to 16kHz before upload)

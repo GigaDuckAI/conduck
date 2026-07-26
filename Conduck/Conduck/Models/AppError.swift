@@ -683,9 +683,9 @@ enum AppError: LocalizedError {
 /// Makes AppError display user-friendly messages in Shortcuts and system dialogs.
 /// Without this, iOS shows "AppError error 9" instead of our errorDescription.
 ///
-/// Error codes are stable — do not renumber without checking analytics/bug reports.
-/// Gappy slots are intentional: the numbering is frozen so Shortcuts users
-/// see stable error codes for each failure mode across releases.
+/// Error codes are stable — never renumber. Gappy slots are intentional: the
+/// numbering is frozen so Shortcuts users see stable error codes for each
+/// failure mode across releases.
 extension AppError: CustomNSError {
     static var errorDomain: String {
         "Conduck.AppError"

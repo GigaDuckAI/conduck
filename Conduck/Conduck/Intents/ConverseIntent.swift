@@ -27,7 +27,6 @@
 
 import Foundation
 import AppIntents
-import AVFoundation
 import UniformTypeIdentifiers
 import os.log
 #if canImport(UIKit)
@@ -124,31 +123,18 @@ struct ConverseIntent: AppIntent {
             throw AppError.audioTooLarge
         }
 
-        // Measure audio duration for diagnostic logging only — not load-bearing.
-        var audioDurationSeconds: Int? = nil
-        do {
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString + ".m4a")
-            try originalAudioData.write(to: tempURL)
-            // Audio cleanup on EVERY exit from this block — `load(.duration)`
-            // can throw, and a post-call removeItem would skip on that path,
-            // stranding a full copy of the recording in tmp.
-            defer { try? FileManager.default.removeItem(at: tempURL) }
-            let asset = AVURLAsset(url: tempURL)
-            let duration = try await asset.load(.duration)
-            // `CMTimeGetSeconds` returns NaN/±inf for an invalid or indefinite
-            // duration, and `Int(NaN)` is an uncatchable runtime trap — the
-            // Shortcut's audio parameter is user-wirable, so guard like
-            // `STTClient` does (value is diagnostic-only; nil is fine).
-            let seconds = CMTimeGetSeconds(duration)
-            audioDurationSeconds = seconds.isFinite ? Int(seconds) : nil
-        } catch {
-            // Non-critical — duration is diagnostic-only.
-        }
-
+        // Byte count + language only — deliberately no clip DURATION. Measuring
+        // it needs an `AVURLAsset`, which needs a file URL, which means writing a
+        // second plaintext copy of the user's recording into `temporaryDirectory`
+        // in Release builds to feed a DEBUG-only log line. Conduck never persists
+        // audio where it controls the storage (`spec.md` Architectural
+        // Invariants), so the ONE audio write this intent makes is the
+        // `STTClient` handoff below, which that client `defer`-deletes. It also
+        // keeps an unbounded `await asset.load(.duration)` off user-wirable
+        // Shortcut input.
         #if DEBUG
         print("[Conduck] ConverseIntent")
-        print("[Conduck] Audio: \(originalAudioData.count) bytes, Duration: \(audioDurationSeconds ?? -1)s, Language: \(preferredLanguage ?? "auto")")
+        print("[Conduck] Audio: \(originalAudioData.count) bytes, Language: \(preferredLanguage ?? "auto")")
         #endif
 
         // Write audio to disk for STTClient (which takes a file URL +

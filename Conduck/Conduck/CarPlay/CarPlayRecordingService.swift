@@ -804,7 +804,16 @@ final class CarPlayRecordingService {
                 try engine.start()
                 Self.log.info("Engine restarted after reconfig")
             } catch {
-                Self.log.error("Engine restart failed after reconfig: \(error.localizedDescription, privacy: .public)")
+                // Reduced to the NSError domain/code — never
+                // `localizedDescription`. This file also does STT networking, so
+                // an error text logged here can carry the user's gateway or
+                // custom-endpoint hostname into the unified log (and from there
+                // into any sysdiagnose attached to a public issue). Domain + code
+                // are numbers/constants and cannot. Same reduction the two share
+                // extensions use; it is what lets this file leave
+                // `LoggingPrivacyDriftGuardTests.errorTextVettedFileNames`.
+                let nsError = error as NSError
+                Self.log.error("Engine restart failed after reconfig: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)")
                 Task { await self.endRecordingForUpload() }
             }
         }

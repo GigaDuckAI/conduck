@@ -136,3 +136,158 @@ actor AgentDownloadScratch {
         return leaf
     }
 }
+
+// MARK: - Orphaned-temp reclaim
+
+/// Launch-time reclaim for temp files the app's OWN writers left behind.
+///
+/// WHY it is needed: every capture, staged upload, and request body is written to
+/// `FileManager.default.temporaryDirectory` under a fresh UUID name, and every
+/// cleanup is in-process (`defer`, or a URLSession delegate callback). A jetsam,
+/// crash, or force-quit between the write and the cleanup therefore leaks a file
+/// with no owner left to delete it — and because those names are unique, repeats
+/// ACCUMULATE rather than overwrite. iOS/watchOS purge `tmp` only opportunistically
+/// ("may be purged when the app is not running"), so on a device that is rarely
+/// short of space those files can survive for weeks.
+///
+/// The one writer that does NOT accumulate is the onboarding shortcut export
+/// (`GigaAction.shortcut` — a fixed name, deleted before each copy, so it
+/// overwrites in place). It is a bundled resource holding no user data, and it is
+/// deliberately absent from `ownedPrefixes`: a single self-replacing file is not
+/// the failure this reclaim exists for. `TempScratchLeafDriftGuardTests` records
+/// that exemption so the omission reads as a decision, not an oversight.
+///
+/// WHY it is a privacy fix, not disk hygiene: the leaked files are raw voice
+/// recordings (`conduck_capture_`, `carplay_`, `watch-capture-`, `wav_*`, …) and
+/// request bodies that embed either a second copy of a recording (`stt-body-`) or
+/// the entire client-owned conversation history in plaintext
+/// (`conduck-converse-body-`, `conduck-carplay-converse-body-`,
+/// `conduck-watch-converse-body-`). The architecture's invariant is that Conduck
+/// never persists audio where it controls the storage; an orphan contradicts it.
+///
+/// WHERE it runs: every process that writes those files — `ConduckApp` (iOS),
+/// `AppDelegate` (macOS), `ConduckWatchApp` (watchOS), each through
+/// `sweepInBackground()`. The wrist is not optional coverage: it is the surface
+/// with the least memory headroom (jetsam mid-upload is routine there) and the
+/// one whose `tmp` the user cannot inspect or clear.
+///
+/// `nonisolated` (the app targets compile with
+/// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so an unannotated type would be
+/// implicitly `@MainActor`): this scan enumerates the SHARED temp directory,
+/// which every framework in the process also stages files in, so its cost scales
+/// with someone else's activity, not ours — it has no business on the main
+/// thread. See `sweepInBackground()` for why `nonisolated` alone is not enough.
+/// Pure `FileManager` + `URL` + `Date`, no state beyond two immutable `let`s, so
+/// it is safe on any executor (the shared `FileManager` is documented
+/// thread-safe absent a delegate, and none is set).
+///
+/// WHY it cannot race a live upload: matching is PREFIX-scoped to names this app
+/// writes (never the whole directory — other frameworks stage files in `tmp` too),
+/// and age-bounded at `maxOrphanAge`. A background upload's own body file must
+/// outlive the task, but the longest resource budget in the app is
+/// `remoteAgentConverseResourceTimeout` (600 s), so a 24 h floor sits two orders
+/// of magnitude clear of any in-flight body — and clear of `PendingRetryStore`'s
+/// 10-minute retry-audio window, which owns `conduck_retry_` files until it
+/// expires them itself. Mirrors `AgentDownloadScratch.sweep()`'s shape (same
+/// `.creationDateKey` + cutoff pattern) so there is ONE reviewed idea here, not two.
+nonisolated enum TempScratchSweeper {
+
+    /// Age floor for reclaiming an orphan. See the type comment for why 24 h is
+    /// the smallest safe value.
+    static let maxOrphanAge: TimeInterval = 24 * 60 * 60
+
+    /// Filename prefixes this app writes into `temporaryDirectory`. Prefix
+    /// matching (not extension or wildcard) keeps the sweep off every file the
+    /// system or another framework staged there. `carplay_` covers
+    /// `carplay_upload_`; `conduck-stt-` covers `conduck-stt-body-`;
+    /// `apple-relay-` covers `apple-relay-out-`.
+    ///
+    /// Every writer MUST prefix its leaf. A bare `UUID().uuidString` name is
+    /// unreachable from here and can only be claimed by a rule loose enough to
+    /// hit other frameworks' files — so an unprefixed capture is permanently
+    /// unreclaimable, not merely unswept. `TempScratchSweeperTests` (iOS) and
+    /// `WatchTempScratchSweeperTests` (watchOS) each pin the writer list.
+    static let ownedPrefixes = [
+        "conduck_capture_",                 // menu-bar dictation capture (audio)
+        "conduck_retry_",                   // retry audio (PendingRetryStore-owned)
+        "conduck-inapp-",                   // in-app recorder capture (audio)
+        "conduck-stt-",                     // intent handoff audio + STT request body
+        "conduck-apple-test-",              // Settings Apple-STT test recording (audio)
+        "conduck-cloud-stt-test-",          // Settings cloud-STT test recording (audio)
+        "carplay_",                         // CarPlay capture + upload copy (audio)
+        "wav_input_", "wav_output_",        // AudioCompressor scratch (audio)
+        "compress_input_", "compress_output_",
+        "stt-body-",                        // multipart STT body (embeds the audio)
+        "stt-json-body-",                   // JSON STT body (embeds the audio, base64)
+        "conduck-converse-body-",           // converse request body (conversation history)
+        "conduck-carplay-converse-body-",   // CarPlay converse request body
+        "conduck-watch-converse-body-",     // wrist converse request body (same history)
+        "conduck-recorder-",                // shared mic recorder capture (audio)
+        "apple-relay-",                     // Apple-relay clip movers (audio)
+        "watch-capture-",                   // wrist recorder capture (audio)
+        "watch-stt-audio-",                 // wrist STT multipart input copy (audio)
+        "conduck-download-",                // completed agent-output download body
+        // Copies of USER CONTENT staged for a background uploader that deletes its
+        // own input. That delete is in-process, so an abnormal termination between
+        // the copy and the upload's completion strands the user's file.
+        "conduck-imgupload-",               // original image bytes, full fidelity
+        "conduck-ftstage-",                 // security-scoped file copy (leaf embeds the filename)
+        "conduck-share-imgupload-",         // share-extension image, drained from the inbox
+        "conduck-share-upload-",            // share-extension file, same path
+        "diagnostics-stt-probe-",           // copy of a bundled probe clip (not user audio)
+        "conduck-ftupload-",                // throwaway copy staged for the background driver
+    ]
+
+    /// Launch entry point — the only one callers should use.
+    ///
+    /// `Task.detached` is load-bearing, not stylistic. Every launch caller
+    /// (`ConduckApp.init`, `AppDelegate.applicationDidFinishLaunching`,
+    /// `ConduckWatchApp.init`) is main-actor isolated, so a plain `Task { }` there
+    /// INHERITS main-actor isolation — it would defer the directory scan to a
+    /// later main-thread turn, not move it off one. `sweep()` being `nonisolated`
+    /// does not help either: a synchronous `nonisolated` call runs on whatever
+    /// thread invokes it. Only a detached task actually puts the scan on a
+    /// background executor, which is the whole point on watchOS, where this runs
+    /// on every background-URLSession relaunch on the device with the least
+    /// headroom.
+    ///
+    /// Fire-and-forget: best-effort hygiene with no result any caller needs, and
+    /// nothing at launch orders against it. `PendingRetryStore` owns App-Group
+    /// storage (a different container entirely) and `AgentDownloadScratch` owns
+    /// the `AgentFileDownloads` subdirectory this scan never descends into, so a
+    /// concurrent launch task cannot collide with it — and a lost race on any
+    /// single file is a `try?` no-op by construction.
+    static func sweepInBackground() {
+        Task.detached(priority: .utility) { sweep() }
+    }
+
+    /// Delete owned-prefix entries older than `maxOrphanAge`. Best-effort and
+    /// silent: a failure leaves the file for the next launch, and nothing here is
+    /// ever logged (the names embed nothing sensitive, but the directory listing
+    /// would reveal capture activity).
+    ///
+    /// Synchronous, and it BLOCKS the calling thread for the length of a scan of
+    /// the shared temp directory. Shipping code goes through
+    /// `sweepInBackground()`; the only direct callers are the tests, which need
+    /// the scan finished before they assert.
+    static func sweep() {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.creationDateKey],
+            options: [.skipsSubdirectoryDescendants]
+        ) else { return }
+
+        let cutoff = Date().addingTimeInterval(-maxOrphanAge)
+        for entry in entries {
+            let name = entry.lastPathComponent
+            guard ownedPrefixes.contains(where: { name.hasPrefix($0) }) else { continue }
+            let created = (try? entry.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+            // An unreadable creation date is NOT treated as old — never delete on
+            // a missing timestamp.
+            guard let created, created < cutoff else { continue }
+            try? fileManager.removeItem(at: entry)
+        }
+    }
+}

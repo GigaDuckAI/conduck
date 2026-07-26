@@ -22,8 +22,13 @@
 //   - urlSession(_:downloadTask:didFinishDownloadingTo:) moves the body to a
 //     caller-owned temp URL before the system reclaims it
 //   - urlSession(_:task:didCompleteWithError:) resumes the continuation
-//   - urlSession(_:didReceive:) (challenge) routes to RemoteAgentTrustEvaluator
-//     scoped to the FILE-SERVER host
+//   - urlSession(_:task:didReceive:) (challenge) routes to
+//     RemoteAgentTrustEvaluator with the pin stamped onto the TASK at enqueue
+//     (FileTransferBackgroundMetadata.pinnedFingerprintHex), applied host-blind
+//     so a cross-origin redirect target must present the pinned key
+//   - urlSession(_:task:willPerformHTTPRedirection:) refuses a cross-origin 3xx
+//     — a real veto on macOS (.default session), never delivered on iOS
+//     (background sessions always follow redirects)
 //   - a stored completion handler bridges the .backgroundTask system callback
 //
 //  POLICY: fail-fast — NO auto-retry. A suspended background
@@ -226,7 +231,10 @@ final class BackgroundFileTransfer: NSObject {
             refSuffix: "",                 // resolved by caller's snapshot; recovery uses host match
             direction: .upload,
             shareEnvelopeID: shareEnvelopeID,
-            sequence: sequence)
+            sequence: sequence,
+            // The pin rides the TASK so the trust handler can apply it host-blind
+            // and survive a relaunch — see the property's doc.
+            pinnedFingerprintHex: snapshot.certFingerprintHex)
 
         do {
             try await enqueueUpload(request: request, metadata: metadata, localURL: localURL, snapshot: snapshot, onProgress: onProgress)
@@ -341,7 +349,8 @@ final class BackgroundFileTransfer: NSObject {
         let metadata = FileTransferBackgroundMetadata(
             storedKey: storedKey,
             refSuffix: "",
-            direction: .download)
+            direction: .download,
+            pinnedFingerprintHex: snapshot.certFingerprintHex)
 
         do {
             return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
@@ -589,15 +598,18 @@ final class BackgroundFileTransfer: NSObject {
     // MARK: - Ephemeral session (probe / delete / MKCOL)
 
     /// A short-lived, cert-pinned session for interactive probe/delete/MKCOL requests.
-    /// Pinned to the file-server host via a one-off URLSession delegate wrapper.
+    /// The `RemoteAgentTrustEvaluator` IS the delegate (the session retains it
+    /// until invalidated), so this lane gets the pin compare AND the cross-host
+    /// redirect refusal from the one shared trust component instead of a
+    /// look-alike wrapper that could drift from it. The pin is applied host-blind
+    /// — a redirect target's cert cannot match, which is the fail-closed answer.
     private static func makeEphemeralSession(snapshot: SettingsManager.FileTransferSnapshot) -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = Constants.fileServerProbeTimeout
         config.timeoutIntervalForResource = Constants.fileServerProbeTimeout
-        let delegate = EphemeralPinningDelegate(
-            pinnedFingerprintHex: snapshot.certFingerprintHex,
-            pinnedHost: snapshot.baseURL.host ?? "")
-        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        let evaluator = RemoteAgentTrustEvaluator(
+            pinnedFingerprintHex: snapshot.certFingerprintHex)
+        return URLSession(configuration: config, delegate: evaluator, delegateQueue: nil)
     }
 
     // MARK: - Error mapping
@@ -668,6 +680,101 @@ final class BackgroundFileTransfer: NSObject {
 // MARK: - URLSessionTaskDelegate (progress + completion)
 
 extension BackgroundFileTransfer: URLSessionTaskDelegate {
+
+    /// TASK-level server-trust challenge handler — per-TASK pinning for the file
+    /// lane. Mirrors `BackgroundRemoteAgent` / `CarPlayConverseUploader` /
+    /// `STTClient+Background`, which all pin this way and for the same reasons.
+    /// A session-level `urlSession(_:didReceive:)` takes precedence for
+    /// server-trust challenges, so it is intentionally ABSENT here — only this
+    /// task-level handler exists.
+    ///
+    /// The pin is recovered from the task's own `taskDescription` envelope (the
+    /// snapshot's fingerprint, stamped at enqueue) and applied HOST-BLIND. That
+    /// is the load-bearing part: this ONE session is a shared, multi-host
+    /// registry, and resolving the pin by CHALLENGE HOST returned nil for a host
+    /// no configured ref points at — so a cross-origin 3xx got default ATS and
+    /// URLSession replayed the file bytes AND the `Authorization: Basic`
+    /// credential to an endpoint the user never configured. Host-blind, that
+    /// redirect target must present the PINNED key or the evaluator cancels.
+    ///
+    /// HONEST LIMIT (identical to `RemoteAgentTrustEvaluator.converseTaskPin`):
+    /// a pin compare proves "same key", not "same origin" — a wildcard/multi-SAN
+    /// cert or one key behind several proxy names satisfies it at another host,
+    /// and URLSession may reuse a connection without raising a fresh challenge.
+    /// It is a mitigation, not a redirect veto. The veto is
+    /// `willPerformHTTPRedirection` below, which an iOS BACKGROUND session never
+    /// receives. And an UNPINNED lane (the recommended Tailscale Serve /
+    /// Let's Encrypt posture) has no mitigation here at all on iOS — point the
+    /// app at the TERMINAL file-server URL, not one that redirects. Test
+    /// Connection surfaces a redirecting endpoint rather than following it.
+    ///
+    /// nil pin (unpinned lane, or a pre-update task whose envelope has no pin
+    /// field → `pinnedFingerprint(forHost:)`) → `performDefaultHandling`.
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        // Only server-trust challenges take the pinning path (client-cert /
+        // HTTP-auth → default handling), mirroring `STTClient+Background`.
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        let pin = Self.taskPin(taskDescription: task.taskDescription)
+            ?? pinnedFingerprint(forHost: challenge.protectionSpace.host)
+        let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: pin)
+        evaluator.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+    }
+
+    /// The pin stamped onto a task's `taskDescription` envelope at enqueue. nil
+    /// for an unpinned lane (→ default ATS) or a pre-update envelope (→ the
+    /// legacy host lookup). Pure over its input and `internal`, so the resolution
+    /// is unit-testable without a live session (`SecTrust` has no test
+    /// constructor, and a `URLSessionTask` cannot be constructed either).
+    static func taskPin(taskDescription: String?) -> String? {
+        guard let pin = FileTransferBackgroundMetadata
+            .decoded(from: taskDescription)?
+            .pinnedFingerprintHex,
+              !pin.isEmpty
+        else { return nil }
+        return pin
+    }
+
+    /// Refuse a cross-ORIGIN redirect; follow a same-origin one unchanged.
+    /// Delegates the origin compare to `RemoteAgentTrustEvaluator.sameOrigin`,
+    /// the app's ONE definition, so this lane cannot drift from the sessions that
+    /// install the evaluator directly (Test Connection, the probe/delete/MKCOL
+    /// ephemeral sessions, macOS foreground converse).
+    ///
+    /// SCOPE — read this before trusting it: URLSession delivers this callback
+    /// only on the macOS build, whose transfer session is a `.default`
+    /// configuration. On iOS the session is a BACKGROUND configuration, and the
+    /// SDK contract is explicit that redirects there "will always be followed and
+    /// this method will not be called". So on iOS the only pushback on a
+    /// cross-host hop is the host-blind pin above — with none at all when the
+    /// lane is unpinned. This is a real veto on one platform, not a guard on
+    /// both.
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        // `response.url` is the URL that ANSWERED with the 3xx — the origin this
+        // hop was actually talking to, which across a chain is not the original.
+        let from = response.url ?? task.currentRequest?.url ?? task.originalRequest?.url
+        guard let target = request.url,
+              let source = from,
+              RemoteAgentTrustEvaluator.sameOrigin(source, target),
+              target.scheme?.lowercased() == "https"
+        else {
+            // nil completes the task with the 3xx itself, which
+            // `completionError(statusCode:isUpload:)` already maps to a plain
+            // transfer failure (a visible, retryable outcome).
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
 
     /// Forward upload progress to the per-task `onProgress` sink (0...1).
     func urlSession(_ session: URLSession,
@@ -754,8 +861,13 @@ extension BackgroundFileTransfer: URLSessionDownloadDelegate {
            !(200...299).contains(http.statusCode) {
             return
         }
+        // The prefix is load-bearing: it is what makes this file reclaimable by
+        // `TempScratchSweeper`. The caller owns cleanup, but a jetsam or crash
+        // between here and the caller's `removeItem` strands downloaded agent
+        // output in `tmp`, and a bare-UUID leaf matches no prefix rule that is
+        // narrow enough to be safe — it would survive every future sweep.
         let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("conduck-download-\(UUID().uuidString)")
         do {
             try FileManager.default.moveItem(at: location, to: destination)
             queue.sync { inFlight[downloadTask.taskIdentifier]?.downloadedURL = destination }
@@ -765,35 +877,82 @@ extension BackgroundFileTransfer: URLSessionDownloadDelegate {
     }
 }
 
-// MARK: - URLSessionDelegate (auth challenge + background events)
+// MARK: - URLSessionDelegate (background events + legacy pin lookup)
+//
+// NO session-level `urlSession(_:didReceive:)` lives here, deliberately: it
+// would take precedence over the TASK-level server-trust handler above, which is
+// where the host-blind per-task pin is applied. Same shape as the three sibling
+// background lanes.
 
 extension BackgroundFileTransfer: URLSessionDelegate {
 
-    /// Route the server-trust challenge to a RemoteAgentTrustEvaluator scoped to
-    /// the file-server host, resolving the pinned fingerprint from whichever
-    /// in-flight transfer targets that host.
-    func urlSession(_ session: URLSession,
-                    didReceive challenge: URLAuthenticationChallenge,
-                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        let host = challenge.protectionSpace.host
-        // RemoteAgentTrustEvaluator pins by fingerprint only (no pinnedHost
-        // param); host-scoping is done here by resolving the fingerprint for
-        // this challenge host. Forward via the URLSessionDelegate method, the
-        // same call BackgroundRemoteAgent uses.
-        let evaluator = RemoteAgentTrustEvaluator(
-            pinnedFingerprintHex: pinnedFingerprint(forHost: host))
-        evaluator.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
-    }
-
-    /// The pinned fingerprint for the file-server `host`, resolved from any
-    /// in-flight transfer whose snapshot targets that host.
+    /// Legacy host-keyed pin resolution, kept ONLY for a task enqueued by a build
+    /// that predates `FileTransferBackgroundMetadata.pinnedFingerprintHex` and is
+    /// still in flight across the update: the in-flight transfer's snapshot when
+    /// one is live, else the durable per-ref pin read from App-Group defaults.
+    ///
+    /// The snapshot is the AUTHORITATIVE source while the process that enqueued
+    /// the transfer is alive — it is the config the operation was started under,
+    /// which is what `identitySignature` exists to guard against a mid-flight
+    /// config edit. The durable fallback covers the case the snapshot cannot:
+    /// iOS terminates the app mid-transfer and RELAUNCHES it to finish
+    /// (`sessionSendsLaunchEvents = true` + `handleBackgroundSessionEvents` —
+    /// a designed-for path, not a corner case), and the in-memory `inFlight`
+    /// registry is empty after a kill. Without the fallback the resumed
+    /// connection resolved no pin and degraded to default ATS, i.e. the user's
+    /// file-server pin silently stopped applying across a relaunch.
+    ///
+    /// LIMIT (why the task-carried pin replaced it): keying off the CHALLENGE
+    /// host means a redirect target the user never configured resolves to "no
+    /// pin" and gets default ATS — the pin stops applying exactly where it
+    /// matters. Current tasks take the host-blind path in the trust handler
+    /// above; this one drains with the last pre-update transfer.
     private func pinnedFingerprint(forHost host: String) -> String? {
-        queue.sync {
+        let live = queue.sync { () -> String? in
             for entry in inFlight.values where entry.snapshot.baseURL.host == host {
                 return entry.snapshot.certFingerprintHex
             }
             return nil
         }
+        if let live { return live }
+        return Self.durableFileServerPin(forHost: host)
+    }
+
+    /// The per-ref file-server pin stored for whichever configured ref's
+    /// file-server base URL lives on `host`, read LIVE from App-Group defaults.
+    /// `nil` when no configured ref matches, or its pin is unset/empty (→ default
+    /// ATS, correct for Tailscale Serve / Let's Encrypt).
+    ///
+    /// Enumerates the built-in refs plus the custom-gateway roster because the
+    /// pin key is per-ref and the challenge only carries a host. Nonisolated
+    /// synchronous defaults read — safe in a trust delegate (no MainActor hop
+    /// into `SettingsManager`) and relaunch-safe by construction.
+    ///
+    /// EDGE (same as the Watch resolver): two file servers on the SAME host
+    /// differing only by port is an unsupported self-signed-pin case — `URL.host`
+    /// ignores the port, so the first matching ref's pin wins. Distinct hosts is
+    /// the documented pinning recipe.
+    ///
+    /// `internal` (not `private`) so `@testable import` can lock the durable
+    /// resolution — the relaunch path itself needs a device, but the lookup is
+    /// pure over App-Group defaults and must not silently regress.
+    nonisolated static func durableFileServerPin(forHost host: String) -> String? {
+        let defaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        var refs: [RemoteAgentRef] = RemoteAgentBackend.allCases.map { .builtin($0) }
+        if let data = defaults.data(forKey: Constants.customGatewaysRegistryKey),
+           let roster = try? JSONDecoder().decode([CustomGateway].self, from: data) {
+            refs.append(contentsOf: roster.map(\.ref))
+        }
+        for ref in refs {
+            guard let urlString = defaults.string(forKey: Constants.fileServerURLKey(for: ref)),
+                  let refHost = URL(string: urlString)?.host(percentEncoded: false),
+                  refHost.caseInsensitiveCompare(host) == .orderedSame,
+                  let pin = defaults.string(forKey: Constants.fileServerCertFingerprintKey(for: ref)),
+                  !pin.isEmpty
+            else { continue }
+            return pin
+        }
+        return nil
     }
 
     /// All background events for this session have been delivered — bridge the
@@ -807,24 +966,3 @@ extension BackgroundFileTransfer: URLSessionDelegate {
     }
 }
 
-// MARK: - EphemeralPinningDelegate
-
-/// One-off URLSession delegate that pins the file-server cert for the
-/// short-lived probe/delete sessions (which don't share the background
-/// session's in-flight registry).
-private final class EphemeralPinningDelegate: NSObject, URLSessionDelegate {
-    let pinnedFingerprintHex: String?
-    let pinnedHost: String
-    init(pinnedFingerprintHex: String?, pinnedHost: String) {
-        self.pinnedFingerprintHex = pinnedFingerprintHex
-        self.pinnedHost = pinnedHost
-    }
-    func urlSession(_ session: URLSession,
-                    didReceive challenge: URLAuthenticationChallenge,
-                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        _ = pinnedHost
-        let evaluator = RemoteAgentTrustEvaluator(
-            pinnedFingerprintHex: pinnedFingerprintHex)
-        evaluator.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
-    }
-}

@@ -740,6 +740,12 @@ private struct AgentMarkdownBody: View, Equatable {
 
     var body: some View {
         StructuredText(markdown: text)
+            // Reply text is untrusted: markup attachment URLs are refused (so a
+            // `![](https://…)` in an answer can never originate a fetch) and a
+            // link tap only reaches the system for a web/mail scheme — any other
+            // scheme shows its real destination and asks first, because the link
+            // text is the agent's to choose. See MarkdownAttachmentPolicy.swift.
+            .appliesUntrustedMarkdownPolicy()
             .foregroundStyle(AppColors.textPrimary)
             .textual.textSelection(.enabled)
             // Mirror the user `Text` branch — take full natural height, no truncation.

@@ -28,16 +28,35 @@
 // recovers the turn's gateway identity (`refRawValue`) from the task's
 // `taskDescription` metadata, then resolves that ref's pinned SHA-256
 // fingerprint LIVE from the App-Group UserDefaults (the per-ref key
-// SettingsManager writes), host-scopes it against the ref's configured URL,
-// and delegates the actual compare to `RemoteAgentTrustEvaluator`. Mirrors
-// the STT background sibling (`STTClient+Background.swift`). Per-challenge
-// live resolution is relaunch-safe (a cross-launch-resumed task re-reads the
-// durable pin), task-scoped (no host-collision across refs), custom-correct
-// (keyed off the true ref, never the `.openclaw` status-map carrier), and
-// honors a post-enqueue cert re-pin. The shared background session can carry
-// concurrent in-flight turns to different gateways; each challenge pins its
-// own ref's cert. Reading UserDefaults directly keeps the nonisolated
-// delegate synchronous (no MainActor hop into SettingsManager).
+// SettingsManager writes) and delegates the actual compare to
+// `RemoteAgentTrustEvaluator`. Mirrors the STT background sibling
+// (`STTClient+Background.swift`). Per-challenge live resolution is
+// relaunch-safe (a cross-launch-resumed task re-reads the durable pin),
+// task-scoped (keyed off the TASK, so concurrent turns to different gateways
+// never read each other's pin), custom-correct (keyed off the true ref, never
+// the `.openclaw` status-map carrier), and honors a post-enqueue cert re-pin.
+// Reading UserDefaults directly keeps the nonisolated delegate synchronous
+// (no MainActor hop into SettingsManager).
+//
+// The resolved pin is applied HOST-BLIND — the delegate never compares
+// `challenge.protectionSpace.host` against the ref's configured URL, so the
+// pin governs EVERY server-trust challenge the task raises, including one
+// raised by a redirect target. Deliberate: a background session always follows
+// redirects and never delivers `willPerformHTTPRedirection` (SDK contract), so
+// this callback is the only point at which a background converse task can push
+// back on a cross-host hop at all. Host-SCOPING would resolve "no pin" for the
+// redirect host and degrade exactly that hop to default ATS — the pin ceasing
+// to apply at the one moment it matters, with the full request body
+// (conversation history + images + the bearer header) riding along.
+//
+// HONEST LIMIT — mitigation, not a redirect veto: a pin compare proves
+// same-KEY, not same-ORIGIN. A wildcard / multi-SAN cert, or one private key
+// deployed behind several proxy names, satisfies the pin at a different host,
+// and URLSession may reuse a connection or a trust decision without raising a
+// fresh challenge at all. The contract to give users is "point Conduck at the
+// TERMINAL gateway URL, never at a redirector" (`spec.md`, Remote Agent
+// Round-Trip → Redirect policy). Rationale in full on
+// `RemoteAgentTrustEvaluator.converseTaskPin(for:metadata:)`.
 //
 // Privacy invariants (see the spec's Privacy & Security section): the bearer token is NEVER
 // logged; reply bodies are never logged.
@@ -80,8 +99,38 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
     private var inFlight: [Int: InFlightTurn] = [:]
 
     /// Response data accumulator per task (delegate may split the payload
-    /// across multiple `didReceive data:` callbacks).
+    /// across multiple `didReceive data:` callbacks). Bounded by
+    /// `Constants.maxBackgroundResponseBytes` — see `overCapTaskIDs`.
     private var responseBuffers: [Int: Data] = [:]
+
+    /// Task identifiers whose server-trust challenge THIS delegate cancelled —
+    /// a pinned-cert mismatch, or a cross-host hop that could not present the
+    /// pinned key. Written by the task-level trust handler, consumed by
+    /// `didCompleteWithError`.
+    ///
+    /// WHY it has to exist: URLSession reports a cancelled challenge as
+    /// `URLError.cancelled` (-999), byte-identical to the user tapping Cancel,
+    /// and this long-lived shared session cannot read the per-challenge
+    /// evaluator instance the way the foreground hop does
+    /// (`RemoteAgentClient.mapTransportError`). Without the note, a user under
+    /// active MITM saw a plain "tap to retry" chip instead of an
+    /// untrusted-certificate failure — the connection was refused either way, so
+    /// this closes a LABELLING gap, not a hole in the trust boundary.
+    ///
+    /// Confined to `queue` (the delegate queue's `underlyingQueue`), so it is
+    /// mutated with `queue.async` and NEVER `queue.sync` — the delegate
+    /// callbacks already execute on `queue` and a sync hop would deadlock.
+    /// Cross-launch resume needs nothing: the set is empty in the new process and
+    /// `entry == nil`, which already takes the resurrected-task failure path.
+    private var pinRejectedTaskIDs = Set<Int>()
+
+    /// Task identifiers whose response body exceeded
+    /// `Constants.maxBackgroundResponseBytes` and were cancelled for it. Same
+    /// registry pattern as `pinRejectedTaskIDs`, for the same reason: a bare
+    /// `task.cancel()` is indistinguishable from a user cancel, which would
+    /// abort the turn with a Retry chip and NO error surfaced anywhere.
+    /// Queue-confined.
+    private var overCapTaskIDs = Set<Int>()
 
     /// Body file URLs keyed by task identifier — cleaned up in
     /// `didCompleteWithError`. (Belt-and-suspenders alongside the
@@ -484,19 +533,51 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let id = dataTask.taskIdentifier
         queue.async {
+            // Already over cap and cancelled — drop straggler chunks the daemon
+            // had already queued (re-accumulating them would defeat the cap).
+            guard !self.overCapTaskIDs.contains(id) else { return }
+
+            // BOUNDED accumulate. The body is gateway-controlled and was
+            // previously appended with no ceiling at all, so a fabricated
+            // multi-hundred-MB answer grew this dictionary until the OS jetsammed
+            // the app. The verdict is recorded BEFORE `cancel()` so
+            // `didCompleteWithError` can tell it from a user cancel, and the
+            // partial buffer is dropped (it can never decode, and holding it
+            // wastes exactly the memory we just refused to grow).
+            let buffered = self.responseBuffers[id]?.count ?? 0
+            guard buffered + data.count <= Constants.maxBackgroundResponseBytes else {
+                self.overCapTaskIDs.insert(id)
+                self.responseBuffers[id] = Data()
+                dataTask.cancel()
+                return
+            }
+            // Subscript-with-default `_modify` keeps the append in place; copying
+            // the value out and back would make accumulation quadratic.
             self.responseBuffers[id, default: Data()].append(data)
         }
     }
 
-    /// TASK-level server-trust challenge handler — host-scoped per-ref pinning
-    /// for the converse hop. The shared background session can carry concurrent
-    /// turns to different gateways, so the pin MUST be resolved per task: recover
-    /// the turn's `refRawValue` from `taskDescription` and look up that ref's
-    /// pin (host-guarded) LIVE from App-Group defaults. nil → default ATS
-    /// (unpinned gateway, or a built-in/custom on a publicly-trusted cert).
-    /// Mirrors `STTClient+Background`'s task-level trust handler. NOTE: a
-    /// session-level `urlSession(_:didReceive:)` would take precedence, so it is
-    /// intentionally absent — only this task-level handler exists.
+    /// TASK-level server-trust challenge handler — per-ref pinning for the
+    /// converse hop. The shared background session can carry concurrent turns to
+    /// different gateways, so the pin MUST be resolved per task: recover the
+    /// turn's `refRawValue` from `taskDescription` and look up that ref's pin
+    /// LIVE from App-Group defaults. nil → default ATS (unpinned gateway, or a
+    /// built-in/custom on a publicly-trusted cert). Mirrors
+    /// `STTClient+Background`'s task-level trust handler. NOTE: a session-level
+    /// `urlSession(_:didReceive:)` would take precedence, so it is intentionally
+    /// absent — only this task-level handler exists.
+    ///
+    /// The resolved pin is applied HOST-BLIND, by design — rationale and honest
+    /// limits on `converseTaskPin(for:metadata:)`. A background session always
+    /// follows redirects and never delivers `willPerformHTTPRedirection`, so this
+    /// callback is the only point at which a cross-host hop can be pushed back on.
+    ///
+    /// A cancelled challenge — pin mismatch OR a refused cross-host hop — reaches
+    /// `didCompleteWithError` as `URLError.cancelled`, which is byte-identical to
+    /// a user cancel. It is told apart by `pinRejectedTaskIDs`, noted here and
+    /// consulted BEFORE that disambiguation, because this long-lived shared
+    /// session cannot read the per-challenge evaluator instance the foreground
+    /// hop reads.
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -511,7 +592,19 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // A non-nil pin was recovered → enforce it (match → useCredential;
         // mismatch → cancel). Compare delegated to the generic evaluator.
         let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: pin)
-        evaluator.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+        let taskID = task.taskIdentifier
+        evaluator.urlSession(session, didReceive: challenge) { disposition, credential in
+            // The evaluator answers `.cancelAuthenticationChallenge` ONLY on a
+            // pinned-cert mismatch (or an SPKI it could not extract under a
+            // configured pin), and it is reached only when a pin was recovered —
+            // so a cancel HERE is a pin rejection, full stop. Noted BEFORE the
+            // handler is forwarded so the record is in place by the time
+            // URLSession reports the resulting `.cancelled`.
+            if disposition == .cancelAuthenticationChallenge {
+                self.queue.async { self.pinRejectedTaskIDs.insert(taskID) }
+            }
+            completionHandler(disposition, credential)
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -547,6 +640,13 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             let entry = self.inFlight.removeValue(forKey: id)
             let buffered = self.responseBuffers.removeValue(forKey: id) ?? Data()
 
+            // Consume both per-task delegate notes. Each records a reason THIS
+            // delegate cancelled the task, and both surface as `.cancelled` — so
+            // they must be read before the user-cancel disambiguation below, and
+            // removed on every exit path so the sets cannot grow.
+            let pinRejected = self.pinRejectedTaskIDs.remove(id) != nil
+            let responseOverCap = self.overCapTaskIDs.remove(id) != nil
+
             // A turn with no awaiting continuation is FIRE-AND-FORGET (the
             // headless Action-Button intent) — or a relaunched turn whose
             // continuation died. The Shortcut has already ended, so a converse
@@ -573,6 +673,38 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             // --- Transport error path ---
             if let error {
                 if let urlError = error as? URLError {
+                    // OUR over-cap cancel (`didReceive data:`) — a body past
+                    // `Constants.maxBackgroundResponseBytes`, i.e. a peer
+                    // fabricating a response, not a user abort. Surfaced as the
+                    // ordinary invalid-response failure so the turn gets the
+                    // normal Retry affordance instead of aborting silently.
+                    if responseOverCap {
+                        resolve(.failure(AppError.remoteAgentInvalidResponse))
+                        if let cid = conversationID {
+                            self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: .remoteAgentInvalidResponse, notifyUser: notifyUserOnFailure)
+                        }
+                        return
+                    }
+                    // OUR pin rejection (the task-level trust handler cancelled
+                    // the challenge). Classification is delegated to the ONE
+                    // shared classifier the foreground hop uses, so the two
+                    // converse lanes can never drift on what counts as a
+                    // certificate failure. With `pinRejected == false` the
+                    // classifier returns `.cancelled` and nothing below changes —
+                    // the user-cancel arm is deliberately NOT broadened.
+                    if pinRejected,
+                       RemoteAgentTrustEvaluator.classifyTransportError(
+                           urlError.code,
+                           hasPin: true,
+                           systemTrustRejected: false,
+                           pinRejected: true
+                       ) == .certMismatch {
+                        resolve(.failure(AppError.remoteAgentCertMismatch))
+                        if let cid = conversationID {
+                            self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: .remoteAgentCertMismatch, notifyUser: notifyUserOnFailure)
+                        }
+                        return
+                    }
                     if urlError.code == .cancelled {
                         // Disambiguate by the in-memory registry:
                         //
@@ -872,7 +1004,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         var outputSnapshot: SettingsManager.FileTransferSnapshot?
         if let fileTransferLaneID, ownsOutputClaim {
             let hasCandidates =
-                !FileTransferOutputDetector.extractCandidates(from: reply).isEmpty
+                !(await FileTransferOutputDetector.extractCandidatesOffMainActor(from: reply)).isEmpty
             if !hasCandidates {
                 _ = try? await ConversationStore.shared.reconcileOutputScan([
                     .init(
@@ -1199,11 +1331,37 @@ enum SourceDevice {
 
 /// Conservative output-file detector for the file-transfer feature. After an
 /// agent reply lands, this scans the reply text for filename-looking tokens and,
-/// for the small allowlisted subset, probes the user's file-server to see if the
-/// agent actually WROTE that file into its working folder. Each confirmed file
-/// becomes a server-reference `AttachmentDraft` on the AGENT bubble, which the
-/// thread renders as an inline download chip (the download itself happens on
-/// chip tap).
+/// for the small allowlisted subset, probes the user's file-server to see whether
+/// a file by that name EXISTS in the served folder. Each confirmed file becomes a
+/// server-reference `AttachmentDraft` on the AGENT bubble, which the thread
+/// renders as an inline download chip; tapping the chip downloads the full file,
+/// and `enrichPreviews` separately pulls a BOUNDED preview with no user action
+/// (that is what makes an output viewable on the wrist).
+///
+/// WHAT THE PROBE PROVES — read this before trusting a chip. It proves EXISTENCE
+/// at the served root, NOT AUTHORSHIP. The probe key is the filename the reply
+/// text named, used verbatim (`snapshot.baseURL` + key), and nothing requires the
+/// agent to have written it, or to have written it THIS turn:
+///   - A reply naming any pre-existing file at the served root gets a chip for it.
+///     Since the setup guidance tells the user to serve the AGENT'S WORKSPACE, that
+///     includes their own working files, and `fileDeliveryInstruction` actively
+///     trains agents to name files in prose — so a completely benign reply
+///     ("I read your config.yaml") trips this routinely. The dominant real-world
+///     symptom is a stray chip plus an unwanted preview, not an attack.
+///   - Consequence to keep in view: a fabricated claim ("I've updated your
+///     budget.csv") LOOKS verified, and up to a bounded slice of a non-output
+///     workspace file is copied into the conversation store — i.e. into the user's
+///     own iCloud and onto their Watch — with no tap. Everything stays inside the
+///     user's trust domain (their device, their iCloud, their server, their
+///     credential) and no content ever reaches the gateway: a detector-minted
+///     draft is always `isServerReference`, and the wire splice carries only
+///     `isText` attachments.
+///   - A freshness gate (`Last-Modified` newer than the dispatching turn) was
+///     considered and REJECTED: it contradicts the deliberate re-mention rule
+///     below, it makes chip creation depend on clock agreement with a BYO
+///     rclone/Caddy/nginx/NAS host (a silent-failure mode this file avoids
+///     everywhere else — see `probeIsConclusive`), and it stops nothing, because
+///     any agent with filesystem write can refresh an mtime.
 ///
 /// Lives in this file (not its own) so it inherits `BackgroundRemoteAgent`'s
 /// app-only target membership without a `project.pbxproj` edit — and so BOTH the
@@ -1222,7 +1380,11 @@ enum SourceDevice {
 ///   - Distinct candidates are CAPPED at 5 so a chatty reply can't fan out into
 ///     dozens of probes against the user's home server.
 ///   - A candidate is kept ONLY when it probes `.exists` (a real GET 200/206) —
-///     a name the model mentioned but never wrote yields nothing.
+///     a name the model INVENTED yields nothing. A name that happens to match a
+///     real file at the served root DOES chip, whoever wrote it (see "WHAT THE
+///     PROBE PROVES" above); the regex cannot emit `/`, so probes are confined to
+///     the configured root — no traversal, and no reach into another
+///     conversation's `<conversationID>/` upload namespace.
 ///   - When the bound gateway has NO file-server configured, the detector
 ///     returns `[]` IMMEDIATELY (zero probes) — the common case stays free.
 ///
@@ -1275,7 +1437,7 @@ enum FileTransferOutputDetector {
         snapshot: SettingsManager.FileTransferSnapshot,
         excludedKeys: Set<String>
     ) async -> ReconciliationScan {
-        guard !extractCandidates(from: reply).isEmpty else {
+        guard !(await extractCandidatesOffMainActor(from: reply)).isEmpty else {
             return ReconciliationScan(drafts: [], conclusive: true)
         }
         let inbound = await inboundStoredKeyTokens(conversationID: conversationID)
@@ -1308,7 +1470,7 @@ enum FileTransferOutputDetector {
         inboundTokens: Set<String>,
         excludedKeys: Set<String>
     ) async -> (drafts: [AttachmentDraft], conclusive: Bool) {
-        let candidates = extractCandidates(from: reply)
+        let candidates = await extractCandidatesOffMainActor(from: reply)
         // Nothing filename-shaped to probe → definitively conclusive (a marked
         // turn will never be re-scanned, which is correct: there is no output).
         guard !candidates.isEmpty else { return ([], true) }
@@ -1374,19 +1536,46 @@ enum FileTransferOutputDetector {
     /// exclusion, so an echoed inbound name never displaces a real output from
     /// the cap window. Pure + content-free (never logged). Internal (not
     /// private) for the test target.
-    static func extractCandidates(from reply: String) -> [String] {
+    ///
+    /// COST — LOAD-BEARING (untrusted input): the pattern's `[A-Za-z0-9._-]+` is
+    /// followed by a required `\.` that the class itself can match, so ICU
+    /// backtracks O(n) per start position over O(n) start positions on a long
+    /// unbroken run of those characters — quadratic (measured, `swiftc -O`
+    /// arm64: 8 KB → 0.49 s, 16 KB → 1.95 s, 32 KB → 7.81 s, i.e. 4× input =
+    /// 16× time). Reply text is adversary-controlled (a hostile gateway, or an
+    /// honest agent prompt-injected by a page it read) and bounded only by the
+    /// 16 MiB `Constants.maxBackgroundResponseBytes` transport ceiling, and the
+    /// retro pass re-runs this over up to `retroScanCap` replies on EVERY thread
+    /// open — so one poisoned reply, persisted and CloudKit-synced, otherwise
+    /// burns CPU forever on every device (extrapolated: ~24 days at 16 MiB).
+    /// Moving it off the main actor (`extractCandidatesOffMainActor`, still
+    /// required) only relocates that; `boundedRunInput` is what BOUNDS it, to
+    /// linear (measured 2.2 s/MiB in its worst SURVIVING shape).
+    ///
+    /// The pattern itself and the UNCAPPED contract stay deliberately unchanged:
+    /// a bounded quantifier would alter match EXTENT, and a truncated token
+    /// becomes the `storedKey` whose probe returns `.missing`, which is
+    /// conclusive — i.e. it would stamp the turn scanned and lose a real output
+    /// file forever. Capping the input length would lose a filename mentioned
+    /// past the cap the same way. The bound is on input SHAPE instead, which
+    /// costs no real candidate at all — see `boundedRunInput`.
+    ///
+    /// `nonisolated` so the off-actor wrapper can reach it (the app module
+    /// defaults declarations to `@MainActor`).
+    nonisolated static func extractCandidates(from reply: String) -> [String] {
         // `name.ext` where name is a safe token and ext is 1–8 alnum chars. The
         // allowlist filter below is what actually defeats prose false-positives;
         // the regex just enumerates filename-shaped tokens.
         let pattern = "[A-Za-z0-9._-]+\\.[A-Za-z0-9]{1,8}"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let range = NSRange(reply.startIndex..<reply.endIndex, in: reply)
+        let scanned = boundedRunInput(reply)
+        let range = NSRange(scanned.startIndex..<scanned.endIndex, in: scanned)
 
         var seen = Set<String>()
         var ordered: [String] = []
-        for match in regex.matches(in: reply, range: range) {
-            guard let r = Range(match.range, in: reply) else { continue }
-            let token = String(reply[r])
+        for match in regex.matches(in: scanned, range: range) {
+            guard let r = Range(match.range, in: scanned) else { continue }
+            let token = String(scanned[r])
             guard let dot = token.lastIndex(of: ".") else { continue }
             let ext = token[token.index(after: dot)...].lowercased()
             guard outputAllowlist.contains(ext) else { continue }
@@ -1395,6 +1584,98 @@ enum FileTransferOutputDetector {
             }
         }
         return ordered
+    }
+
+    /// Longest run of `[A-Za-z0-9._-]` scalars `boundedRunInput` lets through.
+    /// 255 is POSIX `NAME_MAX` — the byte ceiling on a filename on every server
+    /// this app can talk to — so no run this bound drops could have held a
+    /// storable name. That is what makes the bound free: it is not a guess at
+    /// "how long a filename might be", it is the limit past which one cannot
+    /// exist.
+    nonisolated static let maxFilenameRunScalars = 255
+
+    /// Replace every `[A-Za-z0-9._-]` run longer than `maxFilenameRunScalars`
+    /// with a single space, leaving everything else byte-identical. Returns the
+    /// input UNCHANGED (no copy) when no run is over budget — the case for every
+    /// real reply, so real content pays one linear scan and nothing else.
+    ///
+    /// WHY this bound and not a length cap: the pattern's cost is quadratic in
+    /// the length of ONE unbroken run, not in the reply, and a match can never
+    /// span a run boundary (every character the pattern can match is in that
+    /// class). Excising the over-long runs therefore turns the whole scan linear
+    /// — measured `swiftc -O` arm64: 4 MiB of `a` + a real `report.pdf` goes
+    /// from hours of backtracking to 0.008 s, and STILL returns `report.pdf`.
+    ///
+    /// WHY it loses nothing: a match starts at its run's start (the greedy `+`
+    /// consumes to the run end, then backtracks to the last usable dot), so a
+    /// name buried inside a longer run was never extractable in the first place
+    /// — the token was the whole run. The only candidate an over-budget run can
+    /// yield is therefore a >255-character token, which no file-server can hold
+    /// and whose probe is a guaranteed `.missing`. A single space, not deletion,
+    /// so two runs either side of an excision cannot fuse into a token that was
+    /// never in the reply.
+    ///
+    /// RESIDUAL (accepted, and now LINEAR): a reply built entirely of maximal
+    /// in-budget runs still costs ~2.2 s/MiB. Its input term is bounded at the
+    /// transport layer by `Constants.maxBackgroundResponseBytes`, and this runs
+    /// off the main actor, so the worst case is background CPU proportional to a
+    /// body the peer already had to send — not the unbounded quadratic blow-up.
+    ///
+    /// Internal (not private) so the equivalence + cost contract is testable.
+    nonisolated static func boundedRunInput(_ reply: String) -> String {
+        func isTokenScalar(_ scalar: Unicode.Scalar) -> Bool {
+            switch scalar {
+            case "A"..."Z", "a"..."z", "0"..."9", ".", "_", "-": return true
+            default: return false
+            }
+        }
+
+        let scalars = reply.unicodeScalars
+        // nil until the first over-budget run — the no-copy fast path.
+        var excised: String?
+        var copiedUpTo = scalars.startIndex
+        var runStart = scalars.startIndex
+        var runLength = 0
+
+        func flushRun(endingAt runEnd: String.UnicodeScalarView.Index) {
+            guard runLength > maxFilenameRunScalars else { return }
+            if excised == nil { excised = "" }
+            excised?.unicodeScalars.append(contentsOf: scalars[copiedUpTo..<runStart])
+            excised?.unicodeScalars.append(" ")
+            copiedUpTo = runEnd
+        }
+
+        var index = scalars.startIndex
+        while index < scalars.endIndex {
+            if isTokenScalar(scalars[index]) {
+                if runLength == 0 { runStart = index }
+                runLength += 1
+            } else {
+                flushRun(endingAt: index)
+                runLength = 0
+            }
+            index = scalars.index(after: index)
+        }
+        flushRun(endingAt: scalars.endIndex)
+
+        guard var excised else { return reply }
+        excised.unicodeScalars.append(contentsOf: scalars[copiedUpTo...])
+        return excised
+    }
+
+    /// `extractCandidates` on a detached executor — the ONE entry point every
+    /// production caller uses. `detect` / `reconciliationScan` /
+    /// `ConversationDetailViewModel.retroOutputScanRoute` are all MainActor
+    /// (module default), and the retro pass runs the extraction over up to
+    /// `retroScanCap` replies on every thread open, so calling it inline froze
+    /// the UI for as long as the pattern took on a hostile reply. Detached (not
+    /// merely `nonisolated`): a nonisolated sync function still executes on the
+    /// caller's thread. Cheap to hop because the function is pure and
+    /// content-free — it takes a `String` and returns tokens, touching no state.
+    nonisolated static func extractCandidatesOffMainActor(from reply: String) async -> [String] {
+        await Task.detached(priority: .utility) {
+            extractCandidates(from: reply)
+        }.value
     }
 
     /// Fetch the conversation's messages and build the inbound-exclusion set.

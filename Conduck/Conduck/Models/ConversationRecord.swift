@@ -12,7 +12,7 @@ import CoreData
 
 /// Snapshot of a persisted conversation thread. The `sessionID` is the
 /// LOCAL conversation identity — never sent to the gateway under client-owned
-/// history; retained for store identity + a future server-side
+/// history; retained for store identity + a future gateway-side
 /// reconcile. `lastActivityAt` is the list sort key, bumped on
 /// every appended message.
 struct ConversationRecord: Identifiable, Hashable, Sendable {

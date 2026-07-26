@@ -3,16 +3,20 @@
 Conduck's own source code and the neutral placeholder artwork in this repository
 are licensed under the Apache License 2.0 — see the LICENSE file at the root of
 this repository. This file lists the third-party components that are part of a
-Conduck build, in two categories:
+Conduck build, in three categories:
 
 1. **A vendored model artifact** — one compiled machine-learning model checked
    into this repository.
-2. **Swift Package Manager dependencies** — sixteen packages that are not
-   vendored in this tree; they are fetched at build time and compiled into the
-   distributed app binaries. The exact pinned versions and revisions are
-   recorded in the repository at
-   `Conduck/Conduck.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`.
-   The list covers direct and transitive packages.
+2. **Swift Package Manager dependencies** — the packages recorded in
+   `Conduck/Conduck.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`,
+   which holds their exact pinned versions and revisions. They are not vendored
+   in this tree; they are fetched at build time and compiled into the
+   distributed app binaries. The list covers direct and transitive packages.
+3. **Components embedded via those dependencies** — third-party code and assets
+   that are not SPM packages in their own right but travel inside the packages
+   above and reach the distributed app binaries. Their notice-preservation terms
+   attach to the binary, so they are reproduced here even though this
+   repository does not itself redistribute them.
 
 License identities below were verified against the upstream repositories.
 
@@ -252,6 +256,14 @@ Apache-2.0 text without a project-specific copyright notice.
 | Swift System | <https://github.com/apple/swift-system> |
 | swift-transformers | <https://github.com/huggingface/swift-transformers> |
 
+`swift-transformers` and `swift-huggingface` are listed because they reach the
+binary transitively, as dependencies of FluidAudio's `Tokenizers` target: no
+Conduck source file imports either package, and no Conduck code path calls their
+Hugging Face Hub networking. That linked-but-uncalled download code is why the
+literals `huggingface.co` and `router.huggingface.co` appear in a string dump of
+the shipped binary — they are endpoints inside those libraries, not hosts Conduck
+connects to.
+
 #### SwiftASN1 — NOTICE
 
 ```text
@@ -457,3 +469,115 @@ This product contains a derivation of "TokenBucket.swift" from Swift Package Man
   * HOMEPAGE:
     * https://github.com/swiftlang/swift-package-manager
 ```
+
+---
+
+## Components embedded via dependencies
+
+Each component below is compiled or copied into the distributed app binaries
+through one of the Swift packages listed above. None of them is an SPM package
+of its own, so none appears in `Package.resolved`.
+
+### Prism.js v1.29.0 — MIT
+
+- **Embedded in:** Textual, as
+  `Sources/Textual/Internal/Highlighter/Prism/prism-bundle.js` — a single file
+  built from the upstream minified core plus language definitions. Textual
+  declares the enclosing directory as an SPM resource, so the bundle is copied
+  into `textual_Textual.bundle` inside every Conduck build and loaded by
+  Textual's code-block syntax highlighter.
+- **Upstream:** <https://github.com/PrismJS/prism>
+- **License:** MIT
+
+```text
+MIT LICENSE
+
+Copyright (c) 2012 Lea Verou
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+### fastcluster — BSD 2-Clause
+
+- **Embedded in:** FluidAudio, as its `FastClusterWrapper` C++ target
+  (`Sources/FastClusterWrapper/fastcluster_internal.hpp` and its wrapper). The
+  `FluidAudio` library target depends on that target, so the C++ is compiled and
+  linked into the app.
+- **Upstream:** <https://danifold.net/fastcluster.html>
+- **License:** BSD 2-Clause. Its binary-form condition requires reproducing the
+  copyright notice, the list of conditions, and the disclaimer in materials
+  distributed with the binary — which is what this entry does.
+
+```text
+Copyright:
+  * Until package version 1.1.23: © 2011 Daniel Müllner <https://danifold.net>
+  * All changes from version 1.1.24 on: © Google Inc. <https://www.google.com>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+  * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+  * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+### VBx speaker-clustering algorithm — Apache-2.0
+
+- **Embedded in:** FluidAudio, as
+  `Sources/FluidAudio/Diarizer/Offline/Clustering/VBxClustering.swift` — a Swift
+  implementation of the VBx variational-Bayes clustering algorithm from BUT
+  Speech@FIT. It sits in the `FluidAudio` library target, so it compiles into
+  the app.
+- **Upstream:** <https://github.com/BUTSpeechFIT/VBx>
+- **License:** Apache License 2.0, `Copyright 2021-2024 BUT Speech@FIT`. The
+  full license text is identical to this repository's root LICENSE file.
+
+### swiftui-math math fonts — SIL OFL-1.1 and the GUST Font License
+
+- **Embedded in:** swiftui-math, as `Sources/SwiftUIMath/mathFonts.bundle`.
+  swiftui-math declares it with `.copy`, so the directory is embedded verbatim —
+  fonts and license files alike — in `swiftui-math_SwiftUIMath.bundle` inside
+  every Conduck build.
+- **License texts ship with the fonts.** Because the bundle is copied verbatim,
+  its own license files are present in the installed app alongside the fonts,
+  which is what OFL-1.1 and the GUST Font License require of a distribution:
+  `OFL.txt` (the STIX Font License, which reproduces SIL OFL-1.1 in full),
+  `GUST-FONT-LICENSE.txt` (the GUST Font License, distributed under the LaTeX
+  Project Public License 1.3c or later), and `LICENSE` (MIT, Copyright (c) 2013
+  MathChat — the iosMath heritage that swiftui-math's own entry above already
+  reproduces). Those shipped files are authoritative; this entry records the
+  fonts so the list of components is complete.
+
+The twelve fonts, with the license each declares in its own `name` table:
+
+| Font | License |
+|---|---|
+| Asana-Math | SIL OFL-1.1 |
+| Euler-Math | SIL OFL-1.1 |
+| FiraMath-Regular | SIL OFL-1.1 |
+| Garamond-Math | SIL OFL-1.1 |
+| KpMath-Light | SIL OFL-1.1 |
+| KpMath-Sans | SIL OFL-1.1 |
+| LeteSansMath | SIL OFL-1.1 |
+| LibertinusMath-Regular | SIL OFL-1.1 |
+| NotoSansMath-Regular | SIL OFL-1.1 |
+| xits-math | SIL OFL-1.1 |
+| latinmodern-math | GUST Font License |
+| texgyretermes-math | GUST Font License |

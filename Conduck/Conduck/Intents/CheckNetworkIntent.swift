@@ -40,8 +40,16 @@ struct CheckNetworkIntent: AppIntent {
         await withCheckedContinuation { continuation in
             let monitor = NWPathMonitor()
             let queue = DispatchQueue(label: Constants.identityNamespace + ".networkcheck")
-
+            // Single-fire latch, claimed BEFORE `cancel()` — `cancel()` stops
+            // FUTURE deliveries but cannot un-enqueue a handler block already
+            // dispatched onto the monitor's queue, and a second
+            // `continuation.resume` is a hard `fatalError` in every build
+            // configuration. Same primitive and same shape as
+            // `DiagnosticsRunner.probeNetworkPath()`, the codebase's other
+            // `NWPathMonitor` probe.
+            let resumeOnce = LockedOnce()
             monitor.pathUpdateHandler = { [monitor] path in
+                guard resumeOnce.claim() else { return }
                 monitor.cancel()
                 continuation.resume(returning: path.status == .satisfied)
             }

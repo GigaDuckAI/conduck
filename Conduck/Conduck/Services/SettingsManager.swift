@@ -1153,10 +1153,12 @@ actor SettingsManager {
     /// Persist the custom STT endpoint's BASE URL. Pass nil to clear.
     /// Dual-writes App Groups + iCloud KVS (so it rides across the user's
     /// devices) and posts `.settingsDidChangeRemotely`. Mirrors
-    /// `setRemoteAgentURL(_:)`.
+    /// `setRemoteAgentURL(_:)`, write fence included — this URL syncs to KVS
+    /// exactly like the gateway's, so it is held to the same policy.
     func setCustomSTTURL(_ url: URL?) {
         let key = Constants.customSTTURLKey
         if let url {
+            guard EndpointURLPolicy.isAdmissible(url) else { return }
             defaults.set(url.absoluteString, forKey: key)
             iCloudStore.set(url.absoluteString, forKey: key)
         } else {
@@ -1320,9 +1322,11 @@ actor SettingsManager {
     }
 
     /// Persist the per-uuid custom endpoint's BASE URL. Pass nil to clear.
+    /// Write fence as on `setCustomSTTURL(_:)`.
     func setCustomSTTURL(_ url: URL?, for uuid: UUID) {
         let key = Constants.customSTTURLKey(for: uuid)
         if let url {
+            guard EndpointURLPolicy.isAdmissible(url) else { return }
             defaults.set(url.absoluteString, forKey: key)
             iCloudStore.set(url.absoluteString, forKey: key)
         } else {
@@ -1723,20 +1727,31 @@ actor SettingsManager {
         postSettingsDidChangeRemotely()
     }
 
-    /// Pure resolution of a stored gateway URL: local App Groups `defaults`
+    /// Pure resolution of a stored endpoint URL: local App Groups `defaults`
     /// wins; else iCloud KVS (only when iCloud is available). Mirrors the
     /// defaults-first-then-KVS-fallback pattern of `getActivePresetID()` /
     /// `defaultRemoteAgentBackend()` — the gateway URL is the one synced
     /// setting that previously read `defaults` only, so it vanished on a
     /// reinstall (wiped App Group container) even though the setter had
     /// dual-written it to KVS. Pure + static so it is unit-testable headless
-    /// (the live KVS + `iCloudAvailable` path can't run unsigned). Parsed at
-    /// read time so a malformed stored value yields nil, not a half-valid URL.
+    /// (the live KVS + `iCloudAvailable` path can't run unsigned).
+    ///
+    /// This is the READ FENCE for every URL Conduck persists — the gateway URL
+    /// (legacy + per-ref), the file-server URL, and the custom voice-endpoint
+    /// URL all resolve through it. A stored string is admitted only if it still
+    /// satisfies `EndpointURLPolicy` (https + real host + no `user:password@`),
+    /// so a value written before that policy existed — or synced in through KVS
+    /// by a version-skewed peer device running an older build — can never be
+    /// requested, whatever the write-side guards on THIS build do.
+    ///
+    /// An inadmissible value is SKIPPED, not terminal: a contaminated local
+    /// value must still fall through to a clean KVS one (and vice versa), or a
+    /// single bad slot on one device would mask a perfectly good synced config.
     static func resolveStoredURL(local: String?, iCloud: String?, iCloudAvailable: Bool) -> URL? {
-        if let raw = local, !raw.isEmpty, let url = URL(string: raw) {
+        if let url = EndpointURLPolicy.admissibleURL(from: local) {
             return url
         }
-        if iCloudAvailable, let raw = iCloud, !raw.isEmpty, let url = URL(string: raw) {
+        if iCloudAvailable, let url = EndpointURLPolicy.admissibleURL(from: iCloud) {
             return url
         }
         return nil
@@ -1758,8 +1773,17 @@ actor SettingsManager {
     /// Persist the gateway base URL. Pass nil to clear. Dual-writes to iCloud
     /// KVS so the Watch resolves the URL on a cold ControlWidget launch
     /// with no live envelope (cold-launch fix).
+    ///
+    /// WRITE FENCE (all persisted-URL setters carry it): an inadmissible URL is
+    /// REFUSED outright — neither store is touched and no change is posted. The
+    /// UI guards upstream give the user an actionable reason; this one exists so
+    /// a migration, a background path, or a future caller cannot reintroduce the
+    /// privacy bug silently. Refusing rather than clearing keeps a good stored
+    /// value intact when a bad write is attempted over it. See
+    /// `EndpointURLPolicy`.
     func setRemoteAgentURL(_ url: URL?) {
         if let url {
+            guard EndpointURLPolicy.isAdmissible(url) else { return }
             defaults.set(url.absoluteString, forKey: Constants.remoteAgentURLKey)
             iCloudStore.set(url.absoluteString, forKey: Constants.remoteAgentURLKey)
         } else {
@@ -1930,10 +1954,14 @@ actor SettingsManager {
 
     /// Persist a SPECIFIC backend's gateway URL. Pass nil to clear. Dual-writes
     /// App Groups + iCloud KVS (cold-launch parity) and posts
-    /// `.settingsDidChangeRemotely`.
+    /// `.settingsDidChangeRemotely`. Carries the write fence documented on
+    /// `setRemoteAgentURL(_:)` — this is the setter that actually puts a gateway
+    /// URL into KVS, so it is the last line before a credential-bearing string
+    /// would leave the Keychain boundary.
     func setRemoteAgentURL(_ url: URL?, for ref: RemoteAgentRef) {
         let key = Constants.remoteAgentURLKey(for: ref)
         if let url {
+            guard EndpointURLPolicy.isAdmissible(url) else { return }
             defaults.set(url.absoluteString, forKey: key)
             iCloudStore.set(url.absoluteString, forKey: key)
         } else {
@@ -2304,10 +2332,11 @@ actor SettingsManager {
 
     /// Persist a ref's file-server base URL. Pass nil to clear. Dual-writes
     /// App Groups + iCloud KVS (mirrors `setRemoteAgentURL(_:for:)`) and posts
-    /// `.settingsDidChangeRemotely`.
+    /// `.settingsDidChangeRemotely`. Same write fence as the gateway setters.
     func setFileServerURL(_ url: URL?, for ref: RemoteAgentRef) {
         let key = Constants.fileServerURLKey(for: ref)
         if let url {
+            guard EndpointURLPolicy.isAdmissible(url) else { return }
             defaults.set(url.absoluteString, forKey: key)
             iCloudStore.set(url.absoluteString, forKey: key)
         } else {
@@ -2648,6 +2677,15 @@ actor SettingsManager {
         available: Bool,
         for ref: RemoteAgentRef
     ) {
+        // Write fence (see `setRemoteAgentURL(_:)`) — this method writes the
+        // file-server URL key DIRECTLY rather than through `setFileServerURL`,
+        // so it needs the guard itself. Refusing before ANY write leaves the old
+        // URL/pin/capability/availability as one complete, consistent tuple —
+        // the same no-half-state outcome the ordering below is built around.
+        // Unreachable from the two real callers (both pre-validate), which is
+        // the point: it is a backstop, not a user-facing path.
+        guard EndpointURLPolicy.isAdmissible(url) else { return }
+
         // Fail-closed durability order for a mid-write crash: a NOT-available
         // commit revokes availability BEFORE the tuple lands (a crash leaves
         // old-tuple + false — honest), an available commit flips it true only

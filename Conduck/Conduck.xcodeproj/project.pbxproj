@@ -31,6 +31,8 @@
 		88896A7728AF0FEA2853BEDB /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 50484C38EFB50AF68146AA9B /* Foundation.framework */; };
 		89700A11ABA1C9AF465DA4E0 /* WatchReplySpeakerFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEFC36B01C1F38EA15DA7611 /* WatchReplySpeakerFallbackTests.swift */; };
 		BACA6CA80A16CA4946FA2799 /* WatchDiagnosticsReporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7962D7C5DB078A44B543DBC8 /* WatchDiagnosticsReporterTests.swift */; };
+		05B2153A756F4FC80B13778C /* WatchNotificationPrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B93B045C08A26D6489E3498 /* WatchNotificationPrivacyTests.swift */; };
+		770C2F6AF15A5192868D3750 /* WatchTempScratchSweeperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C977508A9E53ACCD66520ABE /* WatchTempScratchSweeperTests.swift */; };
 		C03497D936DB6031248B40CE /* WatchConverseCompletionVerdictTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AD4C033BF02CCA1CBEDBFAD /* WatchConverseCompletionVerdictTests.swift */; };
 		C6486202BB44DA8DF866B51B /* WatchObservabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8036F5A26DD045BFB31148B6 /* WatchObservabilityTests.swift */; };
 		F931ABD9E6AEA0D93CFD338D /* WatchConversationViewModelRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E411F3AF5A7364E4CCE5578D /* WatchConversationViewModelRefreshTests.swift */; };
@@ -142,6 +144,8 @@
 		63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareTargetFilter.swift; path = ConduckShareExtensionMac/ShareTargetFilter.swift; sourceTree = SOURCE_ROOT; };
 		63WC00012F6A1B0A00WC0001 /* WebPageCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WebPageCapture.swift; path = ConduckShareExtensionMac/WebPageCapture.swift; sourceTree = SOURCE_ROOT; };
 		7962D7C5DB078A44B543DBC8 /* WatchDiagnosticsReporterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchDiagnosticsReporterTests.swift; sourceTree = "<group>"; };
+		6B93B045C08A26D6489E3498 /* WatchNotificationPrivacyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchNotificationPrivacyTests.swift; sourceTree = "<group>"; };
+		C977508A9E53ACCD66520ABE /* WatchTempScratchSweeperTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchTempScratchSweeperTests.swift; sourceTree = "<group>"; };
 		8036F5A26DD045BFB31148B6 /* WatchObservabilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchObservabilityTests.swift; sourceTree = "<group>"; };
 		AA2694DF31E04092B32E20C0 /* WatchTTSClientGuardTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchTTSClientGuardTests.swift; sourceTree = "<group>"; };
 		AD013915D6DC49FEF67B48F1 /* WatchDraftMintTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchDraftMintTests.swift; sourceTree = "<group>"; };
@@ -202,6 +206,7 @@
 				Models/OnLaunchMode.swift,
 				Models/SessionContinuationPolicy.swift,
 				Services/ActiveViewTracker.swift,
+				Services/AgentDownloadScratch.swift,
 				Services/AudioCompressor.swift,
 				Services/ConversationHistoryAssembler.swift,
 				Services/ConversationStore.swift,
@@ -434,6 +439,8 @@
 				28B3F3EB66D5E3FB9A523616 /* WatchAudioSessionOwnershipTests.swift */,
 				E411F3AF5A7364E4CCE5578D /* WatchConversationViewModelRefreshTests.swift */,
 				7962D7C5DB078A44B543DBC8 /* WatchDiagnosticsReporterTests.swift */,
+				6B93B045C08A26D6489E3498 /* WatchNotificationPrivacyTests.swift */,
+				C977508A9E53ACCD66520ABE /* WatchTempScratchSweeperTests.swift */,
 			);
 			path = ConduckWatchTests;
 			sourceTree = "<group>";
@@ -763,6 +770,8 @@
 				621F6DCF4F851CF5CD688390 /* WatchAudioSessionOwnershipTests.swift in Sources */,
 				F931ABD9E6AEA0D93CFD338D /* WatchConversationViewModelRefreshTests.swift in Sources */,
 				BACA6CA80A16CA4946FA2799 /* WatchDiagnosticsReporterTests.swift in Sources */,
+				05B2153A756F4FC80B13778C /* WatchNotificationPrivacyTests.swift in Sources */,
+				770C2F6AF15A5192868D3750 /* WatchTempScratchSweeperTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1466,7 +1475,7 @@
 			repositoryURL = "https://github.com/GigaDuckAI/textual";
 			requirement = {
 				kind = revision;
-				revision = 251b3b71d95d016fc7d93124afebcd97b2e4f929;
+				revision = 380a7db1260f4669186e5ab1c977ce644eb76de4;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

@@ -18,8 +18,9 @@
 //
 // Safety-filter path: if `candidates` is empty AND `promptFeedback.block-
 // Reason` is non-nil, the model refused to respond. Mapped to
-// `AppError.audioProcessingFailed` (per locked decision — no new error
-// case until telemetry warrants `sttContentFiltered`).
+// `AppError.audioProcessingFailed` (per locked decision — a dedicated
+// `sttContentFiltered` case would add a code to the frozen taxonomy for a
+// failure the existing copy already describes accurately to the user).
 
 import Foundation
 

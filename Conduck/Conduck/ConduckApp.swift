@@ -374,12 +374,23 @@ struct ConduckApp: App {
             await FileTransferCapabilityRefresher.refreshIfNeeded()
         }
 
-        // 2. Privacy hygiene — delete any pending retry audio older than 10 min,
-        //    and reclaim aged Quick Look scratch downloads (>24 h).
+        // 2. Privacy hygiene. Two independent reclaims, deliberately NOT chained
+        //    into one task — they touch different containers, so nothing here
+        //    orders against anything else:
+        //      • pending retry audio older than 10 min (App Group storage) and
+        //        aged Quick Look scratch downloads (>24 h). Both are actor
+        //        methods, so both already run off the main actor.
+        //      • orphaned capture audio / request bodies an abnormal termination
+        //        left in `temporaryDirectory` (see TempScratchSweeper). Its
+        //        `sweepInBackground` entry point owns the off-main guarantee: a
+        //        plain `Task { }` here would only DEFER that shared-directory
+        //        scan, because a Task created from this main-actor init inherits
+        //        the same isolation.
         Task {
             await PendingRetryStore.shared.cleanupExpired()
             await AgentDownloadScratch.shared.sweep()
         }
+        TempScratchSweeper.sweepInBackground()
 
         // 3. WatchConnectivity iPhone → Watch broadcast (identity + STT settings).
         #if canImport(WatchConnectivity)

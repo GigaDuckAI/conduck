@@ -180,6 +180,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await PendingRetryStore.shared.cleanupExpired()
             await AgentDownloadScratch.shared.sweep()
         }
+        // Orphaned capture audio / request bodies an abnormal termination left in
+        // `temporaryDirectory` (see TempScratchSweeper). Its own detached task,
+        // NOT chained onto the one above: nothing orders against it (different
+        // containers), and the shared-temp scan must not sit on a main-actor task.
+        TempScratchSweeper.sweepInBackground()
         // One-time title-snippet backfill for EXISTING conversations (the iOS
         // `RootView.task` seam doesn't run on a Mac-only install). Idempotent via
         // an App-Group flag; the iOS branch guards the same way.

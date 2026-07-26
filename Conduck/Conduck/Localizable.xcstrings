@@ -3892,6 +3892,17 @@
         }
       }
     },
+    "fileTransfer.manual.mechanism" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your files aren't sent to the model. Conduck uploads each one to your server, then adds a line to your message naming the file and the path it was saved under — that line is what the agent opens."
+          }
+        }
+      }
+    },
     "fileTransfer.manual.explanation.managed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4834,6 +4845,72 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "URL saved"
+          }
+        }
+      }
+    },
+    "fileTransfer.url.userinfo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Don't include a username or password in the URL — Conduck manages the credential for you. Use the address only, and give the generated password to your server."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.url.userinfo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your gateway's token goes in the Token field."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.url.noHost" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That address is missing its host name — it should look like https://ai.example.com."
+          }
+        }
+      }
+    },
+    "fileTransfer.url.noHost" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That address is missing its host name — it should look like https://files.example.com."
+          }
+        }
+      }
+    },
+    "settings.stt.custom.url.userinfo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your endpoint's key goes in the API key field."
+          }
+        }
+      }
+    },
+    "settings.stt.custom.url.noHost" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That address is missing its host name — it should look like https://voice.example.com."
           }
         }
       }
@@ -9486,7 +9563,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conduck will erase the saved URL, token, and pin. You'll re-enter them next time."
+            "value" : "Conduck will erase the saved URL, token, and pin, plus any file-transfer setup for this gateway (server address and generated password). You'll re-enter them next time."
           }
         }
       }
@@ -9497,7 +9574,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Conduck will delete this gateway and its saved URL, token, and pin. Conversations bound to it stay readable but can't send new turns."
+            "value" : "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). Conversations bound to it stay readable but can't send new turns."
           }
         }
       }
@@ -11533,6 +11610,39 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Speech-to-text and text-to-speech for %@ will stop working until you add a key again."
+          }
+        }
+      }
+    },
+    "settings.voice.access.clearKey.message.active" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Speech-to-text and text-to-speech for %@ will stop working until you add a key again. Conduck switches speech-to-text back to Apple on-device and the reply voice back to the Apple voice, on this device and on your Apple Watch."
+          }
+        }
+      }
+    },
+    "settings.voice.access.clearKey.message.activeSTT" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Speech-to-text and text-to-speech for %@ will stop working until you add a key again. Conduck switches speech-to-text back to Apple on-device, on this device and on your Apple Watch."
+          }
+        }
+      }
+    },
+    "settings.voice.access.clearKey.message.activeTTS" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Speech-to-text and text-to-speech for %@ will stop working until you add a key again. Conduck reads replies in the Apple voice instead, on this device and on your Apple Watch."
           }
         }
       }

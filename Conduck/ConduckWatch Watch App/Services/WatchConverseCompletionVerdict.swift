@@ -22,6 +22,15 @@ enum WatchConverseCompletionVerdict {
         /// Non-cancel transport error — the adapter maps honest connectivity
         /// copy via `WatchNetworkFailureCopy.transportFailureMessage`.
         case transport(Error)
+        /// The delegate cancelled the task itself because the response body
+        /// passed `Constants.maxBackgroundResponseBytes` (a peer fabricating a
+        /// reply). Classified FIRST, ahead of the `.cancelled` disambiguation:
+        /// our own cancel surfaces as `URLError.cancelled` WITH the registry
+        /// entry still present, which is exactly the `.cleanupOnly` shape — so
+        /// without this branch an over-cap reply dropped the user's spoken turn
+        /// silently, no bubble and no Retry. Mirrors the per-task over-cap notes
+        /// in `BackgroundRemoteAgent` / `CarPlayConverseUploader`.
+        case responseOverCap
         /// `.cancelled` with NO registry entry: the task was resurrected
         /// ACROSS A LAUNCH (after a force-quit every background task comes
         /// back as `.cancelled`, and the registry died with the old process).
@@ -49,12 +58,17 @@ enum WatchConverseCompletionVerdict {
     /// turn is already in the store; only the delegate's cleanup runs.
     case cleanupOnly
 
+    /// `responseOverCap` is the delegate's own note that IT cancelled this task
+    /// for an oversized body (`WatchAudioUploader.overCapTaskKeys`). It MUST be
+    /// classified before the `.cancelled` disambiguation, which would otherwise
+    /// read our cancel as a live user cancel and drop the turn silently.
     static func make(
         metadata: RemoteAgentBackgroundMetadata?,
         httpStatus: Int?,
         body: Data?,
         transportError: Error?,
-        registryEntryPresent: Bool
+        registryEntryPresent: Bool,
+        responseOverCap: Bool = false
     ) -> WatchConverseCompletionVerdict {
         // Status-map carrier: a built-in ref maps to itself; a custom ref (or
         // garbage metadata) uses `.openclaw` — the map is `.unified` for every
@@ -68,6 +82,12 @@ enum WatchConverseCompletionVerdict {
         let conversationID = metadata.flatMap { UUID(uuidString: $0.conversationID) }
 
         if let transportError {
+            // OUR over-cap cancel, ahead of every other transport branch: it
+            // arrives as `.cancelled` with the registry entry present, i.e.
+            // indistinguishable from a live in-process cancel.
+            if responseOverCap {
+                return .failure(kind: .responseOverCap, conversationID: conversationID)
+            }
             if let urlError = transportError as? URLError, urlError.code == .cancelled {
                 return registryEntryPresent
                     ? .cleanupOnly

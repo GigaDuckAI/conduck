@@ -17,7 +17,10 @@
 // embeds the gateway bearer token + file-server credential. NEVER log /
 // echo the raw string, the decoded JSON, the token, or the credential —
 // parse errors carry NO payload content by design (`PairingParseError` is
-// a bare enum).
+// a bare enum). Both URLs are additionally held to `EndpointURLPolicy`
+// (https + real host + no `user:password@`), because a pairing string is
+// UNTRUSTED input — anyone can hand-craft one — and both URLs land verbatim
+// in App-Group UserDefaults + iCloud KVS on import.
 //
 // Pure Foundation — compiles for iOS AND macOS (no UIKit/AppKit). NOT a
 // Watch-target member (pairing import is an iPhone/iPad/Mac flow).
@@ -37,7 +40,8 @@ enum PairingParseError: Error, Equatable {
     case unsupportedVersion
     /// Bad base64 / bad JSON / missing-or-invalid required field / bearer
     /// without token / custom without nonempty name / bad certFP /
-    /// missing `"v"`.
+    /// missing `"v"` / a URL with no host or carrying `user:password@`
+    /// userinfo (`EndpointURLPolicy` — both URLs, no exceptions).
     case malformed
     /// Gateway or fileServer URL parses but its scheme isn't https — https
     /// is mandatory (`spec.md` Architectural Invariants); surfaced as its
@@ -247,22 +251,43 @@ struct PairingPayload: Equatable, Sendable {
         )
     }
 
-    /// Required URL field: must be a string, parse as a URL WITH a host
-    /// (else `.malformed`), and carry exactly the https scheme (a parsed
-    /// non-https URL → `.insecureURL` so the UI can name the real problem).
+    /// Required URL field: must be a string that parses, and then satisfy
+    /// `EndpointURLPolicy` — https, a non-empty host, and no `user:password@`
+    /// userinfo. BOTH URLs in the payload go through it; there is deliberately
+    /// no per-field opt-out (see `EndpointURLPolicy` for why the gateway URL is
+    /// not an exception, and what capability that removes).
+    ///
+    /// The policy's rejection maps onto the two error cases so the UI can name
+    /// the real problem: a non-https URL is `.insecureURL` ("this code points
+    /// somewhere unencrypted"), everything else is `.malformed`.
+    ///
+    /// Rejecting the whole payload (rather than dropping the offending half) is
+    /// the honest outcome: a half-import leaves the user with a silently
+    /// file-less setup and no reason given, whereas `.malformed` renders as "this
+    /// setup code is damaged or incomplete — re-run conduck-connect", which
+    /// points the user at the one place that can mint a code this parser accepts.
+    ///
+    /// The APP is authoritative about what it will store; it does not assume the
+    /// wizard already agrees. `conduck-connect` enforces the same rule on some
+    /// arms (its `--show-code` profile validation and `--check-adapter` host
+    /// check both refuse userinfo) but NOT on its interactive URL prompt, so a
+    /// wizard-minted code carrying userinfo is reachable today and lands here as
+    /// `.malformed`. Aligning the wizard is tracked separately — do not weaken
+    /// this parser on the assumption that it has happened.
     private static func requireHTTPSURL(_ value: Any?) throws -> URL {
         guard
             let urlString = value as? String,
-            let url = URL(string: urlString),
-            let scheme = url.scheme,
-            url.host != nil
+            let url = URL(string: urlString)
         else {
             throw PairingParseError.malformed
         }
-        guard scheme.lowercased() == "https" else {
+        guard let rejection = EndpointURLPolicy.rejection(for: url) else { return url }
+        switch rejection {
+        case .notHTTPS:
             throw PairingParseError.insecureURL
+        case .noHost, .carriesUserinfo:
+            throw PairingParseError.malformed
         }
-        return url
     }
 
     /// Optional certFP field: nil/absent passes through; otherwise must be

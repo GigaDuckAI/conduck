@@ -26,8 +26,11 @@
 //
 //  Privacy (spec.md "Privacy & Security"): the client-minted credential plaintext
 //  appears ONLY in (a) Keychain, (b) the deliberately-revealed, session-only,
-//  masked-by-default credential row here — never logged, never read back from
-//  Keychain. All chrome text is localized with the `fileTransfer.` key prefix.
+//  masked-by-default credential row here, and (c) the system clipboard when the
+//  user taps Copy — which is why that copy goes through
+//  `Pasteboard.copySensitive` (bounded lifetime), never the plain unbounded
+//  write. Never logged, never read back from Keychain. All chrome text is
+//  localized with the `fileTransfer.` key prefix.
 
 import SwiftUI
 
@@ -341,6 +344,28 @@ struct FileTransferSetupContent: View {
         }
     }
 
+    /// What actually travels — the one mechanism sentence, shown for EVERY
+    /// gateway kind. The reference block Conduck splices into a turn
+    /// (`ConverseRequest.spliceServerFileRefs`) is the whole lane in one line:
+    /// the bytes go to the user's own server, and the MESSAGE carries only the
+    /// file's name and the path it was saved under. Two reasons to say it out
+    /// loud rather than leave it to be inferred from the setup steps:
+    ///
+    ///   1. Privacy. "Where do my files go?" is the first question a BYO-key
+    ///      user asks, and every other sentence on this screen presupposes the
+    ///      answer without ever stating it.
+    ///   2. The filename is content. A name the user never chose (a shared
+    ///      file's name comes from whatever app presented the share sheet) is
+    ///      shown to the agent as text. The wire boundary is what keeps a
+    ///      hostile one inert (`ConverseRequest.wireDisplayName`), but a user
+    ///      deciding what to attach deserves to know the name travels at all.
+    private var mechanismText: LocalizedStringResource {
+        LocalizedStringResource(
+            "fileTransfer.manual.mechanism",
+            defaultValue: "Your files aren't sent to the model. Conduck uploads each one to your server, then adds a line to your message naming the file and the path it was saved under — that line is what the agent opens."
+        )
+    }
+
     /// Custom-only scannable lead above the body — states the eligibility rule
     /// (the gateway must be a real agent with file tools) in one glance. nil for
     /// built-ins (`conduck-connect` couples the working dir for them).
@@ -365,6 +390,10 @@ struct FileTransferSetupContent: View {
                 Text(explanationText)
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(mechanismText)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 Link(destination: Constants.conduckConnectRepoURL) {
                     HStack(spacing: 4) {
@@ -573,6 +602,14 @@ struct FileTransferSetupContent: View {
                     .foregroundStyle(AppColors.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    // Parity with the pairing sheet's setup code + QR
+                    // (`PairingExportSheet`): mark the credential as private so
+                    // a privacy redaction pass blanks it. Applied to the whole
+                    // ternary rather than the reveal branch only — a
+                    // reveal-conditional modifier would re-identify the view and
+                    // animate the transition oddly, and marking the dots costs
+                    // nothing.
+                    .privacySensitive()
             }
             HStack(spacing: 16) {
                 Button {
@@ -586,7 +623,15 @@ struct FileTransferSetupContent: View {
                 }
                 .buttonStyle(.plain)
                 Button {
-                    writeToPasteboard(secret)
+                    // SENSITIVE copy — the 32-hex WebDAV Basic-auth password.
+                    // `Pasteboard.copy` (and the plain open-coded write this
+                    // replaced) leaves it in the general pasteboard with NO
+                    // expiry: on iOS that outlives the setup session and rides
+                    // Universal Clipboard to the user's other devices. Same
+                    // helper the pairing sheet uses for the setup code, which
+                    // embeds this very credential — one secret must not get two
+                    // different clipboard lifetimes.
+                    Pasteboard.copySensitive(secret, expiresAfter: Self.credentialClipboardLifetime)
                     withAnimation { didCopyCredential = true }
                     Task {
                         try? await Task.sleep(for: .seconds(2))
@@ -1006,14 +1051,21 @@ struct FileTransferSetupContent: View {
 
     // MARK: - Clipboard
 
-    private func writeToPasteboard(_ string: String) {
-        #if canImport(UIKit)
-        UIPasteboard.general.string = string
-        #elseif canImport(AppKit)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(string, forType: .string)
-        #endif
-    }
+    /// How long the copied file-server password may live in the system
+    /// clipboard. DELIBERATELY far longer than `Pasteboard.copySensitive`'s
+    /// 180 s default: that default is calibrated for the pairing code, whose
+    /// destination is Conduck on the user's own Mac seconds away and which is
+    /// re-derivable from Keychain at any time. This password's destination is a
+    /// SERVER-side auth config (rclone.conf / Caddyfile / htpasswd, plausibly
+    /// over SSH, plausibly after installing the WebDAV server), routinely more
+    /// than three minutes — and it is NOT re-derivable: `mintedSecret` is
+    /// session-only and dropped on dismiss, after which the only recovery is
+    /// Regenerate, which revokes readiness and invalidates a password the user
+    /// may already have installed server-side. Too short a window trades a
+    /// clipboard-residue risk for a silent empty paste into an auth file, which
+    /// is the invisible-failure class this screen otherwise works hard to make
+    /// loud.
+    private static let credentialClipboardLifetime: Double = 900   // seconds — 15 min
 }
 
 // MARK: - Composer sheet (the ONLY remaining sheet host)
