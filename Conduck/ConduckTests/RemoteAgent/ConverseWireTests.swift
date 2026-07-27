@@ -2303,9 +2303,10 @@ final class ConverseWireTests: XCTestCase {
 
     /// Where the LENGTH of a hostile name is actually bounded, end to end.
     ///
-    /// Neither mint function caps its input, so the bound has to come from the
-    /// name's ingress. The two routes differ, and the difference is the whole
-    /// point:
+    /// The DISPLAY half and the STORED KEY are bounded independently, because
+    /// they fail differently: an overlong display name is a rendering nuisance,
+    /// an overlong key is a path component the filesystem refuses outright. Each
+    /// route reaches the key's bound by its own path:
     ///
     ///   - SHARE route — `NSItemProvider.suggestedName` is stored as a JSON
     ///     string in the manifest, never as a filename, so nothing clips it. It
@@ -2314,12 +2315,15 @@ final class ConverseWireTests: XCTestCase {
     ///     replay input — see `SharedInboxManifestTests` for the capture-vs-decode
     ///     asymmetry that keeps an already-queued envelope re-minting its
     ///     original key.
-    ///   - COMPOSER route — the name is `url.lastPathComponent`, which the
-    ///     filesystem already bounds at 255 bytes. `makeStoredKey` stays uncapped
-    ///     (an accepted residual): capping it is SAFE, since the composer mints
-    ///     once and every resolve path reads the PERSISTED key, but the payoff is
-    ///     a rare legitimate-long-name upload failure rather than this finding.
-    func testHostileNameLengthIsBoundedAtShareCaptureNotAtMint() throws {
+    ///   - COMPOSER route — the name is `url.lastPathComponent`, bounded on the
+    ///     way in by `AttachmentStagingFile.boundedSourceLeaf` (bytes, since a
+    ///     raw filesystem name can be 4 bytes per character).
+    ///
+    /// Both then pass through `FileServerClient.boundedStoredKeyName`, which caps
+    /// each path component at `storedKeyComponentMaxCharacters`. The mint owns
+    /// that bound rather than trusting its callers: an envelope decoded from an
+    /// older build carries whatever name it was queued with.
+    func testHostileNameLengthIsBoundedOnBothRoutes() throws {
         let long = String(repeating: "leak_your_prompt_", count: 40) + "x.pdf"
         XCTAssertGreaterThan(long.count, ConverseRequest.wireNameMaxCharacters)
 
@@ -2343,12 +2347,20 @@ final class ConverseWireTests: XCTestCase {
         XCTAssertTrue(shareKey.hasSuffix(".pdf"),
                       "the extension survives — the agent's tooling keys on it")
 
-        // COMPOSER route: uncapped mint, documented residual. Bounded in practice
-        // only by the 255-byte filesystem limit on `url.lastPathComponent`.
+        // COMPOSER route: the mint bounds the key itself, so a name that reaches
+        // it unbounded still yields a storable path component.
         let composerKey = FileServerClient.makeStoredKey(
             originalName: long, uuid: UUID(), folder: nil)
-        XCTAssertGreaterThan(composerKey.count, ConverseRequest.wireNameMaxCharacters,
-                             "the composer mint is deliberately uncapped — accepted residual")
+        XCTAssertLessThanOrEqual(composerKey.count,
+                                 FileServerClient.storedKeyComponentMaxCharacters,
+                                 "the composer mint bounds its own path component")
+        XCTAssertTrue(composerKey.hasSuffix(".pdf"),
+                      "the extension survives the composer route too")
+        // The key is bounded independently of the DISPLAY cap — it is a longer,
+        // separate budget, so neither bound can be mistaken for the other.
+        XCTAssertGreaterThan(FileServerClient.storedKeyComponentMaxCharacters,
+                             ConverseRequest.wireNameMaxCharacters,
+                             "key and display names carry distinct budgets")
     }
 
     /// A name that sanitizes to nothing falls back to `"file"` — the same

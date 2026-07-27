@@ -888,7 +888,9 @@ struct MessageComposerBar: View {
                 // memory read; the copy BLOCKS on a remote volume), then route by
                 // gateway file-server presence + size. Order preserved: copy →
                 // byteSize check → soft-confirm / finalize.
-                guard let stagingURL = await Task.detached { Self.copyUnderScope(url) }.value else { continue }
+                guard let stagingURL = await Task.detached(
+                    operation: { AttachmentStagingFile.copyUnderScope(url) }
+                ).value else { continue }
                 guard !Task.isCancelled else {
                     try? FileManager.default.removeItem(at: stagingURL)
                     return
@@ -1547,28 +1549,6 @@ struct MessageComposerBar: View {
             }
         }
         cleanupStagingFile(id)
-    }
-
-    /// Copy `url` UNDER its security scope into a stable app-temp file using a
-    /// FILE-TO-FILE copy (`FileManager.copyItem`) — NO whole-file memory read, so
-    /// a multi-hundred-MB video / zip never balloons the app's footprint at
-    /// staging (the background upload already streams `fromFile`). Returns the temp
-    /// URL (caller-owned), or nil on copy failure.
-    /// `static` so callers can hop it OFF the main actor via `Task.detached`
-    /// (the copy BLOCKS on a remote volume) without capturing the non-Sendable
-    /// View; it holds no view state and brackets its OWN process-wide scope.
-    private static func copyUnderScope(_ url: URL) -> URL? {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conduck-ftstage-\(UUID().uuidString)-\(url.lastPathComponent)")
-        do {
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.copyItem(at: url, to: destination)
-            return destination
-        } catch {
-            return nil
-        }
     }
 
     /// The on-disk byte size of `url` (for the chip's size line + the >100 MB

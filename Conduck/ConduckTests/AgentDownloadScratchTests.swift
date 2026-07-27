@@ -103,6 +103,39 @@ final class AgentDownloadScratchTests: XCTestCase {
         XCTAssertTrue(leaf.hasSuffix(".pdf"))
     }
 
+    /// The preview leaf becomes a real filename under
+    /// `tmp/AgentFileDownloads/<uuid>/`, where POSIX `NAME_MAX` is 255 BYTES. The
+    /// name is the AGENT's to choose, so it is not necessarily ASCII: 200 CJK
+    /// characters are a legal-looking 600-byte leaf that `moveItem` refuses
+    /// outright, and the preview fails instead of opening.
+    func testLeafBoundsLengthInBytesNotCharacters() {
+        let long = String(repeating: "漢", count: 100) + ".pdf"
+        XCTAssertLessThan(long.count, AgentDownloadScratch.maxLeafBytes, "fixture: short in CHARACTERS")
+
+        let leaf = AgentDownloadScratch.sanitizedLeaf(preferredName: long, mimeType: nil)
+        XCTAssertLessThanOrEqual(
+            leaf.utf8.count, AgentDownloadScratch.maxLeafBytes,
+            "a multibyte name must be bounded by the byte budget the filesystem enforces"
+        )
+        XCTAssertTrue(leaf.hasSuffix(".pdf"), "the extension still survives")
+        XCTAssertEqual(
+            String(decoding: Array(leaf.utf8), as: UTF8.self), leaf,
+            "the cut must land on a Character boundary — a severed scalar decodes to U+FFFD"
+        )
+    }
+
+    /// The byte bound has to survive contact with a real `moveItem`, which is the
+    /// call that actually throws on an overlong leaf.
+    func testAdoptSucceedsForAMultibyteNameThatWouldOverflowNameMax() async throws {
+        let temp = try makeTemp()
+        let item = try await AgentDownloadScratch.shared.adopt(
+            temp, preferredName: String(repeating: "漢", count: 100) + ".pdf", mimeType: nil)
+        createdItems.append(item)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: item.url.path))
+        XCTAssertLessThanOrEqual(item.url.lastPathComponent.utf8.count, 255)
+    }
+
     func testLeafBoundsLengthWithAbsurdExtension() {
         // A malformed `x.<250×a>` leaf: the "extension" is longer than the
         // whole length bound — must plain-truncate, never trap on a negative

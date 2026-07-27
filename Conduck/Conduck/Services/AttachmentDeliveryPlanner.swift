@@ -244,13 +244,93 @@ enum TextAttachmentStagePreparer {
 /// Shared stable-copy helper for composer uploads. It brackets the original
 /// picker URL's security scope and performs a file-to-file copy, so large files
 /// never balloon into an in-memory `Data`.
+///
+/// The ONE implementation for every composer host — the iOS coordinator, the
+/// macOS bar, and the text planner all call this. Each host used to carry its
+/// own private copy, which is precisely how the length bound below can go
+/// missing on two paths out of three and still look fixed.
 enum AttachmentStagingFile {
+
+    /// Longest leaf a staged copy may occupy, in BYTES.
+    ///
+    /// POSIX `NAME_MAX` is 255 bytes and every filesystem the app stages onto
+    /// enforces it per path component. Overflow is not cosmetic: `copyItem`
+    /// throws `ENAMETOOLONG`, `copyUnderScope` returns nil, and the binary
+    /// composer path then drops the attachment with no chip and no error — the
+    /// user picks a file and nothing at all happens.
+    static let stagingLeafMaxBytes = 255
+
+    /// The `TempScratchSweeper.ownedPrefixes` entry every staged copy carries.
+    /// Kept as a constant for the budget arithmetic; the literal is ALSO spelled
+    /// inline at the append below, because `TempScratchLeafDriftGuardTests`
+    /// reads the claimed prefix off the call site as a string literal.
+    static let stagingLeafPrefix = "conduck-ftstage-"
+
+    /// Bytes the FIXED part of a staging leaf occupies: the claimed prefix, a
+    /// UUID string (always 36 ASCII characters), and the `-` separating it from
+    /// the source name. `AttachmentStagingFileTests` re-measures a real leaf
+    /// end-to-end so this arithmetic cannot drift from the format string.
+    static let stagingLeafReservedBytes = stagingLeafPrefix.utf8.count + 36 + 1
+
+    /// Longest dot-suffix still treated as an extension worth preserving — same
+    /// rule, and same reason, as `FileServerClient.boundedStoredKeyName`.
+    private static let maxPreservedExtensionCharacters = 16
+
+    /// Bound the SOURCE filename so `conduck-ftstage-<uuid>-<name>` fits inside
+    /// one path component, keeping the extension.
+    ///
+    /// Counted in BYTES, unlike `FileServerClient.boundedStoredKeyName`, whose
+    /// input has already been mapped to the single-byte set `[A-Za-z0-9._-]`.
+    /// This one takes the RAW filesystem name, where one character can be four
+    /// bytes: 70 emoji are a legal 280-byte filename on the source volume and
+    /// would sail past a character-counted bound of 202.
+    ///
+    /// The cut lands on a Character boundary, so the result is never a severed
+    /// UTF-8 sequence — a leaf the filesystem would reject for a second,
+    /// harder-to-read reason.
+    ///
+    /// A no-op for every name that already fits, so an ordinary attachment
+    /// stages under exactly the leaf it always did.
+    static func boundedSourceLeaf(
+        _ leaf: String,
+        budgetBytes: Int = stagingLeafMaxBytes - stagingLeafReservedBytes
+    ) -> String {
+        guard budgetBytes > 0 else { return "" }
+        guard leaf.utf8.count > budgetBytes else { return leaf }
+
+        // A leading dot is a dotfile — all stem. Reading it as an extension
+        // would truncate the entire name away.
+        var stem = leaf
+        var ext = ""
+        if let dot = leaf.lastIndex(of: "."), dot != leaf.startIndex {
+            let suffix = String(leaf[dot...])
+            if suffix.count <= maxPreservedExtensionCharacters,
+               suffix.utf8.count < budgetBytes {
+                stem = String(leaf[..<dot])
+                ext = suffix
+            }
+        }
+
+        let stemBudget = budgetBytes - ext.utf8.count
+        var kept = ""
+        var used = 0
+        for character in stem {
+            let width = String(character).utf8.count
+            guard used + width <= stemBudget else { break }
+            kept.append(character)
+            used += width
+        }
+        return kept + ext
+    }
+
     nonisolated static func copyUnderScope(_ url: URL) -> URL? {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
         let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conduck-ftstage-\(UUID().uuidString)-\(url.lastPathComponent)")
+            .appendingPathComponent(
+                "conduck-ftstage-\(UUID().uuidString)-\(boundedSourceLeaf(url.lastPathComponent))"
+            )
         do {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.copyItem(at: url, to: destination)

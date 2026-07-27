@@ -62,6 +62,16 @@ Two things that are intentional, not broken:
   `ConduckTests` bundle (the main app-logic suite) on an iOS Simulator.
 - watchOS-only logic has its own bundle: run the **ConduckWatchTests** scheme
   against a watchOS Simulator.
+- Certificate pinning has one suite that neither of those runs:
+  `scripts/run-live-tls-tests.sh` drives `RemoteAgentTrustPolicyTests`' live
+  counterpart against a real loopback HTTPS server with a self-signed
+  certificate, so a pin mismatch, a cross-origin redirect, and the file lane's
+  task-carried pin are exercised through a genuine TLS handshake rather than a
+  stubbed transport. It needs a script because the macOS test host is a
+  sandboxed app and the App Sandbox denies `bind()` to it and to anything it
+  spawns; the script stands the server up outside the sandbox. **Run it after
+  touching anything under `Services/RemoteAgent/`** — a broken pin is invisible
+  to every other test, because unpinned requests still succeed.
 
 Some tests skip themselves in community builds: cases that touch the live
 Keychain skip on unsigned simulator builds, and the official-identity lock

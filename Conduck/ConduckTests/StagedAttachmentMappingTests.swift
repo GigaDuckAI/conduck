@@ -501,6 +501,13 @@ final class StagedAttachmentMappingTests: XCTestCase {
         )
     }
 
+    // `ComposerAttachmentCoordinator` is itself `#if os(iOS)`, so the cases that
+    // instantiate one must be too — otherwise the whole ConduckTests target
+    // fails to compile for the macOS destination and takes every other test with
+    // it. The `ComposerMountIdentity` / `ComposerDeferredTeardown` cases around
+    // this block are platform-agnostic and stay on both.
+    #if os(iOS)
+
     @MainActor
     func testCoordinatorFreezesRemoveAndClearsOnlyExactSealedIDs() throws {
         let coordinator = ComposerAttachmentCoordinator()
@@ -585,6 +592,8 @@ final class StagedAttachmentMappingTests: XCTestCase {
         XCTAssertTrue(coordinator.staged.isEmpty,
                       "handoff cleanup runs before the deferred navigation discard")
     }
+
+    #endif
 
     func testMacAcceptedBeforeDisappearDefersTeardownUntilDispatchEnd() {
         var lifecycle = ComposerDeferredTeardown()

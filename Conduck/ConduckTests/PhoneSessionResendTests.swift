@@ -6,6 +6,14 @@
 // The full state matrix (activation × paired × installed) plus the precedence
 // order (activation → pairing → install). No live WCSession is touched: the
 // function is pure over its three inputs.
+//
+// `#if os(iOS)` matches `PhoneSessionManager` itself, which is iOS-only
+// (`WatchConnectivity` does not exist on macOS). Without the guard the WHOLE
+// ConduckTests target fails to build for the macOS destination on an
+// unresolvable module dependency, which takes every other test down with it —
+// including the live-TLS pinning suite, which can only run there.
+
+#if os(iOS)
 
 import WatchConnectivity
 import XCTest
@@ -107,3 +115,5 @@ final class PhoneSessionResendTests: XCTestCase {
         )
     }
 }
+
+#endif

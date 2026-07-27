@@ -888,7 +888,9 @@ final class ComposerAttachmentCoordinator {
                 // check → >100 MB soft-confirm enqueue / finalize. A configured
                 // gateway → `.serverFile` + eager upload; an UNCONFIGURED gateway →
                 // a `.needsSetup` tile (blocks Send, auto-promotes once setup done).
-                guard let stagingURL = await Task.detached { Self.copyUnderScope(url) }.value else { continue }
+                guard let stagingURL = await Task.detached(
+                    operation: { AttachmentStagingFile.copyUnderScope(url) }
+                ).value else { continue }
                 guard !Task.isCancelled else {
                     try? FileManager.default.removeItem(at: stagingURL)
                     return
@@ -1178,31 +1180,6 @@ final class ComposerAttachmentCoordinator {
             self?.uploadTasks[id] = nil
         }
         uploadTasks[id] = task
-    }
-
-    /// Copy `url` UNDER its security scope into a stable app-temp file using a
-    /// FILE-TO-FILE copy (`FileManager.copyItem`) — NO whole-file memory read, so
-    /// a multi-hundred-MB video / zip never balloons the app's footprint at
-    /// staging time (the background upload already streams `fromFile`, so this
-    /// closes the last in-memory hop on the large-file path). Returns the temp URL
-    /// (caller-owned), or nil on copy failure.
-    /// `nonisolated static` so callers can hop it OFF the main actor via
-    /// `Task.detached` (the copy BLOCKS on a remote volume); it holds no instance
-    /// state and brackets its OWN process-wide security scope.
-    nonisolated private static func copyUnderScope(_ url: URL) -> URL? {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conduck-ftstage-\(UUID().uuidString)-\(url.lastPathComponent)")
-        do {
-            // Defensive: copyItem throws if the destination exists (the UUID makes
-            // a collision essentially impossible, but be safe).
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.copyItem(at: url, to: destination)
-            return destination
-        } catch {
-            return nil
-        }
     }
 
     /// The on-disk byte size of `url` under its security scope (for the chip's

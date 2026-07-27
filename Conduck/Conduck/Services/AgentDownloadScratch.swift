@@ -114,15 +114,18 @@ actor AgentDownloadScratch {
         if leaf.isEmpty || leaf == "." || leaf == ".." {
             leaf = "file"
         }
-        if leaf.count > 200 {
+        if leaf.utf8.count > maxLeafBytes {
             // Keep the type-carrying extension when truncating an absurd name —
             // unless the "extension" is itself absurd (a malformed `x.<200×a>`
             // leaf), where a plain prefix is the only sane cut.
             let ext = (leaf as NSString).pathExtension
-            if ext.isEmpty || ext.count > 20 {
-                leaf = String(leaf.prefix(200))
+            if ext.isEmpty || ext.utf8.count > 20 {
+                leaf = byteBoundedPrefix(leaf, maxBytes: maxLeafBytes)
             } else {
-                let base = String(((leaf as NSString).deletingPathExtension).prefix(200 - ext.count - 1))
+                let base = byteBoundedPrefix(
+                    (leaf as NSString).deletingPathExtension,
+                    maxBytes: maxLeafBytes - ext.utf8.count - 1
+                )
                 leaf = "\(base).\(ext)"
             }
         }
@@ -134,6 +137,33 @@ actor AgentDownloadScratch {
             leaf += ".\(ext)"
         }
         return leaf
+    }
+
+    /// Longest leaf `sanitizedLeaf` will emit before appending a MIME-inferred
+    /// extension, in BYTES.
+    ///
+    /// Counted in bytes, not characters, because the name is the AGENT's to
+    /// choose and lands on a real filesystem: POSIX `NAME_MAX` is 255 bytes, so
+    /// 200 CJK characters are a legal-looking 600-byte leaf that `moveItem`
+    /// refuses outright — the preview fails instead of opening. The budget sits
+    /// below 255 so the inferred extension still fits.
+    static let maxLeafBytes = 200
+
+    /// Longest prefix of `value` fitting `maxBytes`, cut on a Character
+    /// boundary so the result is never a severed UTF-8 sequence (a leaf the
+    /// filesystem would reject for a second, harder-to-read reason).
+    private static func byteBoundedPrefix(_ value: String, maxBytes: Int) -> String {
+        guard maxBytes > 0 else { return "" }
+        guard value.utf8.count > maxBytes else { return value }
+        var kept = ""
+        var used = 0
+        for character in value {
+            let width = String(character).utf8.count
+            guard used + width <= maxBytes else { break }
+            kept.append(character)
+            used += width
+        }
+        return kept
     }
 }
 
