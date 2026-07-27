@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — pure classification tests for the background converse completion
 // (the wrist's single reply-arrival path when the app is suspended).
 // `WatchConverseCompletionVerdict.make` is the extracted decision;

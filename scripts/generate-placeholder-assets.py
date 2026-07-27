@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+
 """Generate the neutral placeholder assets this repository ships in its catalogs.
 
 The asset catalogs contain neutral stand-in art; the official App Store build

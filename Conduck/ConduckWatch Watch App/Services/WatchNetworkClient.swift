@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //
 //  WatchNetworkClient.swift
 //  ConduckWatch Watch App

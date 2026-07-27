@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import AppIntents
 
 /// Watch-target App Shortcuts provider — forces `appintentsd` to index

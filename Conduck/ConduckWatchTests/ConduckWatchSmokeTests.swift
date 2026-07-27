@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS unit-test target smoke test.
 // Validates the ConduckWatchTests target compiles + runs on the watchOS
 // Simulator. Real Watch-only contract tests live alongside this file.

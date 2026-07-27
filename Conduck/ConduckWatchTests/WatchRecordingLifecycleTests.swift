@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS-only turn-lifecycle contract tests.
 //
 // Locks the WatchRecordingService state-machine transitions behind every

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — lazy draft-mint contract tests (guardrails 1/2: a `.new` capture
 // mints NOTHING until the first non-empty transcript; cancel / empty
 // transcript leave ZERO orphan conversations in the CloudKit-synced store;

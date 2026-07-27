@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — pure truth-table tests for the headless-trigger routing decision
 // (Action Button / ControlWidget press draining into the mounted nav host).
 // Extracted from `WatchNoteView.drainCoordinatorIfNeeded`; the view executes

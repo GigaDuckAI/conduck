@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import Foundation
 
 /// Holds a tapped suspended-reply notification's target conversation until a

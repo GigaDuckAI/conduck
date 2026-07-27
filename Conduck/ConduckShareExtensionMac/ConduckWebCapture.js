@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — Safari page-text capture (NSExtensionJavaScriptPreprocessingFile).
 //
 // Safari executes this file INSIDE the shared page at share time; the object

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — deeply nested LaTeX must never hang the reply surface.
 //
 // THE FAILURE THIS EXISTS FOR: SwiftUIMath's typesetter nests a display node per

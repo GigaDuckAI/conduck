@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS-only contract tests.
 //
 // Locks the `WatchTTSClient` glue that ConduckTests cannot see (the enum is a

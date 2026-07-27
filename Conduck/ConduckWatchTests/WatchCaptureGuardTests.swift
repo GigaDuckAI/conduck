@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS capture-hygiene contract tests.
 //
 // 1. `WatchCaptureGuard` — the pure mis-tap/too-short predicates behind the

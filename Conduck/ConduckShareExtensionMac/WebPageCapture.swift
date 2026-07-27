@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck
 // WebPageCapture.swift  (ConduckShareExtensionMac appex — CANONICAL copy)
 //

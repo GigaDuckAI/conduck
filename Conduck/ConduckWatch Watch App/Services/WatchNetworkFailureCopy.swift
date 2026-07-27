@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import Foundation
 
 /// Maps a transport-layer `Error` from a Watch background `URLSession` task to an

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import Foundation
 
 /// Pure routing decision for a HEADLESS capture trigger (Action Button /

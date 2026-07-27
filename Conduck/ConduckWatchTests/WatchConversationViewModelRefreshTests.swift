@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — Watch refresh-machinery contract tests: a refresh pass publishes
 // ONLY what changed. Field baseline: one wrist session logged 85 refresh
 // passes, each toggling `isLoading` twice and bumping `changeGeneration`

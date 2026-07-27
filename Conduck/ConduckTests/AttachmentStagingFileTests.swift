@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — a long filename must survive the WHOLE upload path, not just the mint.
 //
 // `FileServerClientTests` already pins `boundedStoredKeyName`: the stored key's

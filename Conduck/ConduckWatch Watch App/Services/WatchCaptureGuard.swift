@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import Foundation
 
 /// Pure capture-hygiene decisions for the Watch recording pipeline. Plain

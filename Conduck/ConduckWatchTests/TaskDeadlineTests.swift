@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS-only contract tests for `awaitValue` (TaskDeadline.swift),
 // the first-finisher race between an already-running task and a deadline.
 //

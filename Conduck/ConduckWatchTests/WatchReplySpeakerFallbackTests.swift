@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS-only contract tests.
 //
 // Locks `WatchReplySpeaker`'s cloud-fail → Apple handoff tree — the wrist's

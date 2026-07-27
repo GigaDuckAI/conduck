@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS notification privacy tests.
 //
 // Locks the hostname chokepoint in `AppleRelayPendingQueue.notificationBody(for:fallback:)`.

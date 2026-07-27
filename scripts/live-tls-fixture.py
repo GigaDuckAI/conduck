@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Loopback TLS fixture for Conduck's live certificate-pinning tests.
 
 Started by `scripts/run-live-tls-tests.sh`, never by the tests themselves: the

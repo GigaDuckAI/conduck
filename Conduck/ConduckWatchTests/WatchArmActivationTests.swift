@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS-only capture-arm activation contract tests.
 //
 // Locks the off-main activation seam's guarantees in `_startRecording`:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS-only contract tests.
 //
 // Locks the record⇄playback session-ownership contract in two layers:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 #if canImport(MessageUI)
 import MessageUI
 import SwiftUI

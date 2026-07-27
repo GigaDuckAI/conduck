@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS-only contract tests.
 //
 // These lock logic that lives ONLY in the watchOS target and is therefore

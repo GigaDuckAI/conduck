@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS-only contract tests for the interactive settings pull
 // (`WatchSessionManager.pullSettingsFromPhone` + the `SettingsPullTransport`
 // seam) and the "Enable on Watch" cache courier.

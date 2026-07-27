@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import Foundation
 
 /// Bridges external recording triggers (ControlWidget intent, future surfaces)

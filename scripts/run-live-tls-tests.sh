@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+
 #
 # Run Conduck's LIVE TLS certificate-pinning tests
 # (`ConduckTests/RemoteAgentLiveTLSTrustTests`) against a real loopback HTTPS

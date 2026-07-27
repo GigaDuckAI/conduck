@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS observability spine tests.
 //
 // Covers the diagnostics primitives added with the Watch logging spine:

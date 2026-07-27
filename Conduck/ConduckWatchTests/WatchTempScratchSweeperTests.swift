@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck — watchOS orphaned-temp reclaim tests.
 //
 // The wrist is the surface where the orphan the sweep exists to reclaim is MOST

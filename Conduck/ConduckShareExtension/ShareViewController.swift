@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Conduck
 // ShareViewController.swift  (ConduckShareExtension appex — INERT until Phase C)
 //

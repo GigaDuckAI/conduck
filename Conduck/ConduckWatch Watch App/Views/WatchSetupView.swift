@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import SwiftUI
 
 /// Shown when no user identity is available on the Watch.

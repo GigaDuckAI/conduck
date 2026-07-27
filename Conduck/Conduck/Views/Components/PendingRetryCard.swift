@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import SwiftUI
 
 /// Banner that appears on the home screen when an audio recording was
