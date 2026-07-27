@@ -686,6 +686,17 @@ struct PairingImportSheet: View {
 
     /// Tailnet heads-up shown ABOVE the checklist: the connection test will
     /// fail unless this device is on the same tailnet.
+    ///
+    /// The Private Relay line earns its place because that failure is
+    /// INDISTINGUISHABLE from a dead gateway at every layer the user can see:
+    /// Tailscale reports connected, its own DNS screen reports "Using Tailscale
+    /// DNS", and the tunnel genuinely carries traffic — but the relay resolves a
+    /// `.ts.net` name on the public internet, which for a tailnet-only serve
+    /// yields a Funnel ingress address that answers on no port the app uses.
+    /// Both checklist rows then fail as unreachable and send the user to inspect
+    /// a healthy gateway. Private Relay is ON by default for iCloud+, and
+    /// Tailscale is the transport this app recommends, so the intersection is
+    /// common rather than exotic.
     private var tailscaleCalloutSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
@@ -695,6 +706,17 @@ struct PairingImportSheet: View {
                     Text(LocalizedStringResource(
                         "settings.pairing.tailscale.note",
                         defaultValue: "This gateway is on a tailnet. Install the Tailscale app on this device and sign in to the same tailnet, or the connection test will fail."
+                    ))
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.circle")
+                        .foregroundStyle(AppColors.warning)
+                    Text(LocalizedStringResource(
+                        "settings.pairing.tailscale.privateRelay",
+                        defaultValue: "Already signed in and it still fails? Turn off iCloud Private Relay — Settings › your name › iCloud › Private Relay. It can take over name lookups even while Tailscale says it is connected, so this gateway's address is looked up on the public internet instead of inside your tailnet."
                     ))
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
