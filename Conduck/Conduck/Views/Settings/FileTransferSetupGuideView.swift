@@ -225,7 +225,7 @@ struct FileTransferSetupContent: View {
         #endif
         .bufferedEditorChrome(
             isDirty: isDirty,
-            editorHasUnsavedChanges: $viewModel.editorHasUnsavedChanges,
+            viewModel: viewModel,
             onDiscard: {
                 await viewModel.cancelFileTransferEdit(for: ref)
             },

@@ -170,19 +170,18 @@ struct IpadSettingsView: View {
             guard !viewModel.hasAnyConfiguredRemoteAgent else { return }
             guidedHost.present()
         }
-        // ONE confirm for every outer exit (Done / sidebar switch). Reuses the
-        // editor's own discard strings so the wording is identical wherever the
-        // user leaves from; the editor's `.onDisappear` does the actual revert.
+        // ONE confirm for every outer exit (Done / Close / sidebar switch), with copy
+        // that names the actual consequence — see `outerDiscardTitle`. The editor's
+        // `.onDisappear` does the actual revert.
         .alert(
-            LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?"),
+            outerDiscardTitle,
             isPresented: $showingDiscardConfirm
         ) {
-            Button(
-                LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard"),
-                role: .destructive
-            ) {
+            Button(outerDiscardConfirmTitle, role: .destructive) {
                 // Pre-clear so the teardown's `.onDisappear` doesn't re-assert the
                 // flag, then either switch category (sidebar) or close (Done).
+                // The `false` setter is a hard reset across the whole editor stack,
+                // which is what's wanted here — both branches tear the editors down.
                 viewModel.editorHasUnsavedChanges = false
                 if let target = pendingSelection {
                     selection = target
@@ -196,11 +195,45 @@ struct IpadSettingsView: View {
                 role: .cancel
             ) { pendingSelection = nil }
         } message: {
-            Text(LocalizedStringResource(
-                "settings.editor.discard.message",
-                defaultValue: "Your unsaved changes will be lost."
-            ))
+            Text(outerDiscardMessage)
         }
+    }
+
+    // MARK: - Outer discard copy
+    //
+    // Mirrors `MacSettingsView`. `pendingSelection == nil` means Done/Close —
+    // Settings CLOSES back to the conversation; non-nil means a sidebar switch,
+    // which stays inside Settings. The editor's own Cancel confirm keeps the plain
+    // "Discard changes?" wording so the inner and outer alerts stay distinguishable.
+
+    private var outerDiscardTitle: LocalizedStringResource {
+        pendingSelection == nil
+            ? LocalizedStringResource(
+                "settings.editor.discard.close.title",
+                defaultValue: "Discard changes and close Settings?"
+            )
+            : LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?")
+    }
+
+    private var outerDiscardConfirmTitle: LocalizedStringResource {
+        pendingSelection == nil
+            ? LocalizedStringResource(
+                "settings.editor.discard.close.confirm",
+                defaultValue: "Discard & Close"
+            )
+            : LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard")
+    }
+
+    private var outerDiscardMessage: LocalizedStringResource {
+        pendingSelection == nil
+            ? LocalizedStringResource(
+                "settings.editor.discard.close.message",
+                defaultValue: "Your unsaved changes will be lost and Settings will close."
+            )
+            : LocalizedStringResource(
+                "settings.editor.discard.switch.message",
+                defaultValue: "Switching sections will discard your unsaved changes."
+            )
     }
 
     /// Done: confirm first when an editor is dirty, else close immediately.

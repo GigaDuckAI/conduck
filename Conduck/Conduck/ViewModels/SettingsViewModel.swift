@@ -130,30 +130,116 @@ final class SettingsViewModel {
 
     var isLoading: Bool = false
 
-    /// True while a buffered config editor (`RemoteAgentConfigBody` /
-    /// `CustomSTTConfigBody`) holds the screen with unsaved edits. Set/cleared by
-    /// the active editor's `bufferedEditorChrome`. It is the SINGLE source of truth
+    /// One mounted buffered editor (`bufferedEditorChrome`) and whether it
+    /// currently holds unsaved edits.
+    struct BufferedEditorRegistration: Identifiable, Equatable {
+        let id: UUID
+        var isDirty: Bool
+    }
+
+    /// Every buffered editor currently on screen, in MOUNT order — `last` is the
+    /// innermost/topmost. A stack rather than a single flag because editors
+    /// legitimately co-mount: the gateway editor pushes the file-transfer page,
+    /// and both carry `bufferedEditorChrome`. With one shared flag the child's
+    /// `.onAppear` would overwrite the parent's dirty state on push and its
+    /// `.onDisappear` would clear it on pop, leaving the parent's data-loss guard
+    /// resting on an untestable "a child push doesn't fire the parent's
+    /// onDisappear" assumption. Per-editor entries are correct under either
+    /// ordering.
+    ///
+    /// `private(set)` on purpose: the four mutators below are the ONLY writers,
+    /// and each one ends in `drainDeferredReloadIfCleared` — that encapsulation
+    /// is what replaces the `didSet` the old stored flag relied on.
+    private(set) var bufferedEditors: [BufferedEditorRegistration] = []
+
+    /// Dirty state asserted by NON-chrome writers — the onboarding gateway steps,
+    /// the container hard-resets, and tests — through `editorHasUnsavedChanges`'s
+    /// setter. Kept separate so a hard reset can't be resurrected by a still-clean
+    /// editor's registration, and vice versa.
+    private var directEditorDirty: Bool = false
+
+    /// True while any buffered config editor (`RemoteAgentConfigBody` /
+    /// `CustomSTTConfigBody` / the file-transfer editor) holds unsaved edits, or
+    /// while a non-chrome writer has asserted one. It is the SINGLE source of truth
     /// the whole settings surface consults so that no unsaved edit is ever lost
     /// without a "Discard changes?" confirmation: the macOS Done/Esc/sidebar gates
     /// and the iOS sheet's `interactiveDismissDisabled` all key off it. It ALSO
     /// fences the remote-change reload (see `pendingRemoteReload`) so a
     /// write-on-change control or an incoming iCloud-KVS sync can't silently
-    /// clobber the live buffers mid-edit. `didSet` drains a deferred reload the
-    /// moment the editor closes.
-    var editorHasUnsavedChanges: Bool = false {
-        didSet {
-            guard oldValue != editorHasUnsavedChanges else { return }
-            if !editorHasUnsavedChanges, pendingRemoteReload {
-                pendingRemoteReload = false
-                Task { await loadSettings() }
+    /// clobber the live buffers mid-edit.
+    ///
+    /// Setting it to `false` is a HARD RESET — it clears every registered editor's
+    /// dirty bit too, matching what the bare `= false` call sites have always
+    /// meant (the sheet-dismiss cleanup, the container `.onAppear` belt-and-braces,
+    /// and the outer Discard pre-clear, all of which immediately tear the editors
+    /// down anyway).
+    var editorHasUnsavedChanges: Bool {
+        get { directEditorDirty || bufferedEditors.contains { $0.isDirty } }
+        set {
+            let was = editorHasUnsavedChanges
+            directEditorDirty = newValue
+            if !newValue {
+                for index in bufferedEditors.indices { bufferedEditors[index].isDirty = false }
             }
+            drainDeferredReloadIfCleared(from: was)
         }
+    }
+
+    /// Whether ANY buffered editor is on screen, dirty or not. Distinct from
+    /// `editorHasUnsavedChanges`: the macOS Escape gate keys off mere presence, so
+    /// that Esc inside a clean editor cancels the editor instead of closing all of
+    /// Settings.
+    var hasMountedBufferedEditor: Bool { !bufferedEditors.isEmpty }
+
+    /// The innermost mounted editor. `BufferedEditorChrome` gives its macOS Cancel
+    /// the `.cancelAction` shortcut only when it matches, so exactly ONE Escape
+    /// target is live at a time — SwiftUI documents no precedence between two live
+    /// `.cancelAction` buttons, and a pushed-away parent stays in the hierarchy on
+    /// macOS.
+    var topBufferedEditorID: UUID? { bufferedEditors.last?.id }
+
+    /// Register a newly mounted editor (idempotent — a repeat `.onAppear` for the
+    /// same id refreshes its dirty bit rather than duplicating the entry).
+    func registerBufferedEditor(_ id: UUID, isDirty: Bool) {
+        let was = editorHasUnsavedChanges
+        if let index = bufferedEditors.firstIndex(where: { $0.id == id }) {
+            bufferedEditors[index].isDirty = isDirty
+        } else {
+            bufferedEditors.append(BufferedEditorRegistration(id: id, isDirty: isDirty))
+        }
+        drainDeferredReloadIfCleared(from: was)
+    }
+
+    /// Track a mounted editor's live dirty state. No-op for an unknown id.
+    func setBufferedEditorDirty(_ id: UUID, _ isDirty: Bool) {
+        let was = editorHasUnsavedChanges
+        guard let index = bufferedEditors.firstIndex(where: { $0.id == id }) else { return }
+        bufferedEditors[index].isDirty = isDirty
+        drainDeferredReloadIfCleared(from: was)
+    }
+
+    /// Drop an editor that left the screen.
+    func unregisterBufferedEditor(_ id: UUID) {
+        let was = editorHasUnsavedChanges
+        bufferedEditors.removeAll { $0.id == id }
+        drainDeferredReloadIfCleared(from: was)
+    }
+
+    /// The drain the old stored flag carried in its `didSet`. ONE funnel, called by
+    /// the setter AND by every registry mutation, so it can neither be missed (the
+    /// storage is private) nor double-fire (`pendingRemoteReload` is cleared
+    /// synchronously before the `Task` is dispatched, and the class is
+    /// `@MainActor`, so a second transition sees it already `false`).
+    private func drainDeferredReloadIfCleared(from previous: Bool) {
+        guard previous, !editorHasUnsavedChanges, pendingRemoteReload else { return }
+        pendingRemoteReload = false
+        Task { await loadSettings() }
     }
 
     /// A `.settingsDidChangeRemotely` reload that arrived WHILE an editor was dirty
     /// and was deferred (running it then would overwrite the user's unsaved
-    /// buffers). Drained by `editorHasUnsavedChanges`'s `didSet` when the editor
-    /// closes. Non-observed bookkeeping.
+    /// buffers). Drained by `drainDeferredReloadIfCleared` when the last dirty
+    /// editor closes or goes clean. Non-observed bookkeeping.
     @ObservationIgnored private var pendingRemoteReload: Bool = false
 
     /// In-flight / failure state per preset. Keys absent from this dict
@@ -715,7 +801,8 @@ final class SettingsViewModel {
                 // mid-edit (a remote iCloud-KVS sync, or a local write-on-change
                 // control like the image-history picker that posts this same
                 // notification) would silently revert the user's typing. Defer it;
-                // the `editorHasUnsavedChanges` didSet drains it when the editor closes.
+                // `drainDeferredReloadIfCleared` runs it when the last dirty editor
+                // closes or goes clean.
                 if self.editorHasUnsavedChanges {
                     self.pendingRemoteReload = true
                 } else {

@@ -458,7 +458,7 @@ struct RemoteAgentConfigBody: View {
         }
         .bufferedEditorChrome(
             isDirty: isDirty,
-            editorHasUnsavedChanges: $viewModel.editorHasUnsavedChanges,
+            viewModel: viewModel,
             onDiscard: {
                 // A verdict earned by a credential that dies with this discard
                 // (typed token / staged voice-key reuse) must not survive to

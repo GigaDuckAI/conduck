@@ -159,7 +159,7 @@ struct CustomSTTConfigBody: View {
         }
         .bufferedEditorChrome(
             isDirty: isDirty,
-            editorHasUnsavedChanges: $viewModel.editorHasUnsavedChanges,
+            viewModel: viewModel,
             onDiscard: { await viewModel.cancelCustomVoiceEndpointEdit(for: uuid) },
             suppressCancelOnExit: $suppressCancelOnExit,
             title: editorTitle,

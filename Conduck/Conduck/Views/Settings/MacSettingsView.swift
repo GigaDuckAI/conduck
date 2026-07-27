@@ -159,19 +159,18 @@ struct MacSettingsView: View {
             diagnosticsRunner.setFocus(ref: focus.ref, code: focus.errorCode)
             selection = .diagnostics
         }
-        // ONE confirm for every outer exit (Done / Esc / sidebar switch). Reuses
-        // the editor's own discard strings so the wording is identical wherever
-        // the user leaves from. The editor's `.onDisappear` does the actual revert.
+        // ONE confirm for every outer exit (Done / sidebar switch), with copy that
+        // names the actual consequence — see `outerDiscardTitle`. The editor's
+        // `.onDisappear` does the actual revert.
         .alert(
-            LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?"),
+            outerDiscardTitle,
             isPresented: $showingDiscardConfirm
         ) {
-            Button(
-                LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard"),
-                role: .destructive
-            ) {
+            Button(outerDiscardConfirmTitle, role: .destructive) {
                 // Pre-clear so the teardown's `.onDisappear` doesn't re-assert the
-                // flag, then either switch category (sidebar) or close (Done/Esc).
+                // flag, then either switch category (sidebar) or close (Done).
+                // The `false` setter is a hard reset across the whole editor stack,
+                // which is what's wanted here — both branches tear the editors down.
                 viewModel.editorHasUnsavedChanges = false
                 if let target = pendingSelection {
                     selection = target
@@ -185,14 +184,55 @@ struct MacSettingsView: View {
                 role: .cancel
             ) { pendingSelection = nil }
         } message: {
-            Text(LocalizedStringResource(
-                "settings.editor.discard.message",
-                defaultValue: "Your unsaved changes will be lost."
-            ))
+            Text(outerDiscardMessage)
         }
     }
 
-    /// Done / Esc: confirm first when an editor is dirty, else close immediately.
+    // MARK: - Outer discard copy
+    //
+    // The two branches of this confirm do very different things, so they say
+    // different things. `pendingSelection == nil` means Done — Settings CLOSES and
+    // the user lands back in the conversation; non-nil means a sidebar switch,
+    // which stays inside Settings. The editor's own Cancel confirm
+    // (`BufferedEditorChrome`) owns the plain "Discard changes?" wording, and this
+    // one must never borrow it: an outer alert wearing the inner alert's strings is
+    // indistinguishable from "discard this screen's edits", so a Discard tapped
+    // three levels deep would read as a one-level undo while actually leaving
+    // Settings for the chat UI.
+
+    private var outerDiscardTitle: LocalizedStringResource {
+        pendingSelection == nil
+            ? LocalizedStringResource(
+                "settings.editor.discard.close.title",
+                defaultValue: "Discard changes and close Settings?"
+            )
+            : LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?")
+    }
+
+    private var outerDiscardConfirmTitle: LocalizedStringResource {
+        pendingSelection == nil
+            ? LocalizedStringResource(
+                "settings.editor.discard.close.confirm",
+                defaultValue: "Discard & Close"
+            )
+            : LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard")
+    }
+
+    private var outerDiscardMessage: LocalizedStringResource {
+        pendingSelection == nil
+            ? LocalizedStringResource(
+                "settings.editor.discard.close.message",
+                defaultValue: "Your unsaved changes will be lost and Settings will close."
+            )
+            : LocalizedStringResource(
+                "settings.editor.discard.switch.message",
+                defaultValue: "Switching sections will discard your unsaved changes."
+            )
+    }
+
+    /// Done: confirm first when an editor is dirty, else close immediately. Esc
+    /// reaches this ONLY when no buffered editor is mounted — see the Done button's
+    /// gated `.keyboardShortcut`.
     private func attemptDismiss() {
         if viewModel.editorHasUnsavedChanges {
             pendingSelection = nil   // nil ⇒ Discard returns to the conversation
@@ -250,7 +290,22 @@ struct MacSettingsView: View {
                 // discard. A quiet bordered Done lets Save win the eye; the
                 // discard confirm backstops it either way.
                 .buttonStyle(.bordered)
-                .keyboardShortcut(.cancelAction) // Esc → attemptDismiss
+                // Inert while the confirm is up (parity with `IpadSettingsView`) —
+                // Done is the button the alert is ABOUT, so it must not re-arm the
+                // alert underneath it.
+                .disabled(showingDiscardConfirm)
+                // Esc → attemptDismiss, but ONLY on the bare category screens.
+                // While a buffered editor is open, Esc belongs to that editor's
+                // Cancel (`BufferedEditorChrome.macHeader`). Esc means "back out of
+                // THIS screen", and Done means "leave Settings" — binding both to
+                // one key makes Esc three levels deep (Personal AI → gateway editor
+                // → file transfer) exit to the chat UI, which reads as a runaway
+                // Discard. Depth, not dirtiness, is the right gate: a clean editor
+                // shows no confirm at all, so an ungated Esc would leave Settings
+                // with nothing on screen to explain it.
+                .keyboardShortcut(
+                    viewModel.hasMountedBufferedEditor ? nil : KeyboardShortcut.cancelAction
+                )
             }
             .padding(12)
         }

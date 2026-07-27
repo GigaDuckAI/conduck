@@ -7588,6 +7588,39 @@
         }
       }
     },
+    "settings.editor.discard.close.confirm" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Discard & Close"
+          }
+        }
+      }
+    },
+    "settings.editor.discard.close.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your unsaved changes will be lost and Settings will close."
+          }
+        }
+      }
+    },
+    "settings.editor.discard.close.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Discard changes and close Settings?"
+          }
+        }
+      }
+    },
     "settings.editor.discard.confirm" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -7617,6 +7650,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Your unsaved changes will be lost."
+          }
+        }
+      }
+    },
+    "settings.editor.discard.switch.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Switching sections will discard your unsaved changes."
           }
         }
       }

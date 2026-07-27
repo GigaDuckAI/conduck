@@ -8,7 +8,8 @@
 //
 // It owns the WHOLE commit/cancel chrome, in a STABLE top position that never
 // shifts and never bottom-docks:
-//   - a leading "Cancel" (discard-if-dirty),
+//   - a leading "Cancel" (discard-if-dirty; owns Esc on macOS when it is the
+//     innermost mounted editor),
 //   - a trailing "Save" (disabled until the editor reports it can save) — present
 //     from the moment the editor mounts,
 //   - the "Discard changes?" confirmation alert (dirty-gated),
@@ -47,12 +48,19 @@ private struct BufferedEditorChrome: ViewModifier {
     /// current truth.
     let isDirty: Bool
 
-    /// Mirror of the active editor's dirty state onto the shared
-    /// `SettingsViewModel.editorHasUnsavedChanges`. The OUTER settings exits
-    /// (macOS Done/Esc/sidebar, iOS swipe) consult that flag so an unsaved edit is
-    /// never discarded without the same confirmation Cancel shows. Driven here so
-    /// both editors stay dumb and the wiring lives in one place.
-    @Binding var editorHasUnsavedChanges: Bool
+    /// The shared settings VM. This modifier registers the editor in its
+    /// `bufferedEditors` stack so the OUTER settings exits (macOS Done/Esc/sidebar,
+    /// iOS swipe) can consult `editorHasUnsavedChanges` and never discard an
+    /// unsaved edit without the same confirmation Cancel shows — and so macOS knows
+    /// which editor owns Escape. Driven here so the editors stay dumb and the
+    /// wiring lives in one place.
+    let viewModel: SettingsViewModel
+
+    /// This editor's identity in the VM's stack. `@State` in a `ViewModifier` is
+    /// tied to the modified view's identity, so it is stable across re-renders and
+    /// minted afresh per editor instance — exactly the lifetime a registration
+    /// needs.
+    @State private var editorID = UUID()
 
     /// The VM's cancel/revert: drop a never-saved draft, or re-hydrate an
     /// existing record from storage. Runs on every non-committed exit.
@@ -87,24 +95,27 @@ private struct BufferedEditorChrome: ViewModifier {
 
     func body(content: Content) -> some View {
         chrome(content)
-            // Publish dirty state up to the shared VM so the outer settings exits
-            // can guard against silent loss. `.onAppear` seeds on mount AND
-            // RE-ASSERTS on return from a child push (e.g. the File Transfer guide):
-            // if a future OS were to fire `.onDisappear` on that push and clear the
-            // flag, reappearing re-establishes it from the live `isDirty` (which
-            // `didInitialize` keeps correct) — so the data-loss guard never silently
-            // lapses. `.onChange` tracks live edits thereafter.
-            .onAppear { editorHasUnsavedChanges = isDirty }
+            // Publish this editor's dirty state into the VM's editor stack so the
+            // outer settings exits can guard against silent loss. Registration is
+            // PER-EDITOR, so a child push (e.g. the File Transfer page) neither
+            // clobbers nor is clobbered by its parent — correct whichever way the
+            // OS orders the child's `.onAppear` against the parent's
+            // `.onDisappear`. `.onAppear` is idempotent, so a re-appear on return
+            // from a child push simply refreshes the entry.
+            .onAppear { viewModel.registerBufferedEditor(editorID, isDirty: isDirty) }
             .onChange(of: isDirty) { _, newValue in
-                editorHasUnsavedChanges = newValue
+                viewModel.setBufferedEditorDirty(editorID, newValue)
             }
             .onDisappear {
-                // The editor is leaving — it can no longer be the active dirty
-                // editor. Clearing here releases the outer gates (and drains any
-                // deferred remote reload) once a Save/Cancel/teardown completes.
-                // (A child PUSH does not fire onDisappear on this OS — the same
-                // assumption the onDiscard safety net below already relies on.)
-                editorHasUnsavedChanges = false
+                // The editor is leaving — drop its registration. That releases the
+                // outer gates (and drains any deferred remote reload) once a
+                // Save/Cancel/teardown completes, without disturbing any other
+                // editor still on screen. (The `onDiscard` safety net below still
+                // rests on a child PUSH not firing this editor's `.onDisappear` —
+                // registration no longer does. The one nested pair that exists is
+                // gated clean by `fileTransferGateReason`, so a push can't reach a
+                // dirty parent.)
+                viewModel.unregisterBufferedEditor(editorID)
                 guard !suppressCancelOnExit else { return }
                 Task { await onDiscard() }
             }
@@ -177,6 +188,16 @@ private struct BufferedEditorChrome: ViewModifier {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(AppColors.textSecondary)
+                    // Esc cancels the INNERMOST editor. Bound only on the top of
+                    // the stack: SwiftUI documents no precedence between two live
+                    // `.cancelAction` buttons, and on macOS a pushed-away parent
+                    // stays in the hierarchy, so its header would otherwise be a
+                    // competing target. `MacSettingsView`'s Done drops its own
+                    // `.cancelAction` whenever any editor is mounted, so exactly
+                    // one Esc target exists at a time.
+                    .keyboardShortcut(
+                        viewModel.topBufferedEditorID == editorID ? KeyboardShortcut.cancelAction : nil
+                    )
                     Spacer()
                     Button(saveTitle) { onSave() }
                         .buttonStyle(.plain)
@@ -202,12 +223,13 @@ private struct BufferedEditorChrome: ViewModifier {
 
 extension View {
     /// Applies the shared buffered-editor chrome: a stable top Cancel (leading,
-    /// discard-if-dirty) + Save (trailing, disabled-until-valid) — native bar on
-    /// iOS, custom header on macOS — plus the discard alert + `.onDisappear`
+    /// discard-if-dirty, and Esc on macOS when innermost) + Save (trailing,
+    /// disabled-until-valid) — native bar on iOS, custom header on macOS — plus the
+    /// discard alert, the VM editor-stack registration, and the `.onDisappear`
     /// safety net. Delete/Forget stays inline. See `BufferedEditorChrome`.
     func bufferedEditorChrome(
         isDirty: Bool,
-        editorHasUnsavedChanges: Binding<Bool>,
+        viewModel: SettingsViewModel,
         onDiscard: @escaping () async -> Void,
         suppressCancelOnExit: Binding<Bool>,
         title: String,
@@ -217,7 +239,7 @@ extension View {
     ) -> some View {
         modifier(BufferedEditorChrome(
             isDirty: isDirty,
-            editorHasUnsavedChanges: editorHasUnsavedChanges,
+            viewModel: viewModel,
             onDiscard: onDiscard,
             suppressCancelOnExit: suppressCancelOnExit,
             title: title,
