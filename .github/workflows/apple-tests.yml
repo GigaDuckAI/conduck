@@ -26,6 +26,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # Runs before the Xcode steps because it costs about a second and a missing
+      # header should not wait on a 90-minute simulator matrix to surface.
+      - name: Check SPDX license headers
+        run: scripts/add-spdx-headers.sh --check
+
       - name: Show Xcode version
         run: xcodebuild -version
 

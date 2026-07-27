@@ -1,0 +1,10 @@
+# Commits listed here are skipped by `git blame`, so a line's blame points at
+# the change that wrote it rather than at a repo-wide mechanical rewrite.
+#
+# GitHub honours this file automatically in its blame view. Local git needs to be
+# told once per clone:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# chore: stamp every tracked source file with an SPDX license identifier
+efa553e7e38d5897b56839fb8efd878187271a0c

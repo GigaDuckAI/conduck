@@ -1,0 +1,24 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# Stamp the SPDX license header onto any source file this commit adds or changes.
+#
+# The header is a required CI check (`apple-tests.yml` runs
+# `scripts/add-spdx-headers.sh --check`). Without this hook a new file reaches
+# that check only after a push, so the first sign of a missing header is a red
+# build minutes later, on work that was already finished and left the machine.
+# Stamping at commit time keeps the check honest without ever making anyone think
+# about it.
+#
+# Only files already staged for this commit are touched, and a file with
+# unstaged changes alongside is refused rather than stamped — see the script.
+# The stamp is always printed, never applied silently.
+#
+# Enable once per clone (it is local config, so it cannot ship in the repo):
+#
+#     git config core.hooksPath .githooks
+#
+# CI remains the backstop for anyone who has not enabled hooks.
+
+exec scripts/add-spdx-headers.sh --staged

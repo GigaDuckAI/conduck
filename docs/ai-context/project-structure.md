@@ -18,7 +18,7 @@ Top-level layout only; full annotated tree below. Keep in sync when top-level en
 │   ├── ai-context/                   # spec.md · project-structure.md
 │   └── qa/                           # QA-mode harness docs + test scenarios
 ├── branding/                         # README.md + placeholders/ (neutral stand-in art, regenerable)
-├── scripts/                          # generate-placeholder-assets.py
+├── scripts/                          # generate-placeholder-assets.py · add-spdx-headers.sh
 └── Conduck/                          # Xcode project container
     ├── Conduck.xcodeproj/            # SPM deps (KeyboardShortcuts/FluidAudio/Textual); Watch membership exceptions
     ├── Configs/                      # Identity.xcconfig (build-identity variables)
@@ -54,6 +54,7 @@ Top-level layout only; full annotated tree below. Keep in sync when top-level en
 │   └── placeholders/                                   # Neutral stand-ins for every branded set — identical `Contents.json`, filenames + pixel dimensions; generic chat-bubble art (no character, no letterforms); mirrors the catalog paths of `Conduck/Conduck`, `ConduckShareExtensionMac`, `ConduckWatch Watch App`
 │
 ├── scripts/
+│   ├── add-spdx-headers.sh                             # Stamps `SPDX-License-Identifier: Apache-2.0` onto every tracked `.swift`/`.js`/`.py`/`.sh` file (line 1, or line 2 behind a shebang, then a blank line). Idempotent; `--check` mode is a required CI step in `apple-tests.yml`, so a new file without the tag reddens the build. NO copyright/year line by design — the year of first publication lives only in the root `NOTICE`, and DCO-without-CLA means contributors keep copyright, so a blanket holder line would assert ownership the company does not hold
 │   ├── generate-placeholder-assets.py                  # Deterministic, re-runnable placeholder generator (Pillow); emits verbatim `Contents.json` + same-dimension neutral images into `branding/placeholders/`
 │   ├── live-tls-fixture.py                             # Loopback HTTPS listeners (port 0, per-run `mktemp -d` certs, EC + RSA, a same-key second origin so only the ORIGIN compare can refuse a hop) serving a request counter at `/__hits`; `server_bind` overridden to skip `socket.getfqdn` — the stock reverse lookup blocks ~20 s on hosts with no `127.0.0.1` reverse zone
 │   └── run-live-tls-tests.sh                           # Starts the fixture OUTSIDE the test host and hands ports+pins in through the app container's tmp — Why: the App Sandbox denies `bind()` to the macOS test host and everything it spawns, and `com.apple.security.network.server` is not an entitlement a client-only app should ship for a test. Without it `RemoteAgentLiveTLSTrustTests` SKIPS (naming this script) rather than failing
