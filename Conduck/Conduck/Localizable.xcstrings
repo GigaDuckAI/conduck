@@ -1,105 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "settings.about.licenses.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open Source Licenses"
-          }
-        }
-      }
-    },
-    "settings.about.licenses.conduck.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Conduck License"
-          }
-        }
-      }
-    },
-    "settings.about.licenses.conduck.subtitle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Apache License 2.0"
-          }
-        }
-      }
-    },
-    "settings.about.licenses.notice.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Notice"
-          }
-        }
-      }
-    },
-    "settings.about.licenses.notice.subtitle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Attribution notice"
-          }
-        }
-      }
-    },
-    "settings.about.licenses.thirdparty.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Third-Party Notices"
-          }
-        }
-      }
-    },
-    "settings.about.licenses.thirdparty.subtitle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bundled open-source components"
-          }
-        }
-      }
-    },
-    "settings.about.licenses.footer" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Conduck's own source and placeholder artwork are licensed under the Apache License 2.0. Bundled third-party components keep their own licenses, reproduced here."
-          }
-        }
-      }
-    },
-    "settings.about.licenses.loadError" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This document could not be loaded."
-          }
-        }
-      }
-    },
     "" : {
 
     },
@@ -3892,17 +3793,6 @@
         }
       }
     },
-    "fileTransfer.manual.mechanism" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your files aren't sent to the model. Conduck uploads each one to your server, then adds a line to your message naming the file and the path it was saved under — that line is what the agent opens."
-          }
-        }
-      }
-    },
     "fileTransfer.manual.explanation.managed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3910,6 +3800,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quick connect usually sets this up for you. To do it by hand, run a WebDAV server over HTTPS on your gateway and make it accept the sign-in below."
+          }
+        }
+      }
+    },
+    "fileTransfer.manual.mechanism" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your files aren't sent to the model. Conduck uploads each one to your server, then adds a line to your message naming the file and the path it was saved under — that line is what the agent opens."
           }
         }
       }
@@ -4805,6 +4706,17 @@
         }
       }
     },
+    "fileTransfer.url.noHost" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That address is missing its host name — it should look like https://files.example.com."
+          }
+        }
+      }
+    },
     "fileTransfer.url.placeholder" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4856,61 +4768,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Don't include a username or password in the URL — Conduck manages the credential for you. Use the address only, and give the generated password to your server."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.url.userinfo" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your gateway's token goes in the Token field."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.url.noHost" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "That address is missing its host name — it should look like https://ai.example.com."
-          }
-        }
-      }
-    },
-    "fileTransfer.url.noHost" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "That address is missing its host name — it should look like https://files.example.com."
-          }
-        }
-      }
-    },
-    "settings.stt.custom.url.userinfo" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your endpoint's key goes in the API key field."
-          }
-        }
-      }
-    },
-    "settings.stt.custom.url.noHost" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "That address is missing its host name — it should look like https://voice.example.com."
           }
         }
       }
@@ -5685,6 +5542,94 @@
     "Mac" : {
 
     },
+    "markdownLink.confirm.cancel" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "markdownLink.confirm.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This isn't a web link — it asks another app on your device to handle:\n\n%@\n\nThe link's text was written by your AI and can say anything, so open it only if you expected this."
+          }
+        }
+      }
+    },
+    "markdownLink.confirm.open" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open"
+          }
+        }
+      }
+    },
+    "markdownLink.confirm.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open this link outside Conduck?"
+          }
+        }
+      }
+    },
+    "markdownLink.refused.acknowledge" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "OK"
+          }
+        }
+      }
+    },
+    "markdownLink.refused.activeContent.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This link carries content of its own instead of naming a place to go (%@:), so there's nothing you could check before it opens. Conduck doesn't open those."
+          }
+        }
+      }
+    },
+    "markdownLink.refused.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck won't open this link"
+          }
+        }
+      }
+    },
+    "markdownLink.refused.tooLong.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This isn't a web link, and its destination runs to %1$d characters — too long to show you in full. Conduck won't open a destination you can't check first. It starts with:\n\n%2$@"
+          }
+        }
+      }
+    },
     "Menu Bar App" : {
 
     },
@@ -6140,6 +6085,17 @@
     },
     "Paste your OpenRouter API key and pick a model — your messages go straight to OpenRouter, no middleman." : {
 
+    },
+    "pasteboard.expired.placeholder" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck expired this clipboard copy - copy it again in Conduck"
+          }
+        }
+      }
     },
     "Pay %@ directly. No middleman, no surprise bills, no rate-limited free tier." : {
       "extractionState" : "manual",
@@ -7412,6 +7368,105 @@
     "Settings…" : {
 
     },
+    "settings.about.licenses.conduck.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apache License 2.0"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.conduck.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck License"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.footer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck's own source and placeholder artwork are licensed under the Apache License 2.0. Bundled third-party components keep their own licenses, reproduced here."
+          }
+        }
+      }
+    },
+    "settings.about.licenses.loadError" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This document could not be loaded."
+          }
+        }
+      }
+    },
+    "settings.about.licenses.notice.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attribution notice"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.notice.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notice"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.thirdparty.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bundled open-source components"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.thirdparty.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Third-Party Notices"
+          }
+        }
+      }
+    },
+    "settings.about.licenses.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Source Licenses"
+          }
+        }
+      }
+    },
     "settings.certTrust.approval.heading" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8563,6 +8618,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This gateway is on a tailnet. Install the Tailscale app on this device and sign in to the same tailnet, or the connection test will fail."
+          }
+        }
+      }
+    },
+    "settings.pairing.tofu.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This gateway presented a self-signed certificate this device doesn't recognize. Trusting it pins this exact certificate on this device — from then on Conduck accepts only this one."
+          }
+        }
+      }
+    },
+    "settings.pairing.tofu.noFingerprint" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This gateway uses a self-signed certificate with an unsupported key type. Pin it manually in the gateway's Server certificate row, or give the server a publicly-trusted certificate."
+          }
+        }
+      }
+    },
+    "settings.pairing.tofu.unexpected" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your setup code expected a publicly-trusted certificate here, not a self-signed one. On an untrusted network that can mean something is intercepting the connection. Re-run the setup on your server to confirm before you trust this."
           }
         }
       }
@@ -10789,6 +10877,17 @@
         }
       }
     },
+    "settings.remoteAgent.url.noHost" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That address is missing its host name — it should look like https://ai.example.com."
+          }
+        }
+      }
+    },
     "settings.remoteAgent.url.portHint" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10807,6 +10906,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A Tailscale address — this device needs the Tailscale app, signed in to the same tailnet."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.url.userinfo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your gateway's token goes in the Token field."
           }
         }
       }
@@ -11075,6 +11185,17 @@
         }
       }
     },
+    "settings.stt.custom.url.noHost" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That address is missing its host name — it should look like https://voice.example.com."
+          }
+        }
+      }
+    },
     "settings.stt.custom.url.placeholder" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11082,6 +11203,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "https://whisper.example.com"
+          }
+        }
+      }
+    },
+    "settings.stt.custom.url.userinfo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your endpoint's key goes in the API key field."
           }
         }
       }
