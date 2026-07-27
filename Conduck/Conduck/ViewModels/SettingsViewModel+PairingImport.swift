@@ -134,6 +134,68 @@ extension SettingsViewModel {
         return .ready(target: target)
     }
 
+    // MARK: - Review (what the user is shown before anything is written)
+
+    /// Gather the facts the import review card renders for `payload` landing on
+    /// `target`. Reads only — like `planPairingImport`, it writes nothing.
+    ///
+    /// Deliberately re-readable and `Equatable` in its result: the card is built
+    /// once when the code is scanned and again when Connect is tapped, and the
+    /// two are compared. If a peer device's iCloud sync, a second window, or the
+    /// user's own edit changed the destination in between, the reviewed screen no
+    /// longer describes what would happen — so the sheet re-presents instead of
+    /// executing a decision the user made about different facts.
+    ///
+    /// - Parameter freshlyMinted: true when `planPairingImport` minted a brand-new
+    ///   custom draft for this import. Such a target has no local name yet, and
+    ///   the only name available is the one the CODE chose — which is exactly
+    ///   what the card refuses to render, so it stays nameless.
+    func pairingReview(
+        for payload: PairingPayload,
+        target: RemoteAgentRef,
+        freshlyMinted: Bool
+    ) async -> PairingReviewModel {
+        // Every fact below is read from the STORE, not from this view model's
+        // caches. The card is not only what the user reads — it is also the
+        // snapshot the commit is checked against, and a second window or a
+        // peer's iCloud sync lands in storage BEFORE the cached reload reaches
+        // this view model. A snapshot built from caches would therefore compare
+        // equal to itself while the thing it describes had already moved.
+        let existingGatewayURL = await SettingsManager.shared.getRemoteAgentURL(for: target)
+        let storedFileServerURL = await SettingsManager.shared.getFileServerURL(for: target)
+        let configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
+
+        // "Configured" means URL *and* credential. Credential presence is the one
+        // signal with no cheap store read (it lives in the Keychain), so it stays
+        // the cached mirror — but pairing it with a STORED url means a stale
+        // cache can only under-claim, never promise a lane that isn't there.
+        let existingFileServerDestination: String? = {
+            guard fileServerCredentialPresent[target] == true else { return nil }
+            return storedFileServerURL?.absoluteString
+        }()
+
+        // Local identity only. A built-in's name is the app's own; a custom's is
+        // read from the persisted roster rather than the cached one, for the same
+        // freshness reason. A freshly minted draft has neither — see `targetName`.
+        var targetName: String? = nil
+        if !freshlyMinted {
+            switch target {
+            case .builtin(let backend):
+                targetName = backend.displayName
+            case .custom(let id):
+                targetName = await SettingsManager.shared.customGateway(id: id)?.name
+            }
+        }
+
+        return PairingReviewModel.make(
+            payload: payload,
+            existingGatewayURL: existingGatewayURL,
+            existingFileServerDestination: existingFileServerDestination,
+            targetName: targetName,
+            anyGatewayConfigured: !configuredRefs.isEmpty
+        )
+    }
+
     // MARK: - Discard (cancel before execute)
 
     /// Drop the unsaved custom DRAFT a `planPairingImport` minted — called

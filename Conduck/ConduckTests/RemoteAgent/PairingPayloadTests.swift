@@ -550,6 +550,154 @@ final class PairingPayloadTests: XCTestCase {
         assertFails(pairingString(dict), with: .malformed, "non-hex certFP must reject")
     }
 
+    // MARK: - Display-string sanitization (name / model)
+    //
+    // `gateway.name` and `gateway.model` are the payload's only free-form text.
+    // Both persist (roster name / model override) AND render — the name reaches
+    // the import sheet's kindMismatch error verbatim, before the 40-char persist
+    // truncation applies. A hand-crafted code must not be able to put control or
+    // bidi scalars, or a kilobyte of text, on any of those surfaces. The parser
+    // REJECTS rather than strips: a silently rewritten name would make the
+    // imported gateway's identity differ from what the operator saw in their
+    // terminal, which is the confusion the rule exists to prevent.
+
+    /// Build a payload whose custom gateway carries `name`.
+    private func dictWithName(_ name: String) -> [String: Any] {
+        var dict = minimalDict(kind: "custom")
+        var gateway = dict["gateway"] as! [String: Any]
+        gateway["name"] = name
+        dict["gateway"] = gateway
+        return dict
+    }
+
+    /// Build a payload whose (built-in) gateway carries `model`.
+    private func dictWithModel(_ model: String) -> [String: Any] {
+        var dict = minimalDict()
+        var gateway = dict["gateway"] as! [String: Any]
+        gateway["model"] = model
+        dict["gateway"] = gateway
+        return dict
+    }
+
+    /// The scalars the sanitizer bars, each embedded MID-string so the
+    /// whitespace trim can't be what rejects them.
+    private let hostileScalars: [(String, String)] = [
+        ("NUL (C0)", "\u{0000}"),
+        ("LF (C0)", "\u{000A}"),
+        ("ESC (C0)", "\u{001B}"),
+        ("DEL", "\u{007F}"),
+        ("NEL (C1)", "\u{0085}"),
+        ("APC (C1)", "\u{009F}"),
+        ("LRM (bidi)", "\u{200E}"),
+        ("RLO (bidi override)", "\u{202E}"),
+        ("LRI (bidi isolate)", "\u{2066}"),
+        ("PDI (bidi isolate)", "\u{2069}"),
+        ("LINE SEPARATOR", "\u{2028}"),
+        ("PARAGRAPH SEPARATOR", "\u{2029}"),
+    ]
+
+    func testNameWithHostileScalarIsMalformed() {
+        for (label, scalar) in hostileScalars {
+            let name = "Home\(scalar)Lab"
+            assertFails(pairingString(dictWithName(name)), with: .malformed,
+                        "custom name carrying \(label) must reject the whole code")
+        }
+    }
+
+    func testModelWithHostileScalarIsMalformed() {
+        for (label, scalar) in hostileScalars {
+            let model = "llama\(scalar)-3.3-70b"
+            assertFails(pairingString(dictWithModel(model)), with: .malformed,
+                        "model override carrying \(label) must reject the whole code")
+        }
+    }
+
+    /// The spoof shape specifically: RLO reverses the run after it, so a name
+    /// can render as a different gateway than the one being imported.
+    func testNameWithBidiOverrideIsMalformed() {
+        assertFails(pairingString(dictWithName("Home \u{202E}bal emoH")), with: .malformed,
+                    "a right-to-left override is the display-spoof primitive")
+    }
+
+    /// A control scalar hides inside a single grapheme cluster — `"a\u{0000}"`
+    /// is ONE Character — so this only rejects if the scan is scalar-level.
+    func testNameWithControlScalarInsideGraphemeClusterIsMalformed() {
+        let name = "Home\u{0301}\u{0000} Lab" // combining acute, then NUL
+        XCTAssertLessThan(name.count, name.unicodeScalars.count,
+                          "Fixture must actually collapse scalars into clusters")
+        assertFails(pairingString(dictWithName(name)), with: .malformed,
+                    "a control scalar hidden in a grapheme cluster must still reject")
+    }
+
+    func testNameAtCapParsesAndOverCapIsMalformed() {
+        let atCap = String(repeating: "n", count: 120)
+        guard let payload = assertParses(pairingString(dictWithName(atCap))) else { return }
+        XCTAssertEqual(payload.kind, .custom(name: atCap),
+                       "exactly-at-cap must import unchanged — the cap is a bound, not a truncation")
+
+        assertFails(pairingString(dictWithName(atCap + "n")), with: .malformed,
+                    "one scalar over the name cap must reject")
+        assertFails(pairingString(dictWithName(String(repeating: "n", count: 5_000))),
+                    with: .malformed, "an absurd name must never reach storage or a label")
+    }
+
+    func testModelAtCapParsesAndOverCapIsMalformed() {
+        let atCap = String(repeating: "m", count: 200)
+        guard let payload = assertParses(pairingString(dictWithModel(atCap))) else { return }
+        XCTAssertEqual(payload.model, atCap)
+
+        assertFails(pairingString(dictWithModel(atCap + "m")), with: .malformed,
+                    "one scalar over the model cap must reject")
+    }
+
+    /// THE regression that matters most: the rule is a denylist of rendering
+    /// controls, not an allowlist of scripts. Real gateway names are non-ASCII.
+    func testLegitimateUnicodeNamesAndModelsStillParse() {
+        let names = [
+            "Küchen-Gateway",
+            "日本語ゲートウェイ",
+            "Домашний шлюз",
+            "🦆 Duck Box",
+            "My Böx — lab",
+            "Ali's box (v2) #1 — 100% fine",
+        ]
+        for name in names {
+            guard let payload = assertParses(pairingString(dictWithName(name))) else { continue }
+            XCTAssertEqual(payload.kind, .custom(name: name),
+                           "\"\(name)\" is an ordinary name and must import verbatim")
+        }
+
+        let models = [
+            "hf.co/unsloth/Qwen2.5-Coder-32B-Instruct-GGUF:Q4_K_M",
+            "meta-llama/Llama-3.3-70B-Instruct",
+            "gpt-4.1-mini@2025-04-14",
+            "モデル-1",
+        ]
+        for model in models {
+            guard let payload = assertParses(pairingString(dictWithModel(model))) else { continue }
+            XCTAssertEqual(payload.model, model,
+                           "\"\(model)\" is a plausible machine-minted id and must survive whole")
+        }
+    }
+
+    /// Sanitization runs AFTER the trim, so ordinary padding still imports
+    /// clean rather than tripping the newline rule.
+    func testNameAndModelStillTrimSurroundingWhitespace() {
+        guard let named = assertParses(pairingString(dictWithName("  Home Lab \n"))) else { return }
+        XCTAssertEqual(named.kind, .custom(name: "Home Lab"))
+
+        guard let modeled = assertParses(pairingString(dictWithModel("\t llama-3.3-70b \r\n"))) else { return }
+        XCTAssertEqual(modeled.model, "llama-3.3-70b")
+    }
+
+    /// A model that is whitespace-only still degrades to nil (optional hint),
+    /// while a whitespace-only NAME still rejects (required field) — the
+    /// sanitizer must not have changed either verdict.
+    func testWhitespaceOnlyModelStillDegradesToNil() {
+        guard let payload = assertParses(pairingString(dictWithModel("   \n  "))) else { return }
+        XCTAssertNil(payload.model, "an empty-after-trim model is an absent hint, not an error")
+    }
+
     // MARK: - Input tolerance
 
     func testSurroundingWhitespaceAndNewlinesTolerated() {

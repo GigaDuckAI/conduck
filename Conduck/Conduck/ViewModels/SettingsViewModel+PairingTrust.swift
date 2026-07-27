@@ -141,8 +141,22 @@ extension SettingsViewModel {
         }
 
         // MARK: File-server lane
+        //
+        // Cancellation checkpoint. The caller's generation guard runs only after
+        // this whole method returns, so without this an abandoned resolution
+        // would finish the gateway probe and then open a SECOND connection to an
+        // attacker-selected file host — after the user cancelled. Nothing would
+        // be stored either way, but "cancel" has to mean the outbound work stops,
+        // not merely that its result is discarded.
+        //
+        // The verdict returned here is never used: whoever cancelled has already
+        // superseded this attempt and the guard drops it. It is honest anyway —
+        // the file lane genuinely was not checked.
         var fileServerPin: String?
         if let fileServer = payload.fileServer {
+            guard !Task.isCancelled else {
+                return .unverifiableWhileUnreachable(lane: .fileServer, transportClass: .cancelled)
+            }
             let claim = Self.claimedFileServerPin(for: payload)
             // Probed with NO credential and at the root path: this asks only
             // whether the TLS handshake is accepted and by whom. A 401 from a
