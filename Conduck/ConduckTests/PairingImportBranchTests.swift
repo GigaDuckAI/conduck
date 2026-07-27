@@ -235,7 +235,7 @@ final class PairingImportBranchTests: XCTestCase {
             auth: "none", token: nil,
             transport: "tailscale"
         )
-        let firstOutcome = await vm.executePairingImport(withHint, target: openclaw)
+        let firstOutcome = await vm.executePairingImportUsingPayloadPins(withHint, target: openclaw)
         XCTAssertEqual(firstOutcome, .committed, "A keyless builtin payload must commit.")
 
         let hintAfterFirst = await SettingsManager.shared.getRemoteAgentTransportHint(for: openclaw)
@@ -256,7 +256,7 @@ final class PairingImportBranchTests: XCTestCase {
             auth: "none", token: nil,
             transport: nil
         )
-        let secondOutcome = await vm.executePairingImport(withoutHint, target: openclaw)
+        let secondOutcome = await vm.executePairingImportUsingPayloadPins(withoutHint, target: openclaw)
         XCTAssertEqual(secondOutcome, .committed)
 
         let hintAfterSecond = await SettingsManager.shared.getRemoteAgentTransportHint(for: openclaw)
@@ -290,7 +290,7 @@ final class PairingImportBranchTests: XCTestCase {
             transport: "selfsigned"
         )
 
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A payload with a complete fileServer block must commit on a Keychain-capable host.")
 
         let fsPin = await SettingsManager.shared.getFileServerCertFingerprint(for: openclaw)
@@ -319,7 +319,7 @@ final class PairingImportBranchTests: XCTestCase {
             transport: "tailscale"
         )
 
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed)
 
         let fsPin = await SettingsManager.shared.getFileServerCertFingerprint(for: openclaw)
@@ -346,7 +346,7 @@ final class PairingImportBranchTests: XCTestCase {
             transport: "selfsigned"
         )
 
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed)
 
         let fsPin = await SettingsManager.shared.getFileServerCertFingerprint(for: openclaw)

@@ -11,7 +11,10 @@
 //     `planPairingImport`, and on success `onImported` lets the host re-hydrate
 //     its buffered-editor snapshot.
 //
-// State machine: input → (overwrite alert) → running → done. The running/done
+// State machine: input → (overwrite alert) → TRUST RESOLUTION → running → done.
+// Trust resolution probes both lanes UNPINNED and decides what may be persisted
+// before anything is written (`SettingsViewModel+PairingTrust`); a payload's
+// claimed certificate pin never reaches storage unchecked. The running/done
 // step renders a tiny staged checklist (Save configuration → Gateway connection
 // → File server) styled like `STTTestSuiteResultView`'s stage rows, with the
 // gateway TOFU convention surfaced as an amber "Trust certificate & retry"
@@ -96,8 +99,62 @@ struct PairingImportSheet: View {
     @State private var inlineError: String?
     @State private var planning: Bool = false
 
+    /// A certificate exception the user must accept BEFORE anything persists.
+    /// `gatewayPin`/`fileServerPin` are the exact values that would be stored.
+    private struct PinConsentContext {
+        let payload: PairingPayload
+        let target: RemoteAgentRef
+        let gatewayPin: String?
+        let fileServerPin: String?
+        let lanes: [PairingTrustLane]
+        let freshlyMinted: Bool
+    }
+
+    /// An import refused on trust grounds. `override` is nil when no mechanism to
+    /// proceed exists at all (see `PairingTrustOverride`) — the alert then offers
+    /// no "Connect anyway", because the button could not work.
+    ///
+    /// The CONCRETE override is retained, not just "an override is possible": the
+    /// retry re-probes, and consent has to be bound to the exact action the user
+    /// was shown. `accepted` carries forward overrides agreed on earlier lanes so
+    /// two blocked lanes can both be resolved instead of re-blocking each other.
+    private struct TrustBlockContext {
+        let payload: PairingPayload
+        let target: RemoteAgentRef
+        let lane: PairingTrustLane
+        let block: PairingTrustBlock
+        let override: PairingTrustOverride?
+        let accepted: [PairingTrustLane: PairingTrustOverride]
+        let freshlyMinted: Bool
+    }
+
     @State private var overwriteContext: OverwriteContext?
     @State private var showingOverwriteAlert: Bool = false
+
+    @State private var pinConsentContext: PinConsentContext?
+    @State private var showingPinConsentAlert: Bool = false
+    @State private var trustBlockContext: TrustBlockContext?
+    @State private var showingTrustBlockAlert: Bool = false
+
+    /// Identity of the in-flight import attempt, spanning BOTH unstructured
+    /// awaits — planning and the trust probe. Bumped by anything that abandons
+    /// the attempt (Cancel, dismissal, a superseding attempt), so a Task can tell
+    /// after its await that the result it is holding belongs to an import nobody
+    /// is waiting for any more.
+    ///
+    /// Without this, tapping Import and then Cancel still persisted the URL,
+    /// token and pin when the probe eventually returned. Task cancellation alone
+    /// is NOT sufficient: a cancelled probe classifies as `.unreachable(.cancelled)`,
+    /// and the no-claim rule deliberately proceeds on unreachable.
+    ///
+    /// Both awaits must be guarded, not just the probe: `planPairingImport` mints
+    /// the roster draft for a free-target custom import, so an unguarded planning
+    /// task can orphan a draft AND go on to start a fresh, unwanted attempt.
+    @State private var operationGeneration: Int = 0
+    /// The target of the in-flight resolution, so abandonment can discard a
+    /// roster draft the plan minted for it.
+    @State private var pendingTrustTarget: RemoteAgentRef?
+    @State private var pendingTrustFreshlyMinted: Bool = false
 
     /// Set once the plan resolves — drive the stage run + the trust retry.
     @State private var activePayload: PairingPayload?
@@ -167,6 +224,9 @@ struct PairingImportSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     if phase == .input {
                         Button(role: .cancel) {
+                            // A trust probe may be in flight — invalidate it, or
+                            // it persists the import after the user cancelled.
+                            invalidatePendingImport()
                             dismiss()
                         } label: {
                             Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
@@ -191,7 +251,15 @@ struct PairingImportSheet: View {
                 presenting: overwriteContext
             ) { context in
                 Button(role: .destructive) {
-                    beginImport(context.payload, target: context.target)
+                    // Routes through the SAME trust resolution as the direct
+                    // path. Confirming an overwrite must not be a way to skip
+                    // the certificate check — replacing a gateway you already
+                    // trust is if anything the more dangerous import.
+                    resolveTrustThenImport(
+                        context.payload,
+                        target: context.target,
+                        freshlyMinted: context.freshlyMinted
+                    )
                 } label: {
                     Text(LocalizedStringResource("settings.pairing.overwrite.confirm", defaultValue: "Replace"))
                 }
@@ -203,6 +271,73 @@ struct PairingImportSheet: View {
             } message: { context in
                 Text(overwriteAlertMessage(for: context))
             }
+            .alert(
+                Text(LocalizedStringResource(
+                    "settings.pairing.trust.consent.title",
+                    defaultValue: "Trust this server's certificate?"
+                )),
+                isPresented: $showingPinConsentAlert,
+                presenting: pinConsentContext
+            ) { context in
+                Button {
+                    beginImport(
+                        context.payload,
+                        target: context.target,
+                        gatewayPin: context.gatewayPin,
+                        fileServerPin: context.fileServerPin
+                    )
+                } label: {
+                    Text(LocalizedStringResource("settings.pairing.trust.consent.confirm",
+                                                 defaultValue: "Trust & Connect"))
+                }
+                Button(role: .cancel) {
+                    abandonImport(target: context.target, freshlyMinted: context.freshlyMinted)
+                } label: {
+                    Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
+                }
+            } message: { context in
+                Text(pinConsentMessage(for: context))
+            }
+            .alert(
+                // Deliberately generic: two of the five blocks are NOT a mismatch
+                // (the code named no key; the key type can't be pinned), and a
+                // title claiming otherwise would misdescribe them.
+                Text(LocalizedStringResource(
+                    "settings.pairing.trust.blocked.title",
+                    defaultValue: "Can't verify this server"
+                )),
+                isPresented: $showingTrustBlockAlert,
+                presenting: trustBlockContext
+            ) { context in
+                if let override = context.override {
+                    Button(role: .destructive) {
+                        // Re-resolves with this lane's override accepted, so the
+                        // pin that gets stored is re-derived from a FRESH probe
+                        // rather than from the stale signals behind this alert.
+                        // The EXACT accepted action is carried so a server that
+                        // changed in between cannot silently convert this consent
+                        // into a different one — and prior lanes' acceptances are
+                        // carried forward so two blocked lanes can both resolve.
+                        var accepted = context.accepted
+                        accepted[context.lane] = override
+                        resolveTrustThenImport(
+                            context.payload,
+                            target: context.target,
+                            freshlyMinted: context.freshlyMinted,
+                            acceptedOverrides: accepted
+                        )
+                    } label: {
+                        Text(overrideButtonTitle(for: override))
+                    }
+                }
+                Button(role: .cancel) {
+                    abandonImport(target: context.target, freshlyMinted: context.freshlyMinted)
+                } label: {
+                    Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
+                }
+            } message: { context in
+                Text(trustBlockMessage(for: context))
+            }
         }
         #if os(macOS)
         .frame(minWidth: 460, minHeight: 420)
@@ -211,7 +346,12 @@ struct PairingImportSheet: View {
         // mid-run dismissal could race the unstructured persistence Task. Once
         // `.done`, dismissal is allowed again (Done / Cancel).
         .interactiveDismissDisabled(phase == .running)
-        .onDisappear { handleDisappear() }
+        .onDisappear {
+            // Covers swipe-dismiss and window close during a trust probe — the
+            // Cancel button is not the only way out.
+            invalidatePendingImport()
+            handleDisappear()
+        }
     }
 
     /// Title for the overwrite alert — computed from the pending context (the
@@ -369,9 +509,30 @@ struct PairingImportSheet: View {
             inlineError = message(for: error)
             restartScanner()
         case .success(let payload):
+            // Same generation guard as the trust probe: planning also awaits, and
+            // `planPairingImport` MINTS the roster draft for a free-target custom
+            // import before it returns. Cancelling mid-plan would otherwise leave
+            // that draft orphaned and let the resumed task start a fresh import.
+            operationGeneration &+= 1
+            let generation = operationGeneration
             planning = true
             Task {
                 let plan = await viewModel.planPairingImport(payload, lockedTarget: lockedTarget)
+                guard generation == operationGeneration else {
+                    // Abandoned while planning. This Task is the only holder of
+                    // the minted target, so it owns the cleanup. `.blocked` never
+                    // mints (the cap case fails before minting; a kind mismatch
+                    // implies a locked target, which never mints).
+                    if isFreshlyMinted(payload) {
+                        switch plan {
+                        case .ready(let target), .needsOverwriteConfirm(let target, _, _):
+                            viewModel.discardPairingDraft(target)
+                        case .blocked:
+                            break
+                        }
+                    }
+                    return
+                }
                 planning = false
                 apply(plan, payload: payload)
             }
@@ -396,22 +557,26 @@ struct PairingImportSheet: View {
         case .needsOverwriteConfirm(let target, let existingURL, let newURL):
             // A brand-new custom (free-target import) means the plan minted a
             // draft for it — alert-cancel must discard that draft again.
-            let freshlyMinted: Bool = {
-                guard lockedTarget == nil, case .custom = payload.kind else { return false }
-                return true
-            }()
             overwriteContext = OverwriteContext(
                 payload: payload,
                 target: target,
                 existingURL: existingURL,
                 newURL: newURL,
-                freshlyMinted: freshlyMinted
+                freshlyMinted: isFreshlyMinted(payload)
             )
             showingOverwriteAlert = true
 
         case .ready(let target):
-            beginImport(payload, target: target)
+            resolveTrustThenImport(payload, target: target, freshlyMinted: isFreshlyMinted(payload))
         }
+    }
+
+    /// A brand-new custom (free-target) import means the plan minted an in-memory
+    /// roster draft — every path that abandons the import must discard it again,
+    /// or a phantom empty row lingers in the gateway list.
+    private func isFreshlyMinted(_ payload: PairingPayload) -> Bool {
+        guard lockedTarget == nil, case .custom = payload.kind else { return false }
+        return true
     }
 
     private func cancelOverwrite(_ context: OverwriteContext) {
@@ -420,6 +585,228 @@ struct PairingImportSheet: View {
         }
         overwriteContext = nil
         restartScanner()
+    }
+
+    // MARK: - Trust resolution (runs BEFORE anything persists)
+
+    /// Probe both lanes unpinned, decide, and only then import.
+    ///
+    /// This is the single gate every import path funnels through — the direct
+    /// `.ready` path and the overwrite confirmation alike. Nothing here writes to
+    /// defaults, iCloud, or the Keychain; `beginImport` is reached only with pins
+    /// that have been checked against the key the server actually presented.
+    private func resolveTrustThenImport(
+        _ payload: PairingPayload,
+        target: RemoteAgentRef,
+        freshlyMinted: Bool,
+        acceptedOverrides: [PairingTrustLane: PairingTrustOverride] = [:]
+    ) {
+        overwriteContext = nil
+        // Supersede any resolution already in flight, then claim this identity.
+        operationGeneration &+= 1
+        let generation = operationGeneration
+        pendingTrustTarget = target
+        pendingTrustFreshlyMinted = freshlyMinted
+        planning = true
+        Task {
+            let resolution = await viewModel.resolvePairingTrust(
+                payload, acceptedOverrides: acceptedOverrides)
+
+            // Abandoned while the probe was in flight (Cancel, swipe-dismiss, or
+            // a superseding resolution). Whoever invalidated us owns the cleanup,
+            // including the roster draft — do NOT persist, and do NOT raise an
+            // alert for an import nobody is waiting for.
+            guard generation == operationGeneration else { return }
+
+            planning = false
+            pendingTrustTarget = nil
+            pendingTrustFreshlyMinted = false
+
+            switch resolution {
+            case .proceed(let gatewayPin, let fileServerPin):
+                beginImport(payload, target: target,
+                            gatewayPin: gatewayPin, fileServerPin: fileServerPin)
+
+            case .needsPinConsent(let gatewayPin, let fileServerPin, let lanes):
+                pinConsentContext = PinConsentContext(
+                    payload: payload, target: target,
+                    gatewayPin: gatewayPin, fileServerPin: fileServerPin,
+                    lanes: lanes, freshlyMinted: freshlyMinted
+                )
+                showingPinConsentAlert = true
+
+            case .blocked(let lane, let block, let override):
+                trustBlockContext = TrustBlockContext(
+                    payload: payload, target: target, lane: lane, block: block,
+                    override: override, accepted: acceptedOverrides,
+                    freshlyMinted: freshlyMinted
+                )
+                showingTrustBlockAlert = true
+
+            case .unverifiableWhileUnreachable(let lane, _):
+                // A claim that could not be checked because the server was not
+                // reachable. Importing would persist an unverified pin — the
+                // exact thing this gate exists to prevent — so this is a retry,
+                // not a failure of the code.
+                inlineError = String(
+                    format: String(
+                        localized: "settings.pairing.trust.unreachable",
+                        defaultValue: "Couldn't reach %@ to check its certificate against this code. Try again when you can reach it."
+                    ),
+                    lane == .gateway
+                        ? String(localized: "settings.pairing.trust.subject.gateway.inline",
+                                 defaultValue: "the gateway")
+                        : String(localized: "settings.pairing.trust.subject.file.inline",
+                                 defaultValue: "the file server")
+                )
+                abandonImport(target: target, freshlyMinted: freshlyMinted)
+            }
+        }
+    }
+
+    /// Abandon an import that was never persisted, leaving no draft behind.
+    private func abandonImport(target: RemoteAgentRef, freshlyMinted: Bool) {
+        // Invalidate first: a resolution may still be in flight (the user can
+        // reach this from an alert raised by an EARLIER resolution).
+        operationGeneration &+= 1
+        pendingTrustTarget = nil
+        pendingTrustFreshlyMinted = false
+        planning = false
+        if freshlyMinted {
+            viewModel.discardPairingDraft(target)
+        }
+        pinConsentContext = nil
+        trustBlockContext = nil
+        restartScanner()
+    }
+
+    /// Invalidate an in-flight trust resolution and clean up after it.
+    ///
+    /// Called from the paths that leave the sheet entirely (explicit Cancel and
+    /// `onDisappear`). Separate from `abandonImport` because those paths have no
+    /// context in hand — the pending target is whatever the resolution claimed.
+    private func invalidatePendingImport() {
+        operationGeneration &+= 1
+        if let target = pendingTrustTarget, pendingTrustFreshlyMinted {
+            viewModel.discardPairingDraft(target)
+        }
+        pendingTrustTarget = nil
+        pendingTrustFreshlyMinted = false
+        planning = false
+        pinConsentContext = nil
+        trustBlockContext = nil
+    }
+
+    private func pinConsentMessage(for context: PinConsentContext) -> String {
+        let subject: String = {
+            if context.lanes.contains(.gateway) && context.lanes.contains(.fileServer) {
+                return String(localized: "settings.pairing.trust.consent.both",
+                              defaultValue: "The gateway and its file server use certificates")
+            }
+            if context.lanes.contains(.fileServer) {
+                return String(localized: "settings.pairing.trust.consent.file",
+                              defaultValue: "The file server uses a certificate")
+            }
+            return String(localized: "settings.pairing.trust.consent.gateway",
+                          defaultValue: "This gateway uses a certificate")
+        }()
+        // "matching what this code names" rather than "the same key": with both
+        // lanes involved these may be two DIFFERENT certificates, each matching
+        // its own claim.
+        return String(
+            format: String(
+                localized: "settings.pairing.trust.consent.body",
+                defaultValue: "%@ that no one else vouches for, matching what this setup code names. Conduck will trust those exact keys from now on — and only those."
+            ),
+            subject
+        )
+    }
+
+    /// The override button's title says what it will DO, because the two override
+    /// actions differ in kind: one keeps standard verification, the other starts
+    /// trusting an unvouched-for key permanently.
+    private func overrideButtonTitle(for override: PairingTrustOverride) -> String {
+        switch override {
+        case .proceedUnderOrdinaryTrust:
+            return String(localized: "settings.pairing.trust.blocked.override.ignoreClaim",
+                          defaultValue: "Ignore the code's key")
+        case .pinPresentedKey:
+            return String(localized: "settings.pairing.trust.blocked.override.pin",
+                          defaultValue: "Trust this server anyway")
+        }
+    }
+
+    /// What proceeding would concretely do — appended to every block message that
+    /// offers an override. Pinning shows the fingerprint, because the user cannot
+    /// meaningfully consent to trusting a key they were never shown.
+    private func overrideDisclosure(for override: PairingTrustOverride) -> String {
+        switch override {
+        case .proceedUnderOrdinaryTrust:
+            return String(
+                localized: "settings.pairing.trust.blocked.disclosure.ignoreClaim",
+                defaultValue: "\n\nContinuing ignores the key this code names and uses standard certificate checks instead, which this server already passes."
+            )
+        case .pinPresentedKey(let fingerprintHex):
+            return String(
+                format: String(
+                    localized: "settings.pairing.trust.blocked.disclosure.pin",
+                    defaultValue: "\n\nContinuing trusts the key this server is presenting, permanently and exclusively:\n%@"
+                ),
+                fingerprintHex
+            )
+        }
+    }
+
+    /// The refusal, plus — when proceeding is possible — exactly what proceeding
+    /// would do. A "Connect anyway" button whose consequence is unstated is not
+    /// informed consent.
+    private func trustBlockMessage(for context: TrustBlockContext) -> String {
+        blockReason(for: context) + (context.override.map(overrideDisclosure(for:)) ?? "")
+    }
+
+    /// Per-block copy. Each case has a different remedy, so each gets its own
+    /// sentence rather than one generic refusal.
+    private func blockReason(for context: TrustBlockContext) -> String {
+        let subject = context.lane == .gateway
+            ? String(localized: "settings.pairing.trust.subject.gateway", defaultValue: "The gateway")
+            : String(localized: "settings.pairing.trust.subject.file", defaultValue: "The file server")
+
+        switch context.block {
+        case .pinContradictsLiveServer:
+            return String(
+                format: String(
+                    localized: "settings.pairing.trust.block.contradiction",
+                    defaultValue: "%@ has a valid certificate, but its key is not the one this setup code names. That can mean something on the network is inspecting the connection, or that the code is out of date."
+                ), subject)
+
+        case .untrustedAndPinMismatch:
+            return String(
+                format: String(
+                    localized: "settings.pairing.trust.block.untrustedMismatch",
+                    defaultValue: "%@'s certificate isn't trusted, and its key is not the one this setup code names. Get a fresh code from whoever set the server up."
+                ), subject)
+
+        case .unverifiablePin:
+            return String(
+                format: String(
+                    localized: "settings.pairing.trust.block.unverifiable",
+                    defaultValue: "This setup code names a specific key for %@, but Conduck couldn't read the key the server presented, so it can't check them against each other."
+                ), subject.lowercased())
+
+        case .untrustedWithoutClaim:
+            return String(
+                format: String(
+                    localized: "settings.pairing.trust.block.noClaim",
+                    defaultValue: "%@'s certificate isn't trusted, and this setup code doesn't say which key to expect. A code for a self-signed server normally includes it."
+                ), subject)
+
+        case .untrustedWithoutPinnableKey:
+            return String(
+                format: String(
+                    localized: "settings.pairing.trust.block.unpinnable",
+                    defaultValue: "%@'s certificate isn't trusted and uses a key type Conduck can't pin. Reissue it with RSA 2048/3072/4096 or EC P-256/P-384."
+                ), subject)
+        }
     }
 
     /// User-facing copy per typed parse error — the ONLY error surface for a
@@ -443,8 +830,19 @@ struct PairingImportSheet: View {
 
     // MARK: - Stage run
 
-    private func beginImport(_ payload: PairingPayload, target: RemoteAgentRef) {
+    /// - Parameters:
+    ///   - gatewayPin/fileServerPin: the RESOLVED certificate pins from
+    ///     `resolveTrustThenImport` — `nil` meaning ordinary system trust. Never
+    ///     the payload's claimed values; see `SettingsViewModel+PairingTrust`.
+    private func beginImport(
+        _ payload: PairingPayload,
+        target: RemoteAgentRef,
+        gatewayPin: String?,
+        fileServerPin: String?
+    ) {
         overwriteContext = nil
+        pinConsentContext = nil
+        trustBlockContext = nil
         activePayload = payload
         activeTarget = target
         stageStatus = [:]
@@ -457,15 +855,26 @@ struct PairingImportSheet: View {
         importedHookFired = false
         connectedHookFired = false
         phase = .running
-        Task { await runStages(payload, target: target) }
+        Task {
+            await runStages(payload, target: target,
+                            gatewayPin: gatewayPin, fileServerPin: fileServerPin)
+        }
     }
 
-    private func runStages(_ payload: PairingPayload, target: RemoteAgentRef) async {
+    private func runStages(
+        _ payload: PairingPayload,
+        target: RemoteAgentRef,
+        gatewayPin: String?,
+        fileServerPin: String?
+    ) async {
         // Stage 1 — persist the configuration. Three-way outcome: see
         // `PairingImportOutcome` (the gateway half can commit even when the
         // file-server credential write fails).
         stageStatus[.save] = .running
-        switch await viewModel.executePairingImport(payload, target: target) {
+        switch await viewModel.executePairingImport(
+            payload, target: target,
+            resolvedGatewayPin: gatewayPin, resolvedFileServerPin: fileServerPin
+        ) {
         case .failed:
             stageStatus[.save] = .failed(String(
                 localized: "settings.pairing.error.saveFailed",

@@ -164,14 +164,30 @@ extension SettingsViewModel {
     /// (the shared commit point), so an import of the first gateway makes it the
     /// default exactly like a manual save; a later import never touches the
     /// user's default pointer.
-    func executePairingImport(_ payload: PairingPayload, target: RemoteAgentRef) async -> PairingImportOutcome {
+    /// - Parameters:
+    ///   - resolvedGatewayPin: the certificate pin to persist for the gateway —
+    ///     `nil` for ordinary system trust. This is the DECIDED value from
+    ///     `resolvePairingTrust`, never `payload.certFP`. The payload's claim is
+    ///     an assertion by whoever generated the code; it reaches storage only
+    ///     after it has been checked against the key the server actually
+    ///     presented and, where an exception is involved, explicitly accepted.
+    ///   - resolvedFileServerPin: the same, for the file-server lane (already
+    ///     accounts for the same-host inheritance rule — see
+    ///     `claimedFileServerPin(for:)`).
+    func executePairingImport(
+        _ payload: PairingPayload,
+        target: RemoteAgentRef,
+        resolvedGatewayPin: String?,
+        resolvedFileServerPin: String?
+    ) async -> PairingImportOutcome {
         // Seed the per-ref editor buffers `saveRemoteAgent` commits from.
         // The auth scheme MUST be seeded before the save — especially for a
         // keyless payload, where an unseeded buffer would fall back to
         // `.bearer` and fail the token guard.
         remoteAgentURLStrings[target] = payload.url.absoluteString
         remoteAgentAuthSchemes[target] = payload.authScheme
-        remoteAgentCertFingerprints[target] = payload.certFP ?? ""
+        // The DECIDED pin, never `payload.certFP` — see the parameter docs.
+        remoteAgentCertFingerprints[target] = resolvedGatewayPin ?? ""
         var customName: String? = nil
         if case .custom(let name) = payload.kind {
             customName = name
@@ -224,20 +240,15 @@ extension SettingsViewModel {
                 outcome = .committedGatewayOnly
             }
             if outcome == .committed {
-                // File-server pin: an explicit payload pin wins; else, when the
-                // wizard declared a self-signed recipe AND the file-server rides
-                // the same host as the gateway, the gateway pin covers it too.
-                // Canonicalized through the SAME normalization the save path
-                // uses, so the persisted mirror can never diverge from the
+                // File-server pin: the DECIDED value. The claim-side inheritance
+                // rule (explicit pin wins, else a same-host self-signed gateway
+                // pin covers it) now lives in `claimedFileServerPin(for:)`, which
+                // is what the trust probe CHECKED — computing it a second time
+                // here is how a check and a write drift apart.
+                // Still canonicalized through the SAME normalization the save
+                // path uses, so the persisted mirror can never diverge from the
                 // draft signature's colon-stripped form.
-                let rawPin: String?
-                if let explicit = fileServer.certFP {
-                    rawPin = explicit
-                } else if payload.transport == .selfsigned, fileServer.url.host == payload.url.host {
-                    rawPin = payload.certFP
-                } else {
-                    rawPin = nil
-                }
+                let rawPin: String? = resolvedFileServerPin
                 let pin: String?
                 if case .valid(let hex) = Self.normalizeCertFingerprint(rawPin) {
                     pin = hex

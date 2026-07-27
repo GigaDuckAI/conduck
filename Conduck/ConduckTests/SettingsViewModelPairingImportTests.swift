@@ -281,7 +281,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             transport: "tailscale"
         )
 
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A complete builtin payload must commit.")
 
         let storedURL = await SettingsManager.shared.getRemoteAgentURL(for: openclaw)
@@ -321,7 +321,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             return XCTFail("Expected a minted custom draft target, got \(plan).")
         }
 
-        let outcome = await vm.executePairingImport(payload, target: target)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: target)
         XCTAssertEqual(outcome, .committed, "A named keyless custom payload must commit.")
 
         let roster = await SettingsManager.shared.customGateway(id: id)
@@ -349,7 +349,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             return XCTFail("Expected a minted custom draft target, got \(plan).")
         }
 
-        let outcome = await vm.executePairingImport(payload, target: target)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: target)
         XCTAssertEqual(outcome, .committed)
 
         let roster = await SettingsManager.shared.customGateway(id: id)
@@ -363,7 +363,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let vm = await makeVM()
         let payload = try makePayload(kind: "openclaw", auth: "none", token: nil)
 
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A keyless builtin payload must commit with no Keychain dependency.")
 
         let scheme = await SettingsManager.shared.getRemoteAgentAuthScheme(for: openclaw)
@@ -392,7 +392,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
                                                     newURL: "https://new.example.test:18789"))
 
         // …and a confirmed execute replaces the slots wholesale.
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed)
         let url = await SettingsManager.shared.getRemoteAgentURL(for: openclaw)
         XCTAssertEqual(url?.absoluteString, "https://new.example.test:18789")
@@ -421,7 +421,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             transport: "selfsigned"
         )
 
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A payload with a complete fileServer block must commit on a Keychain-capable host.")
 
         let fsURL = await SettingsManager.shared.getFileServerURL(for: openclaw)
@@ -447,7 +447,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         // pointer was actually SET, not just falling back to `.openclaw`.
         let payload = try makePayload(kind: "hermes", url: "https://hermes.example.test:8642",
                                       auth: "none", token: nil)
-        let outcome = await vm.executePairingImport(payload, target: hermes)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: hermes)
         XCTAssertEqual(outcome, .committed)
 
         let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
@@ -467,7 +467,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let vm = await makeVM()
         let payload = try makePayload(kind: "hermes", url: "https://hermes.example.test:8642",
                                       auth: "none", token: nil)
-        let outcome = await vm.executePairingImport(payload, target: hermes)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: hermes)
         XCTAssertEqual(outcome, .committed)
 
         let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
