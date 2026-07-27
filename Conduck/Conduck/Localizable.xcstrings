@@ -8578,6 +8578,226 @@
         }
       }
     },
+    "settings.pairing.review.certificate" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Certificate"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.certificate.named" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This code names the exact key to expect. Conduck checks it against the key the server presents before saving anything. If the certificate is already trusted on its own, that's a one-off check; if it isn't, Conduck asks before trusting the key from then on."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.certificate.standard" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Standard checks. This code doesn't name a particular key to expect."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.connect" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Connect"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.default" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New chats"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.default.value" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Will use this gateway — it's your first one."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.different" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Use a different code"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.files" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Files go to"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.files.kept" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Files keep going to"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.files.kept.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This code doesn't set up file transfer, so your current setup stays."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.files.replacing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Replacing %@"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Where this code points"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.messages" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Messages go to"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.notice.changed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This gateway's settings changed while you were looking at this screen. Nothing was connected — the details above are the current ones. Check them again before you continue."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.replaceAndConnect" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Replace & Connect"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.replacing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Replacing"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.replacing.named" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Replacing %@"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.replacing.sameAddress" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The same address. The saved key and certificate settings are replaced."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.warning.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Messages and files you send through this gateway go to this server. Anyone with this code can use every capability the gateway permits — depending on its configuration that may include running tools, and reading or changing files in its shared folder. Continue only if you recognize this address and trust whoever gave you the code."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.warning.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check this before you connect"
+          }
+        }
+      }
+    },
     "settings.pairing.scanner.prompt" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8666,6 +8886,17 @@
         }
       }
     },
+    "settings.pairing.tailscale.privateRelay" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Already signed in and it still fails? Turn off iCloud Private Relay — Settings › your name › iCloud › Private Relay. It can take over name lookups even while Tailscale says it is connected, so this gateway's address is looked up on the public internet instead of inside your tailnet."
+          }
+        }
+      }
+    },
     "settings.pairing.tofu.body" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -8695,6 +8926,237 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Your setup code expected a publicly-trusted certificate here, not a self-signed one. On an untrusted network that can mean something is intercepting the connection. Re-run the setup on your server to confirm before you trust this."
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.block.contradiction" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ has a valid certificate, but its key is not the one this setup code names. That can mean something on the network is inspecting the connection, or that the code is out of date."
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.block.noClaim" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@'s certificate isn't trusted, and this setup code doesn't say which key to expect. A code for a self-signed server normally includes it."
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.block.unpinnable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@'s certificate isn't trusted and uses a key type Conduck can't pin. Reissue it with RSA 2048/3072/4096 or EC P-256/P-384."
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.block.untrustedMismatch" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@'s certificate isn't trusted, and its key is not the one this setup code names. Get a fresh code from whoever set the server up."
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.block.unverifiable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This setup code names a specific key for %@, but Conduck couldn't read the key the server presented, so it can't check them against each other."
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.blocked.disclosure.ignoreClaim" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "\n\nContinuing ignores the key this code names and uses standard certificate checks instead, which this server already passes."
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.blocked.disclosure.pin" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "\n\nContinuing trusts the key this server is presenting, permanently and exclusively:\n%@"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.blocked.override.ignoreClaim" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ignore the code's key"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.blocked.override.pin" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Trust this server anyway"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.blocked.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Can't verify this server"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.consent.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ that no one else vouches for, matching what this setup code names. Conduck will trust those exact keys from now on — and only those."
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.consent.both" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The gateway and its file server use certificates"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.consent.confirm" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Trust & Connect"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.consent.file" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The file server uses a certificate"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.consent.gateway" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This gateway uses a certificate"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.consent.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Trust this server's certificate?"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.subject.file" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The file server"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.subject.file.inline" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "the file server"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.subject.gateway" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The gateway"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.subject.gateway.inline" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "the gateway"
+          }
+        }
+      }
+    },
+    "settings.pairing.trust.unreachable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach %@ to check its certificate against this code. Try again when you can reach it."
           }
         }
       }
