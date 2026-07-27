@@ -60,6 +60,23 @@ Out of scope (not operated by us — report to the respective project or vendor)
 A flaw in **how Conduck integrates** with any of those services is very much in
 scope — when in doubt, send it in and it will be routed.
 
+## A note on setup codes
+
+A Conduck setup code (`conduck-setup:v1:…`) is a **bearer credential**. It carries
+your gateway token and, when file transfer is configured, the file-server
+credential — so anyone holding the code gets every capability that gateway
+permits, until you rotate those secrets.
+
+Because the entire payload is chosen by whoever produced the code, nothing inside
+it can prove where it came from. Conduck therefore treats importing one as a
+consent step rather than a verification: before anything is contacted or stored,
+the app shows the exact destination it is about to save and what accepting
+grants, and it settles the certificate question against the live server rather
+than against the code's claim. Reports about that boundary are very much in
+scope — a fact the review screen states wrongly, a way to reach the network or
+storage before the user consents, or a way to steer the certificate decision by
+choosing what the code contains.
+
 ## Safe harbor
 
 Security research conducted in good faith and in line with the policy at

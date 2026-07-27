@@ -281,7 +281,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             transport: "tailscale"
         )
 
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A complete builtin payload must commit.")
 
         let storedURL = await SettingsManager.shared.getRemoteAgentURL(for: openclaw)
@@ -321,7 +321,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             return XCTFail("Expected a minted custom draft target, got \(plan).")
         }
 
-        let outcome = await vm.executePairingImport(payload, target: target)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: target)
         XCTAssertEqual(outcome, .committed, "A named keyless custom payload must commit.")
 
         let roster = await SettingsManager.shared.customGateway(id: id)
@@ -349,7 +349,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             return XCTFail("Expected a minted custom draft target, got \(plan).")
         }
 
-        let outcome = await vm.executePairingImport(payload, target: target)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: target)
         XCTAssertEqual(outcome, .committed)
 
         let roster = await SettingsManager.shared.customGateway(id: id)
@@ -363,7 +363,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let vm = await makeVM()
         let payload = try makePayload(kind: "openclaw", auth: "none", token: nil)
 
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A keyless builtin payload must commit with no Keychain dependency.")
 
         let scheme = await SettingsManager.shared.getRemoteAgentAuthScheme(for: openclaw)
@@ -392,7 +392,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
                                                     newURL: "https://new.example.test:18789"))
 
         // …and a confirmed execute replaces the slots wholesale.
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed)
         let url = await SettingsManager.shared.getRemoteAgentURL(for: openclaw)
         XCTAssertEqual(url?.absoluteString, "https://new.example.test:18789")
@@ -421,7 +421,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             transport: "selfsigned"
         )
 
-        let outcome = await vm.executePairingImport(payload, target: openclaw)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A payload with a complete fileServer block must commit on a Keychain-capable host.")
 
         let fsURL = await SettingsManager.shared.getFileServerURL(for: openclaw)
@@ -447,7 +447,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         // pointer was actually SET, not just falling back to `.openclaw`.
         let payload = try makePayload(kind: "hermes", url: "https://hermes.example.test:8642",
                                       auth: "none", token: nil)
-        let outcome = await vm.executePairingImport(payload, target: hermes)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: hermes)
         XCTAssertEqual(outcome, .committed)
 
         let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
@@ -467,7 +467,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let vm = await makeVM()
         let payload = try makePayload(kind: "hermes", url: "https://hermes.example.test:8642",
                                       auth: "none", token: nil)
-        let outcome = await vm.executePairingImport(payload, target: hermes)
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: hermes)
         XCTAssertEqual(outcome, .committed)
 
         let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
@@ -501,5 +501,173 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         XCTAssertNil(storedURL, "A discarded draft must leave nothing in the store.")
         let roster = await SettingsManager.shared.customGateway(id: id)
         XCTAssertNil(roster, "A discarded draft must have no persisted roster entry.")
+    }
+
+    // MARK: - Review (what the card is told, before anything is written)
+
+    /// THE assertion the whole card rests on: the address the user was shown is
+    /// the address that ends up in storage. A card that renders anything else —
+    /// the raw payload URL, a bare host, a prettified form — is showing a
+    /// destination the app is not going to use, on the one screen whose job is
+    /// to be believed.
+    func testReviewedDestinationIsExactlyWhatGetsPersisted() async throws {
+        let vm = await makeVM()
+        // A URL that normalization changes, so an unnormalized card would fail.
+        let payload = try makePayload(
+            kind: "custom", name: "Home LLM",
+            url: "https://llm.example.test:8080/tenant/v1/chat/completions",
+            auth: "none", token: nil
+        )
+
+        let plan = await vm.planPairingImport(payload, lockedTarget: nil)
+        guard case .ready(let target) = plan else {
+            return XCTFail("Expected a minted custom draft target, got \(plan).")
+        }
+        let review = await vm.pairingReview(for: payload, target: target, freshlyMinted: true)
+
+        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: target)
+        XCTAssertEqual(outcome, .committed)
+
+        let storedURL = await SettingsManager.shared.getRemoteAgentURL(for: target)
+        XCTAssertEqual(
+            review.gatewayDestination, storedURL?.absoluteString,
+            "The reviewed destination and the persisted URL must be byte-identical."
+        )
+        XCTAssertEqual(review.gatewayDestination, "https://llm.example.test:8080/tenant")
+    }
+
+    /// A review taken BEFORE the import must not describe the state the import
+    /// creates — the whole point is that it describes what would happen.
+    func testReviewOfAFreshTargetReportsNothingToReplaceAndBecomingDefault() async throws {
+        let vm = await makeVM()
+        let payload = try makePayload(kind: "openclaw", auth: "none", token: nil)
+
+        let review = await vm.pairingReview(for: payload, target: openclaw, freshlyMinted: false)
+
+        XCTAssertNil(review.previousGatewayDestination)
+        XCTAssertTrue(review.becomesDefault,
+                      "With no gateway configured, this import also becomes the default.")
+        XCTAssertNil(review.fileLane, "No incoming block and no existing lane — no row.")
+    }
+
+    /// The overwrite case, read from the STORE rather than from the plan's
+    /// snapshot — which is what lets the card be re-read at Connect and compared.
+    func testReviewOfAConfiguredTargetReportsTheAddressItReplaces() async throws {
+        let vm = await makeVM()
+        let first = try makePayload(kind: "openclaw", url: "https://old.example.test:18789",
+                                    auth: "none", token: nil)
+        let firstOutcome = await vm.executePairingImportUsingPayloadPins(first, target: openclaw)
+        XCTAssertEqual(firstOutcome, .committed)
+
+        let second = try makePayload(kind: "openclaw", url: "https://new.example.test:18789",
+                                     auth: "none", token: nil)
+        let review = await vm.pairingReview(for: second, target: openclaw, freshlyMinted: false)
+
+        XCTAssertEqual(review.previousGatewayDestination, "https://old.example.test:18789")
+        XCTAssertTrue(review.gatewayDestinationChanges)
+        XCTAssertFalse(review.becomesDefault,
+                       "A gateway is already configured, so this import does not re-point the default.")
+    }
+
+    /// A gateway-only code over a target with a configured lane must say the lane
+    /// survives. Silence here reads as "my file transfer is gone" — and the
+    /// keep-existing rule is exactly the kind of behaviour a user cannot infer.
+    func testReviewNamesTheFileLaneAGatewayOnlyCodeKeeps() async throws {
+        try await requireFileServerKeychainOrSkip(for: openclaw)
+        let vm = await makeVM()
+        let withFiles = try makePayload(
+            kind: "openclaw", auth: "none", token: nil,
+            fileServer: ["url": "https://files.example.test", "credential": "cred"]
+        )
+        let seedOutcome = await vm.executePairingImportUsingPayloadPins(withFiles, target: openclaw)
+        XCTAssertEqual(seedOutcome, .committed)
+
+        let gatewayOnly = try makePayload(kind: "openclaw", url: "https://gw2.example.test",
+                                          auth: "none", token: nil)
+        let review = await vm.pairingReview(for: gatewayOnly, target: openclaw, freshlyMinted: false)
+
+        guard case .keepsExisting(let destination) = review.fileLane else {
+            return XCTFail("Expected the existing lane to be named, got \(String(describing: review.fileLane)).")
+        }
+        XCTAssertEqual(destination, "https://files.example.test")
+    }
+
+    /// A freshly minted custom stays nameless: the only name available is the one
+    /// the CODE chose, and the card must never render it.
+    func testReviewOfAFreshlyMintedCustomCarriesNoName() async throws {
+        let vm = await makeVM()
+        let payload = try makePayload(kind: "custom", name: "Definitely Your Own Server",
+                                      auth: "none", token: nil)
+
+        let plan = await vm.planPairingImport(payload, lockedTarget: nil)
+        guard case .ready(let target) = plan else {
+            return XCTFail("Expected a minted custom draft target, got \(plan).")
+        }
+        let review = await vm.pairingReview(for: payload, target: target, freshlyMinted: true)
+
+        XCTAssertNil(review.targetName)
+        vm.discardPairingDraft(target)
+    }
+
+    /// The card doubles as the snapshot the commit is checked against, so it has
+    /// to read STORAGE. A change made without this view model's knowledge — a
+    /// second window, a peer's iCloud sync — lands in storage before any cached
+    /// reload reaches here, and a card built from caches would describe a
+    /// configuration that had already moved.
+    func testReviewReadsStorageNotTheViewModelsCaches() async throws {
+        let vm = await makeVM()
+        // Write through the manager directly, bypassing the VM entirely.
+        await SettingsManager.shared.setRemoteAgentURL(
+            URL(string: "https://peer-set.example.test")!, for: openclaw
+        )
+        let payload = try makePayload(kind: "openclaw", url: "https://scanned.example.test",
+                                      auth: "none", token: nil)
+
+        let review = await vm.pairingReview(for: payload, target: openclaw, freshlyMinted: false)
+
+        XCTAssertEqual(review.previousGatewayDestination, "https://peer-set.example.test",
+                       "A change that reached storage without a VM reload must still show on the card.")
+        // A bare URL with no usable credential is not a SEND-ABLE gateway, and
+        // `becomesDefault` is deliberately computed with the same predicate
+        // `saveRemoteAgent`'s first-gateway bootstrap uses — so this import would
+        // still become the default, and the card says so.
+        XCTAssertTrue(review.becomesDefault)
+    }
+
+    /// The mechanism the commit gate rests on: the card is rebuilt immediately
+    /// before persisting and must not compare equal if the target moved while the
+    /// user was reading, probing, or deliberating over a certificate alert.
+    func testRebuiltReviewDoesNotCompareEqualAfterTheTargetMoves() async throws {
+        let vm = await makeVM()
+        let payload = try makePayload(kind: "openclaw", url: "https://scanned.example.test",
+                                      auth: "none", token: nil)
+
+        let reviewed = await vm.pairingReview(for: payload, target: openclaw, freshlyMinted: false)
+        await SettingsManager.shared.setRemoteAgentURL(
+            URL(string: "https://production.example.test")!, for: openclaw
+        )
+        let fresh = await vm.pairingReview(for: payload, target: openclaw, freshlyMinted: false)
+
+        XCTAssertNotEqual(reviewed, fresh,
+                          "The commit gate compares exactly these two — a slot that moved must break the comparison.")
+    }
+
+    /// Reviewing is a READ. If it wrote anything, the card would have persisted
+    /// the very configuration it exists to ask permission for.
+    func testReviewPersistsNothing() async throws {
+        let vm = await makeVM()
+        let payload = try makePayload(kind: "openclaw", auth: "none", token: nil)
+
+        _ = await vm.pairingReview(for: payload, target: openclaw, freshlyMinted: false)
+
+        let storedURL = await SettingsManager.shared.getRemoteAgentURL(for: openclaw)
+        XCTAssertNil(storedURL, "Building the review card must not configure the gateway.")
+        // `defaultRemoteAgentRef()` always resolves to something, so assert on
+        // the stored pointer itself: nothing may have been written.
+        XCTAssertNil(defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey),
+                     "Building the review card must not point the default anywhere.")
+        let configured = await SettingsManager.shared.configuredRemoteAgentRefs()
+        XCTAssertTrue(configured.isEmpty,
+                      "Building the review card must leave the configured set untouched.")
     }
 }

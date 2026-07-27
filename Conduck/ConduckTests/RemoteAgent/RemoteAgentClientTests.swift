@@ -319,6 +319,141 @@ final class RemoteAgentClientTests: XCTestCase {
                        "Bearer header MUST be set on the probe — the test verifies auth+connectivity.")
     }
 
+    // The pairing trust matrix must compare the key on the wire against the pin a
+    // scanned code claims EVEN WHEN ordinary trust already accepted the chain
+    // (`PairingTrustDecision`). `TestConnectionOutcome` carries the presented
+    // fingerprint only on its `.untrustedCert` arm, so the success arms would
+    // otherwise discard it and make that comparison impossible.
+    func testTestConnectionReportRetainsPresentedFingerprintOnSuccess() async throws {
+        let liveKey = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200,
+                httpVersion: "HTTP/1.1", headerFields: nil
+            )!
+            return (response, Data(#"{"data":[{"id":"llama3"}]}"#.utf8))
+        }
+
+        let report = try await RemoteAgentClient.shared.testConnectionReportForTesting(
+            backend: .openclaw,
+            url: baseURL,
+            token: token,
+            session: session,
+            presentedFingerprint: { liveKey }
+        )
+
+        XCTAssertEqual(report.outcome, .ok)
+        XCTAssertEqual(report.presentedFingerprintHex, liveKey,
+                       "The presented leaf fingerprint must survive the SUCCESS path, not just the untrusted-cert path.")
+    }
+
+    func testTestConnectionReportRetainsPresentedFingerprintOnEmptyModelList() async throws {
+        let liveKey = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"data":[]}"#.utf8))
+        }
+
+        let report = try await RemoteAgentClient.shared.testConnectionReportForTesting(
+            backend: .openclaw,
+            url: baseURL,
+            token: token,
+            session: session,
+            presentedFingerprint: { liveKey }
+        )
+
+        XCTAssertEqual(report.outcome, .okNoModels)
+        XCTAssertEqual(report.presentedFingerprintHex, liveKey,
+                       "`.okNoModels` is a success arm too — it must retain the fingerprint.")
+    }
+
+    func testTestConnectionReportRetainsPresentedFingerprintOnUntrustedCert() async throws {
+        let liveKey = "beef0123456789abcdefbeef0123456789abcdefbeef0123456789abcdefbeef"
+        MockURLProtocol.requestHandler = { _ in
+            throw URLError(.serverCertificateUntrusted)
+        }
+
+        let report = try await RemoteAgentClient.shared.testConnectionReportForTesting(
+            backend: .openclaw,
+            url: baseURL,
+            token: token,
+            session: session,
+            presentedFingerprint: { liveKey },
+            systemTrustRejected: { true }
+        )
+
+        XCTAssertEqual(report.outcome, .untrustedCert(presentedFingerprintHex: liveKey))
+        XCTAssertEqual(report.presentedFingerprintHex, liveKey,
+                       "The report's fingerprint must agree with the one embedded in the outcome — one capture, one value.")
+    }
+
+    // MARK: - Pairing trust probe (unpinned; handshake-completion semantics)
+
+    /// THE contract that separates this probe from Test Connection: a 401 proves
+    /// the TLS handshake was accepted and the password was wrong — two completely
+    /// different facts. Test Connection throws on 401, which would make the trust
+    /// matrix read an ordinarily-trusted server as unreachable and skip the
+    /// pin-contradiction check entirely.
+    func testPairingTrustProbeTreatsAnyHTTPResponseAsHandshakeCompletion() async {
+        for status in [200, 401, 403, 404, 500] {
+            MockURLProtocol.requestHandler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: status,
+                                               httpVersion: nil, headerFields: nil)!
+                return (response, Data(#"{"error":"nope"}"#.utf8))
+            }
+
+            let signals = await RemoteAgentClient.shared.pairingTrustProbeForTesting(
+                url: baseURL, token: token, payloadPinHex: nil, session: session)
+
+            XCTAssertTrue(signals.requestCompleted,
+                          "HTTP \(status) still proves the handshake was accepted.")
+            XCTAssertNil(signals.transportClass,
+                         "HTTP \(status) is not a transport failure.")
+        }
+    }
+
+    func testPairingTrustProbeCarriesTheClaimAndThePresentedKey() async {
+        let claimed = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+        let live = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+             Data(#"{"data":[]}"#.utf8))
+        }
+
+        let signals = await RemoteAgentClient.shared.pairingTrustProbeForTesting(
+            url: baseURL, token: token, payloadPinHex: claimed, session: session,
+            presentedFingerprint: { live })
+
+        XCTAssertEqual(signals.payloadPinHex, claimed, "The claim must be carried through for comparison, never probed under.")
+        XCTAssertEqual(signals.presentedFingerprintHex, live)
+        // Wired end to end: this is the enterprise-inspection row.
+        XCTAssertEqual(PairingTrustDecision.decide(signals), .blocked(.pinContradictsLiveServer))
+    }
+
+    func testPairingTrustProbeClassifiesAnUntrustedCertificate() async {
+        MockURLProtocol.requestHandler = { _ in throw URLError(.serverCertificateUntrusted) }
+
+        let signals = await RemoteAgentClient.shared.pairingTrustProbeForTesting(
+            url: baseURL, token: token, payloadPinHex: nil, session: session,
+            presentedFingerprint: { "beef0123456789abcdefbeef0123456789abcdefbeef0123456789abcdefbeef" },
+            systemTrustRejected: { true })
+
+        XCTAssertFalse(signals.requestCompleted)
+        XCTAssertEqual(signals.transportClass, .untrustedCert)
+    }
+
+    func testPairingTrustProbeReportsTransientFailureWithoutThrowing() async {
+        MockURLProtocol.requestHandler = { _ in throw URLError(.timedOut) }
+
+        let signals = await RemoteAgentClient.shared.pairingTrustProbeForTesting(
+            url: baseURL, token: token, payloadPinHex: nil, session: session)
+
+        XCTAssertFalse(signals.requestCompleted)
+        XCTAssertEqual(signals.transportClass, .timeout)
+        XCTAssertEqual(PairingTrustDecision.decide(signals), .unreachable(.timeout),
+                       "Unreachable must be a verdict the matrix can reason about, not an error that aborts the decision.")
+    }
+
     func testTestConnectionUnauthorizedMapsToAuthFailed() async {
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!

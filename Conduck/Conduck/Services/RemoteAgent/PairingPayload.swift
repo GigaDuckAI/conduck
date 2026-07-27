@@ -20,7 +20,10 @@
 // a bare enum). Both URLs are additionally held to `EndpointURLPolicy`
 // (https + real host + no `user:password@`), because a pairing string is
 // UNTRUSTED input — anyone can hand-craft one — and both URLs land verbatim
-// in App-Group UserDefaults + iCloud KVS on import.
+// in App-Group UserDefaults + iCloud KVS on import. For the same reason the
+// two free-form display strings (`gateway.name`, `gateway.model`) are held to
+// `sanitizedDisplayText`: they persist AND render, so control/bidi scalars and
+// unbounded length are rejected at parse time rather than downstream.
 //
 // Pure Foundation — compiles for iOS AND macOS (no UIKit/AppKit). NOT a
 // Watch-target member (pairing import is an iPhone/iPad/Mac flow).
@@ -41,7 +44,9 @@ enum PairingParseError: Error, Equatable {
     /// Bad base64 / bad JSON / missing-or-invalid required field / bearer
     /// without token / custom without nonempty name / bad certFP /
     /// missing `"v"` / a URL with no host or carrying `user:password@`
-    /// userinfo (`EndpointURLPolicy` — both URLs, no exceptions).
+    /// userinfo (`EndpointURLPolicy` — both URLs, no exceptions) / a
+    /// display string (`name`, `model`) carrying control or bidi scalars
+    /// or exceeding its length cap (`sanitizedDisplayText`).
     case malformed
     /// Gateway or fileServer URL parses but its scheme isn't https — https
     /// is mandatory (`spec.md` Architectural Invariants); surfaced as its
@@ -187,7 +192,7 @@ struct PairingPayload: Equatable, Sendable {
             else {
                 throw PairingParseError.malformed
             }
-            kind = .custom(name: name)
+            kind = .custom(name: try sanitizedDisplayText(name, maxLength: maxNameLength))
         } else {
             throw PairingParseError.malformed
         }
@@ -212,14 +217,16 @@ struct PairingPayload: Equatable, Sendable {
 
         let certFP = try normalizedCertFP(gateway["certFP"])
 
-        let model: String? = {
-            guard
-                let raw = (gateway["model"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                !raw.isEmpty
-            else { return nil }
-            return raw
-        }()
+        let model: String?
+        if
+            let rawModel = (gateway["model"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawModel.isEmpty
+        {
+            model = try sanitizedDisplayText(rawModel, maxLength: maxModelLength)
+        } else {
+            model = nil
+        }
 
         // fileServer — optional block; when present its url + credential
         // are required (the wizard never emits a half-configured block).
@@ -287,6 +294,82 @@ struct PairingPayload: Equatable, Sendable {
             throw PairingParseError.insecureURL
         case .noHost, .carriesUserinfo:
             throw PairingParseError.malformed
+        }
+    }
+
+    // Length caps for the two free-form display strings. `conduck-connect`
+    // bounds NEITHER — both come from a bare `ask` prompt (`read -r`, no
+    // truncation), and the model id is explicitly left whole on the way out of
+    // the `/v1/models` probe ("a long-but-legitimate id must survive intact").
+    // So the caps cannot be derived from a wizard limit; they are chosen wide
+    // enough that no answer a human types at those prompts can hit them, while
+    // still bounding the rendered surface:
+    //
+    // * name 120 — the prompt asks for "a short name … (shown in the app)" and
+    //   `SettingsViewModel.saveRemoteAgent` keeps only `prefix(40)` on persist,
+    //   so 120 is 3× the bound the name is stored under. The cap exists because
+    //   the UNTRUNCATED string still renders once, verbatim, in the import
+    //   sheet's `PairingImportBlock.kindMismatch` error — the one place a
+    //   hostile name reaches the user before any truncation applies.
+    // * model 200 — model ids are machine-minted and legitimately long (HF-style
+    //   `hf.co/<org>/<repo>-GGUF:Q4_K_M` paths run ~50-80 chars); 200 leaves
+    //   room for the worst realistic id and still refuses a kilobyte of text.
+    //
+    // Both sit far under what a QR code can even carry: the wizard's encoder
+    // tops out at QR version 40 (~2.9 KB binary, ~2.2 KB of JSON after base64
+    // expansion), which the whole payload — URLs, token, credential, digests —
+    // must share. A field near either cap is already implausible on the wire.
+    private static let maxNameLength = 120
+    private static let maxModelLength = 200
+
+    /// Gate for a free-form display string that survives import: rejects when
+    /// it carries a scalar that can spoof or corrupt rendered text, or when it
+    /// is absurdly long. Input is already whitespace-trimmed.
+    ///
+    /// REJECT, never strip. These strings are persisted as the custom gateway's
+    /// roster name / model override and shown back in Settings, selectors and
+    /// nav titles; silently mutating one would make the imported gateway's
+    /// identity differ from what the operator read in their terminal, which is
+    /// the same confusion the sanitizer exists to prevent. A code the real
+    /// wizard minted never contains any of these, so rejection costs nothing.
+    ///
+    /// Scans `unicodeScalars`, NOT `Character`: a grapheme cluster hides a
+    /// control scalar behind its base character (`"a\u{0000}"` is ONE
+    /// `Character`), so a Character-level scan would pass the payload through.
+    private static func sanitizedDisplayText(_ text: String, maxLength: Int) throws -> String {
+        guard
+            text.unicodeScalars.count <= maxLength,
+            !text.unicodeScalars.contains(where: isDisplayHostile)
+        else {
+            throw PairingParseError.malformed
+        }
+        return text
+    }
+
+    /// Scalars barred from any imported display string. Deliberately a
+    /// denylist of *rendering-control* scalars, not an allowlist of scripts —
+    /// gateway names are legitimately non-ASCII ("Küchen-Gateway", 日本語,
+    /// emoji) and over-rejecting them is the worse failure.
+    private static func isDisplayHostile(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        // C0 controls + DEL + C1 controls. C0 carries the ESC that starts an
+        // ANSI sequence and the CR/LF that forge extra lines; C1 is the 8-bit
+        // form of the same set and is equally terminal-actionable.
+        case 0x00...0x1F, 0x7F, 0x80...0x9F:
+            return true
+        // Bidi marks / embeddings / overrides / isolates: LRM, RLM, LRE, RLE,
+        // PDF, LRO, RLO, and the isolate family. RLO in particular reverses
+        // everything after it, so "evil" can render as the trusted name the
+        // user expects — the classic display-spoof primitive.
+        case 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069:
+            return true
+        // LINE / PARAGRAPH SEPARATOR — not in `.newlines` for every API that
+        // touches this string, but break single-line labels the same way LF
+        // does, letting one name occupy several rendered rows.
+        case 0x2028, 0x2029:
+            return true
+        default:
+            return false
         }
     }
 

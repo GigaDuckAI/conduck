@@ -833,43 +833,16 @@ struct RemoteAgentConfigBody: View {
         return HostReachabilityClass.classify(host, transportHint: transportHint) == .publicHost
     }
 
-    /// The shared amber-callout treatment (12pt rounded rect, 0.12 fill / 0.25
-    /// border) — the same shape the guided Commands step's handoff callout uses, so
-    /// "amber block" means one consistent thing across the setup surfaces. NOT
-    /// `.accessibilityElement(children: .combine)`: these sit in Form rows next to
-    /// actionable siblings, and combining would swallow them.
+    /// Local spelling of the shared `AmberCallout` — the same shape the guided
+    /// Commands step's handoff callout and the pairing review card use, so "amber
+    /// block" means one consistent thing across the setup surfaces. Kept as a
+    /// wrapper so this file's call sites keep reading `body:`.
     private func amberCallout(
         systemImage: String,
         title: LocalizedStringResource,
         body: LocalizedStringResource
     ) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: systemImage)
-                .font(.subheadline)
-                .foregroundStyle(AppColors.brandAmber)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppColors.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(body)
-                    .font(.footnote)
-                    .foregroundStyle(AppColors.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(AppColors.brandAmber.opacity(0.12))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(AppColors.brandAmber.opacity(0.25), lineWidth: 1)
-        )
+        AmberCallout(systemImage: systemImage, title: title, message: body)
     }
 
     /// Builds the hosted (OpenRouter) footer as a single `AttributedString` so the
