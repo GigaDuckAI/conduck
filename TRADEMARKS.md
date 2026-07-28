@@ -7,12 +7,13 @@ others, give it a product name of its own.
 
 ## What is a trademark here
 
-"Conduck"™ and the GigaDuck duck character — including the official app icons,
+"Conduck"™ and the Conduck duck character — including the official app icons,
 logos, and character artwork used by the official App Store build — are
 trademarks and brand assets of GigaDuck OÜ. The official brand artwork is not
 included in this repository, and nothing in this repository grants any license
 to it. "Conduck" is the subject of a pending trademark registration
-application; we use the ™ symbol, not ®.
+application; we use the ™ symbol, not ®. The duck character is not a
+registered trademark either.
 
 ## How this relates to the Apache-2.0 license
 
