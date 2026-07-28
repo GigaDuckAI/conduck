@@ -488,6 +488,99 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
         ),
     ]
 
+    // MARK: - Rule 5's registry
+
+    /// Identifiers whose `Text(…)` is error copy. Keyed on the DATA, not on the
+    /// declaration's name: a name-based sweep (`errorFooter`, `errorBanner`)
+    /// missed `DictationPopoverView.captureRecoveryFooter`, which renders the
+    /// identical `descriptionWithRecovery` string and truncated it identically.
+    /// What makes a surface dangerous is the text flowing through it, and the
+    /// binding it arrives in is the one part that shows up at the render site.
+    private static let errorTextIdentifiers: Set<String> = [
+        "message", "errormessage", "error", "detail", "reason",
+        "failure", "verdict", "refusal", "refusaldetail",
+    ]
+
+    /// A surface allowed to render error copy under a FINITE line limit, because
+    /// the full text stays reachable some other way.
+    ///
+    /// Rule 1 asks whether a remedy was RENDERED. This asks whether it can be
+    /// READ — a distinction the suite previously assumed away. Its own note on
+    /// `remedyBearingSources` said the wrist forms were "sized for the surface";
+    /// nobody measured, and all three certificate verdicts (101, 124 and 130
+    /// characters) clipped inside a two-line banner holding roughly 38. The tail
+    /// is where the actionable half lives — the pointer to the phone, and on a
+    /// pin mismatch "the connection may be intercepted" — so truncation removed
+    /// precisely the part that mattered while the banner still looked correct.
+    private struct TruncatingErrorSurface {
+        let name: String
+        let path: String
+        /// The declaration holding the capped `Text`.
+        let declaration: String
+        let reason: String
+        /// What keeps the full text reachable. Same teeth as Rule 3's anchors:
+        /// statement-scoped, so a surviving binding whose USE was deleted fails.
+        let anchors: [RemedyAnchor]
+    }
+
+    private static let truncatingErrorSurfaces: [TruncatingErrorSurface] = [
+        TruncatingErrorSurface(
+            name: "WatchConversationThreadView — the in-thread error banner",
+            path: "ConduckWatch Watch App/Views/WatchConversationThreadView.swift",
+            declaration: "errorBanner",
+            reason: """
+            DELIBERATE. The banner is a bottom OVERLAY, deliberately outside \
+            scroll layout so toggling it cannot resize the ScrollView mid-scroll \
+            — which also means it can neither grow to fit a long message nor \
+            scroll one, because the crown belongs to the thread underneath. \
+            Raising the cap does NOT fix that: measured on-device at the \
+            founder's Dynamic Type size, ten lines still clipped, because the \
+            vertical space is the real limit. So the banner stays a two-line \
+            SUMMARY and the whole message moves to `errorDetail`, a sheet whose \
+            ScrollView owns its own crown and therefore fits any length at any \
+            text size. The trade holds only while that route exists.
+            """,
+            anchors: [
+                // The preview is still a way IN, not a dead end.
+                RemedyAnchor(
+                    path: "ConduckWatch Watch App/Views/WatchConversationThreadView.swift",
+                    declaration: "errorBanner",
+                    withinStatementAt: ".onTapGesture",
+                    tokens: ["isErrorDetailPresented"]
+                ),
+                // …a presentation is still BOUND to that flag. Declaration-scoped
+                // rather than statement-scoped because `statement(startingAt:)`
+                // tracks parentheses, not braces, so it stops at the first line of
+                // a trailing closure. The token is exact enough to carry the check
+                // on its own: deleting or renaming the sheet fails it.
+                RemedyAnchor(
+                    path: "ConduckWatch Watch App/Views/WatchConversationThreadView.swift",
+                    declaration: "body",
+                    withinStatementAt: nil,
+                    tokens: [".sheet(isPresented: $isErrorDetailPresented)"]
+                ),
+                // …and it still SPENDS that presentation on the LIVE message.
+                // Statement-scoped, which is what stops the sheet from surviving
+                // as a shell that renders a constant or an emptied binding.
+                RemedyAnchor(
+                    path: "ConduckWatch Watch App/Views/WatchConversationThreadView.swift",
+                    declaration: "body",
+                    withinStatementAt: "errorDetail(message:",
+                    tokens: ["inlineErrorMessage"]
+                ),
+                // …and the detail screen is still SCROLLABLE, which is the only
+                // property that makes it able to hold what the banner cannot.
+                // Without this the sheet is just a second surface that clips.
+                RemedyAnchor(
+                    path: "ConduckWatch Watch App/Views/WatchConversationThreadView.swift",
+                    declaration: "errorDetail",
+                    withinStatementAt: nil,
+                    tokens: ["ScrollView", "Text(message)"]
+                ),
+            ]
+        ),
+    ]
+
     // MARK: - Source access
 
     /// `.../Conduck/Conduck` — the Xcode project container holding all targets'
@@ -1634,43 +1727,7 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
         var missing: [String] = []
 
         for surface in Self.compensatedCauseOnlySurfaces {
-            for anchor in surface.anchors {
-                let url = projectContainerURL().appendingPathComponent(anchor.path)
-                guard let source = try? String(contentsOf: url, encoding: .utf8) else {
-                    missing.append("\(surface.name) — \(anchor.path) is gone")
-                    continue
-                }
-                let lines = releaseCodeLines(in: source)
-                var scopeRange = 0..<lines.count
-                var place = anchor.path
-                if let name = anchor.declaration {
-                    guard let declaration = declarations(in: lines).first(where: { $0.name == name }),
-                          let start = lines.firstIndex(where: { $0.number >= declaration.startLine }),
-                          let end = lines.lastIndex(where: { $0.number <= declaration.endLine }),
-                          start <= end else {
-                        missing.append("\(surface.name) — `\(name)` is gone from \(anchor.path)")
-                        continue
-                    }
-                    scopeRange = start..<(end + 1)
-                    place += " → `\(name)`"
-                }
-
-                let scope: String
-                if let statementAnchor = anchor.withinStatementAt {
-                    guard let index = scopeRange.first(where: { lines[$0].text.contains(statementAnchor) }) else {
-                        missing.append("\(surface.name) — `\(statementAnchor)` is gone from \(place)")
-                        continue
-                    }
-                    scope = statement(startingAt: index, in: lines)
-                    place += " → the `\(statementAnchor)` statement"
-                } else {
-                    scope = scopeRange.map { lines[$0].text }.joined(separator: "\n")
-                }
-
-                for token in anchor.tokens where !scope.contains(token) {
-                    missing.append("\(surface.name) — `\(token)` is gone from \(place)")
-                }
-            }
+            missing.append(contentsOf: unmetAnchors(surface.anchors, surfaceName: surface.name))
         }
 
         XCTAssertTrue(
@@ -1687,6 +1744,175 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
 
             Either restore the anchor, or show the remedy visibly and delete the \
             entry from `compensatedCauseOnlySurfaces`.
+            """
+        )
+    }
+
+    // MARK: - Shared: anchor verification
+
+    /// Which of `anchors` no longer hold. Shared by Rules 3 and 5 — both let a
+    /// surface show less than the whole verdict, and both are honest only while
+    /// a named, statement-scoped route to the rest survives.
+    private func unmetAnchors(_ anchors: [RemedyAnchor], surfaceName: String) -> [String] {
+        var missing: [String] = []
+        for anchor in anchors {
+            let url = projectContainerURL().appendingPathComponent(anchor.path)
+            guard let source = try? String(contentsOf: url, encoding: .utf8) else {
+                missing.append("\(surfaceName) — \(anchor.path) is gone")
+                continue
+            }
+            let lines = releaseCodeLines(in: source)
+            var scopeRange = 0..<lines.count
+            var place = anchor.path
+            if let name = anchor.declaration {
+                guard let declaration = declarations(in: lines).first(where: { $0.name == name }),
+                      let start = lines.firstIndex(where: { $0.number >= declaration.startLine }),
+                      let end = lines.lastIndex(where: { $0.number <= declaration.endLine }),
+                      start <= end else {
+                    missing.append("\(surfaceName) — `\(name)` is gone from \(anchor.path)")
+                    continue
+                }
+                scopeRange = start..<(end + 1)
+                place += " → `\(name)`"
+            }
+
+            let scope: String
+            if let statementAnchor = anchor.withinStatementAt {
+                guard let index = scopeRange.first(where: { lines[$0].text.contains(statementAnchor) }) else {
+                    missing.append("\(surfaceName) — `\(statementAnchor)` is gone from \(place)")
+                    continue
+                }
+                scope = statement(startingAt: index, in: lines)
+                place += " → the `\(statementAnchor)` statement"
+            } else {
+                scope = scopeRange.map { lines[$0].text }.joined(separator: "\n")
+            }
+
+            for token in anchor.tokens where !scope.contains(token) {
+                missing.append("\(surfaceName) — `\(token)` is gone from \(place)")
+            }
+        }
+        return missing
+    }
+
+    // MARK: - Scanner: truncated error copy
+
+    private static let errorTextPattern =
+        #"\bText\(\s*([A-Za-z_][A-Za-z0-9_]*)(?:\.[A-Za-z0-9_]+)*\s*\)"#
+
+    /// How far below a `Text(` its modifier chain is followed. SwiftUI puts
+    /// `.lineLimit` several lines down, often past a doc comment.
+    private static let modifierChainLines = 24
+
+    /// The identifier a line renders as error copy, if it renders one.
+    private func errorTextRender(in line: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: Self.errorTextPattern) else { return nil }
+        let ns = line as NSString
+        guard let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
+              match.numberOfRanges == 2 else { return nil }
+        let base = ns.substring(with: match.range(at: 1))
+        return Self.errorTextIdentifiers.contains(base.lowercased()) ? base : nil
+    }
+
+    /// The finite line cap constraining the `Text` at `index`, or nil if it is
+    /// uncapped. Walks only the contiguous modifier chain and stops at the next
+    /// view, so a cap belonging to a LATER sibling is never blamed on this one —
+    /// the false positive that would make the rule noisy enough to be disabled.
+    /// `.lineLimit(nil)` reads as uncapped; a conditional like
+    /// `.lineLimit(flag ? nil : 10)` counts as finite, because it can truncate.
+    private func finiteLineLimit(forTextAt index: Int,
+                                 in lines: [(number: Int, text: String)]) -> String? {
+        var cursor = index + 1
+        while cursor < lines.count, cursor <= index + Self.modifierChainLines {
+            let trimmed = lines[cursor].text.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || !(trimmed.hasPrefix(".") || trimmed.hasPrefix("//")) { break }
+            if let range = trimmed.range(of: ".lineLimit(") {
+                let argument = trimmed[range.upperBound...]
+                    .prefix { $0 != ")" }
+                    .trimmingCharacters(in: .whitespaces)
+                return argument == "nil" ? nil : argument
+            }
+            cursor += 1
+        }
+        return nil
+    }
+
+    // MARK: - Rule 5
+
+    /// Rule 1 asks whether a remedy was RENDERED. This asks whether it can be
+    /// READ. The suite assumed the second followed from the first — its own note
+    /// called the wrist forms "sized for the surface" — and three surfaces were
+    /// silently clipping the actionable half of a certificate verdict: the Watch
+    /// banner at two lines, and BOTH menu-bar popover footers at three, where the
+    /// string is `descriptionWithRecovery` (~320 characters against ~150 of room).
+    /// In every case the tail is what carried the way out, and on a pin mismatch
+    /// the tail is "the connection may be intercepted".
+    func testTruncatedErrorCopyAlwaysHasAWayToTheFullText() throws {
+        var discovered: [(surface: String, path: String, line: Int, cap: String)] = []
+
+        for url in try shippingSwiftFiles() {
+            let path = relativePath(url)
+            guard let source = try? String(contentsOf: url, encoding: .utf8),
+                  isViewCode(path: path, source: source) else { continue }
+            let lines = releaseCodeLines(in: source)
+            let declarationList = declarations(in: lines)
+            for (index, entry) in lines.enumerated() {
+                guard errorTextRender(in: entry.text) != nil,
+                      let cap = finiteLineLimit(forTextAt: index, in: lines) else { continue }
+                let owner = enclosingDeclaration(ofLine: entry.number,
+                                                 indent: indent(of: entry.text),
+                                                 in: declarationList)?.name ?? "<file scope>"
+                discovered.append((owner, path, entry.number, cap))
+            }
+        }
+
+        // Non-vacuity. The wrist banner is a known, deliberate, still-correct
+        // instance of this shape, so finding nothing means the scanner broke, not
+        // that the codebase is clean — and a hollow rule that passes forever is
+        // the precise failure this suite exists to catch.
+        XCTAssertFalse(
+            discovered.isEmpty,
+            """
+            Rule 5 found NO error copy under a finite line limit anywhere, which \
+            is almost certainly a broken scanner rather than a clean codebase: \
+            `WatchConversationThreadView.errorBanner` is a registered instance. \
+            Check `errorTextIdentifiers`, `errorTextPattern` and `finiteLineLimit`.
+            """
+        )
+
+        var problems: [String] = []
+        for site in discovered {
+            guard let registered = Self.truncatingErrorSurfaces.first(where: {
+                $0.path == site.path && $0.declaration == site.surface
+            }) else {
+                problems.append("""
+                \(site.path):\(site.line) — `\(site.surface)` renders error copy under \
+                .lineLimit(\(site.cap)) with no registered route to the full text.
+                """)
+                continue
+            }
+            problems.append(contentsOf: unmetAnchors(registered.anchors, surfaceName: registered.name))
+        }
+
+        XCTAssertTrue(
+            problems.isEmpty,
+            """
+            Error copy is being truncated with no way to read the rest:
+            \(problems.joined(separator: "\n"))
+
+            A line cap on error text is not a layout detail. These strings are \
+            cause THEN remedy, so a cap removes the remedy first and leaves a \
+            surface that still looks correct — the user sees a warning and no way \
+            out. On a pin mismatch it deletes "the connection may be intercepted".
+
+            Fix it one of two ways. Uncap the text where the container can grow \
+            (a popover that hugs its content, a scrollable sheet). Or, where it \
+            genuinely cannot — a fixed overlay, a tile — keep the short preview \
+            AND give it a route to the whole message, then register the surface in \
+            `truncatingErrorSurfaces` with anchors that hold that route in place.
+
+            Do NOT just raise the number: the Watch banner still clipped at ten \
+            lines, because its real limit is the space on screen, not the count.
             """
         )
     }

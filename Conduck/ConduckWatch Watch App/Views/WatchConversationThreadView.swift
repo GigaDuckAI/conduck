@@ -193,6 +193,19 @@ struct WatchConversationThreadView: View {
     /// detector and forced true on send/reply so the composer always reappears.
     @State private var isComposerVisible = true
 
+    /// Whether the error banner's full message is open on its own screen.
+    ///
+    /// The banner is a bottom OVERLAY, deliberately outside scroll layout, so its
+    /// height is bounded by the screen and the crown belongs to the thread
+    /// underneath — it can neither grow to fit a long message nor scroll one.
+    /// Raising its line cap does not fix that: at large Dynamic Type the space
+    /// simply is not there, and the tail still clips. Since the clipped tail is
+    /// exactly the actionable half of a certificate verdict (the pointer to the
+    /// phone; on a pin mismatch, the interception warning, which sits last), the
+    /// full text needs a surface with room, and that means a screen of its own.
+    /// Reset per message so a new error never inherits the old one's sheet.
+    @State private var isErrorDetailPresented = false
+
     /// Live scroll-content height from `onScrollGeometryChange` — the settle
     /// signal for `snapToBottom`'s verification window. A signal, not an oracle:
     /// the height can read final while the lazy anchor map is still unresolved,
@@ -427,6 +440,18 @@ struct WatchConversationThreadView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .animation(.easeInOut(duration: 0.2), value: inlineErrorMessage)
+                // Presented from HERE, not from inside `errorBanner`: the banner
+                // is unmounted the moment the error clears, and a sheet owned by
+                // a disappearing view goes with it — including the auto-clear on
+                // a later relay success, which would yank the message out from
+                // under someone mid-read.
+                .sheet(isPresented: $isErrorDetailPresented) {
+                    errorDetail(message: inlineErrorMessage ?? "")
+                }
+                // A new error closes the old one's screen: the sheet shows
+                // whatever `inlineErrorMessage` holds, so leaving it open would
+                // silently swap the text under the reader.
+                .onChange(of: inlineErrorMessage) { _, _ in isErrorDetailPresented = false }
                 // Edge-to-edge frosted slab + a 0.5pt top hairline reads as a
                 // distinct surface above the thread (vs the old card-width thinMaterial
                 // that left a visible seam at the screen edges).
@@ -725,17 +750,41 @@ struct WatchConversationThreadView: View {
     /// counterpart of the root error view. The xmark resets the service to
     /// idle (mirrors iOS `recorder.dismissError()`); a fresh send / mic tap
     /// also recovers on its own, so the banner never gates the composer.
+    ///
+    /// The line stays SHORT on purpose and tapping opens the whole message on
+    /// its own screen. A banner tall enough for the longest message would bury
+    /// the conversation it sits over and still clip at large Dynamic Type, so
+    /// the preview is a summary with a way through — never the only copy of
+    /// text the user has to act on. See `errorDetail`.
     @ViewBuilder
     private func errorBanner(message: String) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption2)
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.caption2)
-                .foregroundStyle(AppColors.textSecondary)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                // The affordance that keeps the truncation honest: the ellipsis
+                // alone reads as "that's all there is", which is how the clipped
+                // remedy went unnoticed. A chevron says there is more and it is
+                // reachable.
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(AppColors.textTertiary)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { isErrorDetailPresented = true }
+            // One element, so VoiceOver reads the whole message (it exposes the
+            // untruncated string) rather than the icon and a clipped fragment.
+            .accessibilityElement(children: .combine)
+            .accessibilityHint(Text(String(localized: LocalizedStringResource(
+                "watch.thread.error.expandHint",
+                defaultValue: "Tap to show the full message"
+            ))))  // xcstrings: hardening
             Button {
                 recordingService.dismissError()
                 // User abandonment is view-local knowledge — the service must
@@ -758,6 +807,30 @@ struct WatchConversationThreadView: View {
         }
         .padding(.horizontal, 8)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    /// The banner's message in full, on a screen that can hold it.
+    ///
+    /// A `ScrollView` rather than a taller banner: here the crown is this view's
+    /// own, so the text fits at ANY Dynamic Type size and at any length a future
+    /// localization reaches. That is the property the banner cannot have, and
+    /// the reason this surface exists — a terminal error's remedy must never be
+    /// unreachable, and on the wrist every certificate verdict is terminal.
+    @ViewBuilder
+    private func errorDetail(message: String) -> some View {
+        ScrollView {
+            VStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+        }
     }
 
     // MARK: - Bubble

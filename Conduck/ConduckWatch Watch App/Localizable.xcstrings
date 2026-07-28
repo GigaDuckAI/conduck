@@ -1542,7 +1542,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conduck can't fingerprint your gateway's certificate key, so your pin can't be checked. Nothing is wrong with the certificate — open Conduck on your iPhone to fix the pin."
+            "value" : "Conduck can't check your pin — unsupported certificate key. Your server is fine; open Conduck on your iPhone to fix the pin."
           }
         }
       }
@@ -2264,6 +2264,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Dismiss error"
+          }
+        }
+      }
+    },
+    "watch.thread.error.expandHint" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap to show the full message"
           }
         }
       }

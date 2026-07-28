@@ -154,8 +154,16 @@ enum CertificateTrustCopy {
     /// face or a car screen, and both name settings that only exist on iPhone.
     /// Gateway-specific wording because the gateway is the only pinned lane
     /// either surface can reach. Terminal, so it never invites a retry.
+    ///
+    /// Kept SHORT — the wrist renders it two lines at a time with the rest a tap
+    /// away, and the car SPEAKS it, where every extra clause is time the driver
+    /// spends listening to a problem they cannot act on. It still carries all
+    /// three load-bearing parts: the KEY is what Conduck can't handle (never "the
+    /// certificate", which sends the user hunting an expiry that isn't there),
+    /// the server is explicitly fine (this verdict must never borrow the
+    /// interception warning), and the fix lives on the phone.
     static var keyUnpinnableRefusalCompact: String {
         String(localized: "settings.certTrust.keyUnpinnable.refusal.compact",
-                defaultValue: "Conduck can't fingerprint your gateway's certificate key, so your pin can't be checked. Nothing is wrong with the certificate — open Conduck on your iPhone to fix the pin.")
+                defaultValue: "Conduck can't check your pin — unsupported certificate key. Your server is fine; open Conduck on your iPhone to fix the pin.")
     }
 }

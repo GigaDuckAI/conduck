@@ -1047,7 +1047,16 @@ struct DictationPopoverView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(AppColors.error)
                 .multilineTextAlignment(.center)
-                .lineLimit(3)
+                // NO cap. `DictationService` routes this through
+                // `descriptionWithRecovery`, so the string is cause AND remedy —
+                // and at 340pt three lines hold ~150 characters against a
+                // certificate refusal's ~320, which cut the remedy in half. The
+                // pin-mismatch verdict was the dangerous one: "the connection may
+                // be intercepted" sits at the very END of its remedy and was the
+                // first thing dropped. The popover hugs its content with no
+                // height cap, so wrapping just makes it taller — the only cost is
+                // a bigger HUD on the rare turn that fails terminally.
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
                 // Retry Voice — re-record; the staged screenshot stays and rides
                 // the next successful transcript.
@@ -1110,7 +1119,16 @@ struct DictationPopoverView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(AppColors.error)
                 .multilineTextAlignment(.center)
-                .lineLimit(3)
+                // NO cap. `DictationService` routes this through
+                // `descriptionWithRecovery`, so the string is cause AND remedy —
+                // and at 340pt three lines hold ~150 characters against a
+                // certificate refusal's ~320, which cut the remedy in half. The
+                // pin-mismatch verdict was the dangerous one: "the connection may
+                // be intercepted" sits at the very END of its remedy and was the
+                // first thing dropped. The popover hugs its content with no
+                // height cap, so wrapping just makes it taller — the only cost is
+                // a bigger HUD on the rare turn that fails terminally.
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
                 if coordinator.hasPendingFailedTurn {
                     // Mint-failure recovery: the transcript survived on the

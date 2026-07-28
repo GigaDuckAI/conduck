@@ -4,72 +4,6 @@
     "" : {
 
     },
-    "remoteAgent.notification.failure.certKeyUnpinnable.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fingerprint can't be checked"
-          }
-        }
-      }
-    },
-    "remoteAgent.notification.failure.certMismatch.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Certificate doesn't match"
-          }
-        }
-      }
-    },
-    "remoteAgent.notification.failure.certUntrusted.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Certificate not trusted"
-          }
-        }
-      }
-    },
-    "remoteAgent.notification.failure.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No reply from your personal AI"
-          }
-        }
-      }
-    },
-    "settings.certTrust.keyUnpinnable.refusal" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
-          }
-        }
-      }
-    },
-    "settings.certTrust.keyUnpinnable.remedy" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The certificate itself is fine and this device trusts it — only the fingerprint check can't run. Reissue it with an RSA 2048/3072/4096 or EC P-256/P-384 key, or clear the saved fingerprint in its settings to go back to ordinary system trust."
-          }
-        }
-      }
-    },
     "…" : {
 
     },
@@ -6141,9 +6075,6 @@
         }
       }
     },
-    "Personal AI" : {
-
-    },
     "pendingRetry.headline" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -6165,6 +6096,9 @@
           }
         }
       }
+    },
+    "Personal AI" : {
+
     },
     "popover.answering" : {
       "extractionState" : "extracted_with_value",
@@ -7116,6 +7050,50 @@
         }
       }
     },
+    "remoteAgent.notification.failure.certKeyUnpinnable.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fingerprint can't be checked"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.failure.certMismatch.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certificate doesn't match"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.failure.certUntrusted.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certificate not trusted"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.failure.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No reply from your personal AI"
+          }
+        }
+      }
+    },
     "Reply from your personal AI" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7566,13 +7544,35 @@
         }
       }
     },
+    "settings.certTrust.keyUnpinnable.refusal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
     "settings.certTrust.keyUnpinnable.refusal.compact" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conduck can't fingerprint your gateway's certificate key, so your pin can't be checked. Nothing is wrong with the certificate — open Conduck on your iPhone to fix the pin."
+            "value" : "Conduck can't check your pin — unsupported certificate key. Your server is fine; open Conduck on your iPhone to fix the pin."
+          }
+        }
+      }
+    },
+    "settings.certTrust.keyUnpinnable.remedy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The certificate itself is fine and this device trusts it — only the fingerprint check can't run. Reissue it with an RSA 2048/3072/4096 or EC P-256/P-384 key, or clear the saved fingerprint in its settings to go back to ordinary system trust."
           }
         }
       }
@@ -14959,6 +14959,28 @@
         }
       }
     },
+    "thread.voiceRefused.banner" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Read aloud in the built-in voice."
+          }
+        }
+      }
+    },
+    "thread.voiceRefused.dismiss" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Dismiss"
+          }
+        }
+      }
+    },
     "Tip: Choose a shortcut you'll remember easily" : {
 
     },
@@ -15489,17 +15511,6 @@
     "You're almost ready." : {
 
     },
-    "Your AI provider is rate-limiting you. Free models often have a daily limit." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI provider is rate-limiting you. Free models often have a daily limit."
-          }
-        }
-      }
-    },
     "Your AI provider is out of credits. Add credits with your provider." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15507,6 +15518,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Your AI provider is out of credits. Add credits with your provider."
+          }
+        }
+      }
+    },
+    "Your AI provider is rate-limiting you. Free models often have a daily limit." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI provider is rate-limiting you. Free models often have a daily limit."
           }
         }
       }
