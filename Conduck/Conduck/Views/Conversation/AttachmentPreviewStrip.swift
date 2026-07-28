@@ -298,7 +298,17 @@ struct AttachmentPreviewStrip: View {
         let ext = (originalName as NSString).pathExtension
         let symbol = AttachmentChipStyle.symbol(forExtension: ext)
         let tint = AttachmentChipStyle.tint(forExtension: ext)
-        let isFailed: Bool = { if case .failed = state { return true } else { return false } }()
+        // Error chrome covers BOTH failure states — a refusal is no less a
+        // failure for being unretryable.
+        let isFailed: Bool = {
+            switch state {
+            case .failed, .refused: return true
+            case .uploading, .uploaded, .none: return false
+            }
+        }()
+        // The a11y label takes `detail` (cause + remedy), never `reason` — see
+        // `ServerFileUploadState.refused`.
+        let refusalDetail: String? = { if case .refused(_, let detail) = state { return detail } else { return nil } }()
 
         return HStack(spacing: 8) {
             Image(systemName: symbol)
@@ -322,17 +332,25 @@ struct AttachmentPreviewStrip: View {
                 .strokeBorder((isFailed ? AppColors.error : tint).opacity(isFailed ? 0.5 : 0.35), lineWidth: 1)
         )
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(String(
-            format: String(localized: LocalizedStringResource(
-                "fileTransfer.attach.serverTile",
-                defaultValue: "Attached file %@ for your gateway"
-            )),
-            originalName
-        )))
+        // The refusal rides the label in FULL — cause AND remedy. The visible
+        // line truncates in a 180pt tile and can only carry the cause; VoiceOver
+        // has no width to run out of, so this is where the remedy (and, for a
+        // pin mismatch, the interception warning) actually reaches the user.
+        .accessibilityLabel(Text(([
+            String(
+                format: String(localized: LocalizedStringResource(
+                    "fileTransfer.attach.serverTile",
+                    defaultValue: "Attached file %@ for your gateway"
+                )),
+                originalName
+            ),
+            refusalDetail
+        ] as [String?]).compactMap { $0 }.joined(separator: ". ")))
     }
 
     /// The state row under a server-file tile's name: the determinate upload
-    /// bar, the failed-with-Retry affordance, or the success check.
+    /// bar, the failed-with-Retry affordance, the refusal's own sentence, or the
+    /// success check.
     @ViewBuilder
     private func serverUploadStateChrome(
         id: UUID,
@@ -364,6 +382,25 @@ struct AttachmentPreviewStrip: View {
                 "fileTransfer.attach.retry",
                 defaultValue: "Retry"
             )))
+        case .refused(let reason, _):
+            // The refusal's OWN words, not a strip-local paraphrase — the tile is
+            // narrow, so this shows the CAUSE only and still truncates, but
+            // truncated canonical copy beats a fifth wording for one cause. The
+            // remedy rides the tile's accessibility label, which has the room.
+            // NO Retry: the same request would be refused the same way.
+            //
+            // Cause-only is the deliberate exception to the app-wide rule, NOT an
+            // oversight: at 180pt clipped to two lines there is no wording of any
+            // remedy that survives, and a pin mismatch's warning sits at the end
+            // of its remedy — first to be cut. The decision and the compensating
+            // control are registered in `ErrorSurfaceDriftGuardTests`
+            // (`compensatedCauseOnlySurfaces`), which fails if the a11y label that
+            // carries the full verdict is ever removed. Change one, change both.
+            Text(verbatim: reason)
+                .font(.caption2)
+                .foregroundStyle(AppColors.error)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
         case .uploaded, .none:
             Image(systemName: "checkmark.circle.fill")
                 .font(.caption)

@@ -1193,10 +1193,59 @@ final class WatchRecordingService {
             compressedAudioData = nil
             compressedAudioFormat = nil
             WatchLog.error(.stt, "stt.prep.failed", ["turn": turnTag, "code": (error as? AppError)?.errorCode ?? -1])
-            let message = (error as? AppError)?.errorDescription
-                ?? String(localized: "Could not send recording. Please try again.")
-            state = .error(message: message)
+            state = .error(message: terminalSTTMessage(for: error as? AppError))
             WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+        }
+    }
+
+    /// Copy for a TERMINAL STT failure surfaced on the wrist: the three
+    /// certificate verdicts in their compact wrist form, everything else its own
+    /// `descriptionWithRecovery`.
+    ///
+    /// `errorDescription` is the CAUSE half only, and on a certificate refusal
+    /// the half that matters is the other one: a mismatch reaches the wrist
+    /// stripped of "the connection may be intercepted", and an unpinnable key
+    /// reads as a broken certificate when this device trusted the chain and only
+    /// the fingerprint check couldn't run. The compact forms keep the
+    /// load-bearing sentence and hand the remedy to the phone, which is the only
+    /// screen that can act on it. They are the SAME strings the converse lane on
+    /// this device renders through `WatchNetworkFailureCopy` — one cause, one
+    /// wording, or the two lanes drift apart.
+    ///
+    /// Both STT legs reach this: the relay leg carries a verdict the iPhone
+    /// reached on a custom voice endpoint (`AppleSpeechRelayCoordinator` rebuilds
+    /// it from the relayed `errorCode`), the upload leg one this watch reached
+    /// itself. Only the STT lane's cases appear — the converse hop is
+    /// non-throwing and funnels its own failures through `WatchAudioUploader`.
+    ///
+    /// The two pinned forms say "your gateway" while a custom voice endpoint is a
+    /// different server, the same trade the wheel takes: naming the wrong server
+    /// costs the user one glance, while the alternative drops the interception
+    /// warning entirely.
+    private func terminalSTTMessage(for error: AppError?) -> String {
+        switch error {
+        case .some(.sttCustomCertUntrusted):
+            return CertificateTrustCopy.untrustedRefusalCompact
+        case .some(.sttCustomCertMismatch):
+            return WatchNetworkFailureCopy.certificatePinMismatchMessage
+        case .some(.sttCustomCertKeyUnpinnable):
+            return WatchNetworkFailureCopy.certificateKeyUnpinnableMessage
+        default:
+            // CAUSE AND REMEDY, not the cause alone. The reachable set here is
+            // mostly TERMINAL (`.sttAuthFailed`, `.sttMissingAPIKey`,
+            // `.sttQuotaExceeded`, `.sttCustomEndpointNotConfigured`,
+            // `.sttDecodingFailure`, `.appleSpeechModelNotInstalled`), and for
+            // every one of those the sentence the user can act on lives in
+            // `recoverySuggestion` — `errorDescription` alone told the wrist
+            // what broke and nothing about fixing it. `descriptionWithRecovery`
+            // is also the safe half of the same trade: it DROPS the generic
+            // "Try again.", so a terminal STT refusal never picks up a retry
+            // invitation on the way to this banner. The nil arm keeps its own
+            // retry wording because a nil `AppError` is an unclassified failure,
+            // where re-recording genuinely can succeed.
+            // xcstrings
+            return error?.descriptionWithRecovery
+                ?? String(localized: "Could not send recording. Please try again.")
         }
     }
 
@@ -1298,8 +1347,7 @@ final class WatchRecordingService {
                 // at the idle edge via dismissError — not here, where the
                 // .error state makes a drain a no-op.)
                 clearInFlight()
-                state = .error(message: appError.errorDescription
-                    ?? String(localized: "Could not send recording. Please try again."))
+                state = .error(message: terminalSTTMessage(for: appError))
                 WatchRecordingCoordinator.shared.isRecordingFlowActive = false
                 return
             }

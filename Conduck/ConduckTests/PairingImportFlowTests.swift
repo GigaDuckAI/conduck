@@ -27,7 +27,7 @@ import XCTest
 final class StubPairingImportEnvironment: PairingImportEnvironment {
 
     enum Call: Equatable {
-        case plan, review, resolveTrust, execute, gatewayTest, fileTest, pinCertificate, discardDraft
+        case plan, review, resolveTrust, execute, gatewayTest, fileTest, discardDraft
     }
 
     /// Every call, in order. The network-touching ones are `.resolveTrust`,
@@ -36,7 +36,6 @@ final class StubPairingImportEnvironment: PairingImportEnvironment {
     private(set) var discardedDrafts: [RemoteAgentRef] = []
     private(set) var executedGatewayPins: [String?] = []
     private(set) var executedFileServerPins: [String?] = []
-    private(set) var pinnedFingerprints: [String] = []
     /// Whether the resolve-trust call observed cancellation when it resumed.
     private(set) var resolveTrustSawCancellation: Bool?
 
@@ -44,7 +43,7 @@ final class StubPairingImportEnvironment: PairingImportEnvironment {
     var trustResult: PairingTrustResolution = .proceed(gatewayPin: nil, fileServerPin: nil)
     var executeResult: PairingImportOutcome = .committed
     var gatewayTestResult: PairingGatewayTestOutcome = .passed
-    var fileTestResult = PairingFileTestResult(passed: true, failureMessage: nil)
+    var fileTestResult = PairingFileTestResult(passed: true, failureMessage: nil, retryable: true)
 
     /// Successive `review` answers; the last repeats. Empty → `defaultModel`.
     /// A test models "the target moved underneath" by making a later entry differ.
@@ -69,7 +68,6 @@ final class StubPairingImportEnvironment: PairingImportEnvironment {
         previousGatewayDestination: nil,
         targetName: nil,
         fileLane: nil,
-        certificate: .standardChecks,
         becomesDefault: true
     )
 
@@ -97,8 +95,7 @@ final class StubPairingImportEnvironment: PairingImportEnvironment {
         return model
     }
 
-    func resolveTrust(_ payload: PairingPayload,
-                      accepted: [PairingTrustLane: PairingTrustOverride]) async -> PairingTrustResolution {
+    func resolveTrust(_ payload: PairingPayload) async -> PairingTrustResolution {
         calls.append(.resolveTrust)
         if suspendResolveTrust {
             await withCheckedContinuation { trustGate = $0 }
@@ -123,11 +120,6 @@ final class StubPairingImportEnvironment: PairingImportEnvironment {
     func runFileTest(for target: RemoteAgentRef) async -> PairingFileTestResult {
         calls.append(.fileTest)
         return fileTestResult
-    }
-
-    func pinCertificate(_ fingerprintHex: String, for target: RemoteAgentRef) async {
-        calls.append(.pinCertificate)
-        pinnedFingerprints.append(fingerprintHex)
     }
 
     func discardDraft(_ target: RemoteAgentRef) {
@@ -155,11 +147,9 @@ final class PairingImportFlowTests: XCTestCase {
     private func code(kind: String = "openclaw",
                       name: String? = nil,
                       url: String = "https://gw.example.test:18789",
-                      certFP: String? = nil,
                       fileServer: [String: Any]? = nil) throws -> String {
         var gateway: [String: Any] = ["kind": kind, "url": url, "auth": "none"]
         if let name { gateway["name"] = name }
-        if let certFP { gateway["certFP"] = certFP }
         var dict: [String: Any] = ["v": 1, "gateway": gateway]
         if let fileServer { dict["fileServer"] = fileServer }
         return "conduck-setup:v1:" + (try JSONSerialization.data(withJSONObject: dict)).base64EncodedString()
@@ -321,15 +311,14 @@ final class PairingImportFlowTests: XCTestCase {
 
     // MARK: - The reviewed snapshot binds the commit
 
-    /// The blocker Codex found: the card was compared before a probe and a
-    /// possibly-long certificate alert, then committed without looking again.
+    /// The blocker Codex found: the card was compared before a probe, then
+    /// committed without looking again.
     func testATargetThatMovesBeforeTheCommitBlocksTheCommit() async throws {
         let moved = PairingReviewModel(
             gatewayDestination: "https://gw.example.test:18789",
             previousGatewayDestination: "https://production.example.test",
             targetName: "OpenClaw",
             fileLane: nil,
-            certificate: .standardChecks,
             becomesDefault: false
         )
         // Scan and the Connect re-read agree; the FINAL gate sees a moved slot.
@@ -353,7 +342,7 @@ final class PairingImportFlowTests: XCTestCase {
         let moved = PairingReviewModel(
             gatewayDestination: "https://elsewhere.example.test",
             previousGatewayDestination: nil, targetName: nil, fileLane: nil,
-            certificate: .standardChecks, becomesDefault: true
+            becomesDefault: true
         )
         env.reviewResults = [StubPairingImportEnvironment.defaultModel, moved]
         let flow = makeFlow()
@@ -366,56 +355,44 @@ final class PairingImportFlowTests: XCTestCase {
                        "No point probing a destination the user did not consent to.")
     }
 
-    /// Accepting a certificate exception must not be a way around the gate — the
-    /// alert is exactly where an unbounded amount of time passes.
-    func testAcceptingACertificateExceptionStillGoesThroughTheFinalGate() async throws {
+    /// A trust refusal the user dismissed must not be a way around the commit
+    /// gate either: backing out of the alert returns to the card, and Connect
+    /// from there re-reads before acting, exactly like the first time.
+    func testConnectingAgainAfterARefusalStillGoesThroughTheFinalGate() async throws {
         let moved = PairingReviewModel(
             gatewayDestination: "https://gw.example.test:18789",
             previousGatewayDestination: "https://production.example.test",
             targetName: "OpenClaw", fileLane: nil,
-            certificate: .standardChecks, becomesDefault: false
+            becomesDefault: false
         )
         // scan, Connect re-read, then the commit gate sees the move.
-        env.reviewResults = [StubPairingImportEnvironment.defaultModel, StubPairingImportEnvironment.defaultModel, moved]
-        env.trustResult = .needsPinConsent(gatewayPin: "aa", fileServerPin: nil, lanes: [.gateway])
+        env.reviewResults = [StubPairingImportEnvironment.defaultModel,
+                             StubPairingImportEnvironment.defaultModel, moved]
+        env.trustResult = .blocked(lane: .gateway, block: .certificateNotPubliclyTrusted)
         let flow = makeFlow()
         try await scanIntoReview(flow)
 
         flow.connect()
-        await settle(until: { flow.showingPinConsentAlert }, "the consent alert should be up")
-        let context = try XCTUnwrap(flow.pinConsentContext)
+        await settle(until: { flow.showingTrustBlockAlert }, "the block alert should be up")
+        flow.returnToReview(notice: .refused("because reasons"))
 
-        flow.acceptPinConsent(context)
-        await settle(until: { flow.reviewContext?.notice != nil }, "should have refused after the alert")
+        // The server has since been fixed; the destination has not.
+        env.trustResult = .proceed(gatewayPin: nil, fileServerPin: nil)
+        flow.connect()
+        await settle(until: { flow.reviewContext?.notice == .destinationChanged },
+                     "should have refused after the alert")
 
-        XCTAssertFalse(env.didPersist)
-        XCTAssertEqual(flow.reviewContext?.notice, .destinationChanged)
+        XCTAssertFalse(env.didPersist,
+                       "A destination that moved while an alert sat open must never be written.")
     }
 
     // MARK: - Certificate outcomes land somewhere the user can see
-
-    func testDecliningACertificateExceptionReturnsToTheCardWithTheDraftIntact() async throws {
-        env.planResult = .ready(target: customTarget)
-        env.trustResult = .needsPinConsent(gatewayPin: "aa", fileServerPin: nil, lanes: [.gateway])
-        let flow = makeFlow()
-        flow.handleCode(try code(kind: "custom", name: "Home LLM"))
-        await settle(until: { flow.phase == .review }, "should have reached the card")
-
-        flow.connect()
-        await settle(until: { flow.showingPinConsentAlert }, "the consent alert should be up")
-        flow.returnToReview(notice: nil)
-
-        XCTAssertEqual(flow.phase, .review)
-        XCTAssertNotNil(flow.reviewContext, "the card must survive — this is one step back, not out")
-        XCTAssertTrue(env.discardedDrafts.isEmpty,
-                      "Declining an exception is not abandoning the import; the draft is still live.")
-    }
 
     /// A refusal raised from an alert vanishes with the alert. Carrying it back
     /// onto the card is what stops the user tapping Connect again into the same
     /// wall with no explanation.
     func testARefusalStaysVisibleOnTheCardAfterTheAlertCloses() async throws {
-        env.trustResult = .blocked(lane: .gateway, block: .pinContradictsLiveServer, override: nil)
+        env.trustResult = .blocked(lane: .gateway, block: .certificateNotPubliclyTrusted)
         let flow = makeFlow()
         try await scanIntoReview(flow)
 
@@ -425,43 +402,51 @@ final class PairingImportFlowTests: XCTestCase {
 
         XCTAssertEqual(flow.reviewContext?.notice, .refused("because reasons"))
         XCTAssertEqual(flow.phase, .review)
+        XCTAssertFalse(env.didPersist, "A refused import must configure nothing.")
     }
 
-    /// This verdict used to be written into the paste field's inline error, which
-    /// only renders in the INPUT step — so nobody ever saw it.
-    func testAnUnreachableServerLandsOnTheCardNotInTheInvisibleInlineError() async throws {
-        env.trustResult = .unverifiableWhileUnreachable(lane: .gateway, transportClass: .timeout)
+    /// Backing out of the refusal keeps the import alive — the draft belongs to a
+    /// card the user is still standing on, not to an abandoned attempt.
+    func testDismissingTheRefusalReturnsToTheCardWithTheDraftIntact() async throws {
+        env.planResult = .ready(target: customTarget)
+        env.trustResult = .blocked(lane: .gateway, block: .certificateNotPubliclyTrusted)
+        let flow = makeFlow()
+        flow.handleCode(try code(kind: "custom", name: "Home LLM"))
+        await settle(until: { flow.phase == .review }, "should have reached the card")
+
+        flow.connect()
+        await settle(until: { flow.showingTrustBlockAlert }, "the block alert should be up")
+        flow.returnToReview(notice: .refused("because reasons"))
+
+        XCTAssertEqual(flow.phase, .review)
+        XCTAssertNotNil(flow.reviewContext, "the card must survive — this is one step back, not out")
+        XCTAssertTrue(env.discardedDrafts.isEmpty,
+                      "Dismissing a refusal is not abandoning the import; the draft is still live.")
+    }
+
+    /// A server that is merely DOWN is not a trust problem and must not be
+    /// treated as one: the configuration saves, and the connectivity stage that
+    /// follows is where the user learns it could not be reached — with the retry
+    /// affordances that stage already owns.
+    func testAnUnreachableServerStillImportsAndFailsAtTheConnectivityStage() async throws {
+        env.trustResult = .proceed(gatewayPin: nil, fileServerPin: nil)
+        env.gatewayTestResult = .failed(message: "couldn't reach it",
+                                        error: .remoteAgentUnreachable)
         let flow = makeFlow()
         try await scanIntoReview(flow)
 
         flow.connect()
-        await settle(until: { flow.reviewContext?.notice != nil }, "should have surfaced the retry")
+        await settle(until: { flow.phase == .done }, "the run should have finished")
 
-        XCTAssertEqual(flow.phase, .review)
-        guard case .unreachable = try XCTUnwrap(flow.reviewContext?.notice) else {
-            return XCTFail("expected an unreachable notice")
-        }
-        XCTAssertNil(flow.inlineError, "the input step's error field is invisible from the card")
-        XCTAssertFalse(env.didPersist)
+        XCTAssertTrue(env.didPersist, "An unreachable server is a retry, not a bad code.")
+        XCTAssertEqual(flow.stageStatus[.gateway] ?? .pending,
+                       .failed("couldn't reach it", retryable: true))
+        XCTAssertTrue(flow.gatewayStageFailed, "the recovery actions must be offered")
+        XCTAssertTrue(flow.gatewayFailureIsRetryable,
+                      "A server that is merely down is the one failure 'Try again' can actually clear.")
     }
 
     // MARK: - What actually gets written
-
-    /// The property the whole trust gate exists to create: the pin that reaches
-    /// storage is the RESOLVED one, never the payload's claim.
-    func testTheCommittedPinsAreTheResolvedOnesNotThePayloadsClaim() async throws {
-        let claimed = String(repeating: "ab", count: 32)
-        env.trustResult = .proceed(gatewayPin: nil, fileServerPin: nil)
-        let flow = makeFlow()
-
-        flow.handleCode(try code(certFP: claimed))
-        await settle(until: { flow.phase == .review }, "should have reached the card")
-        flow.connect()
-        await settle(until: { self.env.didPersist }, "should have imported")
-
-        XCTAssertEqual(env.executedGatewayPins, [nil],
-                       "A matching claim on an already-trusted certificate stores NO pin — the claim must not leak through.")
-    }
 
     /// A save that fails leaves a minted draft with nothing behind it.
     func testAFailedSaveDiscardsAFreshlyMintedDraft() async throws {
@@ -482,7 +467,7 @@ final class PairingImportFlowTests: XCTestCase {
     // MARK: - Host hooks
 
     func testOnConnectedFiresOnlyWhenTheGatewayStageActuallyPassed() async throws {
-        env.gatewayTestResult = .failed(message: "nope")
+        env.gatewayTestResult = .failed(message: "nope", error: .remoteAgentUnreachable)
         var connectedRefs: [RemoteAgentRef] = []
         var importedRefs: [RemoteAgentRef] = []
         let flow = makeFlow(onImported: { importedRefs.append($0) },
@@ -538,23 +523,85 @@ final class PairingImportFlowTests: XCTestCase {
         XCTAssertEqual(flow.phase, .input)
     }
 
-    // MARK: - Trust-and-retry
+    // MARK: - No first-contact trust anywhere
 
-    func testTrustAndRetryPinsThePresentedKeyThenReprobes() async throws {
-        let presented = String(repeating: "cd", count: 32)
-        env.gatewayTestResult = .untrustedCert(presentedFingerprintHex: presented)
+    /// The pins that reach storage come from the resolver, and the resolver's
+    /// only answer is "ordinary trust". Nothing in this flow can produce a
+    /// non-nil pin — there is no consent alert, no override, and no retry that
+    /// pins a presented key, because a pin cannot rescue a chain the system
+    /// rejected in the first place.
+    func testNoImportPathEverStoresACertificatePin() async throws {
+        env.trustResult = .proceed(gatewayPin: nil, fileServerPin: nil)
         let flow = makeFlow()
 
         try await scanIntoReview(flow)
         flow.connect()
-        await settle(until: { flow.phase == .done }, "the run should have paused on the amber row")
-        XCTAssertEqual(flow.stageStatus[.gateway] ?? .pending, .untrustedCert)
+        await settle(until: { self.env.didPersist }, "should have imported")
 
-        env.gatewayTestResult = .passed
-        flow.trustAndRetry()
-        await settle(until: { flow.stageStatus[.gateway] == .passed }, "the retry should pass")
+        XCTAssertEqual(env.executedGatewayPins, [nil])
+        XCTAssertEqual(env.executedFileServerPins, [nil])
+    }
 
-        XCTAssertEqual(env.pinnedFingerprints, [presented],
-                       "the key that gets pinned is the one the server presented, not one the code named")
+    /// The gateway stage has exactly two terminal outcomes. An untrusted
+    /// certificate arrives as an ordinary `.failed` — there is no amber
+    /// pause state for it to land in, so the run finishes and the recovery
+    /// actions are what the user gets.
+    func testAnUntrustedCertificateAtTheGatewayStageIsAPlainFailure() async throws {
+        env.gatewayTestResult = .failed(message: CertificateTrustCopy.untrustedRefusalWithRemedy,
+                                        error: .remoteAgentCertUntrusted)
+        let flow = makeFlow()
+
+        try await scanIntoReview(flow)
+        flow.connect()
+        await settle(until: { flow.phase == .done }, "the run should have finished")
+
+        XCTAssertEqual(flow.stageStatus[.gateway] ?? .pending,
+                       .failed(CertificateTrustCopy.untrustedRefusalWithRemedy, retryable: false))
+        XCTAssertTrue(flow.gatewayStageFailed,
+                      "There is no trust-and-retry to shadow the recovery section any more.")
+    }
+
+    /// Each certificate refusal is TERMINAL, so the recovery section must show
+    /// its way-out actions WITHOUT the retry: the probe reaches the same verdict
+    /// every attempt until something outside the app changes, and a prominent
+    /// "Try again" over a refusal both promises what it cannot deliver and
+    /// buries the stage row's remedy under a spinner.
+    func testEveryCertificateRefusalAtTheGatewayStageWithholdsTheRetry() async throws {
+        let refusals: [(AppError, String)] = [
+            (.remoteAgentCertUntrusted, CertificateTrustCopy.untrustedRefusalWithRemedy),
+            (.remoteAgentCertMismatch, CertificateTrustCopy.pinMismatchRefusalWithRemedy),
+            (.remoteAgentCertKeyUnpinnable, CertificateTrustCopy.keyUnpinnableRefusalWithRemedy),
+        ]
+        for (error, message) in refusals {
+            // A fresh stub per refusal — the flow is single-use, so each arm
+            // needs its own run from the input phase.
+            env = StubPairingImportEnvironment()
+            env.gatewayTestResult = .failed(message: message, error: error)
+            let flow = makeFlow()
+
+            try await scanIntoReview(flow)
+            flow.connect()
+            await settle(until: { flow.phase == .done }, "the run should have finished")
+
+            XCTAssertTrue(flow.gatewayStageFailed,
+                          "\(error): the way-out actions are still the user's exit.")
+            XCTAssertFalse(flow.gatewayFailureIsRetryable,
+                           "\(error): a terminal refusal must not be offered a retry that reaches the identical verdict.")
+        }
+    }
+
+    /// The counterpart, and the reason the gate rides the taxonomy rather than a
+    /// certificate special case: a failure with no typed error behind it keeps
+    /// its retry. Unknown is not terminal.
+    func testAnUntypedGatewayFailureKeepsItsRetry() async throws {
+        env.gatewayTestResult = .failed(message: "Unexpected error. Try again.", error: nil)
+        let flow = makeFlow()
+
+        try await scanIntoReview(flow)
+        flow.connect()
+        await settle(until: { flow.phase == .done }, "the run should have finished")
+
+        XCTAssertTrue(flow.gatewayFailureIsRetryable,
+                      "No taxonomy entry means no terminality claim — the affordance stays.")
     }
 }

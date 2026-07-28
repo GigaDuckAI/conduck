@@ -851,7 +851,18 @@ final class ReplyVoice: SpeakEngine {
                 // Never log the error payload or text. The breadcrumb
                 // carries only the typed error code.
                 if Task.isCancelled || turn != self.generation { return }
-                let code = (error as? AppError)?.errorCode ?? -1
+                let appError = error as? AppError
+                let code = appError?.errorCode ?? -1
+                // A TERMINAL refusal also gets one quiet user-visible verdict
+                // (see `.spokenReplyVoiceRefused`) — posted BEFORE the fallback
+                // starts, never instead of it. Transient failures stay silent.
+                if let appError, !appError.isRetryable {
+                    NotificationCenter.default.post(
+                        name: .spokenReplyVoiceRefused,
+                        object: nil,
+                        userInfo: [SpokenReplyVoiceRefusal.errorCodeKey: appError.errorCode]
+                    )
+                }
                 self.startAppleLeg(
                     text: text, language: language,
                     reason: .fetchFailed(errorCode: code),
@@ -1111,6 +1122,32 @@ final class ReplyVoice: SpeakEngine {
         localized: "tts.sample",
         defaultValue: "This is how your replies will sound."
     )
+}
+
+// MARK: - Terminal spoken-voice refusal (the one user-visible verdict)
+
+/// `userInfo` contract for `.spokenReplyVoiceRefused`.
+enum SpokenReplyVoiceRefusal {
+    /// The refusing `AppError`'s numeric code. A CODE, not a message: the
+    /// receiving surface rebuilds the error and renders the canonical copy, so
+    /// the wording cannot fork here — and nothing text-shaped (reply content,
+    /// endpoint URL, key material) can ride a `userInfo` dictionary by accident.
+    static let errorCodeKey = "errorCode"
+}
+
+extension Notification.Name {
+    /// A spoken reply's chosen voice was refused for a reason a retry cannot
+    /// change, and the Apple on-device voice spoke the reply instead.
+    ///
+    /// Falling back is right — the user still hears their reply, which is the
+    /// whole point of having a fallback. Falling back SILENTLY on a terminal
+    /// refusal is not: a BYO voice endpoint whose certificate this device
+    /// rejects would keep producing the built-in voice indefinitely with
+    /// nothing anywhere saying why, and the device-local outcome ring is a
+    /// forensic record, not a surface anyone reads. Transient failures stay
+    /// silent by design — they resolve on their own, and a notice per flaky
+    /// synthesis is noise that would teach the user to ignore this one.
+    static let spokenReplyVoiceRefused = Notification.Name("spokenReplyVoiceRefused")
 }
 
 #if os(macOS)

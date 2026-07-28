@@ -19,11 +19,17 @@
 //     that lives on the `URLSession` the caller hands the request to
 //     (`BackgroundFileTransfer` for transfers, the ephemeral session built
 //     here for the staged test).
-//   - `runConnectionTest(...)` is the only method that touches the network. It
+//   - THREE methods touch the network, and ALL THREE answer server-trust
+//     challenges: `runConnectionTest(...)` (the staged test),
+//     `probeReachability(...)` and `probeFolderCapability(...)`. Each builds its
+//     own session through the single `makeProbeSession(...)` recipe, which
 //     clones the ephemeral 15 s cert-pinned `URLSession` pattern from
 //     `RemoteAgentClient+TestConnection.swift` so the `RemoteAgentTrustEvaluator`
-//     SPKI-pinning delegate is installed for THIS probe only, never on
-//     `URLSession.shared`.
+//     SPKI-pinning delegate is installed for THAT probe only, never on
+//     `URLSession.shared` — and each reads the resulting verdicts back through
+//     its own `AttemptTrustSignals` source. Audit all three, not just the named
+//     one: a trust refusal that goes unread inside a probe degrades to "host is
+//     down", which is the one misreading this taxonomy exists to prevent.
 //
 // Why GET-never-HEAD for existence: a read-only HEAD/GET 200 on a
 // gateway that exposes a Control-UI HTML page false-positives existence; rclone
@@ -54,6 +60,18 @@ enum FileProbeOutcome: Equatable, Sendable {
     case unauthorized
     /// Server-side fault (HTTP 5xx) — transient, the caller may retry.
     case serverError
+    /// This device refused the server's certificate — an untrusted chain, a
+    /// pinned key that disagreed with a chain it DID trust, or a key algorithm
+    /// Conduck cannot fingerprint. Never `.missing`: a refusal is evidence about
+    /// the connection, never about the file, so a caller that acts on absence
+    /// must not act on this.
+    ///
+    /// Distinct from `.unknown` because the two answer different questions.
+    /// `.unknown` says "this attempt learned nothing"; this says "this attempt
+    /// learned nothing AND no further attempt will, until something outside the
+    /// app changes". Only the evaluator's own verdicts can tell them apart —
+    /// every refusal arrives as the same bare `-999` a benign cancellation does.
+    case certRefused
     /// Any other status (3xx redirect, 4xx other, transport-mapped) — fail closed.
     case unknown
 }
@@ -82,9 +100,29 @@ enum FileReachabilityOutcome: Equatable, Sendable {
     /// inconclusively. FAIL CLOSED (NOT `authFailed` — a `405` is
     /// "method/endpoint", not "bad credential").
     case inconclusive
-    /// Transport failure (DNS / TLS / timeout / refused / pin mismatch) — the host
-    /// was not reachable at all.
+    /// Transport failure (DNS / timeout / refused / a transient handshake
+    /// hiccup) — the host was not reachable at all.
     case unreachable
+    /// The host answered the TLS handshake and this device REFUSED its
+    /// certificate. Split from `.unreachable` because the two carry opposite
+    /// instructions: unreachable sends the user to check the server is running,
+    /// which is exactly wrong here — it is running, and the fix is to give it a
+    /// certificate this device trusts.
+    case certUntrusted
+    /// The host presented a certificate this device DOES trust, and the
+    /// configured pin disagreed with its key. Its own outcome because it is the
+    /// only one that means the connection may be intercepted: folding it into
+    /// `.unreachable` threw that signal away and told the user to check whether
+    /// their file server was running, and folding it into `.certUntrusted` would
+    /// send them to obtain a certificate they already have.
+    case certMismatch
+    /// The host presented a certificate this device DOES trust, and Conduck
+    /// could not compute a digest for its key algorithm, so the configured pin
+    /// was never compared. Its own outcome for the same reason `.certMismatch`
+    /// is: sharing that case would tell a user with a valid certificate their
+    /// connection may be intercepted, and sharing `.certUntrusted` would send
+    /// them to replace a certificate the device already accepts.
+    case certKeyUnpinnable
 }
 
 /// One entry from a PROPFIND `Depth: 1` directory listing. Built NOW + unit-
@@ -674,37 +712,65 @@ enum FileServerClient {
     static func runConnectionTest(
         snapshot: SettingsManager.FileTransferSnapshot,
         session: URLSession? = nil,
-        pinRejectedOverride: (@Sendable () -> Bool)? = nil
+        signalsOverride: (@Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals)? = nil
     ) async -> FileTransferTestResult {
         // Build (or adopt) the probe session. When we build it, install the
         // SPKI-pinning delegate scoped to THIS probe only — same posture as the
-        // converse Test Connection. `hasPin` decides how a TLS-rejection
-        // URLError is classified: pin set + the evaluator confirmed a mismatch
-        // → cert mismatch; otherwise (no pin, or a transient handshake failure)
-        // → unreachable. (TOFU capture is a Settings-layer concern, not a
-        // file-transfer staged-test concern — the staged test runs AFTER the
-        // user has already trusted/pinned the host in setup.) `pinRejectedOverride`
-        // is a test seam (injected sessions have no real evaluator to read).
+        // converse Test Connection. What a TLS-rejection URLError resolves to is
+        // decided by the evaluator's own POSITIVE verdicts, never by whether a
+        // pin exists. `signalsOverride` is the test seam (an injected session
+        // has no real evaluator to read); production reads the real evaluator,
+        // so a certificate the device does not trust is reported as such instead
+        // of being discarded by construction.
+        //
+        // ONE closure returning the whole snapshot, not several loose Bools: the
+        // staged test issues a SEQUENCE of requests on this session, and reading
+        // the verdicts separately could pair one request's system verdict with
+        // another's pin verdict.
         let pin = snapshot.certFingerprintHex
         let ownsSession: Bool
         let probeSession: URLSession
-        let pinRejected: @Sendable () -> Bool
+        let signals: @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals
         if let session {
             probeSession = session
             ownsSession = false
-            pinRejected = pinRejectedOverride ?? { false }
+            signals = Self.probeSignals(override: signalsOverride, evaluator: nil)
         } else {
             let built = makeProbeSession(pinnedFingerprintHex: pin)
             probeSession = built.session
             ownsSession = true
-            pinRejected = pinRejectedOverride ?? { built.evaluator.pinRejected }
+            signals = Self.probeSignals(override: signalsOverride, evaluator: built.evaluator)
         }
         if ownsSession {
             defer { probeSession.invalidateAndCancel() }
-            return await performStagedTest(snapshot: snapshot, session: probeSession, hasPin: pin?.isEmpty == false, pinRejected: pinRejected)
+            return await performStagedTest(snapshot: snapshot, session: probeSession, signals: signals)
         } else {
-            return await performStagedTest(snapshot: snapshot, session: probeSession, hasPin: pin?.isEmpty == false, pinRejected: pinRejected)
+            return await performStagedTest(snapshot: snapshot, session: probeSession, signals: signals)
         }
+    }
+
+    /// Resolve the attempt-verdict source for a probe: the override answers when
+    /// one is supplied, otherwise the real evaluator does (and `.empty`'s
+    /// no-verdict values stand in when there is neither — an injected mock
+    /// session raises no challenge, so no verdict is the truthful reading).
+    ///
+    /// THE OVERRIDE SUPPLIES A WHOLE `AttemptTrustSignals`, never a field at a
+    /// time. Deriving one field from another input is what this seam is
+    /// forbidden to do: it previously read `challengeRefused` off "a pin is
+    /// configured", which is precisely the proxy the classifier removed —
+    /// correct only because of an invariant inside `decide`, invisible from
+    /// here, and reintroduced on a REAL lane the moment someone shares one
+    /// session between Diagnostics probes. It also let the file-lane tests lock
+    /// a signal shape production never produces (a cold tunnel raises no
+    /// challenge, so nothing can have refused it). A whole snapshot makes the
+    /// test state the shape it is testing, and leaves the seam with nothing to
+    /// infer.
+    private static func probeSignals(
+        override: (@Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals)?,
+        evaluator: RemoteAgentTrustEvaluator?
+    ) -> @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals {
+        if let override { return override }
+        return { evaluator?.attemptSignals ?? .empty }
     }
 
     /// NON-MUTATING reach+auth probe — a SINGLE ranged GET of a key that cannot
@@ -718,22 +784,39 @@ enum FileServerClient {
     ///
     /// Session posture mirrors `runConnectionTest`: when `session` is nil, builds
     /// the 15 s ephemeral cert-pinned `URLSession` (SPKI delegate scoped to THIS
-    /// probe only); tests inject a `MockURLProtocol`-backed session. A pin mismatch
-    /// or any transport failure folds to `.unreachable` (the reach probe never
-    /// offers TOFU — a mismatch is still "couldn't reach it safely"). Never names
+    /// probe only); tests inject a `MockURLProtocol`-backed session, and
+    /// `signalsOverride` is the seam that stands in for the evaluator such a
+    /// session does not carry.
+    ///
+    /// A transport failure is classified by the SAME
+    /// `RemoteAgentTrustEvaluator.classifyTransportError` the staged write test
+    /// uses, reading the SAME attempt snapshot, so the two file-lane probes
+    /// cannot tell a user two different stories about one server. All three
+    /// certificate classes survive: a chain the device refuses is
+    /// `.certUntrusted`, a pin that disagreed with a chain it accepted is
+    /// `.certMismatch`, and a key that could not be hashed at all is
+    /// `.certKeyUnpinnable` — folding any of them into `.unreachable` produces
+    /// the "check your file-server is running" row for a host that answered, and
+    /// in the mismatch case discards the one signal that means the connection may
+    /// be intercepted. Everything else still folds to `.unreachable`. Never names
     /// the credential.
     static func probeReachability(
         snapshot: SettingsManager.FileTransferSnapshot,
-        session: URLSession? = nil
+        session: URLSession? = nil,
+        signalsOverride: (@Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals)? = nil
     ) async -> FileReachabilityOutcome {
         let probeSession: URLSession
         let ownsSession: Bool
+        let signals: @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals
         if let session {
             probeSession = session
             ownsSession = false
+            signals = Self.probeSignals(override: signalsOverride, evaluator: nil)
         } else {
-            probeSession = makeProbeSession(pinnedFingerprintHex: snapshot.certFingerprintHex).session
+            let built = makeProbeSession(pinnedFingerprintHex: snapshot.certFingerprintHex)
+            probeSession = built.session
             ownsSession = true
+            signals = Self.probeSignals(override: signalsOverride, evaluator: built.evaluator)
         }
         defer { if ownsSession { probeSession.invalidateAndCancel() } }
 
@@ -750,10 +833,17 @@ enum FileServerClient {
             }
             return classifyReachability(status: http.statusCode)
         } catch {
-            // Any transport error (URLError, cancellation, pin rejection) →
-            // unreachable. The reach probe draws no auth/cert distinction: it
-            // either reached the host and read a status, or it didn't.
-            return .unreachable
+            // Both trust signals are POSITIVE — set only once a server-trust
+            // challenge actually failed — so a cold tunnel or a dead host leaves
+            // both false and still reads as unreachable. A non-`URLError` is
+            // unclassifiable and takes the same conservative answer.
+            guard let urlError = error as? URLError else { return .unreachable }
+            switch RemoteAgentTrustEvaluator.classifyTransportError(urlError.code, signals: signals()) {
+            case .untrustedCert: return .certUntrusted
+            case .certMismatch: return .certMismatch
+            case .certKeyUnpinnable: return .certKeyUnpinnable
+            case .timeout, .unreachable, .cancelled: return .unreachable
+            }
         }
     }
 
@@ -781,8 +871,7 @@ enum FileServerClient {
     private static func performStagedTest(
         snapshot: SettingsManager.FileTransferSnapshot,
         session: URLSession,
-        hasPin: Bool,
-        pinRejected: @escaping @Sendable () -> Bool = { false }
+        signals: @escaping @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals
     ) async -> FileTransferTestResult {
         // Mint a unique tiny probe file name for this test run. The 8-hex tag
         // keeps concurrent / repeated tests from colliding on the same key.
@@ -817,7 +906,7 @@ enum FileServerClient {
             return FileTransferTestResult(
                 reachedStage: .reachability,
                 success: false,
-                failure: mapTransportError(error, hasPin: hasPin, pinRejected: pinRejected())
+                failure: mapTransportError(error, signals: signals())
             )
         } catch {
             return FileTransferTestResult(reachedStage: .reachability, success: false, failure: .fileTransferUnreachable)
@@ -883,16 +972,27 @@ enum FileServerClient {
                     readFailure = .fileTransferAuthFailed
                 case .serverError:
                     readFailure = .fileTransferServerError
-                case .missing, .unknown:
-                    break   // stays `.fileTransferNotAFileServer`
+                case .missing, .certRefused, .unknown:
+                    // Stays `.fileTransferNotAFileServer`. `.certRefused` is
+                    // listed for exhaustiveness only — it is a TRANSPORT verdict
+                    // and `parseProbeOutcome` reads a status, so a response we
+                    // are holding here cannot carry it.
+                    break
                 }
             } else {
                 readFailure = .fileTransferUnreachable
             }
         } catch {
             // The PUT reached the host, so a transport failure on the very next
-            // GET is a connectivity fault, not a config one.
-            readFailure = .fileTransferUnreachable
+            // GET is ordinarily a connectivity fault rather than a config one —
+            // but a CERTIFICATE refusal is neither, and hardcoding unreachable
+            // here threw it away. The PUT and the GET are separate attempts (the
+            // pool can drop and re-establish the connection between them, and a
+            // re-handshake raises its own challenge), so the read is entitled to
+            // its own verdict. `mapTransportError` still answers unreachable for
+            // everything that carries no certificate verdict, which is what keeps
+            // the connectivity reading for the case this comment described.
+            readFailure = mapTransportError(error, signals: signals())
         }
 
         // --- Stage 5: delete (best-effort cleanup) — never affects the verdict ---
@@ -912,7 +1012,41 @@ enum FileServerClient {
         // per-conversation `<convID>/…` keys or falls back to flat ones. This
         // probe failing does NOT fail the connection test (flat keys work fine) —
         // it only narrows `folderCapable` to false.
-        let folderCapable = await probeNestedWrite(snapshot: snapshot, session: session)
+        //
+        // WITH ONE EXCEPTION, and it is the reason this switch is not a `==
+        // .capable`. A CERTIFICATE refusal here is not a capability answer at
+        // all: it says the connection was refused, and absorbing it into
+        // `folderCapable = false` reported a trust refusal as a green connection
+        // test with a narrowed feature — the failure mode that looks like
+        // success. It fails the test, with the certificate's own error.
+        let folderCapable: Bool
+        switch await probeFolderCapability(snapshot: snapshot, session: session, signals: signals) {
+        case .capable:
+            folderCapable = true
+        case .rejected, .indeterminate:
+            // The staged test runs interactively against a server the flat stages
+            // just passed, so "indeterminate" here is a narrowing like any other —
+            // and the silent launch-time re-probe un-sticks a false verdict at the
+            // next probe-algorithm revision anyway.
+            folderCapable = false
+        case .certificateRefused(let refusal):
+            // Reported at `.reachability`, not at `.read`: a certificate refusal
+            // is a TLS-layer verdict about the CONNECTION, and it is where every
+            // other certificate refusal in this lane lands, so the user gets one
+            // story about certificates wherever in the sequence one is observed.
+            // Marking `.read` failed would put a red X on a stage that visibly
+            // succeeded.
+            //
+            // `folderCapable` keeps its init DEFAULT (true), like every other
+            // failure path here: the flag is a narrowing that only a DEFINITIVE
+            // nested-PUT rejection may flip, a refused connection proves nothing
+            // about folders, and neither caller persists it unless `success`.
+            return FileTransferTestResult(
+                reachedStage: .reachability,
+                success: false,
+                failure: refusal.fileTransferError
+            )
+        }
 
         // Full pass (connectivity). `folderCapable` rides alongside the verdict.
         return FileTransferTestResult(
@@ -923,39 +1057,100 @@ enum FileServerClient {
         )
     }
 
-    /// Probe whether the gateway accepts a NESTED (folder) write via the SAME
-    /// sequence real uploads use. Staged-test adapter over
-    /// `probeFolderCapability(snapshot:session:)`: any non-`.capable` outcome →
-    /// false (the staged test runs interactively against a server the flat
-    /// stages just passed, so "indeterminate" there is a failure like any
-    /// other — and the silent launch-time re-probe un-sticks a false verdict
-    /// at the next probe-algorithm revision anyway).
-    private static func probeNestedWrite(
-        snapshot: SettingsManager.FileTransferSnapshot,
-        session: URLSession
-    ) async -> Bool {
-        await probeFolderCapability(snapshot: snapshot, session: session) == .capable
-    }
-
-    /// Tri-state outcome of the folder-capability probe. `rejected` is the ONLY
-    /// value that means "the server answered and refuses nested writes";
-    /// `indeterminate` (transport error, ambient MKCOL failure, ambiguous
-    /// status) must never be persisted as a capability verdict — the silent
-    /// re-probe retries it later, and recording it would park a healthy server
-    /// in flat mode until the next probe-revision bump.
+    /// Outcome of the folder-capability probe. `rejected` is the ONLY value that
+    /// means "the server answered and refuses nested writes"; `indeterminate`
+    /// (transport error, ambient MKCOL failure, ambiguous status) must never be
+    /// persisted as a capability verdict — the silent re-probe retries it later,
+    /// and recording it would park a healthy server in flat mode until the next
+    /// probe-revision bump.
+    ///
+    /// `certificateRefused` is a CASE rather than a flavour of `indeterminate`
+    /// because the two demand opposite handling and Swift has to ask each caller
+    /// which it means. `indeterminate` says "try again later"; this says "the
+    /// connection itself was refused, and no later probe will do better until
+    /// something outside the app changes". Folding it into `indeterminate` is
+    /// exactly how a trust refusal disappeared into `folderCapable = false` while
+    /// the connection test still reported success.
     enum FolderProbeOutcome: Equatable {
         case capable
         case rejected
         case indeterminate
+        case certificateRefused(CertificateRefusal)
+    }
+
+    /// Which of the three CERTIFICATE refusals a probe hit. Deliberately narrower
+    /// than `RemoteAgentTrustEvaluator.TransportErrorClass`: an outcome that
+    /// carried the full class could name a timeout as a certificate refusal, and
+    /// the whole point of the case that holds this is that a trust refusal is
+    /// neither a capability verdict nor a reachability verdict.
+    enum CertificateRefusal: Equatable, Sendable {
+        /// This device does not trust the presented chain.
+        case untrusted
+        /// The chain IS system-trusted and the configured pin disagreed with its
+        /// key — the one shape that means the connection may be intercepted.
+        case mismatch
+        /// The chain IS system-trusted and no digest could be computed for its
+        /// key algorithm, so the pin was never compared.
+        case keyUnpinnable
+
+        /// `nil` for every non-certificate class, so a refusal can never be
+        /// constructed out of a timeout, a cold tunnel, or a cancel. This
+        /// exhaustive switch is the single place the split is decided; adding a
+        /// transport class breaks it here rather than silently at a call site.
+        init?(_ transportClass: RemoteAgentTrustEvaluator.TransportErrorClass) {
+            switch transportClass {
+            case .untrustedCert: self = .untrusted
+            case .certMismatch: self = .mismatch
+            case .certKeyUnpinnable: self = .keyUnpinnable
+            case .timeout, .unreachable, .cancelled: return nil
+            }
+        }
+
+        /// The file-lane taxonomy code for this refusal. Each is its own code, and
+        /// none of them is `.fileTransferUnreachable`: the host answered the
+        /// handshake, so "check your file-server is running" sends the user
+        /// hunting a problem that is not there.
+        var fileTransferError: AppError {
+            switch self {
+            case .untrusted:
+                // This device refused the certificate. The remedy is on the
+                // server, and it is the shared one every lane shows, so the file
+                // lane never invents a second story.
+                return .fileTransferCertUntrusted
+            case .mismatch:
+                return .fileTransferCertMismatch
+            case .keyUnpinnable:
+                // System trust PASSED, so nothing disagreed — the pin simply
+                // could not be computed for this key algorithm. Its own code so
+                // the file lane states that, rather than borrowing the mismatch
+                // warning.
+                return .fileTransferCertKeyUnpinnable
+            }
+        }
+    }
+
+    /// The certificate refusal behind a transport failure, or `nil` when the
+    /// failure was not a certificate verdict at all (a non-`URLError`, a timeout,
+    /// a cold tunnel, a cancel). ONE place every probe in this file asks the
+    /// shared classifier, so no catch block can answer the question its own way.
+    private static func certificateRefusal(
+        _ error: Error,
+        signals: RemoteAgentTrustEvaluator.AttemptTrustSignals
+    ) -> CertificateRefusal? {
+        guard let urlError = error as? URLError else { return nil }
+        return CertificateRefusal(
+            RemoteAgentTrustEvaluator.classifyTransportError(urlError.code, signals: signals)
+        )
     }
 
     /// Probe whether `snapshot`'s file-server accepts the client's nested
     /// upload sequence: `MKCOL __conduck_probe__` (status INSPECTED), then
     /// `PUT __conduck_probe__/<uuid>.txt`, `GET` byte-echo, best-effort
-    /// `DELETE`. Callers: the staged Test Connection (via `probeNestedWrite`,
-    /// collapsing to Bool) and the silent launch-time capability refresh
-    /// (upgrade-only — writes `folderCapable=true` on `.capable`, records a
-    /// definitive revision on `.rejected`, does nothing on `.indeterminate`).
+    /// `DELETE`. Callers: the staged Test Connection (which fails the whole test
+    /// on `.certificateRefused` and collapses everything else to a Bool) and the
+    /// silent launch-time capability refresh (upgrade-only — writes
+    /// `folderCapable=true` on `.capable`, records a definitive revision on
+    /// `.rejected`, does nothing on `.indeterminate` or a refusal).
     ///
     /// Classification:
     /// - PUT 2xx + GET echoes the written bytes → `.capable`.
@@ -969,26 +1164,41 @@ enum FileServerClient {
     /// - PUT 403/405/409 after an INCONCLUSIVE MKCOL (transport error, 5xx,
     ///   auth failure) → `.indeterminate` — the 409 is explained by the
     ///   missing parent, not by a folder-rejecting server.
-    /// - Any other PUT status, PUT/GET transport error → `.indeterminate`.
+    /// - PUT/GET transport failure carrying a CERTIFICATE verdict →
+    ///   `.certificateRefused`. Never `.indeterminate`: the connection was
+    ///   refused, so this probe learned nothing about folders AND no later probe
+    ///   will, which is a different instruction from "try again".
+    /// - Any other PUT status, any other PUT/GET transport error →
+    ///   `.indeterminate`.
     ///
     /// When `session` is nil, builds the 15 s ephemeral cert-pinned session
-    /// (same posture as `runConnectionTest`); tests inject a
-    /// `MockURLProtocol`-backed session. The probe DIR is a fixed throwaway
-    /// namespace (`__conduck_probe__`) distinct from any conversation folder;
-    /// the file carries a per-run uuid so concurrent probes never collide.
-    /// The DELETE is best-effort and never affects the outcome.
+    /// (same posture as `runConnectionTest`) and reads ITS evaluator. A caller
+    /// supplying a `session` must supply `signals` too — the probe cannot read an
+    /// evaluator it did not build, and without a verdict source a certificate
+    /// refusal on that session is indistinguishable from a dead host. Tests inject
+    /// a `MockURLProtocol`-backed session and state the verdicts they are testing.
+    ///
+    /// The probe DIR is a fixed throwaway namespace (`__conduck_probe__`) distinct
+    /// from any conversation folder; the file carries a per-run uuid so concurrent
+    /// probes never collide. The DELETE is best-effort and never affects the
+    /// outcome.
     static func probeFolderCapability(
         snapshot: SettingsManager.FileTransferSnapshot,
-        session: URLSession? = nil
+        session: URLSession? = nil,
+        signals: (@Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals)? = nil
     ) async -> FolderProbeOutcome {
         let probeSession: URLSession
         let ownsSession: Bool
+        let attemptSignals: @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals
         if let session {
             probeSession = session
             ownsSession = false
+            attemptSignals = Self.probeSignals(override: signals, evaluator: nil)
         } else {
-            probeSession = makeProbeSession(pinnedFingerprintHex: snapshot.certFingerprintHex).session
+            let built = makeProbeSession(pinnedFingerprintHex: snapshot.certFingerprintHex)
+            probeSession = built.session
             ownsSession = true
+            attemptSignals = Self.probeSignals(override: signals, evaluator: built.evaluator)
         }
         defer { if ownsSession { probeSession.invalidateAndCancel() } }
 
@@ -1017,6 +1227,9 @@ enum FileServerClient {
             guard let http = response as? HTTPURLResponse else { return .indeterminate }
             putStatus = http.statusCode
         } catch {
+            if let refusal = certificateRefusal(error, signals: attemptSignals()) {
+                return .certificateRefused(refusal)
+            }
             return .indeterminate
         }
 
@@ -1039,8 +1252,10 @@ enum FileServerClient {
         // 200 the GET with its own HTML, so require the returned body to EQUAL
         // the nested payload we PUT before crediting folder-capability. Full-range
         // GET so the whole body comes back to compare. Transport error →
-        // indeterminate (the write may well have landed); a served-but-wrong
-        // body or 404 → rejected (acked writes that don't land are not a lane).
+        // indeterminate (the write may well have landed) UNLESS it carries a
+        // certificate verdict, which is about the connection and not about the
+        // write; a served-but-wrong body or 404 → rejected (acked writes that
+        // don't land are not a lane).
         let getRequest = buildDownloadRequest(snapshot: snapshot, storedKey: nestedKey)
         let outcome: FolderProbeOutcome
         do {
@@ -1051,7 +1266,8 @@ enum FileServerClient {
                 outcome = .rejected
             }
         } catch {
-            outcome = .indeterminate
+            outcome = certificateRefusal(error, signals: attemptSignals())
+                .map(FolderProbeOutcome.certificateRefused) ?? .indeterminate
         }
 
         // Best-effort cleanup (never affects the verdict).
@@ -1071,28 +1287,20 @@ enum FileServerClient {
         _ = try? await session.data(for: request)
     }
 
-    /// Map a transport `URLError` to the file-transfer taxonomy via the shared
+    /// Map a transport failure to the file-transfer taxonomy via the shared
     /// `RemoteAgentTrustEvaluator.classifyTransportError` classifier (single
-    /// source of truth). The staged test never offers TOFU, so an untrusted
-    /// cert reads as unreachable (`systemTrustRejected:` is irrelevant here →
-    /// `false`); a `pinRejected` mismatch is the one case surfaced as a cert
-    /// mismatch. This keeps a transient `.secureConnectionFailed` (cold tunnel)
-    /// from being mislabeled a cert mismatch. Never names the credential.
-    private static func mapTransportError(_ error: URLError, hasPin: Bool, pinRejected: Bool) -> AppError {
-        switch RemoteAgentTrustEvaluator.classifyTransportError(
-            error.code,
-            hasPin: hasPin,
-            systemTrustRejected: false,
-            pinRejected: pinRejected
-        ) {
-        case .certMismatch:
-            return .fileTransferCertMismatch
-        case .timeout, .unreachable, .untrustedCert, .cancelled:
-            // A connect-timeout reads as unreachable (not a long-compute
-            // timeout); an untrusted cert with no pin reads as unreachable
-            // (TOFU lives in the Settings save path, not the staged test).
-            return .fileTransferUnreachable
-        }
+    /// source of truth). The trust verdicts are threaded through from the probe's
+    /// own evaluator rather than hardcoded — a hardcoded `false` made a genuine
+    /// certificate rejection indistinguishable from a cold tunnel. Everything
+    /// that is NOT a certificate refusal collapses to unreachable, which keeps a
+    /// transient `.secureConnectionFailed` (cold tunnel, no verdict set) and a
+    /// connect-timeout reading as reachability rather than as a cert failure.
+    /// Never names the credential.
+    private static func mapTransportError(
+        _ error: Error,
+        signals: RemoteAgentTrustEvaluator.AttemptTrustSignals
+    ) -> AppError {
+        certificateRefusal(error, signals: signals)?.fileTransferError ?? .fileTransferUnreachable
     }
 }
 

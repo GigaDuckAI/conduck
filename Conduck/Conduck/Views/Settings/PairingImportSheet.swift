@@ -32,9 +32,9 @@ import SwiftUI
 
 struct PairingImportSheet: View {
 
-    /// Fired after `dismiss()` when the user, sitting on a TERMINAL non-cert
-    /// gateway failure, picks "Fix it manually" — lets the host route to the
-    /// per-ref/manual editor. nil → the affordance is hidden.
+    /// Fired after `dismiss()` when the user, sitting on a failed gateway stage,
+    /// picks "Fix it manually" — lets the host route to the per-ref/manual
+    /// editor. nil → the affordance is hidden.
     private let onOpenManualSettings: (() -> Void)?
 
     @State private var flow: PairingImportFlow
@@ -134,47 +134,16 @@ struct PairingImportSheet: View {
             }
             .alert(
                 Text(LocalizedStringResource(
-                    "settings.pairing.trust.consent.title",
-                    defaultValue: "Trust this server's certificate?"
-                )),
-                isPresented: $flow.showingPinConsentAlert,
-                presenting: flow.pinConsentContext
-            ) { context in
-                Button {
-                    flow.acceptPinConsent(context)
-                } label: {
-                    Text(LocalizedStringResource("settings.pairing.trust.consent.confirm",
-                                                 defaultValue: "Trust & Connect"))
-                }
-                Button(role: .cancel) {
-                    // Back to the card, draft intact — declining a certificate
-                    // exception is not the same as abandoning the import, and the
-                    // destination is still there to re-read.
-                    flow.returnToReview(notice: nil)
-                } label: {
-                    Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
-                }
-            } message: { context in
-                Text(pinConsentMessage(for: context))
-            }
-            .alert(
-                // Deliberately generic: two of the five blocks are NOT a mismatch
-                // (the code named no key; the key type can't be pinned), and a
-                // title claiming otherwise would misdescribe them.
-                Text(LocalizedStringResource(
                     "settings.pairing.trust.blocked.title",
                     defaultValue: "Can't verify this server"
                 )),
                 isPresented: $flow.showingTrustBlockAlert,
                 presenting: flow.trustBlockContext
             ) { context in
-                if let override = context.override {
-                    Button(role: .destructive) {
-                        flow.acceptTrustOverride(context, override: override)
-                    } label: {
-                        Text(overrideButtonTitle(for: override))
-                    }
-                }
+                // No "Connect anyway". Every refusal here is terminal — a pin
+                // cannot make an untrusted chain acceptable to the system, so a
+                // proceed button would either lie or produce a gateway that fails
+                // every request afterwards.
                 Button(role: .cancel) {
                     // Carry the refusal back onto the card. Dropping it would
                     // return the user to a screen that looks exactly as it did
@@ -185,7 +154,7 @@ struct PairingImportSheet: View {
                     Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
                 }
             } message: { context in
-                Text(trustBlockMessage(for: context))
+                Text(blockReason(for: context))
             }
         }
         #if os(macOS)
@@ -380,10 +349,16 @@ struct PairingImportSheet: View {
                     }
                 }
 
+                // A CONSTANT fact about the app, not about this code — which is
+                // exactly why it belongs on the card. A setup code names no key
+                // and cannot ask for an exception, so the one thing the user
+                // needs to know about certificates here is the rule that will be
+                // applied, and that it is the same for every code.
                 reviewRow(
                     label: String(localized: "settings.pairing.review.certificate",
                                   defaultValue: "Certificate"),
-                    value: certificateText(model.certificate),
+                    value: String(localized: "settings.pairing.review.certificate.standard",
+                                  defaultValue: "Standard checks. Conduck connects only if this device already trusts the server's certificate."),
                     monospaced: false
                 )
 
@@ -418,32 +393,6 @@ struct PairingImportSheet: View {
                            defaultValue: "Replacing %@"),
             name
         )
-    }
-
-    /// The certificate row states the CLAIM, never the outcome — the check runs
-    /// against the live server after Connect (`PairingTrustDecision`), and
-    /// predicting its verdict here would be a guess on the one screen that exists
-    /// to be trustworthy.
-    ///
-    /// The second sentence of the named case is load-bearing. "This code names a
-    /// key" invites the reasonable inference that future connections stay bound to
-    /// that key — but a matching claim on an already-trusted certificate resolves
-    /// to `useOrdinaryTrust` and stores NO pin at all, deliberately, so the server
-    /// can renew normally. Saying only the first half would over-promise
-    /// durability on the row whose whole subject is durability.
-    ///
-    /// Neither string names WHICH server: the claim can belong to the gateway, the
-    /// file server, or both with two different keys, and the destination rows
-    /// directly above already say which servers are involved.
-    private func certificateText(_ certificate: PairingReviewModel.Certificate) -> String {
-        switch certificate {
-        case .standardChecks:
-            return String(localized: "settings.pairing.review.certificate.standard",
-                          defaultValue: "Standard checks. This code doesn't name a particular key to expect.")
-        case .namesSpecificKey:
-            return String(localized: "settings.pairing.review.certificate.named",
-                          defaultValue: "This code names the exact key to expect. Conduck checks it against the key the server presents before saving anything. If the certificate is already trusted on its own, that's a one-off check; if it isn't, Conduck asks before trusting the key from then on.")
-        }
     }
 
     /// What accepting grants. Deliberately about what the AGENT can do, not about
@@ -491,7 +440,7 @@ struct PairingImportSheet: View {
         case .destinationChanged:
             return String(localized: "settings.pairing.review.notice.changed",
                           defaultValue: "This gateway's settings changed while you were looking at this screen. Nothing was connected — the details above are the current ones. Check them again before you continue.")
-        case .refused(let reason), .unreachable(let reason):
+        case .refused(let reason):
             return reason
         }
     }
@@ -500,13 +449,12 @@ struct PairingImportSheet: View {
         switch notice {
         case .destinationChanged: return "arrow.triangle.2.circlepath"
         case .refused: return "xmark.shield"
-        case .unreachable: return "wifi.exclamationmark"
         }
     }
 
     private func noticeColor(_ notice: PairingImportFlow.ReviewNotice) -> Color {
         switch notice {
-        case .destinationChanged, .unreachable: return AppColors.warning
+        case .destinationChanged: return AppColors.warning
         case .refused: return AppColors.error
         }
     }
@@ -581,115 +529,27 @@ struct PairingImportSheet: View {
 
     // MARK: - Certificate alert copy
 
-    private func pinConsentMessage(for context: PairingImportFlow.PinConsentContext) -> String {
-        let subject: String = {
-            if context.lanes.contains(.gateway) && context.lanes.contains(.fileServer) {
-                return String(localized: "settings.pairing.trust.consent.both",
-                              defaultValue: "The gateway and its file server use certificates")
-            }
-            if context.lanes.contains(.fileServer) {
-                return String(localized: "settings.pairing.trust.consent.file",
-                              defaultValue: "The file server uses a certificate")
-            }
-            return String(localized: "settings.pairing.trust.consent.gateway",
-                          defaultValue: "This gateway uses a certificate")
-        }()
-        // "matching what this code names" rather than "the same key": with both
-        // lanes involved these may be two DIFFERENT certificates, each matching
-        // its own claim.
-        return String(
-            format: String(
-                localized: "settings.pairing.trust.consent.body",
-                defaultValue: "%@ that no one else vouches for, matching what this setup code names. Conduck will trust those exact keys from now on — and only those."
-            ),
-            subject
-        )
-    }
-
-    /// The override button's title says what it will DO, because the two override
-    /// actions differ in kind: one keeps standard verification, the other starts
-    /// trusting an unvouched-for key permanently.
-    private func overrideButtonTitle(for override: PairingTrustOverride) -> String {
-        switch override {
-        case .proceedUnderOrdinaryTrust:
-            return String(localized: "settings.pairing.trust.blocked.override.ignoreClaim",
-                          defaultValue: "Ignore the code's key")
-        case .pinPresentedKey:
-            return String(localized: "settings.pairing.trust.blocked.override.pin",
-                          defaultValue: "Trust this server anyway")
-        }
-    }
-
-    /// What proceeding would concretely do — appended to every block message that
-    /// offers an override. Pinning shows the fingerprint, because the user cannot
-    /// meaningfully consent to trusting a key they were never shown.
-    private func overrideDisclosure(for override: PairingTrustOverride) -> String {
-        switch override {
-        case .proceedUnderOrdinaryTrust:
-            return String(
-                localized: "settings.pairing.trust.blocked.disclosure.ignoreClaim",
-                defaultValue: "\n\nContinuing ignores the key this code names and uses standard certificate checks instead, which this server already passes."
-            )
-        case .pinPresentedKey(let fingerprintHex):
-            return String(
-                format: String(
-                    localized: "settings.pairing.trust.blocked.disclosure.pin",
-                    defaultValue: "\n\nContinuing trusts the key this server is presenting, permanently and exclusively:\n%@"
-                ),
-                fingerprintHex
-            )
-        }
-    }
-
-    /// The refusal, plus — when proceeding is possible — exactly what proceeding
-    /// would do. A "Connect anyway" button whose consequence is unstated is not
-    /// informed consent.
-    private func trustBlockMessage(for context: PairingImportFlow.TrustBlockContext) -> String {
-        blockReason(for: context) + (context.override.map(overrideDisclosure(for:)) ?? "")
-    }
-
-    /// Per-block copy. Each case has a different remedy, so each gets its own
-    /// sentence rather than one generic refusal.
+    /// The refusal, and the remedy — which is always on the SERVER. There is no
+    /// override to disclose: an app may tighten certificate checks and never
+    /// loosen them, so no button here could make this connection work.
+    ///
+    /// Only the first sentence is local, because only it is lane-specific: an
+    /// import touches two servers and the user needs to know WHICH one was
+    /// refused. The remedy comes from `CertificateTrustCopy`, shared with every
+    /// other surface that can reach this state — three wordings would drift into
+    /// three different remedies for one cause.
     private func blockReason(for context: PairingImportFlow.TrustBlockContext) -> String {
         let subject = context.lane == .gateway
             ? String(localized: "settings.pairing.trust.subject.gateway", defaultValue: "The gateway")
             : String(localized: "settings.pairing.trust.subject.file", defaultValue: "The file server")
 
         switch context.block {
-        case .pinContradictsLiveServer:
+        case .certificateNotPubliclyTrusted:
             return String(
                 format: String(
-                    localized: "settings.pairing.trust.block.contradiction",
-                    defaultValue: "%@ has a valid certificate, but its key is not the one this setup code names. That can mean something on the network is inspecting the connection, or that the code is out of date."
-                ), subject)
-
-        case .untrustedAndPinMismatch:
-            return String(
-                format: String(
-                    localized: "settings.pairing.trust.block.untrustedMismatch",
-                    defaultValue: "%@'s certificate isn't trusted, and its key is not the one this setup code names. Get a fresh code from whoever set the server up."
-                ), subject)
-
-        case .unverifiablePin:
-            return String(
-                format: String(
-                    localized: "settings.pairing.trust.block.unverifiable",
-                    defaultValue: "This setup code names a specific key for %@, but Conduck couldn't read the key the server presented, so it can't check them against each other."
-                ), subject.lowercased())
-
-        case .untrustedWithoutClaim:
-            return String(
-                format: String(
-                    localized: "settings.pairing.trust.block.noClaim",
-                    defaultValue: "%@'s certificate isn't trusted, and this setup code doesn't say which key to expect. A code for a self-signed server normally includes it."
-                ), subject)
-
-        case .untrustedWithoutPinnableKey:
-            return String(
-                format: String(
-                    localized: "settings.pairing.trust.block.unpinnable",
-                    defaultValue: "%@'s certificate isn't trusted and uses a key type Conduck can't pin. Reissue it with RSA 2048/3072/4096 or EC P-256/P-384."
-                ), subject)
+                    localized: "settings.pairing.trust.block.notTrusted",
+                    defaultValue: "%1$@'s certificate isn't one this device trusts, so Conduck won't connect to it. %2$@"
+                ), subject, CertificateTrustCopy.untrustedRemedy)
         }
     }
 
@@ -705,50 +565,63 @@ struct PairingImportSheet: View {
                 ForEach(flow.visibleStages, id: \.self) { stage in
                     stageRow(stage)
                 }
-                // `phase == .done` = the run has PAUSED on the amber row. Gating
-                // on it keeps the card off screen during a trust-and-retry re-run,
-                // which clears `presentedUntrustedFP` before the stage flips back
-                // to `.running`.
-                if flow.stageStatus[.gateway] == .untrustedCert, flow.phase == .done {
-                    tofuCard
-                }
             }
             .padding(.vertical, 4)
         }
 
-        // Recovery path: a TERMINAL non-cert gateway failure (NOT
-        // `.untrustedCert`, which keeps its own trust-and-retry). The save already
-        // committed, so these actions never re-persist the config.
-        if flow.phase == .done, flow.gatewayFailedTerminally {
+        // Recovery path: the gateway stage failed. The save already committed,
+        // so these actions never re-persist the config.
+        if flow.phase == .done, flow.gatewayStageFailed {
             recoverySection
         }
     }
 
-    /// Three recovery actions below the checklist after a terminal gateway
-    /// failure. None re-run Stage 1 (save) — the config is already persisted.
+    /// Recovery actions below the checklist after a failed gateway stage. None
+    /// re-run Stage 1 (save) — the config is already persisted.
+    ///
+    /// "Try again" is gated on `flow.gatewayFailureIsRetryable`, the same
+    /// `AppError.isRetryable` question every other failure surface asks
+    /// (`DeclinedTurnPresentation.offersRetry`, `StagedAttachment.failure(for:)`,
+    /// `ServerFileDownloadChip.acceptsTap`). A certificate this device refuses,
+    /// a rejected token or a URL that isn't an AI endpoint sends the identical
+    /// probe into the identical refusal, so a prominent retry there is a promise
+    /// the app cannot keep — and it buries the stage row's remedy, which is the
+    /// real way out. The other two actions stay: they lead somewhere on every
+    /// failure.
     private var recoverySection: some View {
         Section {
             VStack(alignment: .leading, spacing: 10) {
-                Text(LocalizedStringResource(
-                    "settings.pairing.recovery.prompt",
-                    defaultValue: "Your settings were saved, but the connection couldn't be verified."
-                ))
+                // Two prompts, because one sentence cannot honestly cover both.
+                // "Couldn't be verified" reads as a blip that might clear on its
+                // own, which is true of an unreachable gateway and false of a
+                // refusal — and the sheet has no retry to soften the terminal
+                // one with, so understating it would leave the user waiting for
+                // a problem that will never clear.
+                Text(flow.gatewayFailureIsRetryable
+                     ? LocalizedStringResource(
+                        "settings.pairing.recovery.prompt",
+                        defaultValue: "Your settings were saved, but the connection couldn't be verified.")
+                     : LocalizedStringResource(
+                        "settings.pairing.recovery.prompt.terminal",
+                        defaultValue: "Your settings were saved, but the connection was refused for the reason above. Trying again would reach the same answer, so fix that first."))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Button {
-                    flow.retryStages()
-                } label: {
-                    Label(
-                        LocalizedStringResource("settings.pairing.recovery.retry",
-                                                defaultValue: "Try again"),
-                        systemImage: "arrow.clockwise"
-                    )
-                    .font(.subheadline.weight(.semibold))
+                if flow.gatewayFailureIsRetryable {
+                    Button {
+                        flow.retryStages()
+                    } label: {
+                        Label(
+                            LocalizedStringResource("settings.pairing.recovery.retry",
+                                                    defaultValue: "Try again"),
+                            systemImage: "arrow.clockwise"
+                        )
+                        .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.accentColor)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.accentColor)
 
                 Button {
                     flow.backToInstructions()
@@ -862,9 +735,6 @@ struct PairingImportSheet: View {
         case .failed:
             Image(systemName: "xmark.circle.fill")
                 .foregroundStyle(AppColors.error)
-        case .untrustedCert:
-            Image(systemName: "lock.trianglebadge.exclamationmark")
-                .foregroundStyle(AppColors.warning)
         }
     }
 
@@ -884,12 +754,8 @@ struct PairingImportSheet: View {
 
     private func detailText(for status: PairingImportFlow.StageStatus) -> String? {
         switch status {
-        case .failed(let message):
+        case .failed(let message, _):
             return message
-        case .untrustedCert:
-            // Reuses the gateway TOFU title — same situation, same words.
-            return String(localized: "settings.remoteAgent.tofu.title",
-                          defaultValue: "Untrusted certificate")
         case .pending, .running, .passed:
             return nil
         }
@@ -899,87 +765,8 @@ struct PairingImportSheet: View {
         switch status {
         case .failed:
             return AppColors.error
-        case .untrustedCert:
-            return AppColors.warning
         default:
             return AppColors.textTertiary
         }
-    }
-
-    // MARK: - TOFU disclosure (what the tap actually pins)
-    //
-    // `trustAndRetry()` writes a PERMANENT per-device pin, and a pin REPLACES
-    // chain validation — so the one tap that reaches it is the whole trust
-    // decision. It therefore has to say what is being pinned before the tap, not
-    // after. One-tap TOFU (no separate review sheet) is the blessed pattern here —
-    // `STTTestSuiteResultView` ships the same shape — and this card mirrors it:
-    // explanatory body copy + the captured SPKI fingerprint inline + the action.
-    // The fingerprint is a PUBLIC value, so rendering it leaks nothing.
-    //
-    // The contradiction line is the signal a user can actually act on. A
-    // `conduck-connect` payload that carries `certFP` (or declares the self-signed
-    // transport) means the wizard expected an untrusted cert here, and a pin
-    // already set makes this state unreachable anyway
-    // (`classifyTransportError(hasPin: true, …)` never returns `.untrustedCert`).
-    // So reaching TOFU during an import of a payload with NO `certFP` means the
-    // wizard read the gateway's cert as publicly trusted while this device rejects
-    // it — a disagreement worth naming, because interception is one of the things
-    // that produces it.
-    @ViewBuilder
-    private var tofuCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let fingerprint = flow.presentedUntrustedFP, !fingerprint.isEmpty {
-                Text(LocalizedStringResource(
-                    "settings.pairing.tofu.body",
-                    defaultValue: "This gateway presented a self-signed certificate this device doesn't recognize. Trusting it pins this exact certificate on this device — from then on Conduck accepts only this one."
-                ))
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if flow.unexpectedSelfSignedCert {
-                    Text(LocalizedStringResource(
-                        "settings.pairing.tofu.unexpected",
-                        defaultValue: "Your setup code expected a publicly-trusted certificate here, not a self-signed one. On an untrusted network that can mean something is intercepting the connection. Re-run the setup on your server to confirm before you trust this."
-                    ))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppColors.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Text(fingerprint)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(AppColors.textTertiary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-                trustRetryButton
-            } else {
-                // No pinnable fingerprint (key algorithm outside the V1 SPKI prefix
-                // table) — there is nothing to pin, so offer no action and name the
-                // two ways out instead of leaving a dead row.
-                Text(LocalizedStringResource(
-                    "settings.pairing.tofu.noFingerprint",
-                    defaultValue: "This gateway uses a self-signed certificate with an unsupported key type. Pin it manually in the gateway's Server certificate row, or give the server a publicly-trusted certificate."
-                ))
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.leading, 30)   // aligns under the stage row's title column
-    }
-
-    private var trustRetryButton: some View {
-        Button {
-            flow.trustAndRetry()
-        } label: {
-            Label(
-                LocalizedStringResource("settings.pairing.trustRetry",
-                                        defaultValue: "Trust certificate & retry"),
-                systemImage: "checkmark.shield.fill"
-            )
-            .font(.subheadline.weight(.semibold))
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(Color.accentColor)
     }
 }

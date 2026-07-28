@@ -75,10 +75,15 @@ nonisolated final class BackgroundSTT: NSObject, @unchecked Sendable {
     /// the pinned key. URLSession surfaces a cancelled challenge as
     /// `URLError.cancelled`, which the mapping below otherwise collapses into the
     /// generic retryable `networkError`; with this note it maps to the specific
-    /// `sttCustomCertMismatch` the certificate-named codes already produce.
-    /// Same registry shape as `BackgroundRemoteAgent.pinRejectedTaskIDs`.
+    /// `sttCustomCertMismatch`.
+    /// Same registry shape as `BackgroundRemoteAgent.trustSignalsByTaskID`, and
+    /// it stores the WHOLE snapshot for the same reason: an untrusted chain, a
+    /// pin that disagreed, and a key Conduck cannot fingerprint are three
+    /// verdicts with three remedies. Collapsing any two of them tells the user to
+    /// re-check a fingerprint when the real fix is a certificate the device
+    /// trusts — or warns of interception over a certificate it just accepted.
     /// Confined to `queue` — mutated with `queue.async`, never `queue.sync`.
-    private var pinRejectedTaskIDs = Set<Int>()
+    private var trustSignalsByTaskID: [Int: RemoteAgentTrustEvaluator.AttemptTrustSignals] = [:]
 
     /// Task identifiers whose response body exceeded
     /// `Constants.maxBackgroundResponseBytes` and were cancelled for it. Needed
@@ -453,19 +458,21 @@ extension BackgroundSTT: URLSessionDataDelegate {
             return
         }
 
-        // Delegate the actual SPKI SHA-256 compare to the generic evaluator
-        // (reused verbatim). It pins (match → useCredential; mismatch → cancel)
-        // because a non-nil pin was recovered above.
+        // Delegate the system-trust evaluation AND the SPKI SHA-256 compare to
+        // the generic evaluator (reused verbatim). The pin applies ON TOP of
+        // system trust: untrusted chain → cancel; match → useCredential;
+        // mismatch → cancel.
         let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: pin)
         let taskID = task.taskIdentifier
         evaluator.urlSession(session, didReceive: challenge) { disposition, credential in
-            // A cancel from the evaluator is a PIN REJECTION by construction (it
-            // only cancels on a mismatch, and it is only reached with a non-nil
-            // pin). Noted BEFORE forwarding, because URLSession then reports plain
-            // `.cancelled`, which the mapping below would otherwise treat as a
-            // generic retryable transport error.
-            if disposition == .cancelAuthenticationChallenge {
-                self.queue.async { self.pinRejectedTaskIDs.insert(taskID) }
+            // Record the evaluator's OWN verdicts, not the disposition: a cancel
+            // here means either "this device does not trust the chain" or "the
+            // pinned key did not match". Noted BEFORE forwarding, because
+            // URLSession then reports plain `.cancelled`, which the mapping below
+            // would otherwise treat as a generic retryable transport error.
+            let signals = evaluator.attemptSignals
+            if signals != .empty {
+                self.queue.async { self.trustSignalsByTaskID[taskID] = signals }
             }
             completionHandler(disposition, credential)
         }
@@ -506,9 +513,9 @@ extension BackgroundSTT: URLSessionDataDelegate {
                 try? FileManager.default.removeItem(at: bodyURL)
             }
 
-            // Consume both per-task delegate notes BEFORE the no-continuation
-            // early return, so neither set can grow across dropped tasks.
-            let pinRejected = self.pinRejectedTaskIDs.remove(id) != nil
+            // Consume every per-task delegate note BEFORE the no-continuation
+            // early return, so no registry can grow across dropped tasks.
+            let trustSignals = self.trustSignalsByTaskID.removeValue(forKey: id) ?? .empty
             let responseOverCap = self.overCapTaskIDs.remove(id) != nil
 
             guard let continuation = self.pendingContinuations.removeValue(forKey: id) else {
@@ -529,20 +536,33 @@ extension BackgroundSTT: URLSessionDataDelegate {
                         continuation.resume(throwing: AppError.invalidResponse)
                         return
                     }
-                    // OUR pin rejection: the trust handler cancelled the
+                    // OUR certificate refusal: the trust handler cancelled the
                     // challenge, so this `.cancelled` DOES name the certificate.
                     // A pin only ever rides a custom-endpoint task, so no cloud
                     // provider can reach this. Classification delegated to the
-                    // shared classifier the converse lanes use.
-                    if pinRejected,
-                       RemoteAgentTrustEvaluator.classifyTransportError(
-                           urlError.code,
-                           hasPin: true,
-                           systemTrustRejected: false,
-                           pinRejected: true
-                       ) == .certMismatch {
-                        continuation.resume(throwing: AppError.sttCustomCertMismatch)
-                        return
+                    // shared classifier the converse lanes use, and the two
+                    // classes are kept APART — a chain this device rejected is
+                    // fixed on the server, a pin that disagreed with a chain it
+                    // accepted is fixed in Settings.
+                    if trustSignals != .empty {
+                        switch RemoteAgentTrustEvaluator.classifyTransportError(
+                            urlError.code,
+                            signals: trustSignals
+                        ) {
+                        case .untrustedCert:
+                            continuation.resume(throwing: AppError.sttCustomCertUntrusted)
+                            return
+                        case .certMismatch:
+                            continuation.resume(throwing: AppError.sttCustomCertMismatch)
+                            return
+                        case .certKeyUnpinnable:
+                            // Third class, kept apart from both: the chain was
+                            // accepted and the pin was never compared.
+                            continuation.resume(throwing: AppError.sttCustomCertKeyUnpinnable)
+                            return
+                        case .timeout, .unreachable, .cancelled:
+                            break
+                        }
                     }
                     switch urlError.code {
                     case .notConnectedToInternet, .networkConnectionLost:
@@ -553,14 +573,16 @@ extension BackgroundSTT: URLSessionDataDelegate {
                          .serverCertificateHasBadDate where isCustomEndpoint,
                          .serverCertificateHasUnknownRoot where isCustomEndpoint,
                          .serverCertificateNotYetValid where isCustomEndpoint:
-                        // Custom-endpoint pin mismatch (the delegate cancelled
-                        // the challenge) surfaces as one of these SPECIFIC
-                        // server-certificate codes. Cloud providers never pin →
-                        // fall to default `.networkError`. The GENERIC
-                        // `.secureConnectionFailed` is deliberately excluded: it
-                        // also fires for transient cold-tunnel hiccups, so it
-                        // falls through to the retryable `.networkError`.
-                        continuation.resume(throwing: AppError.sttCustomCertMismatch)
+                        // These SPECIFIC codes mean the SYSTEM named the
+                        // certificate as the cause and refused the chain before
+                        // any pin could apply — untrusted, not a mismatch (a
+                        // mismatch arrives above, carrying `pinRejected`). Cloud
+                        // providers never pin → fall to default `.networkError`.
+                        // The GENERIC `.secureConnectionFailed` is deliberately
+                        // excluded: it also fires for transient cold-tunnel
+                        // hiccups, so it falls through to the retryable
+                        // `.networkError`.
+                        continuation.resume(throwing: AppError.sttCustomCertUntrusted)
                     default:
                         continuation.resume(throwing: AppError.networkError(urlError))
                     }

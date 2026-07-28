@@ -9,17 +9,18 @@
 //
 //   - One row per stage (reachability / auth / transcription) with a status
 //     glyph — hollow circle (pending), spinner (running), green check
-//     (passed), red x (failed), amber TOFU lock (skipped/untrusted-cert) —
-//     plus the stage's key-free detail line.
+//     (passed), red x (failed), amber dash (skipped — an earlier stage blocked
+//     it) — plus the stage's key-free detail line.
 //   - A monospaced "Heard:" card with the server's transcript and the expected
 //     phrase beneath, once stage ③ produced text.
 //   - A latency line once the round-trip completed.
-//   - The reused "Trust & Save" affordance when an untrusted self-signed cert
-//     is pending (iOS only — the gateway TOFU convention).
 //
-// Platform-neutral; UIKit-only modifiers are `#if os(iOS)`-gated. On macOS
-// (no TOFU banner) the untrusted-cert stage is presented as `.failed` with a
-// "pin under Advanced" hint, matching the gateway convention.
+// Read-only by construction: every outcome the suite can produce is either a
+// pass or a terminal explained failure, so this view offers no actions. A
+// certificate the device rejects is one of those failures — the fix is on the
+// server, and the stage reason names it.
+//
+// Platform-neutral — iOS and macOS render the identical checklist.
 //
 // Privacy: the ONLY transcript shown is the bundled known phrase; stage
 // details are taxonomy-derived and never carry the key, URL, or user audio.
@@ -28,11 +29,6 @@ import SwiftUI
 
 struct STTTestSuiteResultView: View {
     let result: STTTestSuiteResult
-
-    /// "Trust & Save" callback — fired from the iOS TOFU affordance when the
-    /// run skipped on an untrusted self-signed cert. nil → no affordance (e.g.
-    /// a built-in provider's "Run full test", which never pins).
-    var onTrustAndSave: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -46,10 +42,6 @@ struct STTTestSuiteResultView: View {
 
             if let latency = result.latencyMS {
                 latencyLine(latency)
-            }
-
-            if result.pendingUntrustedCertFingerprint != nil {
-                trustAffordance
             }
         }
     }
@@ -91,9 +83,9 @@ struct STTTestSuiteResultView: View {
             Image(systemName: "xmark.circle.fill")
                 .foregroundStyle(AppColors.error)
         case .skipped:
-            // Amber TOFU glyph — the server isn't proven broken; the user can
-            // trust the self-signed cert to continue.
-            Image(systemName: "lock.trianglebadge.exclamationmark")
+            // Amber dash — this stage never ran, so it says nothing about the
+            // server. The stage that DID fail is the one carrying the verdict.
+            Image(systemName: "minus.circle")
                 .foregroundStyle(AppColors.warning)
         }
     }
@@ -112,24 +104,13 @@ struct STTTestSuiteResultView: View {
         }
     }
 
-    /// The per-stage detail string. On macOS, a `.skipped` reachability stage
-    /// (untrusted cert) is rewritten to a "pin under Advanced" hint since there
-    /// is no TOFU banner — matching the gateway convention.
+    /// The per-stage detail string — the suite's own key-free reason for a
+    /// failed or skipped stage, the stage's detail otherwise.
     private func detailText(for stage: STTTestStageResult) -> String? {
         switch stage.status {
-        case .failed(let reason):
+        case .failed(let reason), .skipped(let reason):
             return reason
-        case .skipped(let reason):
-            #if os(macOS)
-            if stage.stage == .reachability, result.pendingUntrustedCertFingerprint != nil {
-                return String(localized: "stt.test.macUntrustedCert.hint",
-                              defaultValue: "Self-signed certificate. Pin its fingerprint under Advanced to continue.")
-            }
-            #endif
-            return reason
-        case .passed:
-            return stage.detail
-        case .pending, .running:
+        case .passed, .pending, .running:
             return stage.detail
         }
     }
@@ -187,66 +168,5 @@ struct STTTestSuiteResultView: View {
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
         }
-    }
-
-    // MARK: - Trust & Save (iOS TOFU)
-
-    @ViewBuilder
-    private var trustAffordance: some View {
-        #if os(iOS)
-        if let fp = result.pendingUntrustedCertFingerprint, let onTrustAndSave {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "lock.trianglebadge.exclamationmark")
-                        .foregroundStyle(AppColors.warning)
-                    Text(LocalizedStringResource("stt.test.tofu.title",
-                                                 defaultValue: "Untrusted certificate"))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppColors.textPrimary)
-                }
-                if fp.isEmpty {
-                    Text(LocalizedStringResource(
-                        "stt.test.tofu.noFingerprint",
-                        defaultValue: "This server uses a self-signed certificate with an unsupported key type. Pin it manually under Advanced, or use a publicly-trusted certificate."
-                    ))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                } else {
-                    Text(LocalizedStringResource(
-                        "stt.test.tofu.body",
-                        defaultValue: "This server uses a self-signed certificate. Trust it once to pin its fingerprint on this device."
-                    ))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                    Text(fp)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(AppColors.textTertiary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                    Button {
-                        onTrustAndSave()
-                    } label: {
-                        Label(
-                            LocalizedStringResource("stt.test.tofu.trustButton", defaultValue: "Trust & Save"),
-                            systemImage: "checkmark.shield.fill"
-                        )
-                        .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(AppColors.brandAmber)
-                }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(AppColors.warning.opacity(0.10))
-            )
-        }
-        #else
-        // macOS: no TOFU banner — the untrusted-cert stage detail already
-        // carries the "pin under Advanced" hint (see `detailText`).
-        EmptyView()
-        #endif
     }
 }

@@ -20,7 +20,10 @@
 //     mirrors custom STT: a per-call ephemeral session with a
 //     `RemoteAgentTrustEvaluator` (optional SHA-256 leaf-cert pin), a dynamically
 //     resolved URL (base + `/v1/audio/speech`), an effective auth scheme + model
-//     from its `CustomTTSConfig`, and the `ttsCustomCertMismatch` URLError mapping.
+//     from its `CustomTTSConfig`, and the certificate mapping that reads the
+//     evaluator's own signals (`ttsCustomCertUntrusted` when this device
+//     rejected the chain, `ttsCustomCertMismatch` when a pin disagreed with a
+//     chain it accepted).
 //   - Tighter retry: the per-error `AppError.maxAttempts` caps
 //     `ttsProviderUnreachable` at 2 (a failed spoken reply never burns more
 //     than two attempts before the free, always-available Apple
@@ -117,7 +120,8 @@ actor TTSClient {
     ///   provider returns a 2xx with a zero-length body).
     /// - Throws: `AppError` — `ttsProviderUnreachable` (transient, retryable),
     ///   `ttsSynthesisFailed` (terminal 4xx/5xx), `ttsEmptyAudio` (empty 2xx),
-    ///   `ttsCustomEndpointNotConfigured` / `ttsCustomCertMismatch` (custom only),
+    ///   `ttsCustomEndpointNotConfigured` / `ttsCustomCertUntrusted` /
+    ///   `ttsCustomCertMismatch` (custom only),
     ///   or a transport error (`requestTimeout` / `noInternetConnection`).
     func synthesize(
         text: String,
@@ -199,17 +203,21 @@ actor TTSClient {
         effAuth.apply(to: &request, apiKey: apiKey)
 
         // Session/trust: the BYO custom endpoint gets a per-call ephemeral session
-        // with a `RemoteAgentTrustEvaluator` (nil pin → default ATS; pin set →
-        // SHA-256 leaf-cert pinning), torn down on exit. The generic evaluator is
+        // with a `RemoteAgentTrustEvaluator` (nil pin → system trust alone; pin
+        // set → system trust AND a matching SHA-256 leaf key), torn down on exit.
+        // The generic evaluator is
         // reused verbatim from STT / the gateway. Frozen providers keep the
         // injected/shared session (default ATS, zero behavior change). Only the
         // per-call custom session is owned here — never invalidate `.shared`.
         let effSession: URLSession
+        let trustEvaluator: RemoteAgentTrustEvaluator?
         if isCustomEndpoint {
             let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: customConfig?.certFingerprint)
             effSession = URLSession(configuration: .ephemeral, delegate: evaluator, delegateQueue: nil)
+            trustEvaluator = evaluator
         } else {
             effSession = session
+            trustEvaluator = nil
         }
         defer {
             if isCustomEndpoint {
@@ -247,7 +255,7 @@ actor TTSClient {
             }
 
             do {
-                let (data, response) = try await performRequest(request, session: effSession, isCustomEndpoint: isCustomEndpoint)
+                let (data, response) = try await performRequest(request, session: effSession, trustEvaluator: trustEvaluator)
                 // Capture the 429 penalty BEFORE the status map throws it away
                 // (`parseResponse` sees only the status code, not headers).
                 if let http = response as? HTTPURLResponse, http.statusCode == 429 {
@@ -267,6 +275,11 @@ actor TTSClient {
                 if attempt + 1 >= error.maxAttempts {
                     break
                 }
+            } catch is CancellationError {
+                // Propagate, never retry — the loop's own `if Task.isCancelled`
+                // guard only covers a cancel that lands during the backoff wait,
+                // not one that lands mid-request.
+                throw CancellationError()
             } catch {
                 lastError = .ttsProviderUnreachable
             }
@@ -320,34 +333,63 @@ actor TTSClient {
 
     /// Execute the request on `session`, mapping URLError → AppError. Auth
     /// header lives on the request object; never echoed into a thrown error.
-    /// Only the custom endpoint pins, so a cert-class URLError maps to
-    /// `ttsCustomCertMismatch` ONLY when `isCustomEndpoint` (mirrors
-    /// `STTClient.performRequest`); for the frozen cloud providers a cert failure
-    /// collapses to `ttsProviderUnreachable` (transient; one retry then Apple).
+    ///
+    /// `trustEvaluator` is non-nil ONLY for the BYO custom endpoint (mirrors
+    /// `STTClient.performRequest`); the frozen cloud providers ride the injected
+    /// session under plain ATS and collapse a cert failure to the transient
+    /// `ttsProviderUnreachable`. The evaluator's signals are what make a
+    /// certificate verdict legible at all: it fails closed on a chain this
+    /// device rejects, and URLSession reports that cancel as a bare `.cancelled`
+    /// (-999) that the code alone cannot tell from a user abort.
     private func performRequest(
         _ request: URLRequest,
         session: URLSession,
-        isCustomEndpoint: Bool
+        trustEvaluator: RemoteAgentTrustEvaluator?
     ) async throws -> (Data, URLResponse) {
         do {
             return try await session.data(for: request)
         } catch let error as URLError {
+            if let trustEvaluator {
+                // Instance form — one snapshot of the attempt that failed, and
+                // the only form that can carry `pinComparisonUnsupported`
+                // (mirrors `STTClient.performRequest`).
+                switch trustEvaluator.classifyTransportError(error.code) {
+                case .untrustedCert:
+                    throw AppError.ttsCustomCertUntrusted
+                case .certMismatch:
+                    throw AppError.ttsCustomCertMismatch
+                case .certKeyUnpinnable:
+                    // System trust passed and the pin could not be computed for
+                    // this key algorithm — its own code, so the remedy names
+                    // the key type instead of raising an interception warning.
+                    throw AppError.ttsCustomCertKeyUnpinnable
+                case .timeout, .unreachable, .cancelled:
+                    // No certificate verdict — fall through to the code mapping
+                    // that owns the TTS taxonomy. A cold tunnel's generic
+                    // `.secureConnectionFailed` lands here (both trust signals
+                    // are POSITIVE) and stays transient; `.cancelled` lands on the
+                    // arm below that preserves it as a cancel.
+                    break
+                }
+            }
             switch error.code {
             case .timedOut:
                 throw AppError.requestTimeout
             case .notConnectedToInternet, .networkConnectionLost:
                 throw AppError.noInternetConnection
-            case .serverCertificateUntrusted where isCustomEndpoint,
-                 .serverCertificateHasBadDate where isCustomEndpoint,
-                 .serverCertificateHasUnknownRoot where isCustomEndpoint,
-                 .serverCertificateNotYetValid where isCustomEndpoint:
-                // Only the custom endpoint pins — a pinned-fingerprint mismatch
-                // cancels the challenge, which URLSession reports as one of these
-                // SPECIFIC server-certificate codes. The GENERIC
-                // `.secureConnectionFailed` is deliberately excluded: it also
-                // fires for transient cold-tunnel hiccups, so it falls through to
-                // the retryable `.ttsProviderUnreachable` below.
-                throw AppError.ttsCustomCertMismatch
+            case .cancelled:
+                // The classifier already ruled out the evaluator's own refusals
+                // above, so a `-999` reaching here is a genuine cancellation —
+                // End pressed, the turn superseded, the first-audio watchdog.
+                // Preserved AS a cancellation (mirroring
+                // `RemoteAgentClient.mapTransportError`) rather than reported as
+                // `.ttsProviderUnreachable`, which is RETRYABLE and reads as "the
+                // provider is down": it spent the remaining attempt on a turn
+                // nobody is listening to and then handed the playback layer a
+                // provider verdict for something the provider never did. The
+                // Apple fallback is unaffected — both `ReplyVoice` fetch sites
+                // already return early on a cancelled turn before choosing a leg.
+                throw CancellationError()
             default:
                 // Generic transport failure → transient (one retry, then Apple).
                 // URLError's `localizedDescription` carries no header material.

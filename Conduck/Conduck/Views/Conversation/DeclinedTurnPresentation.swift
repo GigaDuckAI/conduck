@@ -19,6 +19,14 @@
 // hedged copy ("couldn't use" / "may be blocking"). The poisoned variant
 // additionally requires the dispatch-time fact that the failed request
 // actually carried historical image parts.
+//
+// The generic arm renders CAUSE AND REMEDY (`descriptionWithRecovery`), not the
+// cause alone: the failed-turn row is where a user meets a delivery failure, and
+// half the taxonomy's failures are fixed somewhere the row is the only pointer
+// to — a certificate the device refused is fixed on the SERVER, and a pinned
+// key that disagreed with a trusted chain carries an interception warning that
+// lives entirely in the remedy half. Rendering `errorDescription` alone dropped
+// exactly the sentence the user has to act on.
 
 import Foundation
 
@@ -43,6 +51,14 @@ struct DeclinedTurnPresentation: Equatable {
     let body: String
     /// Toast line (shown only when the failed row is offscreen).
     let toast: String
+    /// "Try again" applies. Rides `AppError.isRetryable`, so the affordance
+    /// exists only where re-firing the stored turn can reach a different
+    /// verdict. A terminal refusal — a certificate this device won't accept, a
+    /// rejected token, a URL that isn't an AI endpoint — sends the identical
+    /// request into the identical refusal, so the button is a promise the app
+    /// cannot keep; the row's remedy is the way out, not the retry. A legacy
+    /// row with no persisted code stays retryable: unknown is not terminal.
+    let offersRetry: Bool
     /// "Resend without photo" applies (photo-declined turns with other
     /// resendable content).
     let offersResendWithoutPhoto: Bool
@@ -72,6 +88,11 @@ struct DeclinedTurnPresentation: Equatable {
     ) -> DeclinedTurnPresentation {
         let wireCode = failureWireCode.flatMap(AdapterWireCode.init(rawValue:))
         let isVisionClass = failureCode == AppError.remoteAgentVisionUnsupported.errorCode
+        // Reconstruct ONCE — the retry gate applies to EVERY kind, and the
+        // generic arm below reuses the same value for its copy + Diagnostics
+        // slot. Nil = legacy row: no taxonomy to gate on, so retry stays on.
+        let reconstructed = failureCode.map { AppError.from(errorCode: $0, message: nil) }
+        let offersRetry = reconstructed?.isRetryable ?? true
 
         if isVisionClass, turnHasOwnImages {
             let confident = wireCode == .imageUnsupported
@@ -88,6 +109,7 @@ struct DeclinedTurnPresentation: Equatable {
                 toast: confident
                     ? String(localized: "declinedTurn.photo.toast.confident", defaultValue: "This gateway declined the photo.")
                     : String(localized: "declinedTurn.photo.toast.hedged", defaultValue: "This gateway couldn't use the photo."),
+                offersRetry: offersRetry,
                 offersResendWithoutPhoto: hasResendableNonPhotoContent,
                 offersKeepChattingWithoutPhotos: false,
                 troubleshootCode: nil
@@ -113,6 +135,7 @@ struct DeclinedTurnPresentation: Equatable {
                 toast: confident
                     ? String(localized: "declinedTurn.history.toast.confident", defaultValue: "An earlier photo is blocking this chat.")
                     : String(localized: "declinedTurn.history.toast.hedged", defaultValue: "An earlier photo may be blocking this chat."),
+                offersRetry: offersRetry,
                 offersResendWithoutPhoto: false,
                 offersKeepChattingWithoutPhotos: true,
                 troubleshootCode: nil
@@ -120,17 +143,21 @@ struct DeclinedTurnPresentation: Equatable {
         }
 
         // Generic (incl. legacy nil-code rows): the row still explains what it
-        // can. A known code reuses the AppError's own static copy; a nil code
-        // gets the neutral line. Troubleshoot rides along when Diagnostics can
-        // actually reason about the class.
-        let reconstructed = failureCode.map { AppError.from(errorCode: $0, message: nil) }
-        let body = reconstructed?.errorDescription
+        // can. A known code reuses the AppError's own static copy — cause AND
+        // remedy, because the row is the whole story for this turn; a nil code
+        // gets the neutral line. `descriptionWithRecovery` drops the generic
+        // "Try again." rather than appending it, so a terminal refusal never
+        // picks up a retry invitation the row deliberately no longer offers.
+        // Troubleshoot rides along when Diagnostics can actually reason about
+        // the class.
+        let body = reconstructed?.descriptionWithRecovery
             ?? String(localized: "declinedTurn.generic.body", defaultValue: "This message wasn't delivered.")
         return DeclinedTurnPresentation(
             kind: .generic,
             title: String(localized: "declinedTurn.generic.title", defaultValue: "No reply"),
             body: body,
             toast: body,
+            offersRetry: offersRetry,
             offersResendWithoutPhoto: false,
             offersKeepChattingWithoutPhotos: false,
             troubleshootCode: (reconstructed?.isTroubleshootable == true) ? failureCode : nil

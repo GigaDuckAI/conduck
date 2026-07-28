@@ -35,9 +35,6 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
     private let openclaw: RemoteAgentRef = .builtin(.openclaw)
     private let hermes: RemoteAgentRef = .builtin(.hermes)
 
-    /// Synthetic 64-hex SPKI fingerprint (the parser requires exactly 64 hex).
-    private let gatewayFP = String(repeating: "ab", count: 32)
-
     override func setUp() async throws {
         try await super.setUp()
         await wipePairingState()
@@ -109,7 +106,6 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         url: String = "https://gw.example.test:18789",
         auth: String? = nil,
         token: String? = "tok-pairing-test",
-        certFP: String? = nil,
         model: String? = nil,
         fileServer: [String: Any]? = nil,
         transport: String? = nil
@@ -118,7 +114,6 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         if let name { gateway["name"] = name }
         if let auth { gateway["auth"] = auth }
         if let token { gateway["token"] = token }
-        if let certFP { gateway["certFP"] = certFP }
         if let model { gateway["model"] = model }
         var dict: [String: Any] = ["v": 1, "gateway": gateway]
         if let fileServer { dict["fileServer"] = fileServer }
@@ -134,14 +129,13 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         url: String = "https://gw.example.test:18789",
         auth: String? = nil,
         token: String? = "tok-pairing-test",
-        certFP: String? = nil,
         model: String? = nil,
         fileServer: [String: Any]? = nil,
         transport: String? = nil
     ) throws -> PairingPayload {
         let string = try makePairingString(
             kind: kind, name: name, url: url, auth: auth, token: token,
-            certFP: certFP, model: model, fileServer: fileServer, transport: transport
+            model: model, fileServer: fileServer, transport: transport
         )
         return try XCTUnwrap(
             try? PairingPayload.parse(string).get(),
@@ -279,11 +273,10 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             kind: "openclaw",
             url: "https://gw.example.test:18789",
             token: "tok-pairing-test",
-            certFP: gatewayFP,
             transport: "tailscale"
         )
 
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A complete builtin payload must commit.")
 
         let storedURL = await SettingsManager.shared.getRemoteAgentURL(for: openclaw)
@@ -293,7 +286,8 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let token = await SettingsManager.shared.getRemoteAgentToken(for: openclaw)
         XCTAssertEqual(token, "tok-pairing-test")
         let cert = await SettingsManager.shared.getRemoteAgentCertFingerprint(for: openclaw)
-        XCTAssertEqual(cert, gatewayFP, "The payload pin must land in the per-ref cert slot (lowercase 64-hex).")
+        XCTAssertNil(cert,
+                     "A resolved import stores no pin — the payload carries none and the trust gate never produces one.")
 
         // Transport hint: readable via the accessor AND App-Group ONLY — the
         // raw key must be ABSENT from iCloud KVS (per-device guidance hint).
@@ -323,7 +317,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             return XCTFail("Expected a minted custom draft target, got \(plan).")
         }
 
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: target)
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: target)
         XCTAssertEqual(outcome, .committed, "A named keyless custom payload must commit.")
 
         let roster = await SettingsManager.shared.customGateway(id: id)
@@ -351,7 +345,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             return XCTFail("Expected a minted custom draft target, got \(plan).")
         }
 
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: target)
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: target)
         XCTAssertEqual(outcome, .committed)
 
         let roster = await SettingsManager.shared.customGateway(id: id)
@@ -365,7 +359,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let vm = await makeVM()
         let payload = try makePayload(kind: "openclaw", auth: "none", token: nil)
 
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A keyless builtin payload must commit with no Keychain dependency.")
 
         let scheme = await SettingsManager.shared.getRemoteAgentAuthScheme(for: openclaw)
@@ -376,12 +370,16 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
     }
 
     /// Overwrite-execute semantics: importing over an already-configured ref
-    /// must REPLACE the URL and clear a stale cert pin when the new payload
-    /// carries none (the riskier half of the explicit-overwrite contract).
+    /// must REPLACE the URL and clear the pin the user had typed in manually for
+    /// the OLD certificate (the riskier half of the explicit-overwrite
+    /// contract — keeping it would fail TLS against the new host).
     func testExecuteOverwriteReplacesURLAndClearsStalePin() async throws {
         await SettingsManager.shared.setRemoteAgentURL(URL(string: "https://old.example.test:18789")!, for: openclaw)
         await SettingsManager.shared.setRemoteAgentAuthScheme(.none, for: openclaw)
-        await SettingsManager.shared.setRemoteAgentCertFingerprint(gatewayFP, for: openclaw)
+        // A pin the user typed into the Settings editor for the old host's
+        // certificate — the only way a pin can exist at all.
+        await SettingsManager.shared.setRemoteAgentCertFingerprint(
+            String(repeating: "ab", count: 32), for: openclaw)
 
         let vm = await makeVM()
         let payload = try makePayload(kind: "openclaw", url: "https://new.example.test:18789",
@@ -394,36 +392,33 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
                                                     newURL: "https://new.example.test:18789"))
 
         // …and a confirmed execute replaces the slots wholesale.
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed)
         let url = await SettingsManager.shared.getRemoteAgentURL(for: openclaw)
         XCTAssertEqual(url?.absoluteString, "https://new.example.test:18789")
         let pin = await SettingsManager.shared.getRemoteAgentCertFingerprint(for: openclaw)
         XCTAssertNil(pin,
-                     "A payload WITHOUT certFP must clear the stale pin — keeping it would fail TLS against the new host's cert.")
+                     "An import replaces the gateway wholesale, so a manually typed pin for the OLD certificate must go with it.")
     }
 
     // MARK: - Execute: file-server block
 
-    func testExecuteFileServerPersistsURLCredentialAndSelfsignedPinCopy() async throws {
+    func testExecuteFileServerPersistsURLAndCredentialWithNoPin() async throws {
         try await requireFileServerKeychainOrSkip(for: openclaw)
 
         let vm = await makeVM()
-        // Self-signed recipe, file-server on the SAME host as the gateway, no
-        // explicit file-server pin → the gateway pin must be copied across.
         let payload = try makePayload(
             kind: "openclaw",
             url: "https://gw.example.test:18789",
             auth: "none", token: nil,
-            certFP: gatewayFP,
             fileServer: [
                 "url": "https://gw.example.test:8443",
                 "credential": "feedfacecafebeeffeedfacecafebeef"
             ],
-            transport: "selfsigned"
+            transport: "tailscale"
         )
 
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: openclaw)
         XCTAssertEqual(outcome, .committed, "A payload with a complete fileServer block must commit on a Keychain-capable host.")
 
         let fsURL = await SettingsManager.shared.getFileServerURL(for: openclaw)
@@ -431,8 +426,8 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let credential = await SettingsManager.shared.getFileServerCredential(for: openclaw)
         XCTAssertEqual(credential, "feedfacecafebeeffeedfacecafebeef")
         let fsPin = await SettingsManager.shared.getFileServerCertFingerprint(for: openclaw)
-        XCTAssertEqual(fsPin, gatewayFP,
-                       "selfsigned + same-host + no explicit fs pin → the GATEWAY pin must cover the file-server too.")
+        XCTAssertNil(fsPin,
+                     "No pin rides in from a setup code, so the file lane commits under ordinary system trust.")
         let available = await SettingsManager.shared.getFileTransferAvailable(for: openclaw)
         XCTAssertFalse(available,
                        "Import must NOT mark file transfer available — only a passing staged Test Connection does (Decision C).")
@@ -449,7 +444,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         // pointer was actually SET, not just falling back to `.openclaw`.
         let payload = try makePayload(kind: "hermes", url: "https://hermes.example.test:8642",
                                       auth: "none", token: nil)
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: hermes)
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: hermes)
         XCTAssertEqual(outcome, .committed)
 
         let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
@@ -469,7 +464,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let vm = await makeVM()
         let payload = try makePayload(kind: "hermes", url: "https://hermes.example.test:8642",
                                       auth: "none", token: nil)
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: hermes)
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: hermes)
         XCTAssertEqual(outcome, .committed)
 
         let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
@@ -527,7 +522,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         }
         let review = await vm.pairingReview(for: payload, target: target, freshlyMinted: true)
 
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: target)
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: target)
         XCTAssertEqual(outcome, .committed)
 
         let storedURL = await SettingsManager.shared.getRemoteAgentURL(for: target)
@@ -558,7 +553,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let vm = await makeVM()
         let first = try makePayload(kind: "openclaw", url: "https://old.example.test:18789",
                                     auth: "none", token: nil)
-        let firstOutcome = await vm.executePairingImportUsingPayloadPins(first, target: openclaw)
+        let firstOutcome = await vm.executePairingImportWithResolvedTrust(first, target: openclaw)
         XCTAssertEqual(firstOutcome, .committed)
 
         let second = try makePayload(kind: "openclaw", url: "https://new.example.test:18789",
@@ -581,7 +576,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             kind: "openclaw", auth: "none", token: nil,
             fileServer: ["url": "https://files.example.test", "credential": "cred"]
         )
-        let seedOutcome = await vm.executePairingImportUsingPayloadPins(withFiles, target: openclaw)
+        let seedOutcome = await vm.executePairingImportWithResolvedTrust(withFiles, target: openclaw)
         XCTAssertEqual(seedOutcome, .committed)
 
         let gatewayOnly = try makePayload(kind: "openclaw", url: "https://gw2.example.test",

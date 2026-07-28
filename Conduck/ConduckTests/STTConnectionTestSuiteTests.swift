@@ -52,13 +52,16 @@ final class STTConnectionTestSuiteTests: XCTestCase {
 
     /// Convenience: run the suite through a mock session, discarding progress
     /// ticks (tests assert the FINAL result; progress is for live animation).
+    /// `hasPin` maps to `challengeRefused` — a pin's existence was only ever a
+    /// proxy for "the evaluator was on a path that CAN cancel", which is what the
+    /// signal now records directly.
     private func runSuite(
         session: URLSession,
         auth: STTAuthScheme = .bearer,
         hasPin: Bool = false,
-        presentedFingerprint: @escaping @Sendable () -> String? = { nil },
         systemTrustRejected: Bool = false,
-        pinRejected: Bool = false
+        pinRejected: Bool = false,
+        pinComparisonUnsupported: Bool = false
     ) async -> STTTestSuiteResult {
         await STTConnectionTestSuite.runForTesting(
             url: probeURL,
@@ -66,10 +69,12 @@ final class STTConnectionTestSuiteTests: XCTestCase {
             auth: auth,
             model: "whisper-1",
             session: session,
-            hasPin: hasPin,
-            presentedFingerprint: presentedFingerprint,
-            systemTrustRejected: { systemTrustRejected },
-            pinRejected: { pinRejected },
+            signals: {
+                .init(systemTrustRejected: systemTrustRejected,
+                      challengeRefused: hasPin,
+                      pinRejected: pinRejected,
+                      pinComparisonUnsupported: pinComparisonUnsupported)
+            },
             progress: { _ in }
         )
     }
@@ -100,8 +105,6 @@ final class STTConnectionTestSuiteTests: XCTestCase {
                        "The server's transcript must be stored for the 'Heard:' card.")
         XCTAssertNotNil(result.latencyMS,
                         "Latency must be captured once the transcription POST completes.")
-        XCTAssertNil(result.pendingUntrustedCertFingerprint,
-                     "A clean TLS path must leave no pending-trust fingerprint.")
         if case .passed = status(of: .transcription, in: result) {} else {
             XCTFail("Transcription stage must be .passed on 200 + non-empty text.")
         }
@@ -225,41 +228,39 @@ final class STTConnectionTestSuiteTests: XCTestCase {
         }
     }
 
-    // MARK: - Untrusted self-signed cert + NO pin → reachability skipped + TOFU fingerprint
+    // MARK: - Untrusted certificate → reachability FAILED, terminally
 
-    func testUntrustedCertNoPinSkippedWithFingerprint() async {
+    func testUntrustedCertNoPinReachabilityFailedWithRemedy() async {
         MockURLProtocol.requestHandler = { _ in
-            // TLS rejection on an untrusted self-signed cert.
+            // TLS rejection on a certificate this device doesn't trust.
             throw URLError(.serverCertificateUntrusted)
         }
-        let result = await runSuite(
-            session: makeMockSession(),
-            hasPin: false,
-            presentedFingerprint: { "aabbccddeeff00112233" }
-        )
+        let result = await runSuite(session: makeMockSession(), hasPin: false)
 
-        XCTAssertFalse(result.allPassed,
-                       "A skipped reachability is incomplete → not allPassed (pending a trust decision).")
-        guard case .skipped = status(of: .reachability, in: result) else {
-            return XCTFail("An untrusted self-signed cert with NO pin must SKIP (not fail) reachability — it's a TOFU opportunity.")
+        XCTAssertFalse(result.allPassed)
+        guard case .failed(let reason) = status(of: .reachability, in: result) else {
+            return XCTFail("A certificate this device doesn't trust must FAIL reachability — there is nothing the user can approve.")
         }
-        XCTAssertEqual(result.pendingUntrustedCertFingerprint, "aabbccddeeff00112233",
-                       "The captured leaf fingerprint must be surfaced for one-tap 'Trust & Save'.")
+        XCTAssertEqual(reason, CertificateTrustCopy.untrustedRefusalWithRemedy,
+                       "The refusal must name the server-side remedy, not leave the user guessing.")
     }
 
-    func testUntrustedCertNoPinNoFingerprintCapturesEmptyString() async {
+    /// The refusal is identical WITH a pin configured: a pin can only narrow a
+    /// chain the system already accepted, so it never rescues a rejected one.
+    func testUntrustedCertWithPinStillFailsAsUntrusted() async {
         MockURLProtocol.requestHandler = { _ in
             throw URLError(.serverCertificateHasUnknownRoot)
         }
-        // presentedFingerprint returns nil (key algorithm outside the SPKI prefix
-        // table) → the engine records "" (untrusted but no copyable fingerprint).
         let result = await runSuite(
             session: makeMockSession(),
-            hasPin: false,
-            presentedFingerprint: { nil }
+            hasPin: true,
+            systemTrustRejected: true
         )
-        XCTAssertEqual(result.pendingUntrustedCertFingerprint, "",
-                       "Untrusted-but-uncopyable must record an empty-string sentinel, not nil.")
+        guard case .failed(let reason) = status(of: .reachability, in: result) else {
+            return XCTFail("A rejected chain must fail reachability whether or not a pin is set.")
+        }
+        XCTAssertEqual(reason, CertificateTrustCopy.untrustedRefusalWithRemedy,
+                       "System-trust rejection outranks the pin verdict — the remedy is the certificate, not the fingerprint.")
     }
 
     // MARK: - Pin set + cert rejected → reachability failed (never re-trust)
@@ -274,51 +275,32 @@ final class STTConnectionTestSuiteTests: XCTestCase {
         let result = await runSuite(
             session: makeMockSession(),
             hasPin: true,
-            presentedFingerprint: { "ffffffffffffffff" },
             pinRejected: true
         )
 
         XCTAssertFalse(result.allPassed)
-        guard case .failed = status(of: .reachability, in: result) else {
+        guard case .failed(let reason) = status(of: .reachability, in: result) else {
             return XCTFail("A pin mismatch must FAIL (not skip) reachability — never auto-offer re-trust.")
         }
-        XCTAssertNil(result.pendingUntrustedCertFingerprint,
-                     "A pin mismatch must NOT surface a 'Trust & Save' fingerprint — re-trusting defeats the pin.")
+        XCTAssertNotEqual(reason, CertificateTrustCopy.untrustedRefusalWithRemedy,
+                          "A pin mismatch on a system-trusted chain must not be described as an untrusted certificate.")
     }
 
-    func testSecureConnectionFailedTransientNoPinIsRetryableNotTOFU() async {
+    func testSecureConnectionFailedTransientNoPinIsRetryable() async {
         // THE REGRESSION (STT path): a generic `.secureConnectionFailed` with
-        // no system rejection is a cold-tunnel hiccup → reachability FAILS
-        // (retryable), and must NOT skip with a captured TOFU fingerprint.
+        // no system rejection is a cold-tunnel hiccup → reachability fails as a
+        // retryable transport problem, NOT as a certificate verdict.
         MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
         let result = await runSuite(
             session: makeMockSession(),
             hasPin: false,
-            presentedFingerprint: { "deadbeefdeadbeef" },
             systemTrustRejected: false
         )
-        guard case .failed = status(of: .reachability, in: result) else {
-            return XCTFail("A transient secure-connection failure must FAIL reachability, not SKIP as a TOFU opportunity.")
+        guard case .failed(let reason) = status(of: .reachability, in: result) else {
+            return XCTFail("A transient secure-connection failure must FAIL reachability.")
         }
-        XCTAssertNil(result.pendingUntrustedCertFingerprint,
-                     "A transient failure must not surface a 'Trust & Save' fingerprint.")
-    }
-
-    func testSecureConnectionFailedSystemRejectedNoPinIsTOFU() async {
-        // A genuine no-pin rejection that surfaced via the generic code (system
-        // DID reject) still SKIPS as a TOFU opportunity with the captured fp.
-        MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
-        let result = await runSuite(
-            session: makeMockSession(),
-            hasPin: false,
-            presentedFingerprint: { "aabbccddaabbccdd" },
-            systemTrustRejected: true
-        )
-        guard case .skipped = status(of: .reachability, in: result) else {
-            return XCTFail("A genuine system rejection (no pin) must SKIP reachability as a TOFU opportunity.")
-        }
-        XCTAssertEqual(result.pendingUntrustedCertFingerprint, "aabbccddaabbccdd",
-                       "The captured leaf fingerprint must be surfaced for one-tap 'Trust & Save'.")
+        XCTAssertNotEqual(reason, CertificateTrustCopy.untrustedRefusalWithRemedy,
+                          "A cold-tunnel hiccup must not be blamed on the certificate.")
     }
 
     // MARK: - 4xx other than 401/403 → transcription failed (request-shape rejection)

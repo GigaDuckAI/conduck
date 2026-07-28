@@ -64,6 +64,38 @@ struct StagedAttachment: Identifiable, Equatable {
         /// The upload failed fast — the strip shows an error badge + Retry; the
         /// tile never rides the wire while in this state.
         case failed
+        /// The upload was REFUSED for a reason a retry cannot change (a
+        /// certificate this device won't accept, a rejected credential, a URL
+        /// that isn't a file server). Carries the reason so the tile says what
+        /// happened instead of showing a bare red badge, and the strip offers no
+        /// Retry — an identical request against an identical refusal can only
+        /// fail identically, and the spinner would bury the one sentence the
+        /// user needs.
+        ///
+        /// TWO strings, because the tile and VoiceOver have opposite
+        /// constraints. `reason` is the cause alone, for a ~180pt tile that
+        /// clips at two lines. `detail` is cause AND remedy, for the tile's
+        /// accessibility label, which has no width to run out of — and the
+        /// remedy is the half that matters most: an untrusted certificate is
+        /// fixed on the SERVER, and a pinned key that disagreed with a chain the
+        /// system trusted carries the warning that the connection may be
+        /// intercepted. Rendering only `reason` anywhere dropped that warning
+        /// entirely.
+        case refused(reason: String, detail: String)
+
+        /// Classify a thrown upload error into the tile's failure state. The
+        /// split rides `AppError.isRetryable` rather than a certificate special
+        /// case, because it is the same question: a refused certificate, a
+        /// rejected credential and a URL that isn't a file server are all
+        /// terminal, and all three used to reach the user as an unlabelled red
+        /// tile with a Retry chip that could only fail again. Anything else —
+        /// including a non-`AppError` — keeps `.failed` + Retry.
+        static func failure(for error: Error) -> Self {
+            guard let appError = error as? AppError,
+                  !appError.isRetryable,
+                  let reason = appError.errorDescription else { return .failed }
+            return .refused(reason: reason, detail: appError.descriptionWithRecovery)
+        }
     }
 
     /// The resolution state of a staged item.
@@ -230,9 +262,20 @@ struct StagedAttachment: Identifiable, Equatable {
         return false
     }
 
-    /// True when a `.serverFile` tile's upload failed fast — the strip shows
-    /// Retry; the tile never rides the wire while failed, and it blocks Send.
+    /// True when a `.serverFile` tile's upload did not land — retryable or
+    /// refused. The tile never rides the wire in either state, and both block
+    /// Send: a refusal is not a reason to let the turn go out without the file.
     var serverUploadFailed: Bool {
+        switch serverUploadState {
+        case .failed, .refused: return true
+        case .uploading, .uploaded, .none: return false
+        }
+    }
+
+    /// True only for the RETRYABLE failure. `.refused` is deliberately excluded:
+    /// re-issuing the identical request against the identical refusal spends the
+    /// user's tap to reach the same verdict.
+    var serverUploadRetryable: Bool {
         if case .failed = serverUploadState { return true }
         return false
     }

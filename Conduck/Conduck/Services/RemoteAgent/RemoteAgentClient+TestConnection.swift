@@ -33,16 +33,19 @@ extension RemoteAgentClient {
     ///
     ///   - `.ok` — publicly-trusted cert, or a configured pin that matched.
     ///     The save path persists the tuple and shows "Connected".
-    ///   - `.untrustedCert(presentedFingerprintHex:)` — NO pin configured
-    ///     AND the system rejected an untrusted self-signed cert. The UI
-    ///     offers a one-tap TOFU "Trust & Save" using the captured leaf
-    ///     SPKI fingerprint (`nil` when the key algorithm is outside the V1
-    ///     prefix table — the banner then says "untrusted cert" with no
-    ///     copyable hex).
+    ///   - `.untrustedCert` — the system rejected the server's certificate.
+    ///     TERMINAL: the UI explains the refusal and names the remedy (give
+    ///     the server a certificate this device already trusts). It carries
+    ///     no fingerprint, because there is nothing the app could do with
+    ///     one — App Transport Security lets a pin TIGHTEN evaluation of a
+    ///     chain the system already accepts, never rescue one it rejected,
+    ///     so pinning the presented key would produce a gateway that fails
+    ///     every request.
     ///
-    /// A *pin-mismatch* (pin already set, cert changed) is NOT a member of
-    /// this enum — it still `throw`s `.remoteAgentCertMismatch` so the UI
-    /// never auto-offers re-trust (that would defeat pinning).
+    /// A *pin mismatch* is NOT a member of this enum — it `throw`s
+    /// `.remoteAgentCertMismatch`. It can only mean the system DID trust the
+    /// chain and the presented key still disagreed, since an untrusted chain
+    /// resolves to `.untrustedCert` above before any digest is compared.
     enum TestConnectionOutcome: Equatable, Sendable {
         case ok
         /// The route answered with a WELL-FORMED but EMPTY model list
@@ -51,7 +54,7 @@ extension RemoteAgentClient {
         /// turn, and a flat green "Connected" would overclaim. Kept distinct so
         /// the editor can say so.
         case okNoModels
-        case untrustedCert(presentedFingerprintHex: String?)
+        case untrustedCert
 
         /// Whether the probe proved a usable route (either success shape).
         var isSuccess: Bool {
@@ -60,27 +63,6 @@ extension RemoteAgentClient {
             case .untrustedCert: return false
             }
         }
-    }
-
-    /// A `TestConnectionOutcome` PLUS the leaf SPKI the server actually presented.
-    ///
-    /// `TestConnectionOutcome` surfaces the presented fingerprint only on its
-    /// `.untrustedCert` arm, because the editor's Test Connection needs it for
-    /// exactly one purpose: offering one-tap TOFU when the system rejected a
-    /// self-signed cert. On the SUCCESS arms the evaluator computes the digest and
-    /// the outcome drops it.
-    ///
-    /// An inbound PAIRING import needs it on the success arm too. "Ordinary trust
-    /// accepted the chain" and "the key on the wire is the one this code claims"
-    /// are independent facts, and under enterprise TLS inspection the first is true
-    /// while the second is false — see `PairingTrustDecision`. Without this readout
-    /// that row is not merely unhandled, it is undecidable.
-    struct TestConnectionReport: Equatable, Sendable {
-        let outcome: TestConnectionOutcome
-        /// Leaf SPKI SHA-256 (lowercase hex) captured on the server-trust
-        /// challenge, on EVERY arm. `nil` when no challenge fired or the key
-        /// algorithm is outside the V1 SPKI prefix table.
-        let presentedFingerprintHex: String?
     }
 
     /// Issue `GET <url>/v1/models` against the configured gateway and
@@ -98,12 +80,15 @@ extension RemoteAgentClient {
     ///   - fingerprint: optional pinned SHA-256 hex. `nil` falls through
     ///     to default ATS chain validation. Hex is normalised lowercase
     ///     by the trust evaluator on compare.
-    /// - Returns: `.ok` on success, or `.untrustedCert(...)` when no pin is
-    ///   set and the system rejected a self-signed cert (TOFU opportunity).
+    /// - Returns: `.ok` on success, or `.untrustedCert` when this device rejected
+    ///   the server's certificate — WITH a pin configured just as much as
+    ///   without one, because a pinned challenge over a chain the system refused
+    ///   fails closed (terminal — see the enum).
     /// - Throws: `AppError` — typically `.remoteAgentAuthFailed`,
-    ///   `.remoteAgentUnreachable`, `.remoteAgentCertMismatch` (pin set +
-    ///   mismatch — never offered re-trust), `.remoteAgentTimeout`, or
-    ///   `.remoteAgentServerError`.
+    ///   `.remoteAgentUnreachable`, `.remoteAgentCertMismatch` (the system
+    ///   trusted the chain and the presented key still disagreed — never
+    ///   offered re-trust, and removing the pin is never the remedy),
+    ///   `.remoteAgentTimeout`, or `.remoteAgentServerError`.
     ///   - bodyShape: the JSON envelope a 2xx body must carry to PASS. Comes from
     ///     the DESCRIPTOR, not from `backend` — a custom gateway rides the
     ///     `.openclaw` carrier (for the status map) but has no descriptor of its
@@ -121,37 +106,6 @@ extension RemoteAgentClient {
         probePath: String = Constants.remoteAgentModelsProbePath,
         bodyShape: RemoteAgentProbeBodyShape = .modelListEnvelope
     ) async throws -> TestConnectionOutcome {
-        try await testConnectionReport(
-            backend: backend,
-            url: url,
-            token: token,
-            authScheme: authScheme,
-            fingerprint: fingerprint,
-            probePath: probePath,
-            bodyShape: bodyShape
-        ).outcome
-    }
-
-    /// Same probe as `testConnection(...)`, retaining the presented leaf
-    /// fingerprint on EVERY arm.
-    ///
-    /// FILE-PRIVATE ON PURPOSE. It takes an arbitrary `fingerprint`, and a pairing
-    /// caller that passed the payload's claim here would defeat the entire trust
-    /// matrix (see `pairingTrustProbeReport`). Keeping it unreachable from outside
-    /// this file means the unpinned requirement cannot be bypassed by a future
-    /// caller — a stronger guarantee than a test, which only catches the callers
-    /// it happens to know about. The two sanctioned entry points are
-    /// `testConnection(...)` (drops the fingerprint) and `pairingTrustProbeReport(...)`
-    /// (hardcodes `nil`).
-    private func testConnectionReport(
-        backend: RemoteAgentBackend,
-        url: URL,
-        token: String,
-        authScheme: RemoteAgentAuthScheme = .bearer,
-        fingerprint: String?,
-        probePath: String = Constants.remoteAgentModelsProbePath,
-        bodyShape: RemoteAgentProbeBodyShape = .modelListEnvelope
-    ) async throws -> TestConnectionReport {
         // Per-call ephemeral session — install the pinning delegate ONLY
         // for the duration of this probe, never on `URLSession.shared`.
         let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: fingerprint)
@@ -167,34 +121,30 @@ extension RemoteAgentClient {
         defer { session.invalidateAndCancel() }
 
         let request = Self.buildTestConnectionRequest(url: url, token: token, authScheme: authScheme, probePath: probePath)
-        // `hasPin` decides how a TLS-rejection URLError is classified:
-        //   - no pin + system-rejected self-signed → `.untrustedCert(fp)`
-        //     (TOFU opportunity — read the captured fp from the evaluator)
-        //   - pin set + mismatch → throw `.remoteAgentCertMismatch`
-        let hasPin = (fingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+        // The WHOLE snapshot of whatever verdict the evaluator reached on this
+        // attempt — read as a closure because the challenge fires while the
+        // request below is in flight. Passing the snapshot rather than loose
+        // Bools is what lets Test Connection distinguish a key Conduck cannot
+        // fingerprint from a key that disagreed; the editor is the surface most
+        // likely to meet the first, since it is where a pin gets typed in.
         return try await Self.performTestConnection(
             request,
             session: session,
             backend: backend,
             bodyShape: bodyShape,
-            hasPin: hasPin,
-            presentedFingerprint: { evaluator.presentedFingerprintHex },
-            systemTrustRejected: { evaluator.systemTrustRejected },
-            pinRejected: { evaluator.pinRejected }
+            signals: { evaluator.attemptSignals }
         )
     }
 
     /// The UNPINNED trust probe an inbound pairing import must use — the ONLY
     /// sanctioned entry point for `PairingTrustDecision`.
     ///
-    /// UNPINNED IS LOAD-BEARING. Probing under the pin the payload carries would
-    /// be silently self-defeating: the evaluator ACCEPTS on a pin match without
-    /// ever consulting ordinary trust (`RemoteAgentTrustEvaluator.swift:406`), so
-    /// a pin-accepted request is indistinguishable from "ordinary trust passed"
-    /// — and the matrix would read a forged agreement as `.useOrdinaryTrust`. The
-    /// pin a code carries is a CLAIM to be checked in software, never a pin to
-    /// probe under. It is therefore not a parameter here; it is only carried
-    /// through into the returned signals for comparison.
+    /// UNPINNED IS LOAD-BEARING, and it is the ONLY way this probe runs — there
+    /// is no fingerprint parameter to pass. The question the probe asks is
+    /// exactly "does THIS DEVICE's trust store accept this server", and any pin
+    /// installed for the probe would answer a different question: the evaluator
+    /// accepts on a pin match, so a pin-accepted request would be
+    /// indistinguishable from "ordinary trust passed".
     ///
     /// NEVER THROWS, and deliberately says nothing about whether the gateway
     /// WORKS. It answers exactly one question — was the TLS handshake accepted,
@@ -211,7 +161,6 @@ extension RemoteAgentClient {
         url: URL,
         token: String,
         authScheme: RemoteAgentAuthScheme = .bearer,
-        payloadPinHex: String?,
         probePath: String = Constants.remoteAgentModelsProbePath
     ) async -> PairingTrustProbeSignals {
         let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: nil)
@@ -225,23 +174,29 @@ extension RemoteAgentClient {
         return await Self.performPairingTrustProbe(
             Self.buildTestConnectionRequest(url: url, token: token, authScheme: authScheme, probePath: probePath),
             session: session,
-            payloadPinHex: payloadPinHex,
-            presentedFingerprint: { evaluator.presentedFingerprintHex },
-            systemTrustRejected: { evaluator.systemTrustRejected },
-            pinRejected: { evaluator.pinRejected }
+            signals: { evaluator.attemptSignals }
         )
     }
 
+    #if DEBUG
     /// Test-only injection seam for `pairingTrustProbe(...)` — drives the probe
     /// through a `MockURLProtocol`-backed session with the trust signals supplied
     /// as closures, since a mocked transport raises no server-trust challenge.
+    ///
+    /// `#if DEBUG` IS the fence, not the name. A caller-supplied session is a
+    /// session with no evaluator on it and hand-written trust verdicts beside it —
+    /// i.e. every trust answer this probe gives becomes whatever the caller says.
+    /// "No production caller uses it" is call-site discipline; not existing in a
+    /// Release or Archive build is enforcement, and it is the same fence
+    /// `RemoteAgentTrustEvaluator`'s test-only initializer and
+    /// `BackgroundFileTransfer.respondToTaskTrustChallenge` already stand behind.
+    /// Nothing in the app links against it — `pairingTrustProbe(...)` builds its
+    /// own session and calls the shared executor directly.
     func pairingTrustProbeForTesting(
         url: URL,
         token: String,
         authScheme: RemoteAgentAuthScheme = .bearer,
-        payloadPinHex: String?,
         session: URLSession,
-        presentedFingerprint: @escaping @Sendable () -> String? = { nil },
         systemTrustRejected: @escaping @Sendable () -> Bool = { false },
         pinRejected: @escaping @Sendable () -> Bool = { false },
         probePath: String = Constants.remoteAgentModelsProbePath
@@ -249,75 +204,74 @@ extension RemoteAgentClient {
         await Self.performPairingTrustProbe(
             Self.buildTestConnectionRequest(url: url, token: token, authScheme: authScheme, probePath: probePath),
             session: session,
-            payloadPinHex: payloadPinHex,
-            presentedFingerprint: presentedFingerprint,
-            systemTrustRejected: systemTrustRejected,
-            pinRejected: pinRejected
+            // `challengeRefused` stays false: this probe installs no pin, and an
+            // unpinned challenge is never one the evaluator cancels.
+            signals: {
+                .init(systemTrustRejected: systemTrustRejected(),
+                      challengeRefused: false,
+                      pinRejected: pinRejected(),
+                      pinComparisonUnsupported: false)
+            }
         )
     }
+    #endif
 
     private static func performPairingTrustProbe(
         _ request: URLRequest,
         session: URLSession,
-        payloadPinHex: String?,
-        presentedFingerprint: @escaping @Sendable () -> String?,
-        systemTrustRejected: @escaping @Sendable () -> Bool,
-        pinRejected: @escaping @Sendable () -> Bool
+        signals: @escaping @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals
     ) async -> PairingTrustProbeSignals {
         do {
             // Discard the response entirely. Status and body are the FUNCTIONAL
             // question, asked later by the existing gateway test; reaching this
             // line at all is the only fact this probe reports.
             _ = try await session.data(for: request)
-            return PairingTrustProbeSignals(
-                payloadPinHex: payloadPinHex,
-                presentedFingerprintHex: presentedFingerprint(),
-                requestCompleted: true
-            )
+            return PairingTrustProbeSignals(requestCompleted: true)
         } catch let error as URLError {
-            // `hasPin: false` matches the unpinned probe — a mismatch signal here
-            // could only come from the evaluator, which has no pin to mismatch.
+            // The probe installs no pin, so the snapshot can only ever carry a
+            // system verdict — there is nothing for a pin to disagree with and
+            // no digest to fail to compute.
             return PairingTrustProbeSignals(
-                payloadPinHex: payloadPinHex,
-                presentedFingerprintHex: presentedFingerprint(),
                 requestCompleted: false,
-                transportClass: RemoteAgentTrustEvaluator.classifyTransportError(
-                    error.code,
-                    hasPin: false,
-                    systemTrustRejected: systemTrustRejected(),
-                    pinRejected: pinRejected()
-                )
+                transportClass: RemoteAgentTrustEvaluator.classifyTransportError(error.code, signals: signals())
             )
         } catch {
             // Not a `URLError` — unclassifiable, so conservatively unreachable.
             return PairingTrustProbeSignals(
-                payloadPinHex: payloadPinHex,
-                presentedFingerprintHex: presentedFingerprint(),
                 requestCompleted: false,
                 transportClass: nil
             )
         }
     }
 
+    #if DEBUG
     /// Test-only injection seam — issues the probe through a caller-
     /// supplied `URLSession`. Production callers use `testConnection(...)`
     /// which constructs its own pinning session; tests use this to drive
     /// a `MockURLProtocol`-backed session without paying for a real
-    /// network round-trip (and to control fingerprint pinning via the
-    /// mock instead of a real `RemoteAgentTrustEvaluator` delegate).
+    /// network round-trip. The trust signals arrive as closures because a
+    /// mocked transport raises no server-trust challenge, so there is no real
+    /// `RemoteAgentTrustEvaluator` to read them off.
     ///
-    /// Marked `internal` (not `private`) so `@testable import` reaches it.
-    /// Keep the public `testConnection(...)` overload as the only
-    /// non-test entry point.
+    /// `#if DEBUG` IS the fence: this method decides the probe's certificate
+    /// verdict from its arguments rather than from a challenge, so a shipping
+    /// build must not be able to reach it at all. `internal` keeps
+    /// `@testable import` working inside that fence, and `testConnection(...)`
+    /// stays the only entry point a Release build has.
     ///
-    /// - Parameters mirror the production overload, plus:
-    ///   - hasPin: whether a pin is configured. Drives the no-pin →
-    ///     `.untrustedCert` vs pin-set → `throw .remoteAgentCertMismatch`
-    ///     classification of a TLS-rejection URLError. Defaults to `false`
-    ///     (the common test case is "no pin set").
-    ///   - presentedFingerprint: closure returning the leaf SPKI fp the
-    ///     evaluator captured — tests pass a literal; production passes a
-    ///     read of the real evaluator instance.
+    /// - Parameters mirror the production overload, plus the four verdicts an
+    ///   attempt can reach, each as a closure and each defaulting to the
+    ///   no-verdict value — so a test exercising a REFUSAL has to say which one.
+    ///   They are assembled into the same `AttemptTrustSignals` the production
+    ///   overload snapshots off its evaluator; which arms consult which verdict
+    ///   is `classifyTransportError`'s own business and is documented there,
+    ///   because restating that list here is how a seam's doc and the
+    ///   classifier's doc drift into contradicting each other.
+    ///   `challengeRefused` is the one a test reaching for "a pinned lane" most
+    ///   likely wants: it is the positive record that the evaluator ANSWERED the
+    ///   challenge with a cancel, which is what makes a `-999` attributable at
+    ///   all. A pin's mere existence is not a substitute — it says nothing about
+    ///   whether this attempt was refused.
     @discardableResult
     func testConnectionForTesting(
         backend: RemoteAgentBackend,
@@ -325,56 +279,28 @@ extension RemoteAgentClient {
         token: String,
         authScheme: RemoteAgentAuthScheme = .bearer,
         session: URLSession,
-        hasPin: Bool = false,
-        presentedFingerprint: @escaping @Sendable () -> String? = { nil },
+        challengeRefused: Bool = false,
         systemTrustRejected: @escaping @Sendable () -> Bool = { false },
         pinRejected: @escaping @Sendable () -> Bool = { false },
+        pinComparisonUnsupported: @escaping @Sendable () -> Bool = { false },
         probePath: String = Constants.remoteAgentModelsProbePath,
         bodyShape: RemoteAgentProbeBodyShape = .modelListEnvelope
     ) async throws -> TestConnectionOutcome {
-        try await testConnectionReportForTesting(
-            backend: backend,
-            url: url,
-            token: token,
-            authScheme: authScheme,
-            session: session,
-            hasPin: hasPin,
-            presentedFingerprint: presentedFingerprint,
-            systemTrustRejected: systemTrustRejected,
-            pinRejected: pinRejected,
-            probePath: probePath,
-            bodyShape: bodyShape
-        ).outcome
-    }
-
-    /// Report-returning counterpart of `testConnectionForTesting(...)`, so the
-    /// success-path fingerprint retention the pairing trust matrix depends on is
-    /// itself testable without a live TLS fixture.
-    func testConnectionReportForTesting(
-        backend: RemoteAgentBackend,
-        url: URL,
-        token: String,
-        authScheme: RemoteAgentAuthScheme = .bearer,
-        session: URLSession,
-        hasPin: Bool = false,
-        presentedFingerprint: @escaping @Sendable () -> String? = { nil },
-        systemTrustRejected: @escaping @Sendable () -> Bool = { false },
-        pinRejected: @escaping @Sendable () -> Bool = { false },
-        probePath: String = Constants.remoteAgentModelsProbePath,
-        bodyShape: RemoteAgentProbeBodyShape = .modelListEnvelope
-    ) async throws -> TestConnectionReport {
         let request = Self.buildTestConnectionRequest(url: url, token: token, authScheme: authScheme, probePath: probePath)
         return try await Self.performTestConnection(
             request,
             session: session,
             backend: backend,
             bodyShape: bodyShape,
-            hasPin: hasPin,
-            presentedFingerprint: presentedFingerprint,
-            systemTrustRejected: systemTrustRejected,
-            pinRejected: pinRejected
+            signals: {
+                .init(systemTrustRejected: systemTrustRejected(),
+                      challengeRefused: challengeRefused,
+                      pinRejected: pinRejected(),
+                      pinComparisonUnsupported: pinComparisonUnsupported())
+            }
         )
     }
+    #endif
 
     /// Build the `GET <url>/v1/models` request. `.bearer` sets the
     /// Authorization header; `.none` (keyless) omits it — a keyless gateway is
@@ -402,21 +328,38 @@ extension RemoteAgentClient {
     /// `RemoteAgentClient` (transport mapping + status-map dispatch) but
     /// skips the body decode — `testConnection` is binary success/failure.
     ///
-    /// TLS-rejection handling depends on `hasPin`:
-    ///   - no pin set → the rejection is a TOFU opportunity → return
-    ///     `.untrustedCert(presentedFingerprint())` (do NOT throw).
-    ///   - pin set → the rejection means the cert changed away from the
-    ///     pin → `throw .remoteAgentCertMismatch` (never offer re-trust).
+    /// TLS-rejection handling depends on WHICH verdict `classifyTransportError`
+    /// found, never on whether a pin merely exists — this device's own trust
+    /// verdict wins regardless:
+    ///   - `systemTrustRejected` → this device does not trust the server's
+    ///     certificate → return `.untrustedCert` (do NOT throw — the UI
+    ///     explains this one, with a remedy, rather than folding it into a
+    ///     generic connection failure).
+    ///   - system trust OK but `pinRejected` → the presented key does not
+    ///     match the fingerprint the user typed in on an otherwise-trusted
+    ///     certificate → `throw .remoteAgentCertMismatch`.
+    ///   - system trust OK, `pinRejected`, and `pinComparisonUnsupported` → the
+    ///     digest could not be COMPUTED, so nothing was compared →
+    ///     `throw .remoteAgentCertKeyUnpinnable`. Reachable only because the
+    ///     whole signals snapshot is threaded here; the loose-Bool form drops
+    ///     that verdict and this user gets an interception warning instead.
+    ///
+    /// FILE-PRIVATE ON PURPOSE. This is the only executor that runs the probe
+    /// under a caller-chosen pin, so keeping it unreachable from outside this
+    /// file means the two sanctioned entry points are the only ways in:
+    /// `testConnection(...)`, whose fingerprint comes from the Settings editor,
+    /// and `testConnectionForTesting(...)`, the test seam. The pairing import
+    /// does not route through here at all — `pairingTrustProbe(...)` has its own
+    /// executor with no fingerprint parameter to pass, which is what makes
+    /// "the pairing probe runs unpinned" a structural fact rather than a
+    /// convention a future caller could break.
     private static func performTestConnection(
         _ request: URLRequest,
         session: URLSession,
         backend: RemoteAgentBackend,
         bodyShape: RemoteAgentProbeBodyShape,
-        hasPin: Bool,
-        presentedFingerprint: @escaping @Sendable () -> String?,
-        systemTrustRejected: @escaping @Sendable () -> Bool = { false },
-        pinRejected: @escaping @Sendable () -> Bool = { false }
-    ) async throws -> TestConnectionReport {
+        signals: @escaping @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals
+    ) async throws -> TestConnectionOutcome {
         let data: Data
         let response: URLResponse
         do {
@@ -427,12 +370,7 @@ extension RemoteAgentClient {
             // ensures a transient `.secureConnectionFailed` (cold tunnel) is NOT
             // mislabeled "untrusted certificate". Bearer header is on the request
             // object; we never echo request material into the thrown error.
-            switch RemoteAgentTrustEvaluator.classifyTransportError(
-                error.code,
-                hasPin: hasPin,
-                systemTrustRejected: systemTrustRejected(),
-                pinRejected: pinRejected()
-            ) {
+            switch RemoteAgentTrustEvaluator.classifyTransportError(error.code, signals: signals()) {
             case .timeout:
                 throw AppError.remoteAgentTimeout
             case .unreachable:
@@ -446,15 +384,17 @@ extension RemoteAgentClient {
                 // Pin set + the evaluator confirmed a genuine mismatch → throw
                 // (never auto-offer re-trust; that defeats pinning).
                 throw AppError.remoteAgentCertMismatch
+            case .certKeyUnpinnable:
+                // System trust passed; the pin could not be COMPUTED for this
+                // key algorithm, so nothing was compared. Thrown as its own code
+                // so the editor states the key-type cause instead of an
+                // interception warning the evidence does not support.
+                throw AppError.remoteAgentCertKeyUnpinnable
             case .untrustedCert:
-                // No pin + the system genuinely rejected an untrusted cert →
-                // TOFU opportunity: return the captured leaf fingerprint so the
-                // UI can offer one-tap "Trust & Save".
-                let presented = presentedFingerprint()
-                return TestConnectionReport(
-                    outcome: .untrustedCert(presentedFingerprintHex: presented),
-                    presentedFingerprintHex: presented
-                )
+                // This device does not trust the server's certificate — true
+                // whether or not a pin is configured, since `systemTrustRejected`
+                // is checked before `pinRejected` in `classifyTransportError`.
+                return .untrustedCert
             }
         } catch {
             // Non-URLError transport failure — collapse to unreachable.
@@ -489,14 +429,7 @@ extension RemoteAgentClient {
         // `/v1/models` — so a status-only verdict reports a gateway that cannot
         // answer a single turn as "Connected", and the user only discovers it when
         // their first message fails. The gateway must PROVE it speaks the protocol.
-        //
-        // The presented fingerprint is retained on this SUCCESS path too — the
-        // pairing trust matrix compares it against the pin a scanned code claims,
-        // and ordinary trust having accepted the chain does not answer that question.
-        return TestConnectionReport(
-            outcome: try Self.validateProbeBody(data, shape: bodyShape),
-            presentedFingerprintHex: presentedFingerprint()
-        )
+        return try Self.validateProbeBody(data, shape: bodyShape)
     }
 
     /// Decide a 2xx probe's verdict from its BODY.

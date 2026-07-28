@@ -33,6 +33,31 @@ enum WatchConverseCompletionVerdict {
         /// silently, no bubble and no Retry. Mirrors the per-task over-cap notes
         /// in `BackgroundRemoteAgent` / `CarPlayConverseUploader`.
         case responseOverCap
+        /// The trust delegate refused the server-trust challenge because THIS
+        /// DEVICE DOES NOT TRUST the presented chain. Usually reaches the
+        /// completion as `URLError.cancelled` WITH the registry entry present —
+        /// the same shape as a live in-process cancel, so without this branch a
+        /// pinned gateway whose certificate the watch rejects dropped the user's
+        /// spoken turn silently and left the live machine stuck in `.uploading`
+        /// (App Transport Security may also refuse first, surfacing `-1200`; same
+        /// verdict). TERMINAL: a pin can only tighten a chain the system already
+        /// trusts, never rescue one, so nothing on the wrist changes the outcome.
+        case certificateUntrusted
+        /// The trust delegate refused the challenge because a configured pin did
+        /// not match a chain the system DID trust. A DISTINCT kind from
+        /// `.certificateUntrusted`, never merged with it: there the chain is
+        /// rejected and the fix is a real certificate on the server; here the
+        /// chain is fine and the KEY under it changed, which is what an
+        /// intercepted connection looks like. Also terminal.
+        case certificatePinMismatch
+        /// The trust delegate refused because it could not COMPUTE the pin: the
+        /// chain the system trusted carries a key algorithm outside Conduck's
+        /// SPKI prefix table, so nothing was compared. A third distinct kind,
+        /// merged with neither — `.certificateUntrusted` would send the user to
+        /// replace a certificate this device accepts, and `.certificatePinMismatch`
+        /// would warn about an interception that nothing here is evidence of.
+        /// Also terminal: the key is the same on every attempt.
+        case certificateKeyUnpinnable
         /// `.cancelled` with NO registry entry: the task was resurrected
         /// ACROSS A LAUNCH (after a force-quit every background task comes
         /// back as `.cancelled`, and the registry died with the old process).
@@ -60,17 +85,25 @@ enum WatchConverseCompletionVerdict {
     /// turn is already in the store; only the delegate's cleanup runs.
     case cleanupOnly
 
-    /// `responseOverCap` is the delegate's own note that IT cancelled this task
-    /// for an oversized body (`WatchAudioUploader.overCapTaskKeys`). It MUST be
-    /// classified before the `.cancelled` disambiguation, which would otherwise
-    /// read our cancel as a live user cancel and drop the turn silently.
+    /// `responseOverCap` and `trustSignals` are the delegate's own per-task
+    /// notes, each recording a reason IT cancelled this task
+    /// (`WatchAudioUploader.overCapTaskKeys` / `trustSignalsByTaskKey`). Both
+    /// MUST be classified before the `.cancelled` disambiguation, which would
+    /// otherwise read our own cancel as a live user cancel and drop the turn
+    /// silently.
+    ///
+    /// `trustSignals` arrives WHOLE — the same snapshot the evaluator reached —
+    /// because `pinComparisonUnsupported` is the only thing separating a key the
+    /// watch cannot fingerprint from a key that disagreed, and the wrist is the
+    /// surface least able to recover from being told the wrong one.
     static func make(
         metadata: RemoteAgentBackgroundMetadata?,
         httpStatus: Int?,
         body: Data?,
         transportError: Error?,
         registryEntryPresent: Bool,
-        responseOverCap: Bool = false
+        responseOverCap: Bool = false,
+        trustSignals: RemoteAgentTrustEvaluator.AttemptTrustSignals = .empty
     ) -> WatchConverseCompletionVerdict {
         // Status-map carrier: a built-in ref maps to itself; a custom ref (or
         // garbage metadata) uses `.openclaw` — the map is `.unified` for every
@@ -89,6 +122,33 @@ enum WatchConverseCompletionVerdict {
             // indistinguishable from a live in-process cancel.
             if responseOverCap {
                 return .failure(kind: .responseOverCap, conversationID: conversationID)
+            }
+            // OUR certificate refusal, likewise ahead of the `.cancelled`
+            // disambiguation and for the identical reason: the trust delegate
+            // cancelled the challenge, so this arrives as `.cancelled` with the
+            // registry entry present. Mutually exclusive with the over-cap note
+            // above — a refused challenge never gets far enough for a body.
+            //
+            // Classification is DELEGATED to the one shared classifier the
+            // iPhone, CarPlay and STT lanes use, so the wrist cannot drift on
+            // what counts as a certificate failure — and so a note left on a
+            // task that nonetheless connected cannot mislabel an unrelated later
+            // error: only the code arms the classifier accepts become a
+            // certificate verdict, everything else falls through untouched.
+            if trustSignals != .empty, let urlError = transportError as? URLError {
+                switch RemoteAgentTrustEvaluator.classifyTransportError(
+                    urlError.code,
+                    signals: trustSignals
+                ) {
+                case .untrustedCert:
+                    return .failure(kind: .certificateUntrusted, conversationID: conversationID)
+                case .certMismatch:
+                    return .failure(kind: .certificatePinMismatch, conversationID: conversationID)
+                case .certKeyUnpinnable:
+                    return .failure(kind: .certificateKeyUnpinnable, conversationID: conversationID)
+                case .timeout, .unreachable, .cancelled:
+                    break
+                }
             }
             if let urlError = transportError as? URLError, urlError.code == .cancelled {
                 return registryEntryPresent

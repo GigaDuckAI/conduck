@@ -12,9 +12,17 @@
 //
 //   ① Reachability + TLS  — the transcription POST's handshake. URLError is
 //      classified exactly like `RemoteAgentClient+TestConnection.performTestConnection`
-//      (timeout / unreachable / cert). An untrusted self-signed cert with NO
-//      pin → `.skipped` + the captured leaf SPKI fingerprint for one-tap
-//      "Trust & Save"; a pin mismatch (pin set + cert changed) → `.failed`.
+//      (timeout / unreachable / cert). Three certificate refusals, each with its
+//      own remedy and none collapsible into another — a chain this device
+//      doesn't trust (fix the SERVER), a pinned key that disagreed with a chain
+//      the system DID trust (stop: the connection may be intercepted), and a key
+//      algorithm Conduck cannot fingerprint (the certificate is fine; reissue it
+//      or clear the pin). Never "the certificate changed": on the mismatch's
+//      real shape nothing on the user's server changed, and saying so sends them
+//      hunting a configuration they never touched. All three are terminal, so
+//      none is recoverable from this screen. The wording itself is
+//      `CertificateTrustCopy`'s, rendered below — this comment must not restate
+//      it, or the two drift.
 //   ② Auth — the SAME response's HTTP status. ONLY 401 / 403 fail this stage;
 //      every other status means the key reached the auth layer and was
 //      accepted (a 5xx is a server problem, surfaced at stage ③).
@@ -54,10 +62,9 @@ enum STTTestStage: String, Sendable, Equatable, CaseIterable {
     case transcription
 }
 
-/// Per-stage lifecycle. `.skipped` is distinct from `.failed`: it carries a
-/// non-fatal reason (e.g. an untrusted self-signed cert the user can pin via
-/// TOFU) where the stage could not be COMPLETED but the server is not proven
-/// broken. The UI renders `.skipped` amber, `.failed` red.
+/// Per-stage lifecycle. `.skipped` is distinct from `.failed`: this stage never
+/// ran because an EARLIER one blocked it, so it says nothing about the server.
+/// The UI renders `.skipped` amber, `.failed` red.
 enum STTStageStatus: Sendable, Equatable {
     /// Not yet started.
     case pending
@@ -67,8 +74,7 @@ enum STTStageStatus: Sendable, Equatable {
     case passed
     /// Completed and failed. `reason` is a taxonomy-derived, key-free string.
     case failed(reason: String)
-    /// Could not complete, but the server is not proven broken (e.g. an
-    /// untrusted self-signed cert pending TOFU). `reason` is key-free.
+    /// Never ran — an earlier stage blocked it. `reason` is key-free.
     case skipped(reason: String)
 }
 
@@ -78,7 +84,7 @@ struct STTTestStageResult: Identifiable, Sendable, Equatable {
     var id: STTTestStage { stage }
     let stage: STTTestStage
     var status: STTStageStatus
-    /// Optional secondary detail (e.g. "HTTP 200", "self-signed cert"). Always
+    /// Optional secondary detail (e.g. "HTTP 200", "Connected — TLS OK"). Always
     /// status/category-derived — NEVER carries the key, URL, or transcript.
     var detail: String?
 }
@@ -98,14 +104,8 @@ struct STTTestSuiteResult: Sendable, Equatable {
     /// until stage ③ completes.
     var latencyMS: Int?
 
-    /// When stage ① skipped on an untrusted self-signed cert with NO pin, the
-    /// captured leaf SPKI fingerprint (lowercase hex) for one-tap "Trust &
-    /// Save". `""` signals "untrusted but no copyable fingerprint" (key
-    /// algorithm outside the V1 SPKI prefix table). Nil = no pending TOFU.
-    var pendingUntrustedCertFingerprint: String?
-
-    /// True iff every stage `.passed` (a `.skipped` reachability does NOT count
-    /// as passed — the run is incomplete pending a trust decision).
+    /// True iff every stage `.passed` (a `.skipped` stage does NOT count as
+    /// passed — it never ran).
     var allPassed: Bool {
         stages.allSatisfy { if case .passed = $0.status { return true } else { return false } }
     }
@@ -117,8 +117,7 @@ struct STTTestSuiteResult: Sendable, Equatable {
                 STTTestStageResult(stage: $0, status: .pending, detail: nil)
             },
             transcript: nil,
-            latencyMS: nil,
-            pendingUntrustedCertFingerprint: nil
+            latencyMS: nil
         )
     }
 }
@@ -154,7 +153,8 @@ enum STTConnectionTestSuite {
     ///   - url: FULL transcribe URL (caller resolves base + path).
     ///   - token: API key / bearer token. Never surfaced.
     ///   - auth: effective auth scheme (`.bearer` / `.none` / `.headerName`).
-    ///   - fingerprint: optional pinned SHA-256 hex; nil → default ATS.
+    ///   - fingerprint: optional pinned SHA-256 hex, applied ON TOP of the
+    ///     system's own trust evaluation; nil → system trust alone.
     ///   - model: model tag for the multipart `model` field.
     ///   - progress: live tick — invoked on the calling context with the
     ///     latest snapshot after each stage transition.
@@ -179,43 +179,62 @@ enum STTConnectionTestSuite {
         let session = URLSession(configuration: config, delegate: evaluator, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
 
-        let hasPin = (fingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-        return await runForTesting(
+        // The whole attempt snapshot, not loose Bools: only it carries
+        // `pinComparisonUnsupported`, and this screen is where a user types a
+        // fingerprint in — so it is the surface most likely to meet a key
+        // Conduck cannot hash, and the worst place to answer that with an
+        // interception warning.
+        return await perform(
             url: url,
             token: token,
             auth: auth,
             model: model,
             session: session,
-            hasPin: hasPin,
-            presentedFingerprint: { evaluator.presentedFingerprintHex },
-            systemTrustRejected: { evaluator.systemTrustRejected },
-            pinRejected: { evaluator.pinRejected },
+            signals: { evaluator.attemptSignals },
             progress: progress
         )
     }
 
+    #if DEBUG
     /// Test-only injection seam — runs the suite through a caller-supplied
     /// `URLSession` (e.g. a `MockURLProtocol`-backed session) without a real
-    /// network round-trip. Marked `internal` (not `private`) so
-    /// `@testable import` reaches it. Production callers use `run(...)`.
+    /// network round-trip, with the attempt verdicts a mocked transport cannot
+    /// produce supplied as a closure (production reads them off the evaluator
+    /// only after the awaited request returns). `signals` defaults to `.empty` —
+    /// no verdict — so a test exercising a refusal has to name which one.
     ///
-    /// - Parameters mirror `run(...)`, plus:
-    ///   - session: the (test-controlled) session to issue the POST through.
-    ///   - hasPin: whether a pin is configured — drives the no-pin →
-    ///     `.skipped` vs pin-set → `.failed` classification of a TLS-rejection
-    ///     URLError.
-    ///   - presentedFingerprint: closure returning the leaf SPKI fp the
-    ///     evaluator captured (tests pass a literal).
+    /// `#if DEBUG` IS the fence: a caller-supplied session carries no evaluator,
+    /// so every certificate verdict this run reports comes from the arguments
+    /// rather than from a challenge. `run(...)` is a THIN wrapper over the same
+    /// `perform(...)` body precisely so this can be fenced without production
+    /// depending on it — the shared body is what both call, and only this
+    /// entrance disappears from a Release or Archive build.
     static func runForTesting(
         url: URL,
         token: String,
         auth: STTAuthScheme,
         model: String,
         session: URLSession,
-        hasPin: Bool = false,
-        presentedFingerprint: @escaping @Sendable () -> String? = { nil },
-        systemTrustRejected: @escaping @Sendable () -> Bool = { false },
-        pinRejected: @escaping @Sendable () -> Bool = { false },
+        signals: @escaping @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals = { .empty },
+        progress: @Sendable (STTTestSuiteResult) -> Void
+    ) async -> STTTestSuiteResult {
+        await perform(
+            url: url, token: token, auth: auth, model: model,
+            session: session, signals: signals, progress: progress
+        )
+    }
+    #endif
+
+    /// The staged run itself, over a ready session and a ready verdict source.
+    /// `private` so the only ways in are `run(...)` (which builds the pinned
+    /// session) and, in a Debug build, `runForTesting(...)`.
+    private static func perform(
+        url: URL,
+        token: String,
+        auth: STTAuthScheme,
+        model: String,
+        session: URLSession,
+        signals: @escaping @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals,
         progress: @Sendable (STTTestSuiteResult) -> Void
     ) async -> STTTestSuiteResult {
         var result = STTTestSuiteResult.pending
@@ -261,12 +280,7 @@ enum STTConnectionTestSuite {
             // Classify via the single source of truth in `RemoteAgentTrustEvaluator`
             // so a transient `.secureConnectionFailed` (cold tunnel) is NOT
             // mislabeled "untrusted certificate" — it stays a retryable failure.
-            switch RemoteAgentTrustEvaluator.classifyTransportError(
-                error.code,
-                hasPin: hasPin,
-                systemTrustRejected: systemTrustRejected(),
-                pinRejected: pinRejected()
-            ) {
+            switch RemoteAgentTrustEvaluator.classifyTransportError(error.code, signals: signals()) {
             case .timeout:
                 update(.reachability, .failed(reason: Self.timeoutReason))
             case .unreachable, .cancelled:
@@ -275,12 +289,18 @@ enum STTConnectionTestSuite {
                 // Pin set + the evaluator confirmed a genuine mismatch → hard
                 // `.failed` (never auto-offer re-trust; that defeats pinning).
                 update(.reachability, .failed(reason: Self.certMismatchReason))
+            case .certKeyUnpinnable:
+                // System trust passed and the digest could not be computed, so
+                // no comparison happened. Terminal like the two above, but its
+                // own reason: this stage must not report a possible interception
+                // over a certificate this device just accepted.
+                update(.reachability, .failed(reason: Self.certKeyUnpinnableReason))
             case .untrustedCert:
-                // No pin + the system genuinely rejected an untrusted cert →
-                // TOFU opportunity: `.skipped` + capture the leaf fingerprint.
-                let fp = presentedFingerprint()
-                result.pendingUntrustedCertFingerprint = fp ?? ""
-                update(.reachability, .skipped(reason: Self.untrustedCertReason))
+                // The system rejected the chain. Terminal: a pin can only ever
+                // narrow what is accepted, so there is nothing this screen could
+                // offer that would make the connection work. Name the fix on the
+                // server instead.
+                update(.reachability, .failed(reason: Self.untrustedCertReason))
             }
             // Reachability did not cleanly pass → auth + transcription cannot
             // run. Mark them skipped with a dependency reason.
@@ -485,21 +505,36 @@ enum STTConnectionTestSuite {
         String(localized: "stt.test.reachability.unreachable",
                 defaultValue: "Couldn't reach the server.")
     }
-    private static var certMismatchReason: String {
-        String(localized: "stt.test.reachability.certMismatch",
-                defaultValue: "Certificate doesn't match the pinned fingerprint.")
+    // Internal for the same reason as `untrustedCertReason` below, and the
+    // shared copy for the same reason: a mismatch reaches this stage only when
+    // the system TRUSTED the chain, so the reason has to carry the interception
+    // warning — a bare "doesn't match the pinned fingerprint" reads like a
+    // typo the user should correct.
+    static var certMismatchReason: String {
+        CertificateTrustCopy.pinMismatchRefusalWithRemedy
     }
-    private static var untrustedCertReason: String {
-        String(localized: "stt.test.reachability.untrustedCert",
-                defaultValue: "Self-signed certificate — trust it to continue.")
+    // Internal (not private) so the suite's tests can assert the EXACT reason a
+    // rejected chain produces — the one refusal wording, shared with the gateway
+    // editor so the two surfaces can't name different remedies.
+    static var untrustedCertReason: String {
+        CertificateTrustCopy.untrustedRefusalWithRemedy
+    }
+    // Internal for the same reason as the two above: the tests assert the EXACT
+    // reason, and the wording is shared so this stage cannot invent a third
+    // story about an unfingerprintable key.
+    static var certKeyUnpinnableReason: String {
+        CertificateTrustCopy.keyUnpinnableRefusalWithRemedy
     }
     private static var invalidResponseReason: String {
         String(localized: "stt.test.reachability.invalidResponse",
                 defaultValue: "Server returned an unexpected response.")
     }
+    // `.v2` key: the original wording blamed reachability, which is now only one
+    // of the ways stage ① ends (a rejected certificate is the other) — and the
+    // catalog value WINS over `defaultValue:`, so the reword needs a fresh key.
     private static var blockedByReachabilityReason: String {
-        String(localized: "stt.test.skipped.blockedByReachability",
-                defaultValue: "Skipped — the server wasn't reachable.")
+        String(localized: "stt.test.skipped.blockedByReachability.v2",
+                defaultValue: "Skipped — the connection to the server didn't complete.")
     }
     private static var blockedByAuthReason: String {
         String(localized: "stt.test.skipped.blockedByAuth",

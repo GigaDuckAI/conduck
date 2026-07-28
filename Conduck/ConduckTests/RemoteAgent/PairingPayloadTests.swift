@@ -10,6 +10,10 @@
 // "update the app", insecureURL names the https violation, and everything
 // else collapses to malformed. Test payloads use synthetic tokens /
 // credentials only — never real secrets.
+//
+// The payload carries NO certificate field, and the tests below lock that the
+// parser has no path by which a code-supplied digest could become a value the
+// app holds.
 
 import XCTest
 @testable import Conduck
@@ -17,10 +21,6 @@ import XCTest
 final class PairingPayloadTests: XCTestCase {
 
     // MARK: - Fixtures & helpers
-
-    /// 64 lowercase hex chars — a syntactically valid SPKI SHA-256.
-    private let gatewayFP = String(repeating: "ab", count: 32)
-    private let fileServerFP = String(repeating: "cd", count: 32)
 
     /// Build a pairing string from a JSON dict the way `conduck-connect`
     /// does (minified JSON → base64 → prefixed segments).
@@ -42,13 +42,11 @@ final class PairingPayloadTests: XCTestCase {
                 "url": "https://gw.example.ts.net:18789",
                 "auth": "bearer",
                 "token": "tok-test-123",
-                "certFP": gatewayFP,
                 "model": "test-model",
             ],
             "fileServer": [
                 "url": "https://files.example.ts.net:8443",
                 "credential": "cred-test-456",
-                "certFP": fileServerFP,
             ],
             "transport": "tailscale",
         ]
@@ -106,7 +104,6 @@ final class PairingPayloadTests: XCTestCase {
         XCTAssertEqual(payload.url, URL(string: "https://gw.example.ts.net:18789"))
         XCTAssertEqual(payload.authScheme, .bearer)
         XCTAssertEqual(payload.token, "tok-test-123")
-        XCTAssertEqual(payload.certFP, gatewayFP)
         XCTAssertEqual(payload.model, "test-model")
         XCTAssertEqual(payload.transport, .tailscale)
 
@@ -116,7 +113,6 @@ final class PairingPayloadTests: XCTestCase {
         }
         XCTAssertEqual(fileServer.url, URL(string: "https://files.example.ts.net:8443"))
         XCTAssertEqual(fileServer.credential, "cred-test-456")
-        XCTAssertEqual(fileServer.certFP, fileServerFP)
     }
 
     func testOpenclawKindMapsToBuiltin() {
@@ -250,18 +246,6 @@ final class PairingPayloadTests: XCTestCase {
         guard let payload = assertParses(pairingString(dict)) else { return }
         XCTAssertEqual(payload.fileServer?.url, URL(string: "https://files.example.com:8443"))
         XCTAssertEqual(payload.fileServer?.credential, "cred-test-456")
-        XCTAssertNil(payload.fileServer?.certFP, "Absent fileServer.certFP must decode nil")
-    }
-
-    func testFileServerForwardCompatCertFPParses() {
-        var dict = minimalDict()
-        dict["fileServer"] = [
-            "url": "https://files.example.com",
-            "credential": "cred-test-456",
-            "certFP": fileServerFP,
-        ]
-        guard let payload = assertParses(pairingString(dict)) else { return }
-        XCTAssertEqual(payload.fileServer?.certFP, fileServerFP)
     }
 
     func testFileServerEmptyCredentialIsMalformed() {
@@ -304,7 +288,6 @@ final class PairingPayloadTests: XCTestCase {
             ("funnel", .funnel),
             ("cloudflare", .cloudflare),
             ("public", .publicCert),
-            ("selfsigned", .selfsigned),
         ]
         for (raw, expected) in expectations {
             var dict = minimalDict()
@@ -524,32 +507,49 @@ final class PairingPayloadTests: XCTestCase {
                     "the file-server URL is held to the same host requirement")
     }
 
-    // MARK: - certFP normalization
+    // MARK: - The payload names no certificate
+    //
+    // A pin can only ever be an ADDITIONAL restriction on a chain the system
+    // already trusts, so a certificate field in an untrusted setup code could
+    // only ask the app to lower its standards. There is no such field, and the
+    // tolerant dict-decode means a hand-crafted code that adds one is not
+    // rejected — it is IGNORED, which is the stronger property: the parser has
+    // no path by which a code-supplied digest becomes a value the app holds.
 
-    func testCertFPWithColonsAndUppercaseNormalizes() {
-        // openssl-style "AB:AB:…:AB" (32 uppercase pairs, colon-separated)
-        // must normalize to bare lowercase 64-hex.
-        let colonSeparated = Array(repeating: "AB", count: 32).joined(separator: ":")
+    func testACertFPKeyInTheGatewayBlockIsIgnoredNotHonoured() {
         var dict = minimalDict()
         var gateway = dict["gateway"] as! [String: Any]
-        gateway["certFP"] = colonSeparated
+        gateway["certFP"] = String(repeating: "ab", count: 32)
         dict["gateway"] = gateway
 
         guard let payload = assertParses(pairingString(dict)) else { return }
-        XCTAssertEqual(payload.certFP, String(repeating: "ab", count: 32))
+        XCTAssertEqual(payload.kind, .builtin(.openclaw),
+                       "The rest of the payload must parse normally around the ignored key.")
+        XCTAssertEqual(payload.url, URL(string: "https://gw.example.com"))
     }
 
-    func testCertFPWrongLengthOrNonHexIsMalformed() {
+    func testACertFPKeyInTheFileServerBlockIsIgnoredNotHonoured() {
         var dict = minimalDict()
-        var gateway = dict["gateway"] as! [String: Any]
+        dict["fileServer"] = [
+            "url": "https://files.example.com",
+            "credential": "cred-test-456",
+            "certFP": String(repeating: "cd", count: 32),
+        ]
+        guard let payload = assertParses(pairingString(dict)) else { return }
+        XCTAssertEqual(payload.fileServer?.url, URL(string: "https://files.example.com"))
+        XCTAssertEqual(payload.fileServer?.credential, "cred-test-456")
+    }
 
-        gateway["certFP"] = String(repeating: "ab", count: 16) // 32 chars
-        dict["gateway"] = gateway
-        assertFails(pairingString(dict), with: .malformed, "32-hex certFP is wrong length")
-
-        gateway["certFP"] = String(repeating: "zz", count: 32) // 64 chars, non-hex
-        dict["gateway"] = gateway
-        assertFails(pairingString(dict), with: .malformed, "non-hex certFP must reject")
+    /// `selfsigned` is not a transport this app can reach at all: App Transport
+    /// Security refuses a private-CA or self-signed certificate on a remote host
+    /// whatever the app's delegate returns. It must therefore read as an unknown
+    /// hint — nil, no error — exactly like `"quantum-tunnel"` above.
+    func testSelfsignedTransportIsUnknownAndDecodesToNil() {
+        var dict = minimalDict()
+        dict["transport"] = "selfsigned"
+        guard let payload = assertParses(pairingString(dict)) else { return }
+        XCTAssertNil(payload.transport,
+                     "`selfsigned` names no supported exposure recipe — it must not map to a case.")
     }
 
     // MARK: - Display-string sanitization (name / model)

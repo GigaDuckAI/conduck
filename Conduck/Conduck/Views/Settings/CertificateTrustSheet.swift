@@ -3,24 +3,22 @@
 // Conduck
 // CertificateTrustSheet.swift
 //
-// The ONE place certificate trust is decided — opened from the "Server
-// certificate" row in the gateway editor (variant `.gateway`) and the
-// file-transfer page (variant `.fileServer`). The row itself only shows a
-// plain-language value (Automatic / Pinned on this device / Approval needed);
-// everything jargon-bearing (the fingerprint, "SPKI SHA-256") is quarantined
-// in here so the main form never has to explain pinning inline.
+// The ONE place the optional certificate pin is edited — opened from the
+// "Server certificate" row in the gateway editor and the file-transfer page.
+// The row itself only shows a plain-language value (Automatic / Pinned on this
+// device); everything jargon-bearing (the fingerprint, "SPKI SHA-256") is
+// quarantined in here so the main form never has to explain pinning inline.
+//
+// A pin only ever TIGHTENS: Conduck refuses any certificate this device
+// doesn't already trust, and a fingerprint narrows that further to one exact
+// certificate. It can never make an untrusted server acceptable — so this
+// sheet has no "trust it anyway", and both servers' copy is identical (the
+// gateway and the file server are the same decision).
 //
 // STAGING ONLY: the fingerprint binding writes through to the caller's editor
 // buffer (which marks the form dirty and retracts any live verdict); nothing
 // here persists. The host editor's Save — gateway editor and file-transfer
-// page alike — is the single commit point, and the footer says so.
-//
-// The two variants differ in exactly two ways, both capability-truths:
-//   • TOFU capture exists only on the gateway probe — the file-server test
-//     never captures a certificate, so `.fileServer` never shows the approval
-//     card (callers pass `pendingCapturedFingerprint: nil` there).
-//   • The manual field's provenance line: the gateway's Test Connection can
-//     fill the value in; a file server's arrives via setup code or paste.
+// page alike — is the single commit point.
 //
 // Fingerprints are public values (a hash of the server's public key), so
 // displaying one is not a secret leak — unlike tokens, which never enter here.
@@ -28,21 +26,8 @@
 import SwiftUI
 
 struct CertificateTrustSheet: View {
-    /// Which server's trust decision this sheet edits (copy differences only).
-    enum Variant {
-        case gateway
-        case fileServer
-    }
-
-    let variant: Variant
     /// Write-through to the caller's staged fingerprint buffer. Empty = Automatic.
     @Binding var fingerprint: String
-    /// Gateway variant only: the TOFU-captured fingerprint awaiting approval.
-    /// Pass nil (default) when there is none — and always for `.fileServer`.
-    var pendingCapturedFingerprint: String? = nil
-    /// Runs after the user approves the captured certificate (the caller stages
-    /// it and kicks the automatic re-test). The sheet dismisses itself.
-    var onTrustCaptured: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -57,11 +42,6 @@ struct CertificateTrustSheet: View {
                     .foregroundStyle(AppColors.textPrimary)
 
                 statusText
-
-                if let captured = pendingCapturedFingerprint,
-                   !captured.isEmpty, variant == .gateway {
-                    approvalCard(captured: captured)
-                }
 
                 manualSection
 
@@ -111,16 +91,7 @@ struct CertificateTrustSheet: View {
     @ViewBuilder
     private var statusText: some View {
         let pinned = !fingerprint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasPending = (pendingCapturedFingerprint?.isEmpty == false) && variant == .gateway
-        if hasPending {
-            Text(LocalizedStringResource(
-                "settings.certTrust.status.approval",
-                defaultValue: "This server showed a certificate this device doesn't recognize yet. If that's your own self-signed certificate, approve it below and Conduck will only ever accept this exact one."
-            ))
-                .font(.subheadline)
-                .foregroundStyle(AppColors.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-        } else if pinned {
+        if pinned {
             Text(LocalizedStringResource(
                 "settings.certTrust.status.pinned",
                 defaultValue: "Pinned on this device — Conduck only accepts the server holding this exact certificate, so an impostor at the same address is turned away."
@@ -137,51 +108,6 @@ struct CertificateTrustSheet: View {
                 .foregroundStyle(AppColors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    // MARK: - TOFU approval (gateway only)
-
-    private func approvalCard(captured: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(LocalizedStringResource(
-                "settings.certTrust.approval.heading",
-                defaultValue: "Certificate waiting for approval"
-            ))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppColors.textPrimary)
-            Text(captured)
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(AppColors.textSecondary)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
-            Text(LocalizedStringResource(
-                "settings.certTrust.approval.hint",
-                defaultValue: "Only approve a certificate you expect — one you set up on your own server."
-            ))
-                .font(.caption)
-                .foregroundStyle(AppColors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Button {
-                fingerprint = captured
-                onTrustCaptured?()
-                dismiss()
-            } label: {
-                Label(
-                    LocalizedStringResource(
-                        "settings.certTrust.approval.trustButton",
-                        defaultValue: "Trust Certificate"
-                    ),
-                    systemImage: "checkmark.shield.fill"
-                )
-                .font(.subheadline.weight(.semibold))
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(AppColors.brandAmber)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppColors.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Manual pin (the only surface where the jargon lives)
@@ -205,26 +131,17 @@ struct CertificateTrustSheet: View {
                 #endif
                 .autocorrectionDisabled()
                 .textFieldStyle(.roundedBorder)
-            Text(manualHelper)
+            // `.v2` key: the old helper promised Test Connection / a setup code
+            // would fill this in, which the removal of trust-on-first-use made
+            // false — and the catalog value WINS over `defaultValue:`, so the
+            // reword needs a fresh key.
+            Text(LocalizedStringResource(
+                "settings.certTrust.manual.helper.v2",
+                defaultValue: "Optional, and only ever a tightening: Conduck already refuses a certificate this device doesn't trust, and a fingerprint narrows that to one exact certificate. Paste it from the server you run."
+            ))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
-
-    private var manualHelper: LocalizedStringResource {
-        switch variant {
-        case .gateway:
-            return LocalizedStringResource(
-                "settings.certTrust.manual.helper.gateway",
-                defaultValue: "Test Connection captures this for you when your server uses its own certificate — you rarely need to type it."
-            )
-        case .fileServer:
-            return LocalizedStringResource(
-                "settings.certTrust.manual.helper.fileServer",
-                defaultValue: "A setup code fills this in for you; otherwise paste it from your file server."
-            )
-        }
-    }
-
 }

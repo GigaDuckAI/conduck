@@ -7,9 +7,10 @@
 // SPKI digest math (which `RemoteAgentFingerprintTests` owns):
 //
 //   1. REDIRECT policy — a cross-host (or scheme-downgrading) 3xx is REFUSED;
-//      a same-host one is followed unchanged. Directly callable: unlike the
-//      server-trust callback (which needs an opaque `SecTrust` no test can
-//      construct), `willPerformHTTPRedirection` takes only Foundation values.
+//      a same-host one is followed unchanged. Directly callable:
+//      `willPerformHTTPRedirection` takes only Foundation values. (The
+//      server-trust BRANCH ORDER is locked in `RemoteAgentFingerprintTests`,
+//      which drives `decide(serverTrust:)` with a fixture-built `SecTrust`.)
 //   2. PIN RESOLUTION — `storedConversePin(for:)` / `converseTaskPin(...)` read
 //      the DURABLE per-ref pin and apply it HOST-BLIND, so a redirect target's
 //      cert is compared against the pin (→ cancel) instead of degrading that hop

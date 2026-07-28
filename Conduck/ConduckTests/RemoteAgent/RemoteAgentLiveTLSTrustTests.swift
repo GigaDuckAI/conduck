@@ -19,31 +19,65 @@
 // Keychain and no App Group, so the pin path itself has no entitlement
 // dependency (the macOS host still has to be signed to launch at all).
 //
+// TWO GROUPS, AND WHY THE FILE IS SPLIT THAT WAY
+//
+// The trust rule is that a pin is an ADDITIONAL restriction on a connection the
+// system ALREADY trusts — it can never rescue an untrusted chain. So a pinned
+// request over a chain the system rejects is cancelled BEFORE any digest is
+// compared. The fixture's certificates are self-signed, i.e. untrusted by
+// construction, and that single fact splits everything this file can prove:
+//
+//   GROUP A — no stub. The fixture's chain is genuinely untrusted, so these
+//   prove the fail-closed property itself: an untrusted certificate is refused
+//   no matter what the pin says, and the refusal is attributed to the
+//   CERTIFICATE rather than to a key mismatch. This is the most important group
+//   in the file — it is the only place the rule meets a real TLS stack.
+//
+//   GROUP B — `makeTrustStubbedForegroundSession` / `TrustStubbedFileLaneDelegate`
+//   substitute a SUCCEEDING system-trust verdict for the one the loopback
+//   fixture can never earn, standing in for "this device trusts this chain".
+//   The handshake, the `SecTrust`, and every decision taken after it are still
+//   real, so everything post-handshake stays testable: the pin compare, the
+//   redirect policy, the converse send, the file lane's task-carried pin.
+//   Without the substitution none of those code paths is reachable here at all.
+//
 // WHAT IS PROVEN HERE (each one live, end to end):
-//   1. A MATCHING pin accepts the connection — for EC P-256 AND RSA-2048, the
-//      two SPKI-prefix families the V1 table covers.
+//   1. An untrusted chain is REFUSED even when the configured pin matches it
+//      exactly — for EC P-256 AND RSA-2048, the two SPKI-prefix families the V1
+//      table covers — and the refusal records `systemTrustRejected`, never
+//      `pinRejected`.
 //   2. The app's SPKI digest equals the canonical
 //      `openssl x509 -pubkey | openssl pkey -pubin -outform DER | dgst -sha256`
 //      value, computed here by OPENSSL — never by calling the app's own
 //      `spkiDER(from:)`, so a drifting recipe fails instead of agreeing with
-//      itself.
-//   3. A MISMATCHED pin fails, is attributable to the certificate
-//      (`.remoteAgentCertMismatch`, not a generic cancel), and the request body
-//      + bearer header never reach the server (asserted against the fixture's
-//      own hit counter, not just the client's error).
+//      itself. The digest is captured before the trust branch, so a REFUSED
+//      connection still carries it and the drift guard survives group A.
+//   3. On a chain the system trusts, a MISMATCHED pin fails, is attributable to
+//      the certificate (`.certMismatch` / `.remoteAgentCertMismatch`, not a
+//      generic cancel), and the request body + bearer header never reach the
+//      server (asserted against the fixture's own hit counter, not just the
+//      client's error).
 //   4. A cross-ORIGIN 3xx is refused — by port, by HOST NAME, and by scheme
 //      downgrade — while a same-origin 3xx is still followed. The two HTTPS
 //      listeners deliberately present THE SAME KEY, so the pin cannot tell them
 //      apart and only the origin compare can refuse the hop. That is the
 //      "same key is not same origin" limit the production comments call out,
 //      turned into a test.
-//   5. The macOS converse send path (`makePinnedForegroundSession` +
+//   5. The macOS converse send path (the `makePinnedForegroundSession` recipe +
 //      `RemoteAgentClient.send`) pins and refuses redirects on the LIVE hop.
 //   6. The file lane's task-level challenge handler applies the pin carried on
-//      `taskDescription`, host-blind, against a real challenge — and refuses a
-//      cross-origin 3xx on the `.default` session macOS actually ships.
+//      `taskDescription`, host-blind, against a real challenge — refuses a
+//      cross-origin 3xx on the `.default` session macOS actually ships, and
+//      inherits the same fail-closed rule on an untrusted chain.
 //
 // WHAT IS NOT PROVEN — do not read this file as retiring these:
+//   - APP TRANSPORT SECURITY. Loopback is ATS-EXEMPT (traffic routes via `lo0`),
+//     so nothing here exercises ATS's own requirements. Every refusal below is
+//     the APP's posture: our evaluator's explicit `SecTrustEvaluateWithError`
+//     and its fail-closed branch, plus ordinary chain validation on the
+//     default-handling path. That is the point — the app must refuse an
+//     untrusted certificate on its own, not by relying on ATS to kill it, and
+//     that is exactly the property a loopback fixture CAN test.
 //   - iOS BACKGROUND sessions. `willPerformHTTPRedirection` is never delivered
 //     there (SDK contract), and a mid-upload jetsam + relaunch still needs a
 //     signed device. The host-blind task pin is the only pushback on that lane
@@ -54,12 +88,13 @@
 //   - The macOS call SITES. They are `#if os(macOS)` branches inside the view
 //     model / drainer with no injection seam; this file drives the same
 //     composition they build (`RemoteAgentClientTests` locks that the factory
-//     installs the evaluator).
-//   - A MITM holding a PUBLICLY-TRUSTED certificate. The fixture's cert is
-//     self-signed, so a request that stopped pinning here still fails on system
-//     trust; against a publicly-trusted attacker cert it would SUCCEED. That is
-//     why `testLivePinMismatchFailsAsACertMismatchNotAGenericCancel` asserts on
-//     `evaluator.pinRejected` and on the classification, not merely on "it
+//     installs the evaluator and what its configuration is).
+//   - A MITM holding a PUBLICLY-TRUSTED certificate. Group B's stub is the
+//     closest this file gets: it says "the system trusts this chain" and then
+//     shows the pin still refusing the wrong key. Against a real publicly-
+//     trusted attacker cert an unpinned request would SUCCEED, which is why
+//     `testAMismatchedPinOnATrustedChainStillClassifiesAsACertMismatch` asserts
+//     on `evaluator.pinRejected` and on the classification, not merely on "it
 //     failed" — verified by control: degrading the mismatch arm to
 //     `.performDefaultHandling` leaves the request failing and fails ONLY that
 //     assertion.
@@ -92,42 +127,56 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
         fixture = try LoopbackTLSFixture.loadOrSkip()
     }
 
-    // MARK: - 1. A matching pin is accepted (and the digest recipe is the openssl one)
+    // MARK: - GROUP A — an untrusted chain is refused, whatever the pin says
+    //
+    // No stub anywhere in this group: the fixture's self-signed certificate is
+    // the real subject. These are the cases that would have caught a pin being
+    // treated as a licence to accept an untrusted chain.
 
-    func testLivePinMatchOnAnECP256CertIsAccepted() async throws {
+    func testAnUntrustedChainIsRefusedEvenWhenTheECP256PinMatches() async throws {
+        let before = try await fixture.hits()
         let (session, evaluator) = RemoteAgentClient.makePinnedForegroundSession(
             pinnedFingerprintHex: fixture.ecPin)
         defer { session.invalidateAndCancel() }
 
-        let (data, response) = try await session.data(
-            for: fixture.request(port: fixture.portA, path: "/probe/ec-match"))
+        _ = await fixture.expectTransportFailure(
+            session: session,
+            request: fixture.request(port: fixture.portA, path: "/probe/ec-match"))
 
-        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200,
-                       "A cert whose SPKI digest equals the configured pin must be accepted on the live lane.")
-        XCTAssertEqual(String(decoding: data, as: UTF8.self), "MARKER-TLS-A")
+        XCTAssertTrue(evaluator.systemTrustRejected,
+                      "A pin is an ADDITIONAL restriction on a chain the system already trusts, never a rescue for one it rejects. A matching pin over an untrusted leaf must still be refused, and the refusal must be recorded as a TRUST rejection.")
         XCTAssertFalse(evaluator.pinRejected,
-                       "A matching pin must not record a rejection.")
+                       "The evaluator bails BEFORE comparing digests, so a pin that would have matched must not be reported as a key mismatch — the actionable problem is the untrusted certificate.")
         XCTAssertEqual(evaluator.presentedFingerprintHex, fixture.ecPin,
-                       "DRIFT GUARD: the app's SPKI digest of a real EC P-256 leaf must equal the value openssl produces — that value is the pin users compute and paste. A wrong ASN.1 prefix would fail every real gateway.")
+                       "DRIFT GUARD: the app's SPKI digest of a real EC P-256 leaf must equal the value openssl produces — that value is the pin users compute and paste. A wrong ASN.1 prefix would fail every real gateway. The digest is captured before the trust branch, so it is still populated on a REFUSED connection; that is what keeps this guard alive now that the connection is refused.")
+        let after = try await fixture.hits()
+        XCTAssertEqual(after.delta(from: before, key: "tlsA /probe/ec-match"), 0,
+                       "Fail closed means fail before the body: the request must never reach a server whose certificate this device does not trust.")
     }
 
-    func testLivePinMatchOnAnRSA2048CertIsAccepted() async throws {
+    func testAnUntrustedChainIsRefusedEvenWhenTheRSA2048PinMatches() async throws {
         let (session, evaluator) = RemoteAgentClient.makePinnedForegroundSession(
             pinnedFingerprintHex: fixture.rsaPin)
         defer { session.invalidateAndCancel() }
 
-        let (data, response) = try await session.data(
-            for: fixture.request(port: fixture.portRSA, path: "/probe/rsa-match"))
+        _ = await fixture.expectTransportFailure(
+            session: session,
+            request: fixture.request(port: fixture.portRSA, path: "/probe/rsa-match"))
 
-        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
-        XCTAssertEqual(String(decoding: data, as: UTF8.self), "MARKER-TLS-RSA")
+        XCTAssertTrue(evaluator.systemTrustRejected,
+                      "The fail-closed rule is about the CHAIN, not about the key algorithm — an RSA leaf gets the same refusal as an EC one.")
+        XCTAssertFalse(evaluator.pinRejected)
         XCTAssertEqual(evaluator.presentedFingerprintHex, fixture.rsaPin,
-                       "The RSA-2048 SPKI prefix must produce the openssl digest too — RSA and EC are separate prefix entries and only a live cert of each proves both.")
+                       "DRIFT GUARD (RSA arm): the RSA-2048 SPKI prefix must produce the openssl digest too — RSA and EC are separate prefix entries in the V1 table and only a live cert of each proves both.")
     }
 
-    // MARK: - 2. A mismatched pin fails, attributably, before the body leaves
-
-    func testLivePinMismatchFailsAsACertMismatchNotAGenericCancel() async throws {
+    /// Ordering test, and deliberately not symmetric: when a certificate is
+    /// untrusted AND the pin disagrees, the verdict is `.untrustedCert`. Saying
+    /// "certificate mismatch" there would imply a MITM the user cannot act on,
+    /// when the truthful, actionable statement is that this device does not
+    /// trust the certificate at all. Group B holds the counterpart — a
+    /// mismatched pin on a TRUSTED chain still classifies as `.certMismatch`.
+    func testAnUntrustedChainWithAMismatchedPinClassifiesAsUntrustedNotAsAMismatch() async throws {
         let before = try await fixture.hits()
         let (session, evaluator) = RemoteAgentClient.makePinnedForegroundSession(
             pinnedFingerprintHex: Self.impossiblePin)
@@ -139,20 +188,19 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
         let urlError = try XCTUnwrap(error as? URLError,
                                      "A cancelled server-trust challenge must surface as a URLError.")
 
-        XCTAssertTrue(evaluator.pinRejected,
-                      "The evaluator must RECORD that it cancelled for a pin mismatch — that flag is the only thing that tells a MITM apart from the user tapping Cancel.")
+        XCTAssertTrue(evaluator.systemTrustRejected,
+                      "The system-trust evaluation runs on EVERY challenge now, pinned or not, so the untrusted chain is recorded even though a pin was configured.")
+        XCTAssertFalse(evaluator.pinRejected,
+                       "We never reach the comparison, so nothing may claim the key was wrong.")
         XCTAssertEqual(
             RemoteAgentTrustEvaluator.classifyTransportError(
-                urlError.code, hasPin: true,
-                systemTrustRejected: evaluator.systemTrustRejected,
-                pinRejected: evaluator.pinRejected),
-            .certMismatch,
-            "The live failure code (\(urlError.code.rawValue)) must classify as a certificate MISMATCH, not as unreachable/cancelled.")
+                urlError.code, signals: evaluator.attemptSignals),
+            .untrustedCert,
+            "The live failure code (\(urlError.code.rawValue)) must classify as UNTRUSTED, not as unreachable/cancelled and not as a mismatch. `systemTrustRejected` outranks `pinRejected` precisely so this case reads as the certificate problem it is.")
         XCTAssertEqual(
-            (RemoteAgentClient.mapTransportError(urlError.code, hasPin: true,
-                                                 pinRejected: evaluator.pinRejected) as? AppError)?.errorCode,
-            AppError.remoteAgentCertMismatch.errorCode,
-            "The user must see 'certificate mismatch'. A silent cancel here is the failure mode that looks like success.")
+            (RemoteAgentClient.mapTransportError(urlError.code, signals: evaluator.attemptSignals) as? AppError)?.errorCode,
+            AppError.remoteAgentCertUntrusted.errorCode,
+            "The user must see the UNTRUSTED-certificate error, whose remedy is on the server. A silent cancel here is the failure mode that looks like success; a mismatch here would send them to edit a fingerprint that was never consulted.")
 
         let after = try await fixture.hits()
         XCTAssertEqual(after.delta(from: before, key: "tlsA /probe/mismatch"), 0,
@@ -160,10 +208,18 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
     }
 
     /// The intrinsic control for the whole file: the fixture's cert is NOT
-    /// trusted by the system, so a request that carries no pin must fail. If it
-    /// ever passes, the fixture has been trusted somehow and every "pin match"
-    /// pass above stops meaning anything.
-    func testUnpinnedRequestToTheSelfSignedFixtureIsRejectedByDefaultATS() async throws {
+    /// trusted by this machine, so a request that carries no pin must fail. If it
+    /// ever passes, the fixture has been trusted somehow (added to a keychain,
+    /// say) and every group A refusal above stops meaning anything.
+    ///
+    /// HONEST SCOPE — this does NOT prove App Transport Security. Loopback is
+    /// ATS-exempt, so ATS's own requirements never apply to any request in this
+    /// file. What it proves is the APP's posture: the evaluator runs its explicit
+    /// `SecTrustEvaluateWithError` on the unpinned path too and RECORDS the
+    /// rejection (so the lanes a user converses on can report a certificate
+    /// problem rather than a transient hiccup), and the connection is refused by
+    /// ordinary chain validation on the default-handling path.
+    func testAnUnpinnedRequestToTheSelfSignedFixtureIsRefusedAndRecordedAsUntrusted() async throws {
         let before = try await fixture.hits()
         let (session, evaluator) = RemoteAgentClient.makePinnedForegroundSession(
             pinnedFingerprintHex: nil)
@@ -174,18 +230,103 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
             request: fixture.request(port: fixture.portA, path: "/probe/no-pin"))
 
         XCTAssertTrue(evaluator.systemTrustRejected,
-                      "No pin → default ATS → the system must reject this self-signed leaf, and the evaluator must record that so Test Connection can offer TOFU instead of reporting a transient hiccup.")
+                      "System-trust evaluation must run on the NO-PIN challenge too — that is the signal that turns an opaque TLS failure into 'this device does not trust this certificate', which is a terminal, explained refusal rather than a retry.")
         XCTAssertFalse(evaluator.pinRejected,
-                       "No pin configured means the evaluator never cancels — the rejection came from the system.")
+                       "No pin configured means the evaluator never cancels for a key mismatch — the refusal came from the system on the default-handling path.")
         let after = try await fixture.hits()
         XCTAssertEqual(after.delta(from: before, key: "tlsA /probe/no-pin"), 0)
     }
 
-    // MARK: - 3. Redirect policy, live
+    /// The file lane inherits the same rule, on the shipping delegate object
+    /// itself — no forwarder, no stub. A task-carried pin that MATCHES the leaf
+    /// still cannot buy an untrusted chain a transfer.
+    func testFileLaneRefusesAnUntrustedChainEvenWhenTheTaskPinMatches() async throws {
+        let before = try await fixture.hits()
+        let session = fixture.fileLaneSession(delegate: BackgroundFileTransfer.shared)
+        defer { session.invalidateAndCancel() }
+
+        let outcome = await fixture.runFileLaneTask(
+            session: session, port: fixture.portA, path: "/probe/file-untrusted",
+            taskDescription: Self.fileLaneTaskDescription(pin: fixture.ecPin))
+
+        XCTAssertNil(outcome.statusCode,
+                     "An untrusted chain must abort the transfer at the TLS layer — no HTTP response at all, even with a matching pin.")
+        let code = try XCTUnwrap(outcome.urlErrorCode,
+                                 "Expected a transport failure, got: \(outcome.errorDescription ?? "success")")
+        XCTAssertTrue(Self.certRejectionCodes.contains(code),
+                      "A cancelled server-trust challenge must surface as a TLS/cancel failure the lane maps to a certificate error. Got \(code.rawValue).")
+        let after = try await fixture.hits()
+        XCTAssertEqual(after.delta(from: before, key: "tlsA /probe/file-untrusted"), 0,
+                       "File bytes and the `Authorization: Basic` credential must never reach a server this device does not trust.")
+    }
+
+    // MARK: - GROUP B — post-handshake behaviour, over a stubbed trust verdict
+    //
+    // Everything below substitutes a SUCCEEDING system-trust verdict (see
+    // `makeTrustStubbedForegroundSession`) for the one the loopback fixture can
+    // never earn. The handshake is still real and the `SecTrust` is still real;
+    // only the "does this device trust the chain" answer is supplied. Without it
+    // the evaluator fails closed and none of these code paths is reachable.
+
+    // MARK: Pin compare, on a chain the system trusts
+
+    func testAMatchingPinOnATrustedChainIsAccepted() async throws {
+        let (session, evaluator) = Self.makeTrustStubbedForegroundSession(
+            pinnedFingerprintHex: fixture.ecPin)
+        defer { session.invalidateAndCancel() }
+
+        let (data, response) = try await session.data(
+            for: fixture.request(port: fixture.portA, path: "/probe/ec-match-trusted"))
+
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200,
+                       "A cert whose SPKI digest equals the configured pin, on a chain the device trusts, must be accepted — a pin that blocks the happy path is not a security control, it is an outage.")
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "MARKER-TLS-A")
+        XCTAssertFalse(evaluator.pinRejected,
+                       "A matching pin must not record a rejection.")
+        XCTAssertFalse(evaluator.systemTrustRejected,
+                       "Sanity check on the stub itself: if this were true the trust substitution is not in effect and the acceptance above proves nothing.")
+    }
+
+    /// The counterpart to group A's ordering test: strip the untrusted-chain
+    /// confound and a mismatched pin must STILL be attributable to the
+    /// certificate. This is the property that survives a MITM holding a
+    /// publicly-trusted cert, so losing it would gut pinning entirely.
+    func testAMismatchedPinOnATrustedChainStillClassifiesAsACertMismatch() async throws {
+        let before = try await fixture.hits()
+        let (session, evaluator) = Self.makeTrustStubbedForegroundSession(
+            pinnedFingerprintHex: Self.impossiblePin)
+        defer { session.invalidateAndCancel() }
+
+        let error = await fixture.expectTransportFailure(
+            session: session,
+            request: fixture.request(port: fixture.portA, path: "/probe/mismatch-trusted"))
+        let urlError = try XCTUnwrap(error as? URLError,
+                                     "A cancelled server-trust challenge must surface as a URLError.")
+
+        XCTAssertTrue(evaluator.pinRejected,
+                      "The evaluator must RECORD that it cancelled for a pin mismatch — that flag is the only thing that tells a MITM apart from the user tapping Cancel.")
+        XCTAssertFalse(evaluator.systemTrustRejected,
+                       "The chain is trusted in this scenario; if this flips, the test has silently become group A's and the mismatch classification below is not being exercised.")
+        XCTAssertEqual(
+            RemoteAgentTrustEvaluator.classifyTransportError(
+                urlError.code, signals: evaluator.attemptSignals),
+            .certMismatch,
+            "The live failure code (\(urlError.code.rawValue)) must classify as a certificate MISMATCH, not as unreachable/cancelled.")
+        XCTAssertEqual(
+            (RemoteAgentClient.mapTransportError(urlError.code, signals: evaluator.attemptSignals) as? AppError)?.errorCode,
+            AppError.remoteAgentCertMismatch.errorCode,
+            "The user must see 'certificate mismatch'. A silent cancel here is the failure mode that looks like success.")
+
+        let after = try await fixture.hits()
+        XCTAssertEqual(after.delta(from: before, key: "tlsA /probe/mismatch-trusted"), 0,
+                       "The request must never reach the server: TLS is refused before the body and the `Authorization` header go out.")
+    }
+
+    // MARK: Redirect policy, live
 
     func testCrossOriginRedirectToADifferentPortIsRefused() async throws {
         let before = try await fixture.hits()
-        let (session, _) = RemoteAgentClient.makePinnedForegroundSession(
+        let (session, _) = Self.makeTrustStubbedForegroundSession(
             pinnedFingerprintHex: fixture.ecPin)
         defer { session.invalidateAndCancel() }
 
@@ -202,7 +343,7 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
 
     func testCrossHostRedirectToTheSameListenerIsRefused() async throws {
         let before = try await fixture.hits()
-        let (session, _) = RemoteAgentClient.makePinnedForegroundSession(
+        let (session, _) = Self.makeTrustStubbedForegroundSession(
             pinnedFingerprintHex: fixture.ecPin)
         defer { session.invalidateAndCancel() }
 
@@ -217,7 +358,7 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
 
     func testSchemeDowngradeRedirectIsRefused() async throws {
         let before = try await fixture.hits()
-        let (session, _) = RemoteAgentClient.makePinnedForegroundSession(
+        let (session, _) = Self.makeTrustStubbedForegroundSession(
             pinnedFingerprintHex: fixture.ecPin)
         defer { session.invalidateAndCancel() }
 
@@ -234,7 +375,7 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
     /// every reverse proxy that canonicalises a path would break.
     func testSameOriginRedirectIsFollowed() async throws {
         let before = try await fixture.hits()
-        let (session, _) = RemoteAgentClient.makePinnedForegroundSession(
+        let (session, _) = Self.makeTrustStubbedForegroundSession(
             pinnedFingerprintHex: fixture.ecPin)
         defer { session.invalidateAndCancel() }
 
@@ -249,11 +390,11 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
                        "The redirect target on the same origin must actually be reached.")
     }
 
-    // MARK: - 4. The macOS converse send path
+    // MARK: The macOS converse send path
 
     func testMacConverseSendRefusesAMismatchedPin() async throws {
         let before = try await fixture.hits()
-        let (session, evaluator) = RemoteAgentClient.makePinnedForegroundSession(
+        let (session, evaluator) = Self.makeTrustStubbedForegroundSession(
             pinnedFingerprintHex: Self.impossiblePin)
         defer { session.invalidateAndCancel() }
 
@@ -264,8 +405,7 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
                 token: Self.bearerToken,
                 newUserText: "hello",
                 fileServerReady: false,
-                session: session,
-                trustEvaluator: evaluator)
+                transport: .pinned(session: session, evaluator: evaluator))
             XCTFail("A converse send against a mismatched pin must FAIL. Succeeding here means the send path is not pinning.")
         } catch {
             XCTAssertEqual((error as? AppError)?.errorCode,
@@ -280,7 +420,7 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
 
     func testMacConverseSendSucceedsOnAMatchingPin() async throws {
         let before = try await fixture.hits()
-        let (session, evaluator) = RemoteAgentClient.makePinnedForegroundSession(
+        let (session, evaluator) = Self.makeTrustStubbedForegroundSession(
             pinnedFingerprintHex: fixture.ecPin)
         defer { session.invalidateAndCancel() }
 
@@ -290,18 +430,17 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
             token: Self.bearerToken,
             newUserText: "hello",
             fileServerReady: false,
-            session: session,
-            trustEvaluator: evaluator)
+            transport: .pinned(session: session, evaluator: evaluator))
 
         XCTAssertEqual(reply, "LIVE-REPLY-tlsA",
-                       "A correctly pinned gateway must still answer — a pin that blocks the happy path is not a security control, it is an outage.")
+                       "A correctly pinned gateway on a trusted chain must still answer — a pin that blocks the happy path is not a security control, it is an outage.")
         let after = try await fixture.hits()
         XCTAssertEqual(after.delta(from: before, key: "tlsA /v1/chat/completions"), 1)
     }
 
     func testMacConverseSendDoesNotFollowACrossOriginRedirect() async throws {
         let before = try await fixture.hits()
-        let (session, evaluator) = RemoteAgentClient.makePinnedForegroundSession(
+        let (session, evaluator) = Self.makeTrustStubbedForegroundSession(
             pinnedFingerprintHex: fixture.ecPin)
         defer { session.invalidateAndCancel() }
 
@@ -313,8 +452,7 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
                 token: Self.bearerToken,
                 newUserText: "hello",
                 fileServerReady: false,
-                session: session,
-                trustEvaluator: evaluator)
+                transport: .pinned(session: session, evaluator: evaluator))
             XCTFail("A redirecting gateway must surface as a visible failure, never as a silently re-pointed turn.")
         } catch {
             // Which AppError the 302 lands on is the status/decode layer's
@@ -326,12 +464,13 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
                        "A 302 must not replay the full client-owned history + bearer header at a host the user never configured — even when that host presents the pinned key.")
     }
 
-    // MARK: - 5. The file-transfer lane's task-level trust handler
+    // MARK: The file-transfer lane's task-level trust handler
 
     /// `BackgroundFileTransfer` IS the session delegate on the lane it drives.
     /// On macOS that session is a `.default` configuration — exactly what this
     /// test builds — so the handler under test here is the shipping one, driven
-    /// by a real challenge with a real `SecTrust`.
+    /// by a real challenge with a real `SecTrust`
+    /// (`TrustStubbedFileLaneDelegate` forwards INTO it and adds no policy).
     ///
     /// On iOS the same delegate runs on a BACKGROUND configuration. The pin
     /// compare is identical there, but the redirect callback is never delivered
@@ -339,7 +478,8 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
     /// still needs a signed device.
     func testFileLaneAppliesTheTaskCarriedPinToALiveChallenge() async throws {
         let before = try await fixture.hits()
-        let session = fixture.fileLaneSession()
+        let delegate = TrustStubbedFileLaneDelegate()
+        let session = fixture.fileLaneSession(delegate: delegate)
         defer { session.invalidateAndCancel() }
 
         let mismatch = await fixture.runFileLaneTask(
@@ -350,7 +490,7 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
         let code = try XCTUnwrap(mismatch.urlErrorCode,
                                  "Expected a transport failure, got: \(mismatch.errorDescription ?? "success")")
         XCTAssertTrue(Self.certRejectionCodes.contains(code),
-                      "A cancelled server-trust challenge must surface as a TLS/cancel failure the lane maps to `.fileTransferCertMismatch`. Got \(code.rawValue).")
+                      "A cancelled server-trust challenge must surface as one of the codes CFNetwork is observed to report for it. Got \(code.rawValue).")
 
         let match = await fixture.runFileLaneTask(
             session: session, port: fixture.portA, path: "/probe/file-match",
@@ -367,7 +507,8 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
 
     func testFileLaneRefusesACrossOriginRedirect() async throws {
         let before = try await fixture.hits()
-        let session = fixture.fileLaneSession()
+        let delegate = TrustStubbedFileLaneDelegate()
+        let session = fixture.fileLaneSession(delegate: delegate)
         defer { session.invalidateAndCancel() }
 
         let outcome = await fixture.runFileLaneTask(
@@ -383,6 +524,45 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
 
     // MARK: - Fixtures
 
+    /// TEST-ONLY. The production foreground converse session recipe over an
+    /// evaluator whose SYSTEM-TRUST verdict is stubbed to SUCCEED — group B's
+    /// stand-in for "this device trusts this chain".
+    ///
+    /// WHY IT HAS TO EXIST: a pin is an ADDITIONAL restriction on a chain the
+    /// system already trusts, so a pinned request over an untrusted chain is
+    /// cancelled BEFORE any digest is compared. The fixture can only serve
+    /// self-signed certificates and no test can make this machine trust one, so
+    /// without the substitution nothing that happens AFTER a completed handshake
+    /// — the pin compare, the redirect policy, the converse send — is reachable
+    /// here at all. The handshake, the `SecTrust`, and every decision taken over
+    /// it remain real; only the trust verdict is supplied.
+    ///
+    /// FENCED BY LIVING IN THE TEST TARGET: `private`, inside the test case, in a
+    /// file the app target does not compile, so no production call site can reach
+    /// it whatever the injection point's own access level allows. The
+    /// `{ _ in true }` closure exists nowhere else; production gets
+    /// `RemoteAgentTrustEvaluator`'s default, `SecTrustEvaluateWithError`.
+    ///
+    /// The CONFIGURATION is lifted off `RemoteAgentClient.makePinnedForegroundSession`
+    /// rather than re-declared, so the shipping recipe (`.ephemeral`, the converse
+    /// timeouts, the cache posture) is what these tests run on and a drift in it
+    /// reaches them instead of quietly bypassing them. Only the delegate differs,
+    /// which is the one thing that cannot be injected into that factory.
+    private static func makeTrustStubbedForegroundSession(
+        pinnedFingerprintHex: String?
+    ) -> (session: URLSession, evaluator: RemoteAgentTrustEvaluator) {
+        let (recipe, _) = RemoteAgentClient.makePinnedForegroundSession(
+            pinnedFingerprintHex: pinnedFingerprintHex)
+        let configuration = recipe.configuration
+        recipe.invalidateAndCancel()
+
+        let evaluator = RemoteAgentTrustEvaluator(
+            pinnedFingerprintHex: pinnedFingerprintHex,
+            evaluateSystemTrust: { _ in true })
+        return (URLSession(configuration: configuration, delegate: evaluator, delegateQueue: nil),
+                evaluator)
+    }
+
     /// 64 hex chars no certificate will ever hash to.
     private static let impossiblePin = String(repeating: "ff", count: 32)
 
@@ -390,9 +570,19 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
     /// hit counter proves the request carrying it never went out.
     private static let bearerToken = "test-token-never-sent"
 
-    /// The codes URLSession uses for a challenge the delegate cancelled. Which
-    /// one arrives is a CFNetwork detail (`.cancelled` in practice); the lane's
-    /// `mapTransferError` maps all of these to `.fileTransferCertMismatch`.
+    /// The codes URLSession is observed to use for a challenge the delegate
+    /// cancelled. Which one arrives is a CFNetwork detail (`.cancelled` in
+    /// practice), so the assertion accepts the whole observed set.
+    ///
+    /// THIS SET IS NOT A MAPPING CLAIM. What the user is told comes from the
+    /// per-task trust NOTE the lane's challenge handler recorded, not from the
+    /// code: a pinned-key rejection over a chain the system trusted reaches them
+    /// as `.fileTransferCertMismatch` on any of these three, and an untrusted
+    /// chain as `.fileTransferCertUntrusted` on any of them. Without a note,
+    /// `.secureConnectionFailed` deliberately stays `.fileTransferUnreachable` —
+    /// a generic `-1200` is a cold-tunnel handshake hiccup as often as a trust
+    /// rejection. `BackgroundFileTransferTrustVerdictTests` owns those mappings;
+    /// this set is tolerated here only as codes the refusal may surface as.
     private static let certRejectionCodes: Set<URLError.Code> = [
         .cancelled, .secureConnectionFailed, .serverCertificateUntrusted,
     ]
@@ -533,9 +723,14 @@ nonisolated final class LoopbackTLSFixture: @unchecked Sendable {
     }
 
     /// The file lane's macOS recipe verbatim: a `.default` session whose
-    /// delegate IS `BackgroundFileTransfer.shared`. No wrapper, no look-alike —
-    /// the object making the trust and redirect decisions is the shipping one.
-    func fileLaneSession() -> URLSession {
+    /// delegate makes the trust and redirect decisions.
+    ///
+    /// Group A passes `BackgroundFileTransfer.shared` — the shipping object
+    /// itself, no wrapper. Group B passes `TrustStubbedFileLaneDelegate`, which
+    /// forwards both callbacks straight into that same object's methods and only
+    /// substitutes the system-trust verdict; the pin resolution, the pin compare
+    /// and the redirect veto are still the shipping code either way.
+    func fileLaneSession(delegate: URLSessionDelegate) -> URLSession {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 15
@@ -543,9 +738,7 @@ nonisolated final class LoopbackTLSFixture: @unchecked Sendable {
         // response would satisfy the client without touching the server.
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         config.urlCache = nil
-        return URLSession(configuration: config,
-                          delegate: BackgroundFileTransfer.shared,
-                          delegateQueue: nil)
+        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
     /// What a file-lane task ended with, reduced to `Sendable` values so the
@@ -610,6 +803,59 @@ private nonisolated final class AcceptAnyTrust: NSObject, URLSessionDelegate, @u
             return
         }
         completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+}
+
+/// GROUP B's file-lane delegate. Forwards BOTH callbacks under test straight
+/// into `BackgroundFileTransfer.shared`'s own methods and adds no policy of its
+/// own: the pin resolution off `taskDescription`, the evaluator it builds, the
+/// pin compare, and the cross-origin redirect veto are all the SHIPPING code.
+/// The only substitution is the system-trust verdict passed to
+/// `respondToTaskTrustChallenge` — the "this device trusts this chain" answer
+/// the loopback fixture cannot earn, without which the lane fails closed before
+/// it ever compares a digest or sees a 3xx.
+///
+/// It exists ONLY because the trust handler is a delegate callback with nowhere
+/// to inject from the outside. Group A drives `BackgroundFileTransfer.shared`
+/// directly, with no forwarder at all, so the shipping composition is still
+/// exercised end to end somewhere in this file.
+///
+/// Living in the test target is one fence; `#if DEBUG` on
+/// `respondToTaskTrustChallenge(…evaluateSystemTrust:)` is the other, and the
+/// load-bearing one — the method it forwards to does not exist in a Release
+/// build, so no shipping code can pass `{ _ in true }` even by accident.
+///
+/// The tasks driven through here carry a COMPLETION HANDLER, so URLSession never
+/// delivers `didCompleteWithError` to a delegate and the trust note this records
+/// on `BackgroundFileTransfer.shared` is never consumed. Harmless: that
+/// singleton drives no real transfer in a test process, and each note is one
+/// `Int`. Production tasks are delegate-driven and always reach the terminal
+/// callback that consumes theirs.
+private nonisolated final class TrustStubbedFileLaneDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        BackgroundFileTransfer.shared.respondToTaskTrustChallenge(
+            session,
+            task: task,
+            challenge: challenge,
+            evaluateSystemTrust: { _ in true },
+            completionHandler: completionHandler)
+    }
+
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        BackgroundFileTransfer.shared.urlSession(
+            session,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: request,
+            completionHandler: completionHandler)
     }
 }
 

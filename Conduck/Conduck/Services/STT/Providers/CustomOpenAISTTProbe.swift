@@ -20,8 +20,12 @@
 //   - auth is the endpoint's EFFECTIVE scheme (`.bearer` / `.none` for a
 //     keyless local server) — never the immutable archetype default;
 //   - the request runs on a per-call pinned session (`RemoteAgentTrustEvaluator`,
-//     nil pin → default ATS) so a pinned self-signed endpoint doesn't
-//     false-fail TLS through `URLSession.shared`.
+//     nil pin → system trust alone) so a pinned endpoint is held to the SAME
+//     one certificate here as on the live transcribe path, instead of whatever
+//     `URLSession.shared` would accept — and the evaluator's trust signals are
+//     read back through `classifyTransportError`, the shared classifier the
+//     other three custom-STT call sites use, so a terminal certificate refusal
+//     is reported as one instead of as a transient outage.
 //
 // Privacy: the resolved URL and the key are NEVER logged or surfaced in an
 // error — only HTTP-status-derived taxonomy cases are thrown.
@@ -103,7 +107,7 @@ enum CustomOpenAISTTProbe: STTProbe {
         request.httpBody = body
 
         // Per-call pinned session, mirroring `STTClient.transcribe`'s custom
-        // path (nil pin → default ATS chain validation).
+        // path (nil pin → system trust alone).
         let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: customConfig?.certFingerprint)
         let session = URLSession(configuration: .ephemeral, delegate: evaluator, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
@@ -111,8 +115,8 @@ enum CustomOpenAISTTProbe: STTProbe {
         let response: URLResponse
         do {
             (_, response) = try await session.data(for: request)
-        } catch is URLError {
-            throw AppError.sttProviderUnreachable
+        } catch let urlError as URLError {
+            throw transportError(urlError.code, signals: evaluator.attemptSignals)
         } catch {
             throw AppError.sttProviderUnreachable
         }
@@ -133,6 +137,45 @@ enum CustomOpenAISTTProbe: STTProbe {
             // request reached the server and was accepted at the auth layer.
             // Treat as success — the probe's only job is "endpoint accepts us".
             return
+        }
+    }
+
+    /// The STT error a probe's transport `code` means, given the evaluator's
+    /// trust signals read back after the awaited request returned. Pure over its
+    /// inputs so the routing is unit-testable without a live endpoint.
+    ///
+    /// Routed through `RemoteAgentTrustEvaluator.classifyTransportError` — the
+    /// same single source of truth as `STTClient.performRequest`,
+    /// `STTClient+Background`, and `STTConnectionTestSuite` — because a
+    /// certificate refusal is TERMINAL and `.sttProviderUnreachable` is
+    /// retryable. The evaluator FAILS CLOSED on a chain this device rejects and
+    /// URLSession reports that cancel as a bare `.cancelled` (-999); without the
+    /// signals, a refusal the user has to fix on their own server is
+    /// indistinguishable from a server that happens to be down, and gets
+    /// retried instead of explained.
+    /// Takes the whole `AttemptTrustSignals` snapshot rather than loose Bools:
+    /// only the snapshot carries `pinComparisonUnsupported`, and without it a
+    /// key Conduck cannot hash reports as a pin MISMATCH — an interception
+    /// warning on a certificate the system accepted.
+    static func transportError(
+        _ code: URLError.Code,
+        signals: RemoteAgentTrustEvaluator.AttemptTrustSignals
+    ) -> AppError {
+        switch RemoteAgentTrustEvaluator.classifyTransportError(code, signals: signals) {
+        case .untrustedCert:
+            return .sttCustomCertUntrusted
+        case .certMismatch:
+            return .sttCustomCertMismatch
+        case .certKeyUnpinnable:
+            // System trust passed and the digest could not be computed, so the
+            // pin was never compared. Its own code — the probe must not report
+            // a possible interception it has no evidence for.
+            return .sttCustomCertKeyUnpinnable
+        case .timeout, .unreachable, .cancelled:
+            // No certificate verdict. A cold tunnel's generic
+            // `.secureConnectionFailed` lands here (both signals are POSITIVE)
+            // and keeps the probe's existing retryable outcome.
+            return .sttProviderUnreachable
         }
     }
 }

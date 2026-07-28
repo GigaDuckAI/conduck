@@ -760,28 +760,29 @@ final class WatchSettingsReader {
         remoteAgentFileTransferReadyByRef[ref] ?? false
     }
 
-    /// Resolve the pinned cert fingerprint for a gateway by HOST.
-    /// The background converse `URLSession` is shared across backends, so its
-    /// per-challenge trust handler can't capture a single backend's cert; it
-    /// matches the challenge's `protectionSpace.host` against the per-backend
-    /// URL caches to find the right pin. Falls back to the single-config
-    /// `remoteAgentCertFingerprint` (covers a legacy install whose per-backend
-    /// cache rebuild hasn't populated yet). Nil = ATS default trust.
-    func remoteAgentCertFingerprint(forHost host: String) -> String? {
-        // EDGE: two gateways fronted on the SAME host differing only by port is
-        // an unsupported self-signed-pin case — `URL.host` ignores the port, so
-        // the first matching ref's pin wins. Distinct hosts is the documented
-        // pinning recipe.
-        for (ref, url) in remoteAgentURLs where url.host == host {
-            if let cert = remoteAgentCertFingerprints[ref] {
-                return cert
-            }
+    /// Resolve the pinned cert fingerprint for the gateway bound to `ref` (a
+    /// `rawString`). Falls back to the single-config `remoteAgentCertFingerprint`
+    /// when `ref` IS the single-envelope mirror's ref (covers a legacy install
+    /// whose per-ref cache rebuild hasn't populated yet). Nil = ATS default trust.
+    ///
+    /// KEYED BY REF, NOT BY HOST, and that is load-bearing. The background
+    /// converse `URLSession` is shared across backends, so its per-challenge
+    /// trust handler can't capture a single backend's cert — but the task's own
+    /// `taskDescription` envelope names the ref it was dispatched for, and that
+    /// same ref chose the URL and token (`remoteAgentConfig(for:)`). Matching the
+    /// CHALLENGE HOST instead resolved nil for any host no configured ref points
+    /// at — i.e. exactly a redirect target — and a background session always
+    /// follows redirects, so the pin silently stopped applying on the one hop it
+    /// existed to cover. Same host-blind resolution as every sibling background
+    /// lane (`RemoteAgentTrustEvaluator.converseTaskPin(for:metadata:)`,
+    /// `STTClient+Background`, `BackgroundFileTransfer`).
+    func remoteAgentCertFingerprint(forRef ref: String) -> String? {
+        if let cert = remoteAgentCertFingerprints[ref], !cert.isEmpty {
+            return cert
         }
-        // Legacy single-config fallback (same host).
-        if remoteAgentURL?.host == host {
-            return remoteAgentCertFingerprint
-        }
-        return nil
+        // Legacy single-config fallback (same ref).
+        guard remoteAgentBackendRef == ref else { return nil }
+        return remoteAgentCertFingerprint
     }
 
     // MARK: - Active-conversation pointer (PER-DEVICE — Watch App Group)

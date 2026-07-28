@@ -777,9 +777,9 @@ struct FileTransferSetupContent: View {
 
     /// The row's plain-language value against the PERSISTED mirror: a buffer
     /// that diverged (in either direction) owes a Save — the persisted pin
-    /// still governs connections until then. Comparison is normalized the way
-    /// the QR parser accepts a pin (case/colon-insensitive) so cosmetic paste
-    /// differences don't read as a pending change.
+    /// still governs connections until then. Comparison uses the canonical
+    /// manual-pin form (case/colon-insensitive) so cosmetic paste differences
+    /// don't read as a pending change.
     private var certRowValue: LocalizedStringResource {
         let buffer = Self.pinComparisonForm(viewModel.fileServerCertFingerprints[ref] ?? "")
         let persisted = Self.pinComparisonForm(viewModel.fileServerPersistedPins[ref] ?? "")
@@ -816,8 +816,8 @@ struct FileTransferSetupContent: View {
 
     /// Plain-language trust row: "Automatic" (system trust) or "Pinned on this
     /// device". Everything jargon-bearing (the fingerprint, "SPKI SHA-256") lives
-    /// in `CertificateTrustSheet` — the file-server test never TOFU-captures, so
-    /// there is no approval state here (`pendingCapturedFingerprint: nil`).
+    /// in `CertificateTrustSheet`. The pin is optional and only ever narrows what
+    /// is accepted — a certificate this device rejects fails the test outright.
     private var certificateRow: some View {
         // Split-action row (the gateway editor's `secretRow` pattern): the ⓘ is a
         // SIBLING of the row's action, never inside it — a label Button that hugs
@@ -859,11 +859,7 @@ struct FileTransferSetupContent: View {
             .accessibilityHidden(true)
         }
         .sheet(isPresented: $showingCertSheet) {
-            CertificateTrustSheet(
-                variant: .fileServer,
-                fingerprint: certPinBinding,
-                pendingCapturedFingerprint: nil
-            )
+            CertificateTrustSheet(fingerprint: certPinBinding)
         }
     }
 
@@ -983,9 +979,12 @@ struct FileTransferSetupContent: View {
         }
     }
 
+    /// Cause AND remedy: this inline line is the only place the guide reports a
+    /// failed test, so dropping `recoverySuggestion` would strand a terminal
+    /// refusal (a certificate this device won't accept) with no next step.
     private func failureMessage(test: FileTransferTestResult?) -> Text {
-        if let desc = test?.failure?.errorDescription {
-            return Text(verbatim: desc)
+        if let failure = test?.failure {
+            return Text(verbatim: failure.descriptionWithRecovery)
         }
         return Text(LocalizedStringResource("fileTransfer.inline.failed", defaultValue: "Test failed"))
     }

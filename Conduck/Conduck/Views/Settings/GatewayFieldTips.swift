@@ -192,8 +192,8 @@ enum GatewayFieldTips {
             defaultValue: "Server certificate"
         ),
         message: LocalizedStringResource(
-            "settings.remoteAgent.tip.serverCertificate.message",
-            defaultValue: "Every https server shows a certificate to prove who it is before Conduck sends anything. Automatic means your device already recognizes it — right for most setups. If your server made its own certificate (self-signed), open this row to pin it: Conduck then accepts exactly that certificate and nothing else."
+            "settings.remoteAgent.tip.serverCertificate.message.v2",
+            defaultValue: "Every https server shows a certificate to prove who it is before Conduck sends anything. Automatic means your device already recognizes it — right for most setups. Conduck refuses a certificate your device doesn't recognize, so a server that made its own needs a real one instead. Pinning is an optional extra: open this row to name one exact certificate and nothing else is accepted."
         )
     )
 }

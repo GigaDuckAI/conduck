@@ -592,10 +592,23 @@ extension SettingsViewModel {
                 defaultValue: "Set your custom endpoint URL first (in the Speech-to-Text section above)."
             )
         case .ttsCustomCertMismatch:
-            return String(
-                localized: "settings.voice.tts.preview.error.certMismatch",
-                defaultValue: "The server's certificate didn't match your saved fingerprint."
-            )
+            // The shared refusal + remedy, verbatim. The preview is one of the
+            // few places a mismatch surfaces, so it carries the whole verdict —
+            // the bare "didn't match" it replaced named neither the risk nor a
+            // next step.
+            return CertificateTrustCopy.pinMismatchRefusalWithRemedy
+        case .ttsCustomCertUntrusted:
+            // The shared refusal + remedy, verbatim — the preview must not
+            // invent a shorter story for the one failure the user cannot fix
+            // from this screen.
+            return CertificateTrustCopy.untrustedRefusalWithRemedy
+        case .ttsCustomCertKeyUnpinnable:
+            // The shared refusal + remedy, verbatim, and its OWN arm: the
+            // fallback below blames the voice name for a failure that never
+            // reached synthesis, and the mismatch arm above would warn about
+            // interception on a chain this device trusted. Only the digest could
+            // not be computed.
+            return CertificateTrustCopy.keyUnpinnableRefusalWithRemedy
         default:
             // ttsSynthesisFailed / ttsEmptyAudio and any other terminal — the
             // most likely cause in preview is a wrong voice name/ID.

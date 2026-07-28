@@ -39,13 +39,11 @@ import Foundation
 protocol PairingImportEnvironment: AnyObject {
     func plan(_ payload: PairingPayload, lockedTarget: RemoteAgentRef?) async -> PairingImportPlan
     func review(_ payload: PairingPayload, target: RemoteAgentRef, freshlyMinted: Bool) async -> PairingReviewModel
-    func resolveTrust(_ payload: PairingPayload,
-                      accepted: [PairingTrustLane: PairingTrustOverride]) async -> PairingTrustResolution
+    func resolveTrust(_ payload: PairingPayload) async -> PairingTrustResolution
     func execute(_ payload: PairingPayload, target: RemoteAgentRef,
                  gatewayPin: String?, fileServerPin: String?) async -> PairingImportOutcome
     func runGatewayTest(_ payload: PairingPayload, target: RemoteAgentRef) async -> PairingGatewayTestOutcome
     func runFileTest(for target: RemoteAgentRef) async -> PairingFileTestResult
-    func pinCertificate(_ fingerprintHex: String, for target: RemoteAgentRef) async
     func discardDraft(_ target: RemoteAgentRef)
 }
 
@@ -53,6 +51,15 @@ struct PairingFileTestResult: Equatable, Sendable {
     let passed: Bool
     /// Taxonomy-derived copy only — never payload content.
     let failureMessage: String?
+    /// Whether re-running this stage can reach a different verdict. Rides
+    /// `AppError.isRetryable`, resolved where the `AppError` still exists rather
+    /// than re-derived from `failureMessage` later — a message is prose, and the
+    /// one thing no consumer can recover from it is whether the server refused
+    /// permanently. Both stages report it because the checklist renders both
+    /// through one `StageStatus`, so the taxonomy would otherwise be discarded
+    /// at two boundaries instead of one. No typed error → `true`: unknown is not
+    /// terminal.
+    let retryable: Bool
 }
 
 @MainActor
@@ -69,8 +76,7 @@ final class PairingImportFlow {
     }
 
     /// The staged checklist — rows mirror `STTTestSuiteResultView`'s glyph +
-    /// title + detail shape, with an extra amber `untrustedCert` state carrying
-    /// the trust-and-retry affordance.
+    /// title + detail shape.
     enum StageID: Int, CaseIterable {
         case save, gateway, file
     }
@@ -80,25 +86,28 @@ final class PairingImportFlow {
         case running
         case passed
         /// Detail is taxonomy-/key-derived only — never payload content.
-        case failed(String?)
-        case untrustedCert
+        ///
+        /// `retryable` rides `AppError.isRetryable`, mirroring
+        /// `ServerFileDownloadChip`'s `failed(message:retryable:)`: a row that
+        /// knows only its message cannot tell a gateway that is merely down from
+        /// a certificate this device refuses, and the recovery section below the
+        /// checklist has to. A failure with no typed error behind it stays
+        /// retryable — unknown is not terminal.
+        case failed(String?, retryable: Bool)
     }
 
     /// Something the user must be told on the review card that is NOT part of the
     /// destination itself. Each arm exists because the alternative was a message
-    /// the user could never see: a refusal or an unreachable-server retry raised
-    /// from an alert vanishes the moment the alert is dismissed, leaving a card
-    /// that looks exactly as it did before they tapped Connect.
+    /// the user could never see: a refusal raised from an alert vanishes the
+    /// moment the alert is dismissed, leaving a card that looks exactly as it did
+    /// before they tapped Connect.
     enum ReviewNotice: Equatable {
         /// The reviewed facts changed before Connect executed. The card now shows
         /// the NEW facts and deliberately did not act on the old ones.
         case destinationChanged
-        /// A trust refusal the user backed out of, kept on screen so the reason
+        /// A trust refusal the user dismissed, kept on screen so the reason
         /// survives the alert that carried it.
         case refused(String)
-        /// A named certificate could not be checked because the server was not
-        /// reachable — a retry, not a bad code.
-        case unreachable(String)
     }
 
     /// The import awaiting consent. Nothing in it has been persisted;
@@ -115,32 +124,14 @@ final class PairingImportFlow {
         var notice: ReviewNotice?
     }
 
-    /// A certificate exception the user must accept BEFORE anything persists.
-    /// `gatewayPin`/`fileServerPin` are the exact values that would be stored.
-    struct PinConsentContext: Equatable {
-        let payload: PairingPayload
-        let target: RemoteAgentRef
-        let gatewayPin: String?
-        let fileServerPin: String?
-        let lanes: [PairingTrustLane]
-        let freshlyMinted: Bool
-    }
-
-    /// An import refused on trust grounds. `override` is nil when no mechanism to
-    /// proceed exists at all (see `PairingTrustOverride`) — the alert then offers
-    /// no "Connect anyway", because the button could not work.
-    ///
-    /// The CONCRETE override is retained, not just "an override is possible": the
-    /// retry re-probes, and consent has to be bound to the exact action the user
-    /// was shown. `accepted` carries forward overrides agreed on earlier lanes so
-    /// two blocked lanes can both be resolved instead of re-blocking each other.
+    /// An import refused on trust grounds. There is deliberately no "Connect
+    /// anyway": every block reason is terminal (see `PairingTrustBlock`), so the
+    /// alert explains and offers only Cancel.
     struct TrustBlockContext: Equatable {
         let payload: PairingPayload
         let target: RemoteAgentRef
         let lane: PairingTrustLane
         let block: PairingTrustBlock
-        let override: PairingTrustOverride?
-        let accepted: [PairingTrustLane: PairingTrustOverride]
         let freshlyMinted: Bool
     }
 
@@ -155,20 +146,14 @@ final class PairingImportFlow {
 
     private(set) var reviewContext: ReviewContext?
 
-    var pinConsentContext: PinConsentContext?
-    var showingPinConsentAlert: Bool = false
     var trustBlockContext: TrustBlockContext?
     var showingTrustBlockAlert: Bool = false
 
-    /// Set once the plan resolves — drives the stage run + the trust retry.
+    /// Set once the plan resolves — drives the stage run.
     private(set) var activePayload: PairingPayload?
     private(set) var activeTarget: RemoteAgentRef?
 
     private(set) var stageStatus: [StageID: StageStatus] = [:]
-    /// The presented self-signed fingerprint from an `.untrustedCert` outcome —
-    /// nil when none is pending OR the cert's key type yielded no fingerprint
-    /// (then there is nothing to pin and the retry affordance is hidden).
-    private(set) var presentedUntrustedFP: String?
 
     /// Bumped whenever a scanned code is REJECTED back to the input phase. The
     /// scanner's one-shot latch + `stopScanning()` would otherwise leave a frozen
@@ -184,19 +169,19 @@ final class PairingImportFlow {
     /// superseding attempt), so a Task can tell after its await that the result it
     /// is holding belongs to an import nobody is waiting for any more.
     ///
-    /// Without this, tapping Import and then Cancel still persisted the URL, token
-    /// and pin when the probe eventually returned. Task cancellation alone is NOT
+    /// Without this, tapping Import and then Cancel still persisted the URL and
+    /// token when the probe eventually returned. Task cancellation alone is NOT
     /// sufficient: a cancelled probe classifies as `.unreachable(.cancelled)`, and
-    /// the no-claim rule deliberately proceeds on unreachable.
+    /// an unreachable server deliberately still imports.
     private var operationGeneration: Int = 0
 
     /// The target of an import that has been RESOLVED but not yet persisted — set
     /// the moment the review card appears and cleared only by `beginImport`
     /// (persistence has started, the draft is real now) or by an exit path.
     ///
-    /// It deliberately stays set while the certificate alerts are on screen: a
-    /// window closed out from under a consent alert must still discard the draft,
-    /// and clearing it when the probe returned would leave exactly that gap.
+    /// It deliberately stays set while the trust-refusal alert is on screen: a
+    /// window closed out from under that alert must still discard the draft, and
+    /// clearing it when the probe returned would leave exactly that gap.
     private var pendingTrustTarget: RemoteAgentRef?
     private var pendingTrustFreshlyMinted: Bool = false
 
@@ -249,21 +234,32 @@ final class PairingImportFlow {
         activePayload?.fileServer != nil ? [.save, .gateway, .file] : [.save, .gateway]
     }
 
-    /// True iff the gateway stage ended in a hard `.failed` (drives the recovery
-    /// section). `.untrustedCert` and `.passed`/`.running`/`.pending` all read
-    /// false — recovery never shadows the trust-retry or a success.
-    var gatewayFailedTerminally: Bool {
+    /// True iff the gateway stage ended in a `.failed` (drives the recovery
+    /// section). `.passed`/`.running`/`.pending` all read false — recovery never
+    /// shadows a success or an in-flight probe.
+    ///
+    /// Deliberately says nothing about WHY it failed: "Back to instructions" and
+    /// "Fix it manually" are the right offer for every failure, terminal or not.
+    /// Only the retry affordance needs the distinction — see
+    /// `gatewayFailureIsRetryable`.
+    var gatewayStageFailed: Bool {
         if case .failed = stageStatus[.gateway] ?? .pending { return true }
         return false
     }
 
-    /// True when the pairing payload gave no reason to expect a self-signed
-    /// certificate — no `certFP` AND a transport other than `.selfsigned`.
-    /// `conduck-connect` computes and emits `certFP` for any self-signed gateway
-    /// it detects, so its absence means the wizard saw a trusted chain.
-    var unexpectedSelfSignedCert: Bool {
-        guard let payload = activePayload else { return false }
-        return payload.certFP == nil && payload.transport != .selfsigned
+    /// Whether re-running the connectivity stages can reach a different verdict.
+    /// The SINGLE gate on the recovery section's "Try again", so the sheet
+    /// answers the same question every other failure surface answers from
+    /// `AppError.isRetryable` — a certificate this device won't accept, a
+    /// rejected token or a URL that isn't an AI endpoint sends the identical
+    /// probe into the identical refusal, and a button that can only fail again
+    /// is a promise the app cannot keep.
+    ///
+    /// True when the gateway stage has not failed at all, so this is only ever
+    /// consulted alongside `gatewayStageFailed`.
+    var gatewayFailureIsRetryable: Bool {
+        if case .failed(_, let retryable) = stageStatus[.gateway] ?? .pending { return retryable }
+        return true
     }
 
     /// A brand-new custom (free-target) import means the plan minted an in-memory
@@ -456,8 +452,6 @@ final class PairingImportFlow {
     /// — the consent that was given was about different facts, and re-asking is
     /// the only honest use of it.
     private func presentChangedFacts(_ fresh: PairingReviewModel, context: ReviewContext) {
-        pinConsentContext = nil
-        showingPinConsentAlert = false
         trustBlockContext = nil
         showingTrustBlockAlert = false
         reviewContext = ReviewContext(
@@ -477,8 +471,6 @@ final class PairingImportFlow {
         resolutionTask?.cancel()
         resolutionTask = nil
         planning = false
-        pinConsentContext = nil
-        showingPinConsentAlert = false
         trustBlockContext = nil
         showingTrustBlockAlert = false
         guard reviewContext != nil else {
@@ -501,44 +493,17 @@ final class PairingImportFlow {
         restartScanner()
     }
 
-    /// Accept a certificate exception and commit — through the final gate, not
-    /// straight to persistence: an alert can sit open for as long as the person
-    /// takes, and the destination they agreed to may have moved meanwhile.
-    func acceptPinConsent(_ context: PinConsentContext) {
-        commitIfUnchanged(context.payload, target: context.target,
-                          gatewayPin: context.gatewayPin, fileServerPin: context.fileServerPin)
-    }
-
-    /// Accept a "Connect anyway" override on a blocked lane.
-    ///
-    /// Re-resolves with this lane's override accepted, so the pin that gets stored
-    /// is re-derived from a FRESH probe rather than from the stale signals behind
-    /// the alert. The EXACT accepted action is carried so a server that changed in
-    /// between cannot silently convert this consent into a different one — and
-    /// prior lanes' acceptances are carried forward so two blocked lanes can both
-    /// resolve.
-    func acceptTrustOverride(_ context: TrustBlockContext, override: PairingTrustOverride) {
-        var accepted = context.accepted
-        accepted[context.lane] = override
-        resolveTrustThenImport(
-            context.payload, target: context.target,
-            freshlyMinted: context.freshlyMinted, acceptedOverrides: accepted
-        )
-    }
-
     // MARK: - Trust resolution (runs BEFORE anything persists)
 
     /// Probe both lanes unpinned, decide, and only then import.
     ///
     /// This is the single gate every import path funnels through. Nothing here
     /// writes to defaults, iCloud, or the Keychain; `beginImport` is reached only
-    /// with pins that have been checked against the key the server actually
-    /// presented.
+    /// after a live probe found this device already trusts the server.
     private func resolveTrustThenImport(
         _ payload: PairingPayload,
         target: RemoteAgentRef,
-        freshlyMinted: Bool,
-        acceptedOverrides: [PairingTrustLane: PairingTrustOverride] = [:]
+        freshlyMinted: Bool
     ) {
         // Supersede any resolution already in flight, then claim this identity.
         // `pendingTrustTarget` is already this target (claimed at `enterReview`)
@@ -553,7 +518,7 @@ final class PairingImportFlow {
         // would make the cancellation checkpoint inside `resolveTrust` unreachable
         // — the very probe it exists to stop.
         resolutionTask = Task { [environment] in
-            let resolution = await environment.resolveTrust(payload, accepted: acceptedOverrides)
+            let resolution = await environment.resolveTrust(payload)
 
             // Abandoned while the probe was in flight (Cancel, swipe-dismiss, or a
             // superseding resolution). Whoever invalidated us owns the cleanup,
@@ -567,41 +532,19 @@ final class PairingImportFlow {
                 self.commitIfUnchanged(payload, target: target,
                                        gatewayPin: gatewayPin, fileServerPin: fileServerPin)
 
-            case .needsPinConsent(let gatewayPin, let fileServerPin, let lanes):
-                self.pinConsentContext = PinConsentContext(
-                    payload: payload, target: target,
-                    gatewayPin: gatewayPin, fileServerPin: fileServerPin,
-                    lanes: lanes, freshlyMinted: freshlyMinted
-                )
-                self.showingPinConsentAlert = true
-
-            case .blocked(let lane, let block, let override):
+            case .blocked(let lane, let block):
                 self.trustBlockContext = TrustBlockContext(
                     payload: payload, target: target, lane: lane, block: block,
-                    override: override, accepted: acceptedOverrides,
                     freshlyMinted: freshlyMinted
                 )
                 self.showingTrustBlockAlert = true
 
-            case .unverifiableWhileUnreachable(let lane, _):
-                // A claim that could not be checked because the server was not
-                // reachable. Importing would persist an unverified pin — the exact
-                // thing this gate exists to prevent — so this is a retry, not a
-                // failure of the code. It lands on the CARD, not in the paste
-                // field's inline error: that field is only rendered in the input
-                // step, so an unreachable verdict used to be written somewhere the
-                // user could not see it.
-                self.returnToReview(notice: .unreachable(String(
-                    format: String(
-                        localized: "settings.pairing.trust.unreachable",
-                        defaultValue: "Couldn't reach %@ to check its certificate against this code. Try again when you can reach it."
-                    ),
-                    lane == .gateway
-                        ? String(localized: "settings.pairing.trust.subject.gateway.inline",
-                                 defaultValue: "the gateway")
-                        : String(localized: "settings.pairing.trust.subject.file.inline",
-                                 defaultValue: "the file server")
-                )))
+            case .abandoned:
+                // The resolution cancelled itself between lanes. Normally the
+                // guard above has already dropped this attempt; reaching here
+                // means cancellation raced it, so fall back to the card rather
+                // than persist a decision that was never finished.
+                self.returnToReview(notice: nil)
             }
         }
     }
@@ -622,8 +565,6 @@ final class PairingImportFlow {
         pendingTrustTarget = nil
         pendingTrustFreshlyMinted = false
         planning = false
-        pinConsentContext = nil
-        showingPinConsentAlert = false
         trustBlockContext = nil
         showingTrustBlockAlert = false
         reviewContext = nil
@@ -632,16 +573,15 @@ final class PairingImportFlow {
     // MARK: - Stage run (the first writes happen here)
 
     /// - Parameters:
-    ///   - gatewayPin/fileServerPin: the RESOLVED certificate pins — `nil` meaning
-    ///     ordinary system trust. Never the payload's claimed values.
+    ///   - gatewayPin/fileServerPin: the RESOLVED certificate pins, which today
+    ///     are always `nil` — ordinary system trust. Threaded through rather than
+    ///     assumed so the value that reaches storage is one a decision produced.
     private func beginImport(
         _ payload: PairingPayload,
         target: RemoteAgentRef,
         gatewayPin: String?,
         fileServerPin: String?
     ) {
-        pinConsentContext = nil
-        showingPinConsentAlert = false
         trustBlockContext = nil
         showingTrustBlockAlert = false
         reviewContext = nil
@@ -654,7 +594,6 @@ final class PairingImportFlow {
         activePayload = payload
         activeTarget = target
         stageStatus = [:]
-        presentedUntrustedFP = nil
         // Reset per-attempt outcome so a re-import re-evaluates cleanly and the
         // dismiss hooks fire for the LATEST attempt, not a stale earlier one.
         saveSucceeded = false
@@ -684,10 +623,14 @@ final class PairingImportFlow {
         switch await environment.execute(payload, target: target,
                                          gatewayPin: gatewayPin, fileServerPin: fileServerPin) {
         case .failed:
+            // Retryable: the message says so, and re-running the import is the
+            // remedy. The recovery section never sees it — a failed save ends
+            // the run before the gateway stage — but the row must not claim a
+            // terminality it does not have.
             stageStatus[.save] = .failed(String(
                 localized: "settings.pairing.error.saveFailed",
                 defaultValue: "Couldn't save this configuration securely. Try again."
-            ))
+            ), retryable: true)
             // A free-target custom import minted a roster draft in the plan step —
             // nothing persisted, so drop it (else a phantom empty row lingers in
             // the gateway list until the next state reload).
@@ -702,10 +645,13 @@ final class PairingImportFlow {
             // The file-server half rolled back at save time — mark its stage
             // failed up front; `runFileStageIfNeeded` sees the terminal state and
             // never probes a config that isn't there.
+            // Not retryable: `retryStages()` never redoes Stage 1, so re-running
+            // the connectivity stages cannot write the credential this rolled
+            // back. The remedy is in the message — re-run the whole import.
             stageStatus[.file] = .failed(String(
                 localized: "settings.pairing.error.fileCredentialFailed",
                 defaultValue: "Couldn't save the file-server credential securely. The gateway itself was set up — re-run the import to add the file server."
-            ))
+            ), retryable: false)
         case .committed:
             saveSucceeded = true
             stageStatus[.save] = .passed
@@ -722,25 +668,22 @@ final class PairingImportFlow {
         phase = .done
     }
 
-    /// Stage 2 — gateway connection test. On `.untrustedCert` the run PAUSES
-    /// (amber row + trust-and-retry); the file stage only follows a terminal
-    /// gateway outcome (pass or hard fail — the file server is independent).
+    /// Stage 2 — gateway connection test. The file stage follows either terminal
+    /// gateway outcome (pass or fail — the file server is independent).
     private func runGatewayStage(_ payload: PairingPayload, target: RemoteAgentRef) async {
         stageStatus[.gateway] = .running
-        presentedUntrustedFP = nil
         switch await environment.runGatewayTest(payload, target: target) {
         case .passed:
             gatewayConnected = true
             stageStatus[.gateway] = .passed
             fireConnectedHookIfNeeded()
             await runFileStageIfNeeded(payload, target: target)
-        case .untrustedCert(let fingerprint):
+        case .failed(let message, let error):
             gatewayConnected = false
-            presentedUntrustedFP = fingerprint
-            stageStatus[.gateway] = .untrustedCert
-        case .failed(let message):
-            gatewayConnected = false
-            stageStatus[.gateway] = .failed(message)
+            // The taxonomy decides the retry affordance, not the copy: `nil`
+            // means no typed error stood behind the message, and unknown is not
+            // terminal.
+            stageStatus[.gateway] = .failed(message, retryable: error?.isRetryable ?? true)
             await runFileStageIfNeeded(payload, target: target)
         }
     }
@@ -753,22 +696,9 @@ final class PairingImportFlow {
         if case .failed = stageStatus[.file] ?? .pending { return }
         stageStatus[.file] = .running
         let result = await environment.runFileTest(for: target)
-        stageStatus[.file] = result.passed ? .passed : .failed(result.failureMessage)
-    }
-
-    /// Pin the presented self-signed fingerprint for the target, then re-run the
-    /// gateway stage (the pinned cert now validates).
-    func trustAndRetry() {
-        guard let fingerprint = presentedUntrustedFP,
-              let payload = activePayload,
-              let target = activeTarget else { return }
-        presentedUntrustedFP = nil
-        phase = .running
-        stageTask = Task { [environment] in
-            await environment.pinCertificate(fingerprint, for: target)
-            await self.runGatewayStage(payload, target: target)
-            self.phase = .done
-        }
+        stageStatus[.file] = result.passed
+            ? .passed
+            : .failed(result.failureMessage, retryable: result.retryable)
     }
 
     /// Recovery "Try again": re-run ONLY the connectivity stages on the
@@ -777,7 +707,6 @@ final class PairingImportFlow {
         guard let payload = activePayload, let target = activeTarget else { return }
         stageStatus[.gateway] = .pending
         if payload.fileServer != nil { stageStatus[.file] = .pending }
-        presentedUntrustedFP = nil
         phase = .running
         stageTask = Task {
             await self.runGatewayStage(payload, target: target)
@@ -869,9 +798,8 @@ final class SettingsViewModelPairingEnvironment: PairingImportEnvironment {
         await viewModel.pairingReview(for: payload, target: target, freshlyMinted: freshlyMinted)
     }
 
-    func resolveTrust(_ payload: PairingPayload,
-                      accepted: [PairingTrustLane: PairingTrustOverride]) async -> PairingTrustResolution {
-        await viewModel.resolvePairingTrust(payload, acceptedOverrides: accepted)
+    func resolveTrust(_ payload: PairingPayload) async -> PairingTrustResolution {
+        await viewModel.resolvePairingTrust(payload)
     }
 
     func execute(_ payload: PairingPayload, target: RemoteAgentRef,
@@ -885,17 +813,19 @@ final class SettingsViewModelPairingEnvironment: PairingImportEnvironment {
         await viewModel.runPairingGatewayTest(payload, target: target)
     }
 
+    /// Cause AND remedy. The gateway stage in this same sheet renders the full
+    /// remedy (`friendlyGatewayMessage`), so a one-sentence file stage next to
+    /// it reads as a second, smaller problem rather than the same class of
+    /// failure — and the sheet has no Troubleshoot chip to reach the fix.
     func runFileTest(for target: RemoteAgentRef) async -> PairingFileTestResult {
         await viewModel.runFileTransferTest(for: target)
         let result = viewModel.fileTransferTestResults[target]
+        let failure = result?.failure
         return PairingFileTestResult(
             passed: result?.success == true,
-            failureMessage: result?.failure?.errorDescription
+            failureMessage: failure?.descriptionWithRecovery,
+            retryable: failure?.isRetryable ?? true
         )
-    }
-
-    func pinCertificate(_ fingerprintHex: String, for target: RemoteAgentRef) async {
-        await SettingsManager.shared.setRemoteAgentCertFingerprint(fingerprintHex, for: target)
     }
 
     func discardDraft(_ target: RemoteAgentRef) {

@@ -36,22 +36,6 @@ import Foundation
 
 struct PairingReviewModel: Equatable, Sendable {
 
-    /// What the code asks for regarding the server's certificate.
-    ///
-    /// A CLAIM, never an outcome: whether a named key is honoured, contradicted
-    /// by the live server, or quietly irrelevant (the server is publicly trusted
-    /// and the claim merely agrees) is decided by the probe that runs after
-    /// Connect. Stating an outcome here would be a guess, and a wrong one on the
-    /// exact screen that exists to be trustworthy.
-    enum Certificate: Equatable, Sendable {
-        /// No key named anywhere in the payload — ordinary certificate checks
-        /// decide, with no exception available to this import.
-        case standardChecks
-        /// A key is named for at least one lane. Conduck checks it against the
-        /// key the server actually presents before storing anything.
-        case namesSpecificKey
-    }
-
     /// The file-transfer half. Both arms carry a destination because "same host
     /// as the gateway" is NOT a reason to hide it — `…example:443/agent` and
     /// `…example:9443/files` are different backends, as are two paths on one
@@ -86,7 +70,6 @@ struct PairingReviewModel: Equatable, Sendable {
     let targetName: String?
 
     let fileLane: FileLane?
-    let certificate: Certificate
 
     /// True when no gateway is configured yet, so this import also becomes the
     /// gateway new conversations bind to (`saveRemoteAgent`'s first-gateway
@@ -137,14 +120,6 @@ struct PairingReviewModel: Equatable, Sendable {
             return nil
         }()
 
-        // Either lane naming a key makes this import a certificate decision, so
-        // the row is about the IMPORT, not only about the gateway half. The
-        // file-lane claim is read through the same inheritance rule the trust
-        // gate checks and the import stores — computing it a second way here is
-        // how a card and a commit drift apart.
-        let namesKey = payload.certFP != nil
-            || SettingsViewModel.claimedFileServerPin(for: payload) != nil
-
         return PairingReviewModel(
             // The one transformation applied on the save path. Rendering the raw
             // payload URL would show a destination the app is not going to use
@@ -154,7 +129,6 @@ struct PairingReviewModel: Equatable, Sendable {
             previousGatewayDestination: existingGatewayURL?.absoluteString,
             targetName: targetName,
             fileLane: fileLane,
-            certificate: namesKey ? .namesSpecificKey : .standardChecks,
             becomesDefault: !anyGatewayConfigured
         )
     }

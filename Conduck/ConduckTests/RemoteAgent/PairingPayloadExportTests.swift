@@ -21,11 +21,7 @@ final class PairingPayloadExportTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    /// 64 lowercase hex — a syntactically valid SPKI SHA-256.
-    private let gatewayFP = String(repeating: "ab", count: 32)
-    private let fileServerFP = String(repeating: "cd", count: 32)
-
-    /// V1 — minimal openclaw, bearer, tailscale transport, file lane, no pins.
+    /// V1 — minimal openclaw, bearer, tailscale transport, file lane.
     private func vector1() -> PairingPayloadExport.Payload {
         PairingPayloadExport.Payload(
             gateway: PairingPayloadExport.Gateway(
@@ -33,22 +29,20 @@ final class PairingPayloadExportTests: XCTestCase {
                 url: "https://gw.tail1234.ts.net:8443",
                 authScheme: .bearer,
                 token: "tok_ABC123",
-                model: nil,
-                certFP: nil
+                model: nil
             ),
             transport: "tailscale",
             fileServer: PairingPayloadExport.FileServer(
                 url: "https://gw.tail1234.ts.net:9443",
-                credential: "a1b2c3d4e5f60718",
-                certFP: nil
+                credential: "a1b2c3d4e5f60718"
             )
         )
     }
 
     private let vector1Expected = "conduck-setup:v1:eyJ2IjoxLCJnYXRld2F5Ijp7ImtpbmQiOiJvcGVuY2xhdyIsInVybCI6Imh0dHBzOi8vZ3cudGFpbDEyMzQudHMubmV0Ojg0NDMiLCJhdXRoIjoiYmVhcmVyIiwidG9rZW4iOiJ0b2tfQUJDMTIzIn0sInRyYW5zcG9ydCI6InRhaWxzY2FsZSIsImZpbGVTZXJ2ZXIiOnsidXJsIjoiaHR0cHM6Ly9ndy50YWlsMTIzNC50cy5uZXQ6OTQ0MyIsImNyZWRlbnRpYWwiOiJhMWIyYzNkNGU1ZjYwNzE4In19"
 
-    /// V2 — maximal custom: unicode name, "/"+"="+"+" in the token, model, BOTH
-    /// cert pins, selfsigned transport. Exercises escaping + every optional key.
+    /// V2 — maximal custom: unicode name, "/"+"="+"+" in the token, model,
+    /// cloudflare transport. Exercises escaping + every optional key.
     private func vector2() -> PairingPayloadExport.Payload {
         PairingPayloadExport.Payload(
             gateway: PairingPayloadExport.Gateway(
@@ -58,19 +52,17 @@ final class PairingPayloadExportTests: XCTestCase {
                 url: "https://ai.example.com",
                 authScheme: .bearer,
                 token: "sk-test/77+q==",
-                model: "llama-3.3-70b",
-                certFP: gatewayFP
+                model: "llama-3.3-70b"
             ),
-            transport: "selfsigned",
+            transport: "cloudflare",
             fileServer: PairingPayloadExport.FileServer(
                 url: "https://ai.example.com:8444",
-                credential: "deadbeefcafe0123",
-                certFP: fileServerFP
+                credential: "deadbeefcafe0123"
             )
         )
     }
 
-    private let vector2Expected = "conduck-setup:v1:eyJ2IjoxLCJnYXRld2F5Ijp7ImtpbmQiOiJjdXN0b20iLCJ1cmwiOiJodHRwczovL2FpLmV4YW1wbGUuY29tIiwiYXV0aCI6ImJlYXJlciIsIm5hbWUiOiJNeSBCXHUwMGY2eCBcdTIwMTQgbGFiIiwidG9rZW4iOiJzay10ZXN0Lzc3K3E9PSIsIm1vZGVsIjoibGxhbWEtMy4zLTcwYiIsImNlcnRGUCI6ImFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWIifSwidHJhbnNwb3J0Ijoic2VsZnNpZ25lZCIsImZpbGVTZXJ2ZXIiOnsidXJsIjoiaHR0cHM6Ly9haS5leGFtcGxlLmNvbTo4NDQ0IiwiY3JlZGVudGlhbCI6ImRlYWRiZWVmY2FmZTAxMjMiLCJjZXJ0RlAiOiJjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkY2RjZGNkIn19"
+    private let vector2Expected = "conduck-setup:v1:eyJ2IjoxLCJnYXRld2F5Ijp7ImtpbmQiOiJjdXN0b20iLCJ1cmwiOiJodHRwczovL2FpLmV4YW1wbGUuY29tIiwiYXV0aCI6ImJlYXJlciIsIm5hbWUiOiJNeSBCXHUwMGY2eCBcdTIwMTQgbGFiIiwidG9rZW4iOiJzay10ZXN0Lzc3K3E9PSIsIm1vZGVsIjoibGxhbWEtMy4zLTcwYiJ9LCJ0cmFuc3BvcnQiOiJjbG91ZGZsYXJlIiwiZmlsZVNlcnZlciI6eyJ1cmwiOiJodHRwczovL2FpLmV4YW1wbGUuY29tOjg0NDQiLCJjcmVkZW50aWFsIjoiZGVhZGJlZWZjYWZlMDEyMyJ9fQ=="
 
     /// V3 — keyless custom, no lane, no model. No token key; no fileServer key.
     private func vector3() -> PairingPayloadExport.Payload {
@@ -80,8 +72,7 @@ final class PairingPayloadExportTests: XCTestCase {
                 url: "https://ollama.lan.example.com",
                 authScheme: .none,
                 token: nil,
-                model: nil,
-                certFP: nil
+                model: nil
             ),
             transport: "public",
             fileServer: nil
@@ -177,6 +168,19 @@ final class PairingPayloadExportTests: XCTestCase {
         XCTAssertTrue(decodedJSON(PairingPayloadExport.serialize(vector2())).contains("\"model\":\"llama-3.3-70b\""))
     }
 
+    /// A locally stored certificate pin is a per-device tightening the user typed
+    /// in for a certificate THIS device already trusts. Emitting it would push
+    /// that private narrowing onto another device as though it were a fact about
+    /// the server — and break that device on ordinary certificate renewal. The
+    /// wire format has no field for it, and no representable payload can produce
+    /// one.
+    func testNoVectorEverEmitsACertificateField() {
+        for code in [vector1(), vector2(), vector3()].map(PairingPayloadExport.serialize) {
+            XCTAssertFalse(decodedJSON(code).contains("certFP"),
+                           "A setup code must never carry a certificate digest.")
+        }
+    }
+
     // MARK: - fileServer emitted only when url AND credential both non-empty
 
     // The serializer must honor the wizard's `if FS_URL and FS_CRED` truthiness
@@ -201,8 +205,7 @@ final class PairingPayloadExportTests: XCTestCase {
                 transport: base.transport,
                 fileServer: PairingPayloadExport.FileServer(
                     url: "",
-                    credential: "a1b2c3d4e5f60718",
-                    certFP: nil
+                    credential: "a1b2c3d4e5f60718"
                 )
             )
         )
@@ -225,8 +228,7 @@ final class PairingPayloadExportTests: XCTestCase {
                 transport: base.transport,
                 fileServer: PairingPayloadExport.FileServer(
                     url: "https://gw.tail1234.ts.net:9443",
-                    credential: "",
-                    certFP: nil
+                    credential: ""
                 )
             )
         )
@@ -242,12 +244,10 @@ final class PairingPayloadExportTests: XCTestCase {
             url: URL(string: "https://gw.tail1234.ts.net:8443")!,
             authScheme: .bearer,
             token: "tok_ABC123",
-            certFP: nil,
             model: nil,
             fileServer: PairingPayload.FileServer(
                 url: URL(string: "https://gw.tail1234.ts.net:9443")!,
-                credential: "a1b2c3d4e5f60718",
-                certFP: nil
+                credential: "a1b2c3d4e5f60718"
             ),
             transport: .tailscale
         ))
@@ -259,14 +259,12 @@ final class PairingPayloadExportTests: XCTestCase {
             url: URL(string: "https://ai.example.com")!,
             authScheme: .bearer,
             token: "sk-test/77+q==",
-            certFP: gatewayFP,
             model: "llama-3.3-70b",
             fileServer: PairingPayload.FileServer(
                 url: URL(string: "https://ai.example.com:8444")!,
-                credential: "deadbeefcafe0123",
-                certFP: fileServerFP
+                credential: "deadbeefcafe0123"
             ),
-            transport: .selfsigned
+            transport: .cloudflare
         ))
     }
 
@@ -276,7 +274,6 @@ final class PairingPayloadExportTests: XCTestCase {
             url: URL(string: "https://ollama.lan.example.com")!,
             authScheme: .none,
             token: nil,
-            certFP: nil,
             model: nil,
             fileServer: nil,
             transport: .publicCert

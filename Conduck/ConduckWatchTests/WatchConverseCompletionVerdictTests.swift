@@ -8,15 +8,30 @@
 // Deliberately NOT re-tested here: `ConverseResponse` decode internals
 // (ConverseWireTests) and `WatchNetworkFailureCopy` wording
 // (WatchObservabilityTests) — this suite locks branch classification and
-// ordering only: cancel disambiguation via registry presence, transport vs
-// HTTP vs decode, the missing-response guard, and the
-// anti-phantom-reply conversationID guard.
+// ordering only: cancel disambiguation via registry presence, the two
+// certificate refusals that also arrive as a cancel, transport vs HTTP vs
+// decode, the missing-response guard, and the anti-phantom-reply
+// conversationID guard.
 
 import XCTest
 @testable import ConduckWatch_Watch_App
 
 @MainActor
 final class WatchConverseCompletionVerdictTests: XCTestCase {
+
+    /// One recorded attempt snapshot. `challengeRefused` is derived: the
+    /// delegate records a snapshot ONLY for a challenge it answered, so any
+    /// verdict at all means the refusal was ours — which is exactly what the
+    /// `.cancelled` arm needs in order not to read it as a user cancel.
+    private func noted(systemTrustRejected: Bool = false,
+                       pinRejected: Bool = false,
+                       pinComparisonUnsupported: Bool = false)
+    -> RemoteAgentTrustEvaluator.AttemptTrustSignals {
+        .init(systemTrustRejected: systemTrustRejected,
+              challengeRefused: true,
+              pinRejected: pinRejected,
+              pinComparisonUnsupported: pinComparisonUnsupported)
+    }
 
     private let cid = UUID()
 
@@ -126,6 +141,141 @@ final class WatchConverseCompletionVerdictTests: XCTestCase {
         )
         guard case .reply = verdict else {
             return XCTFail("Expected .reply, got \(verdict)")
+        }
+    }
+
+    // MARK: - Certificate refusal (must NOT read as a user cancel)
+
+    /// THE blocker this branch exists for: a PINNED gateway over a chain this
+    /// device does not trust makes the evaluator fail closed and cancel the
+    /// challenge, so the task completes as `.cancelled` WITH the registry entry
+    /// still present — byte-identical to a live in-process cancel, which drops
+    /// the turn silently. It must be a visible terminal failure instead, or the
+    /// user's spoken turn vanishes off the wrist and the live machine stays
+    /// stuck in `.uploading`.
+    func testUntrustedCertificateCancelIsNotSilentCleanup() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.cancelled), registryEntryPresent: true,
+            trustSignals: noted(systemTrustRejected: true)
+        )
+        guard case .failure(.certificateUntrusted, let conversationID) = verdict else {
+            return XCTFail("An untrusted-certificate cancel must surface a failure, got \(verdict)")
+        }
+        XCTAssertEqual(conversationID, cid)
+    }
+
+    /// A pin mismatch on a chain the system DID trust is a DIFFERENT verdict and
+    /// must never collapse into the untrusted one: there the fix is a real
+    /// certificate on the server, here the key changed under a still-trusted
+    /// chain.
+    func testPinMismatchCancelClassifiesSeparately() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.cancelled), registryEntryPresent: true,
+            trustSignals: noted(pinRejected: true)
+        )
+        guard case .failure(.certificatePinMismatch, let conversationID) = verdict else {
+            return XCTFail("A pin-mismatch cancel must classify as certificatePinMismatch, got \(verdict)")
+        }
+        XCTAssertEqual(conversationID, cid)
+    }
+
+    /// Precedence is the shared classifier's: "this device does not trust this
+    /// certificate" is the truthful, actionable statement when both are noted.
+    func testUntrustedOutranksPinMismatchWhenBothNoted() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.cancelled), registryEntryPresent: true,
+            trustSignals: noted(systemTrustRejected: true, pinRejected: true)
+        )
+        guard case .failure(.certificateUntrusted, _) = verdict else {
+            return XCTFail("systemTrustRejected must outrank pinRejected, got \(verdict)")
+        }
+    }
+
+    /// ATS can refuse the connection itself before our cancel lands, surfacing
+    /// `-1200` rather than `-999`. With the note set, both codes are the same
+    /// verdict.
+    func testSecureConnectionFailedWithTrustNoteIsUntrusted() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.secureConnectionFailed), registryEntryPresent: true,
+            trustSignals: noted(systemTrustRejected: true)
+        )
+        guard case .failure(.certificateUntrusted, _) = verdict else {
+            return XCTFail("A noted -1200 must classify as certificateUntrusted, got \(verdict)")
+        }
+    }
+
+    /// The cold-tunnel fence, on the wrist: a generic `-1200` with NEITHER note
+    /// is a transient handshake failure (a cold Tailscale tunnel on a perfectly
+    /// good certificate), and must stay an ordinary transport failure.
+    func testSecureConnectionFailedWithNoNotesStaysTransport() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.secureConnectionFailed), registryEntryPresent: true
+        )
+        guard case .failure(.transport, _) = verdict else {
+            return XCTFail("An unsignalled -1200 must not claim a certificate problem, got \(verdict)")
+        }
+    }
+
+    /// A GENUINE user cancel is byte-for-byte unchanged: no notes, registry
+    /// entry present, still a silent cleanup. This is the fence that keeps the
+    /// certificate branches from broadening the cancel arm.
+    func testGenuineUserCancelWithNoNotesStaysSilentCleanup() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.cancelled), registryEntryPresent: true,
+            trustSignals: .empty
+        )
+        guard case .cleanupOnly = verdict else {
+            return XCTFail("A genuine user cancel must still drop silently, got \(verdict)")
+        }
+    }
+
+    /// A note that somehow rides a task which nonetheless connected must not
+    /// hijack an unrelated later error: only the codes the shared classifier
+    /// accepts become a certificate verdict.
+    func testTrustNoteDoesNotHijackAnUnrelatedTransportError() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.timedOut), registryEntryPresent: true,
+            trustSignals: noted(systemTrustRejected: true)
+        )
+        guard case .failure(.transport(let error), _) = verdict else {
+            return XCTFail("A timeout must stay a transport failure, got \(verdict)")
+        }
+        XCTAssertEqual((error as? URLError)?.code, .timedOut)
+    }
+
+    /// A key the watch cannot fingerprint is NOT the interception case. The
+    /// wrist is the surface least able to act on a warning, so a false one there
+    /// is the most expensive: reachable only because the registry stores the
+    /// whole snapshot, since the loose-Bool form drops the verdict that says so.
+    func testAnUnfingerprintableKeyIsItsOwnVerdictNotAMismatch() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.cancelled), registryEntryPresent: true,
+            trustSignals: noted(pinRejected: true, pinComparisonUnsupported: true)
+        )
+        guard case .failure(.certificateKeyUnpinnable, _) = verdict else {
+            return XCTFail("System trust passed and nothing was compared — this must not read as a pin mismatch, got \(verdict)")
+        }
+    }
+
+    /// Over-cap keeps its existing precedence — the two notes are mutually
+    /// exclusive in practice (a refused challenge never yields a body), so the
+    /// order only has to be stable, not clever.
+    func testOverCapKeepsPrecedenceOverTrustNotes() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: nil, body: nil,
+            transportError: URLError(.cancelled), registryEntryPresent: true,
+            responseOverCap: true, trustSignals: noted(systemTrustRejected: true)
+        )
+        guard case .failure(.responseOverCap, _) = verdict else {
+            return XCTFail("Over-cap must keep its precedence, got \(verdict)")
         }
     }
 

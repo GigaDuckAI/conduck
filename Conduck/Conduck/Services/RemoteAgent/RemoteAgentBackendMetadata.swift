@@ -71,12 +71,16 @@ enum RemoteAgentModelPolicy: Sendable, Equatable {
     case required
 }
 
-/// TLS trust posture.
+/// TLS trust posture. Both cases REQUIRE system trust — a certificate this
+/// device rejects is refused either way. They differ only in whether the user
+/// may add a pin ON TOP of that, which can only ever narrow what is accepted.
 enum RemoteAgentTrustPolicy: Sendable, Equatable {
-    /// TOFU self-signed pinning allowed — the user's own server (OpenClaw /
-    /// Hermes / custom).
-    case userPinnable
-    /// Public-CA only, default ATS, no pin UI (OpenRouter).
+    /// System trust required, plus an OPTIONAL user-typed fingerprint that
+    /// narrows acceptance to one certificate — the user's own server
+    /// (OpenClaw / Hermes / custom).
+    case optionalUserPin
+    /// System trust required, no pin UI (OpenRouter). A hosted provider rotates
+    /// its leaf certificates, so letting a user pin one would arm a future break.
     case systemTrustOnly
 }
 
@@ -325,7 +329,7 @@ enum RemoteAgentBackendRegistry {
             endpoint: .editable,
             authentication: .selectable,
             model: .unsupported,
-            trust: .userPinnable,
+            trust: .optionalUserPin,
             pairingSupported: true,
             fileTransferSupported: true,
             connectionProbe: .modelList,
@@ -372,7 +376,7 @@ enum RemoteAgentBackendRegistry {
             endpoint: .editable,
             authentication: .selectable,
             model: .unsupported,
-            trust: .userPinnable,
+            trust: .optionalUserPin,
             pairingSupported: true,
             fileTransferSupported: true,
             connectionProbe: .modelList,

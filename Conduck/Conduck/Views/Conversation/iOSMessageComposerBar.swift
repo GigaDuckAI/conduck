@@ -189,8 +189,15 @@ struct iOSMessageComposerBar: View {
             )
             .allowsHitTesting(!sendSubmissionInProgress)
 
+            // Cause AND remedy — the iPhone/iPad twin of the macOS composer's
+            // `errorBanner`, and the same reasoning: this is the composer's only
+            // slot for a capture failure, `.error` carries the whole `AppError`
+            // taxonomy, and the certificate verdicts keep the part the user must
+            // act on (the interception warning, the server-side routes, the
+            // "your certificate is fine") in the remedy half alone.
             if case .error(let error) = recorder.state {
-                Text(error.errorDescription ?? String(localized: "Something went wrong."))  // xcstrings
+                let message = error.descriptionWithRecovery
+                Text(message.isEmpty ? String(localized: "Something went wrong.") : message)  // xcstrings
                     .font(.caption)
                     .foregroundStyle(AppColors.error)
                     .multilineTextAlignment(.center)

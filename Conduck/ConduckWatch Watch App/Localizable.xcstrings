@@ -4,6 +4,160 @@
     "" : {
 
     },
+    "fileTransfer.error.certKeyUnpinnable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your file server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
+    "fileTransfer.error.certUntrusted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device doesn't trust your file server's certificate."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.certKeyUnpinnable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your gateway's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.certUntrusted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device doesn't trust your gateway's certificate."
+          }
+        }
+      }
+    },
+    "settings.certTrust.keyUnpinnable.refusal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
+    "settings.certTrust.keyUnpinnable.remedy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The certificate itself is fine and this device trusts it — only the fingerprint check can't run. Reissue it with an RSA 2048/3072/4096 or EC P-256/P-384 key, or clear the saved fingerprint in its settings to go back to ordinary system trust."
+          }
+        }
+      }
+    },
+    "settings.certTrust.pinMismatch.refusal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This server's certificate doesn't match the fingerprint you pinned."
+          }
+        }
+      }
+    },
+    "settings.certTrust.pinMismatch.remedy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If you replaced the server's certificate, update the pinned fingerprint in its settings. If you changed nothing, stop — the connection may be intercepted."
+          }
+        }
+      }
+    },
+    "settings.certTrust.untrusted.refusal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device doesn't trust the certificate this server presented, so Conduck won't connect to it."
+          }
+        }
+      }
+    },
+    "settings.certTrust.untrusted.remedy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Give the server a publicly trusted certificate: Tailscale Serve issues one automatically, Let's Encrypt is free and also issues certificates for plain IP addresses, or put a domain in front with Caddy, which renews for you."
+          }
+        }
+      }
+    },
+    "stt.error.customCertKeyUnpinnable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your custom STT server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
+    "stt.error.customCertUntrusted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device doesn't trust your custom STT server's certificate."
+          }
+        }
+      }
+    },
+    "tts.error.customCertKeyUnpinnable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your custom voice server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
+    "tts.error.customCertUntrusted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device doesn't trust your custom voice server's certificate."
+          }
+        }
+      }
+    },
     "…" : {
 
     },
@@ -493,18 +647,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your file-server's certificate fingerprint changed."
-          }
-        }
-      }
-    },
-    "fileTransfer.error.certMismatch.recovery.v2" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "If you changed your file server's certificate, open its File transfer section, tap Forget file transfer, and set it up again. If you changed nothing, stop — the connection may be intercepted."
+            "value" : "Your file server's certificate doesn't match the fingerprint you pinned."
           }
         }
       }
@@ -948,18 +1091,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your gateway's certificate fingerprint changed."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.certMismatch.recovery" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Settings and update the pinned fingerprint, or remove the pin to use system trust."
+            "value" : "Your gateway's certificate doesn't match the fingerprint you pinned."
           }
         }
       }
@@ -1404,6 +1536,39 @@
         }
       }
     },
+    "settings.certTrust.keyUnpinnable.refusal.compact" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck can't fingerprint your gateway's certificate key, so your pin can't be checked. Nothing is wrong with the certificate — open Conduck on your iPhone to fix the pin."
+          }
+        }
+      }
+    },
+    "settings.certTrust.pinMismatch.refusal.compact" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your gateway's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "settings.certTrust.untrusted.refusal.compact" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This device doesn't trust the server's certificate. Open Conduck on your iPhone to see how to fix it."
+          }
+        }
+      }
+    },
     "settings.error.loadFailed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1578,18 +1743,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your custom STT server's certificate fingerprint changed."
-          }
-        }
-      }
-    },
-    "stt.error.customCertMismatch.recovery" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Settings and update the pinned fingerprint, or remove the pin to use system trust."
+            "value" : "Your custom STT server's certificate doesn't match the fingerprint you pinned."
           }
         }
       }
@@ -1930,7 +2084,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your custom voice server's certificate fingerprint changed."
+            "value" : "Your custom voice server's certificate doesn't match the fingerprint you pinned."
           }
         }
       }

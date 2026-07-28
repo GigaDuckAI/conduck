@@ -529,14 +529,16 @@ final class ComposerAttachmentCoordinator {
             } catch is CancellationError {
                 // Tile is being removed — leave it.
             } catch {
-                // Upload failed → mark `.failed`. Does NOT block Send (a
-                // `.dualImage` tile is excluded from the send-gating helpers); the
-                // image rides inline-only this turn. NO silent retry, NO revert.
+                // Upload failed → `.failed`, or `.refused(reason)` when the error
+                // is terminal (the tile then SAYS why and drops Retry). Does NOT
+                // block Send either way (a `.dualImage` tile is excluded from the
+                // send-gating helpers); the image rides inline-only this turn. NO
+                // silent retry, NO revert.
                 guard let self,
                       let i = self.staged.firstIndex(where: { $0.id == id }),
                       self.staged[i].serverOwnerRef == ref,
                       self.staged[i].serverOwnerSnapshot == snapshot else { return }
-                self.staged[i].serverUploadState = .failed
+                self.staged[i].serverUploadState = .failure(for: error)
             }
             self?.uploadTasks[id] = nil
         }
@@ -707,14 +709,15 @@ final class ComposerAttachmentCoordinator {
             } catch is CancellationError {
                 // Tile is being removed — leave it.
             } catch {
-                // Upload failed → mark `.failed`. Does NOT block Send (a `.dualText`
-                // tile is excluded from the send-gating helpers); the file rides
-                // inline-only this turn. NO silent retry, NO revert.
+                // Upload failed → `.failed`, or `.refused(reason)` on a terminal
+                // error. Does NOT block Send (a `.dualText` tile is excluded from
+                // the send-gating helpers); the file rides inline-only this turn.
+                // NO silent retry, NO revert.
                 guard let self,
                       let i = self.staged.firstIndex(where: { $0.id == id }),
                       self.staged[i].serverOwnerRef == ref,
                       self.staged[i].serverOwnerSnapshot == snapshot else { return }
-                self.staged[i].serverUploadState = .failed
+                self.staged[i].serverUploadState = .failure(for: error)
             }
             self?.uploadTasks[id] = nil
         }
@@ -1109,11 +1112,14 @@ final class ComposerAttachmentCoordinator {
     /// `serverStoredKeys` — so the retry overwrites the partial blob instead of
     /// orphaning it under a fresh key), flipping the tile back to `.uploading(0)`.
     /// `vm` may be nil (VM-less new chat): the fallback mint goes flat.
+    /// Guarded on `serverUploadRetryable`, not `serverUploadFailed`: the strip
+    /// shows no Retry on a `.refused` tile, and a programmatic call must not
+    /// re-open one.
     func retryServerUpload(id: UUID, vm: ConversationDetailViewModel?) {
         guard !dispatchInProgress else { return }
         guard let index = staged.firstIndex(where: { $0.id == id }),
               case .serverFile(let url, let originalName, _) = staged[index].kind,
-              staged[index].serverUploadFailed,
+              staged[index].serverUploadRetryable,
               let ref = staged[index].serverOwnerRef,
               let snapshot = staged[index].serverOwnerSnapshot else { return }
         staged[index].serverUploadState = .uploading(progress: 0)
@@ -1177,7 +1183,7 @@ final class ComposerAttachmentCoordinator {
                       let i = self.staged.firstIndex(where: { $0.id == id }),
                       self.staged[i].serverOwnerRef == ref,
                       self.staged[i].serverOwnerSnapshot == snapshot else { return }
-                self.staged[i].serverUploadState = .failed
+                self.staged[i].serverUploadState = .failure(for: error)
             }
             self?.uploadTasks[id] = nil
         }

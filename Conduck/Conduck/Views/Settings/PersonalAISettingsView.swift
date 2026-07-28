@@ -18,7 +18,7 @@
 // (The global Startup / Session landing-UX pickers now live on the ROOT
 //  Settings page — `SettingsView` — directly below the "AI & Voice" section.)
 //
-// Per-gateway config (URL / token / cert / Test / Forget / TOFU banner) lives in
+// Per-gateway config (URL / token / cert / Test / Forget) lives in
 // `RemoteAgentConfigBody` (PURE CONFIG, no in-detail Set-as-Default), pushed via
 // `RemoteAgentDetailView`. macOS is `MacPersonalAICategory` (same model). One
 // `navigationDestination` keyed on `PersonalAIRoute` serves both the chooser and

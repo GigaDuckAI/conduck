@@ -122,13 +122,19 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
     /// Confined to `queue` (the delegate queue's `underlyingQueue`), so it is
     /// mutated with `queue.async` and NEVER `queue.sync` — the delegate
     /// callbacks already execute on `queue` and a sync hop would deadlock.
-    /// Cross-launch resume needs nothing: the set is empty in the new process and
+    /// Cross-launch resume needs nothing: the registry is empty in the new process and
     /// `entry == nil`, which already takes the resurrected-task failure path.
-    private var pinRejectedTaskIDs = Set<Int>()
+    /// Stores the WHOLE `AttemptTrustSignals` snapshot per task rather than a
+    /// verdict per set: "untrusted certificate", "pinned key mismatch" and "key
+    /// Conduck cannot fingerprint" are three verdicts with three remedies, and
+    /// splitting them across sets both invites pairing one task's verdict with
+    /// another's and drops `pinComparisonUnsupported` — the only thing that
+    /// separates the third from an interception warning.
+    private var trustSignalsByTaskID: [Int: RemoteAgentTrustEvaluator.AttemptTrustSignals] = [:]
 
     /// Task identifiers whose response body exceeded
     /// `Constants.maxBackgroundResponseBytes` and were cancelled for it. Same
-    /// registry pattern as `pinRejectedTaskIDs`, for the same reason: a bare
+    /// registry pattern as `trustSignalsByTaskID`, for the same reason: a bare
     /// `task.cancel()` is indistinguishable from a user cancel, which would
     /// abort the turn with a Retry chip and NO error surfaced anywhere.
     /// Queue-confined.
@@ -574,9 +580,10 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     /// follows redirects and never delivers `willPerformHTTPRedirection`, so this
     /// callback is the only point at which a cross-host hop can be pushed back on.
     ///
-    /// A cancelled challenge — pin mismatch OR a refused cross-host hop — reaches
-    /// `didCompleteWithError` as `URLError.cancelled`, which is byte-identical to
-    /// a user cancel. It is told apart by `pinRejectedTaskIDs`, noted here and
+    /// A cancelled challenge — untrusted chain, pin mismatch, or a refused
+    /// cross-host hop — reaches `didCompleteWithError` as `URLError.cancelled`,
+    /// which is byte-identical to a user cancel. It is told apart by
+    /// `trustSignalsByTaskID`, noted here and
     /// consulted BEFORE that disambiguation, because this long-lived shared
     /// session cannot read the per-challenge evaluator instance the foreground
     /// hop reads.
@@ -591,19 +598,22 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        // A non-nil pin was recovered → enforce it (match → useCredential;
-        // mismatch → cancel). Compare delegated to the generic evaluator.
+        // A non-nil pin was recovered → enforce it ON TOP of system trust
+        // (system rejects the chain → cancel; match → useCredential; mismatch →
+        // cancel). Both the evaluation and the compare are delegated to the
+        // generic evaluator.
         let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: pin)
         let taskID = task.taskIdentifier
         evaluator.urlSession(session, didReceive: challenge) { disposition, credential in
-            // The evaluator answers `.cancelAuthenticationChallenge` ONLY on a
-            // pinned-cert mismatch (or an SPKI it could not extract under a
-            // configured pin), and it is reached only when a pin was recovered —
-            // so a cancel HERE is a pin rejection, full stop. Noted BEFORE the
-            // handler is forwarded so the record is in place by the time
-            // URLSession reports the resulting `.cancelled`.
-            if disposition == .cancelAuthenticationChallenge {
-                self.queue.async { self.pinRejectedTaskIDs.insert(taskID) }
+            // Record the evaluator's OWN verdicts rather than inferring from the
+            // disposition: a cancel here can mean either "this device does not
+            // trust the chain" or "the pinned key did not match", and the two
+            // must not be collapsed. Noted BEFORE the handler is forwarded so
+            // the record is in place by the time URLSession reports the
+            // resulting `.cancelled`.
+            let signals = evaluator.attemptSignals
+            if signals != .empty {
+                self.queue.async { self.trustSignalsByTaskID[taskID] = signals }
             }
             completionHandler(disposition, credential)
         }
@@ -642,11 +652,12 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             let entry = self.inFlight.removeValue(forKey: id)
             let buffered = self.responseBuffers.removeValue(forKey: id) ?? Data()
 
-            // Consume both per-task delegate notes. Each records a reason THIS
-            // delegate cancelled the task, and both surface as `.cancelled` — so
-            // they must be read before the user-cancel disambiguation below, and
-            // removed on every exit path so the sets cannot grow.
-            let pinRejected = self.pinRejectedTaskIDs.remove(id) != nil
+            // Consume every per-task delegate note. Each records a reason THIS
+            // delegate cancelled the task, and all of them surface as
+            // `.cancelled` — so they must be read before the user-cancel
+            // disambiguation below, and removed on every exit path so the sets
+            // cannot grow.
+            let trustSignals = self.trustSignalsByTaskID.removeValue(forKey: id) ?? .empty
             let responseOverCap = self.overCapTaskIDs.remove(id) != nil
 
             // A turn with no awaiting continuation is FIRE-AND-FORGET (the
@@ -687,25 +698,37 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         }
                         return
                     }
-                    // OUR pin rejection (the task-level trust handler cancelled
-                    // the challenge). Classification is delegated to the ONE
+                    // OUR certificate refusal (the task-level trust handler
+                    // cancelled the challenge) — either an untrusted chain or a
+                    // pinned-key mismatch. Classification is delegated to the ONE
                     // shared classifier the foreground hop uses, so the two
                     // converse lanes can never drift on what counts as a
-                    // certificate failure. With `pinRejected == false` the
-                    // classifier returns `.cancelled` and nothing below changes —
-                    // the user-cancel arm is deliberately NOT broadened.
-                    if pinRejected,
-                       RemoteAgentTrustEvaluator.classifyTransportError(
-                           urlError.code,
-                           hasPin: true,
-                           systemTrustRejected: false,
-                           pinRejected: true
-                       ) == .certMismatch {
-                        resolve(.failure(AppError.remoteAgentCertMismatch))
-                        if let cid = conversationID {
-                            self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: .remoteAgentCertMismatch, notifyUser: notifyUserOnFailure)
+                    // certificate failure. With no verdict recorded the classifier
+                    // returns `.cancelled` and nothing below changes — the
+                    // user-cancel arm is deliberately NOT broadened. The two
+                    // classes stay APART: an untrusted chain is fixed on the
+                    // server, a pin mismatch in Settings. Neither is retryable.
+                    if trustSignals != .empty {
+                        let certError: AppError?
+                        switch RemoteAgentTrustEvaluator.classifyTransportError(
+                            urlError.code,
+                            signals: trustSignals
+                        ) {
+                        case .untrustedCert: certError = .remoteAgentCertUntrusted
+                        case .certMismatch: certError = .remoteAgentCertMismatch
+                        // Third class, kept apart from both: system trust
+                        // passed and the pin was never compared, so neither a
+                        // server fix nor an interception warning applies.
+                        case .certKeyUnpinnable: certError = .remoteAgentCertKeyUnpinnable
+                        case .timeout, .unreachable, .cancelled: certError = nil
                         }
-                        return
+                        if let certError {
+                            resolve(.failure(certError))
+                            if let cid = conversationID {
+                                self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: certError, notifyUser: notifyUserOnFailure)
+                            }
+                            return
+                        }
                     }
                     if urlError.code == .cancelled {
                         // Disambiguate by the in-memory registry:
@@ -890,8 +913,12 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
              .serverCertificateHasBadDate,
              .serverCertificateHasUnknownRoot,
              .serverCertificateNotYetValid:
-            // The system NAMED the certificate as the cause → cert mismatch.
-            return .remoteAgentCertMismatch
+            // The SYSTEM named the certificate as the cause and refused the
+            // chain before any pin could apply — untrusted, not a mismatch. A
+            // genuine pin mismatch reaches the caller with `pinRejected` set and
+            // is classified there; this arm has no per-challenge signals to
+            // read, so it must not claim a fingerprint disagreed.
+            return .remoteAgentCertUntrusted
         case .secureConnectionFailed:
             // GENERIC SSL failure (`-1200`) — NOT a certificate-trust signal on
             // its own. This long-lived background session can't read the
@@ -1132,7 +1159,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     /// thread without speaking a stale prior reply.
     static func postFailureNotification(conversationID: UUID, error: AppError?) async {
         let content = UNMutableNotificationContent()
-        content.title = String(localized: "Couldn't reach your personal AI")  // xcstrings
+        content.title = failureNotificationTitle(for: error)
         // PRIVACY (never reveal gateway URLs — see the spec's Privacy & Security section): cases that
         // interpolate an UNDERLYING error's text (`.networkError` /
         // `.decodingError` / `.unknown` wrap a URLError whose description can
@@ -1145,6 +1172,17 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         switch error {
         case .some(.networkError), .some(.decodingError), .some(.unknown):
             content.body = AppError.remoteAgentUnreachable.errorDescription ?? fallback
+        // The certificate verdicts carry their REMEDY into the notification.
+        // This is a headless turn: the user was not watching, so this push may
+        // be the only place the verdict is read for hours. The cause alone
+        // leaves an untrusted chain with no server-side fix to act on, and
+        // strips the "may be intercepted" warning off a pin mismatch — that
+        // sentence lives entirely in the remedy half. On an unpinnable key the
+        // remedy carries the whole reassurance ("the certificate itself is fine
+        // and this device trusts it"), so the cause alone reads as a server
+        // fault the user would go hunting at whatever hour the push arrives.
+        case .some(let appError) where Self.isCertificateVerdict(appError):
+            content.body = appError.descriptionWithRecovery
         case .some(let appError):
             content.body = appError.errorDescription ?? fallback
         case nil:
@@ -1159,6 +1197,70 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             trigger: nil
         )
         try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    /// The failure notification's TITLE, derived from the error rather than
+    /// fixed. A constant "Couldn't reach your personal AI" asserts a cause —
+    /// the gateway was never reached — for every failure alike, and a
+    /// certificate refusal is the case where that assertion does real damage:
+    /// the connection DID reach the server, this device rejected what it
+    /// presented, and the title sends the user hunting an outage on a machine
+    /// that is running perfectly. The three certificate families keep separate
+    /// titles for the reason they keep separate copy everywhere else — their
+    /// remedies disagree: one is server-side, one is "stop and check", and one
+    /// says the server is already correct.
+    private static func failureNotificationTitle(for error: AppError?) -> String {
+        switch error {
+        case .some(.remoteAgentCertUntrusted), .some(.sttCustomCertUntrusted),
+             .some(.ttsCustomCertUntrusted), .some(.fileTransferCertUntrusted):
+            return String(localized: "remoteAgent.notification.failure.certUntrusted.title",
+                          defaultValue: "Certificate not trusted")
+        case .some(.remoteAgentCertMismatch), .some(.sttCustomCertMismatch),
+             .some(.ttsCustomCertMismatch), .some(.fileTransferCertMismatch):
+            return String(localized: "remoteAgent.notification.failure.certMismatch.title",
+                          defaultValue: "Certificate doesn't match")
+        case .some(.remoteAgentCertKeyUnpinnable), .some(.sttCustomCertKeyUnpinnable),
+             .some(.ttsCustomCertKeyUnpinnable), .some(.fileTransferCertKeyUnpinnable):
+            // Names the CHECK, never the certificate: this device trusted the
+            // chain, so a title implying a bad certificate would contradict the
+            // body's "the certificate itself is fine" one line later — and the
+            // mismatch title above would announce a disagreement that never
+            // happened.
+            return String(localized: "remoteAgent.notification.failure.certKeyUnpinnable.title",
+                          defaultValue: "Fingerprint can't be checked")
+        // The reachability class — the only one the original title was ever
+        // true for. `.networkError` / `.decodingError` / `.unknown` belong here
+        // because the body above maps them to the unreachable copy, so title
+        // and body have to agree.
+        case .some(.remoteAgentUnreachable), .some(.remoteAgentTimeout),
+             .some(.networkError), .some(.decodingError), .some(.unknown),
+             .some(.noInternetConnection), .some(.requestTimeout),
+             .some(.persistentNetworkFailure):
+            return String(localized: "Couldn't reach your personal AI")  // xcstrings
+        default:
+            // Everything the gateway ANSWERED — and the nil case, where the
+            // cause is unknown and must not be guessed at.
+            return String(localized: "remoteAgent.notification.failure.title",
+                          defaultValue: "No reply from your personal AI")
+        }
+    }
+
+    /// The three certificate families across every lane. Grouped ONLY where all
+    /// three share a property — here, that the half of their copy a user has to
+    /// act on lives in `recoverySuggestion`, so a surface rendering the cause
+    /// alone silently drops it. They are never collapsed into one message.
+    private static func isCertificateVerdict(_ error: AppError) -> Bool {
+        switch error {
+        case .remoteAgentCertUntrusted, .sttCustomCertUntrusted,
+             .ttsCustomCertUntrusted, .fileTransferCertUntrusted,
+             .remoteAgentCertMismatch, .sttCustomCertMismatch,
+             .ttsCustomCertMismatch, .fileTransferCertMismatch,
+             .remoteAgentCertKeyUnpinnable, .sttCustomCertKeyUnpinnable,
+             .ttsCustomCertKeyUnpinnable, .fileTransferCertKeyUnpinnable:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Post the turn-completion signal (`.remoteAgentTurnDidComplete`, userInfo
@@ -1522,13 +1624,18 @@ enum FileTransferOutputDetector {
 
     /// Whether a single probe outcome is DEFINITIVE for scan-completeness: only a
     /// real present/absent verdict (`.exists` / `.missing`) lets a retro pass mark
-    /// the turn `outputScanDone`. `.unauthorized` / `.serverError` / `.unknown`
-    /// are transient/inconclusive — the pass stays unmarked so a later thread
-    /// open retries. Pure + content-free; internal for the test target.
+    /// the turn `outputScanDone`. `.unauthorized` / `.serverError` / `.unknown` /
+    /// `.certRefused` are inconclusive — the pass stays unmarked so a later
+    /// thread open retries. Pure + content-free; internal for the test target.
+    ///
+    /// `.certRefused` is inconclusive despite being TERMINAL for the attempt
+    /// that produced it: the refusal says nothing about whether the file exists,
+    /// and the user can fix the certificate, so a later open must re-probe
+    /// rather than permanently stamp a scan that learned nothing.
     static func probeIsConclusive(_ outcome: FileProbeOutcome) -> Bool {
         switch outcome {
         case .exists, .missing: return true
-        case .unauthorized, .serverError, .unknown: return false
+        case .unauthorized, .serverError, .certRefused, .unknown: return false
         }
     }
 

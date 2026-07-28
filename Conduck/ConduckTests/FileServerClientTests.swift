@@ -500,14 +500,34 @@ final class FileServerClientTests: XCTestCase {
 
     // MARK: - Transport-error classification (staged test)
 
+    /// One attempt's verdicts, STATED IN FULL — the shape the probe seam takes.
+    /// Nothing here is inferred from the snapshot's pin: a seam that derived
+    /// `challengeRefused` from "a pin is configured" let these cases lock a
+    /// shape production never produces (a cold tunnel raises no challenge, so
+    /// nothing can have refused it), and it kept alive on a test path the exact
+    /// pin-as-proxy the classifier removed.
+    private func signals(
+        systemTrustRejected: Bool = false,
+        challengeRefused: Bool = false,
+        pinRejected: Bool = false,
+        pinComparisonUnsupported: Bool = false
+    ) -> @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals {
+        let snapshot = RemoteAgentTrustEvaluator.AttemptTrustSignals(
+            systemTrustRejected: systemTrustRejected,
+            challengeRefused: challengeRefused,
+            pinRejected: pinRejected,
+            pinComparisonUnsupported: pinComparisonUnsupported)
+        return { snapshot }
+    }
+
     func testTransportPinMismatchMapsToCertMismatch() async {
-        // Pin set + the evaluator confirmed the mismatch (`pinRejectedOverride`)
-        // → cert mismatch.
+        // The evaluator refused the challenge because the presented key
+        // disagreed with the pin → cert mismatch.
         MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
         let result = await FileServerClient.runConnectionTest(
             snapshot: makeSnapshot(fingerprint: "AA:BB:CC"),
             session: makeMockSession(),
-            pinRejectedOverride: { true }
+            signalsOverride: signals(challengeRefused: true, pinRejected: true)
         )
         XCTAssertFalse(result.success)
         guard case .fileTransferCertMismatch = result.failure else {
@@ -515,15 +535,36 @@ final class FileServerClientTests: XCTestCase {
         }
     }
 
+    func testTransportUnpinnableKeyMapsToItsOwnCode() async {
+        // The chain is system-trusted and NOTHING disagreed — the leaf's key
+        // algorithm is simply outside the SPKI prefix table, so the pin could
+        // not be computed. Borrowing `.fileTransferCertMismatch` here would tell
+        // a user with a perfectly good certificate that their connection may be
+        // intercepted, which is how people learn to dismiss the real warning.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
+        let result = await FileServerClient.runConnectionTest(
+            snapshot: makeSnapshot(fingerprint: "AA:BB:CC"),
+            session: makeMockSession(),
+            signalsOverride: signals(challengeRefused: true,
+                                     pinRejected: true,
+                                     pinComparisonUnsupported: true)
+        )
+        XCTAssertFalse(result.success)
+        guard case .fileTransferCertKeyUnpinnable = result.failure else {
+            return XCTFail("A key Conduck cannot fingerprint must keep its own code (got \(String(describing: result.failure))).")
+        }
+    }
+
     func testTransportPinTransientMapsToUnreachable() async {
         // THE FIX (file lane, pin path): a generic `.secureConnectionFailed`
         // with NO confirmed mismatch (cold tunnel) must be retryable, NOT a
-        // false cert mismatch.
+        // false cert mismatch. Nothing refused anything — the handshake never
+        // reached a certificate — so every verdict is false.
         MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
         let result = await FileServerClient.runConnectionTest(
             snapshot: makeSnapshot(fingerprint: "AA:BB:CC"),
             session: makeMockSession(),
-            pinRejectedOverride: { false }
+            signalsOverride: signals()
         )
         XCTAssertFalse(result.success)
         guard case .fileTransferUnreachable = result.failure else {
@@ -531,17 +572,56 @@ final class FileServerClientTests: XCTestCase {
         }
     }
 
-    func testTransportNoPinUntrustedMapsToUnreachable() async {
-        // No pin: the staged test never offers TOFU → an untrusted cert reads
-        // as unreachable (TOFU lives in the Settings save path).
+    func testTransportNoPinUntrustedMapsToCertUntrusted() async {
+        // No pin: the host ANSWERED and then this device refused its
+        // certificate. Folding that into `.fileTransferUnreachable` would tell
+        // the user to check whether their file server is running — a hunt for a
+        // problem that isn't there, and one that never leads to the real fix.
         MockURLProtocol.requestHandler = { _ in throw URLError(.serverCertificateUntrusted) }
         let result = await FileServerClient.runConnectionTest(
             snapshot: makeSnapshot(fingerprint: nil),
             session: makeMockSession()
         )
         XCTAssertFalse(result.success)
+        guard case .fileTransferCertUntrusted = result.failure else {
+            return XCTFail("An untrusted cert must name the certificate, not read as unreachable (got \(String(describing: result.failure))).")
+        }
+    }
+
+    func testTransportSystemTrustRejectionOutranksAPinRejection() async {
+        // The fail-closed arm reaches this lane too: the evaluator refuses a
+        // PINNED connection whose chain the device does not trust, and that must
+        // not be reported as "the pinned key changed" — the fingerprint was
+        // never the problem, so the pin-mismatch copy would send the user to fix
+        // the wrong thing.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
+        let result = await FileServerClient.runConnectionTest(
+            snapshot: makeSnapshot(fingerprint: "AA:BB:CC"),
+            session: makeMockSession(),
+            // The fail-closed arm's real shape: the evaluator cancelled, the
+            // system had objected, and no digest was ever compared.
+            signalsOverride: signals(systemTrustRejected: true, challengeRefused: true)
+        )
+        XCTAssertFalse(result.success)
+        guard case .fileTransferCertUntrusted = result.failure else {
+            return XCTFail("An untrusted chain must NOT be reported as a pin mismatch (got \(String(describing: result.failure))).")
+        }
+    }
+
+    func testTransportSystemTrustSignalDoesNotFireOnAColdTunnel() async {
+        // Both trust signals are POSITIVE: a transient `-1200` never reached a
+        // certificate challenge, so neither is set and the lane stays retryable.
+        // This is the regression the classifier exists to prevent, re-locked at
+        // the seam that now carries the real signal.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
+        let result = await FileServerClient.runConnectionTest(
+            snapshot: makeSnapshot(fingerprint: "AA:BB:CC"),
+            session: makeMockSession(),
+            signalsOverride: signals()
+        )
+        XCTAssertFalse(result.success)
         guard case .fileTransferUnreachable = result.failure else {
-            return XCTFail("No-pin untrusted cert during the staged test reads as unreachable, not a TOFU offer (got \(String(describing: result.failure))).")
+            return XCTFail("A cold tunnel must stay retryable (got \(String(describing: result.failure))).")
         }
     }
 }

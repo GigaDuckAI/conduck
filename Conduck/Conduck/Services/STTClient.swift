@@ -298,14 +298,18 @@ actor STTClient {
         // TRUST/SESSION: cloud providers (`dynamicEndpointKey == nil`) keep the
         // shared session (zero behavior change, default ATS). The BYO custom
         // provider gets a per-call session with a `RemoteAgentTrustEvaluator`
-        // (nil pin → default ATS; pin set → SHA-256 leaf-cert pinning), torn
-        // down on exit. The generic evaluator is reused verbatim.
+        // (nil pin → system trust alone; pin set → system trust AND a matching
+        // SHA-256 leaf key), torn down on exit. The generic evaluator is reused
+        // verbatim.
         let session: URLSession
+        let trustEvaluator: RemoteAgentTrustEvaluator?
         if provider.dynamicEndpointKey != nil {
             let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: customConfig?.certFingerprint)
             session = URLSession(configuration: .ephemeral, delegate: evaluator, delegateQueue: nil)
+            trustEvaluator = evaluator
         } else {
             session = .shared
+            trustEvaluator = nil
         }
         // Only the per-call custom session is owned here — never invalidate the
         // shared session.
@@ -329,7 +333,7 @@ actor STTClient {
                 let (data, response) = try await performRequest(
                     request,
                     session: session,
-                    isCustomEndpoint: provider.dynamicEndpointKey != nil
+                    trustEvaluator: trustEvaluator
                 )
                 return try parseResponse(data: data, response: response, provider: provider)
             } catch let error as AppError {
@@ -346,6 +350,12 @@ actor STTClient {
                 if attempt + 1 >= error.maxAttempts {
                     break
                 }
+            } catch is CancellationError {
+                // Propagate, never retry. A cancelled attempt says the caller
+                // stopped wanting the answer; re-issuing it burns the user's own
+                // STT budget on a transcript nothing will read, and collapsing it
+                // into `lastError` would surface a network failure for an abort.
+                throw CancellationError()
             } catch {
                 lastError = .networkError(error)
             }
@@ -370,37 +380,70 @@ actor STTClient {
     /// behavior change) and a per-call pinned ephemeral session for the BYO
     /// custom endpoint (see `transcribe(...)`).
     ///
-    /// `isCustomEndpoint` is true ONLY for the BYO custom provider — it gates
-    /// the server-certificate URLError → `sttCustomCertMismatch` mapping (the
-    /// `RemoteAgentTrustEvaluator` cancels a pinned-fingerprint mismatch, which
-    /// URLSession surfaces as one of the server-cert / secure-connection
-    /// failures). Cloud providers can never hit the pin path, so their cert
-    /// failures stay generic network errors (zero behavior change).
+    /// `trustEvaluator` is non-nil ONLY for the BYO custom endpoint (the frozen
+    /// cloud providers ride `.shared` under plain ATS). It is what makes a
+    /// certificate verdict legible: the evaluator FAILS CLOSED on a chain this
+    /// device rejects, and URLSession reports that cancel as a bare `.cancelled`
+    /// (-999) — indistinguishable from a user abort from the code alone. Reading
+    /// the evaluator's signals through the shared classifier is therefore the
+    /// only way this lane can tell "the device refused the certificate" from "a
+    /// pin disagreed" from "the tunnel was cold".
     private func performRequest(
         _ request: URLRequest,
         session: URLSession,
-        isCustomEndpoint: Bool
+        trustEvaluator: RemoteAgentTrustEvaluator?
     ) async throws -> (Data, URLResponse) {
         do {
             return try await session.data(for: request)
         } catch let error as URLError {
+            if let trustEvaluator {
+                // The instance form: every signal comes from ONE snapshot of the
+                // attempt that just failed. The loose-Bool overload cannot carry
+                // `pinComparisonUnsupported`, so a lane on it reports an
+                // unfingerprintable key as a pin mismatch — an interception
+                // warning on a certificate the system accepted.
+                switch trustEvaluator.classifyTransportError(error.code) {
+                case .untrustedCert:
+                    throw AppError.sttCustomCertUntrusted
+                case .certMismatch:
+                    throw AppError.sttCustomCertMismatch
+                case .certKeyUnpinnable:
+                    // System trust passed and the pin could not be computed for
+                    // this key algorithm — its own code, so the user is told
+                    // the key type is the problem rather than warned about an
+                    // interception that nothing here is evidence of.
+                    throw AppError.sttCustomCertKeyUnpinnable
+                case .timeout, .unreachable, .cancelled:
+                    // No certificate verdict — the classifier's transport
+                    // classes carry no per-lane copy, so fall through to the
+                    // code mapping that already owns the STT taxonomy. A cold
+                    // tunnel's generic `.secureConnectionFailed` lands here
+                    // (both trust signals are POSITIVE) and stays retryable;
+                    // `.cancelled` lands on the arm below that preserves it as a
+                    // cancel.
+                    break
+                }
+            }
             switch error.code {
             case .notConnectedToInternet, .networkConnectionLost:
                 throw AppError.noInternetConnection
             case .timedOut:
                 throw AppError.requestTimeout
-            case .serverCertificateUntrusted where isCustomEndpoint,
-                 .serverCertificateHasBadDate where isCustomEndpoint,
-                 .serverCertificateHasUnknownRoot where isCustomEndpoint,
-                 .serverCertificateNotYetValid where isCustomEndpoint:
-                // Only the custom endpoint pins — a pinned-fingerprint mismatch
-                // cancels the challenge, which URLSession reports as one of
-                // these SPECIFIC server-certificate codes. The GENERIC
-                // `.secureConnectionFailed` is deliberately NOT here: it also
-                // fires for transient cold-tunnel handshake hiccups, so it must
-                // fall through to a retryable `.networkError` rather than a
-                // false hard cert mismatch.
-                throw AppError.sttCustomCertMismatch
+            case .cancelled:
+                // The classifier already ruled out the evaluator's own refusals
+                // above, so a `-999` reaching here is a genuine cancellation —
+                // the user backing out of a recording, a superseded turn, a
+                // structured-concurrency cancel. Preserved AS a cancellation
+                // (mirroring `RemoteAgentClient.mapTransportError`) rather than
+                // wrapped in `.networkError`, which is RETRYABLE: that spent two
+                // more attempts plus their backoff on a request nobody is waiting
+                // for, and then reported "persistent network failure" — a
+                // save-for-retry-eligible verdict — for an abort the user
+                // performed deliberately. Handled for the frozen cloud providers
+                // too, not just the evaluator-bearing custom endpoint: a cancel is
+                // a cancel on every lane, and splitting it would be exactly the
+                // drift the shared classifier exists to prevent.
+                throw CancellationError()
             default:
                 // `.networkError` wraps the URLError — URLError's
                 // `localizedDescription` does NOT contain header material.

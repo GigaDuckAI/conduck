@@ -1238,8 +1238,18 @@ final class ConversationDetailViewModel {
     /// user-facing description AND numeric code (drives the Troubleshoot
     /// deep-link into Diagnostics). Use this instead of assigning `sendError`
     /// directly so the message and code can never diverge.
+    ///
+    /// Cause AND remedy (`descriptionWithRecovery`), matching the failed-turn
+    /// row this banner stands in for while that row is offscreen: the two are
+    /// the same verdict seen from two scroll positions, so the banner cannot
+    /// carry less. It matters most for the failures whose remedy is the whole
+    /// point — a certificate the device refused is fixed on the SERVER, and a
+    /// pinned key that disagreed with a trusted chain carries an interception
+    /// warning that lives only in the remedy half. `descriptionWithRecovery`
+    /// drops the generic "Try again." rather than appending it, so a terminal
+    /// refusal never gains a retry invitation here.
     func setSendError(_ error: AppError, messageID: UUID? = nil) {
-        sendError = error.errorDescription
+        sendError = error.descriptionWithRecovery
         sendErrorCode = error.errorCode
         sendErrorMessageID = messageID
     }
@@ -1651,8 +1661,7 @@ final class ConversationDetailViewModel {
                     newUserImageFileRefs: newUserImageFileRefs,
                     newUserTextFileServerRefs: newUserTextFileServerRefs,
                     fileServerReady: dispatchFileLane != nil,
-                    session: pinnedSession,
-                    trustEvaluator: trustEvaluator
+                    transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
                 )
                 // Cooperative-cancel check: a Cancel tapped between the reply
                 // landing and this point should drop the reply.
@@ -2058,6 +2067,24 @@ final class ConversationDetailViewModel {
     /// is a no-op.
     func retry(_ message: MessageRecord, omittingPhotos: Bool = false) async {
         guard message.role == "user", message.status == "failed" else { return }
+        // A plain re-fire of a TERMINAL failure sends the identical request into
+        // the identical refusal — a certificate this device won't accept, a
+        // rejected token, a URL that isn't an AI endpoint. The affordance is
+        // gated where it's offered, so reaching here on a terminal code means a
+        // caller that gates only on role/status; re-assert the stored verdict
+        // rather than burn a request or no-op silently under the user's tap.
+        //
+        // `omittingPhotos` is EXEMPT: dropping the photo makes it a materially
+        // different request, which is the whole point of "Resend without photo"
+        // on a photo decline — a verdict about the photo cannot govern a send
+        // that no longer carries one.
+        if !omittingPhotos, let failureCode = message.failureCode {
+            let storedFailure = AppError.from(errorCode: failureCode, message: nil)
+            guard storedFailure.isRetryable else {
+                setSendError(storedFailure, messageID: message.id)
+                return
+            }
+        }
         clearSendError()
 
         #if os(macOS)
@@ -2308,8 +2335,7 @@ final class ConversationDetailViewModel {
                     newUserImageFileRefs: newUserImageFileRefs,
                     newUserTextFileServerRefs: newUserTextFileServerRefs,
                     fileServerReady: readyOutputLane != nil,
-                    session: pinnedSession,
-                    trustEvaluator: trustEvaluator
+                    transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
                 )
                 guard !Task.isCancelled else { return }
                 // Same persistence-first ordering as the original-send path.

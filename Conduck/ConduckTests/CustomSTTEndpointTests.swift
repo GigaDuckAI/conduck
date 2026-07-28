@@ -15,8 +15,8 @@
 //     custom provider carries `dynamicEndpointKey != nil`, so only it selects a
 //     pinning session — every cloud provider stays on `URLSession.shared`.
 //
-// The full staged Test suite (request shape, `.openAICompat` decode, TOFU, pin
-// mismatch) is covered in `STTConnectionTestSuiteTests` via the MockURLProtocol
+// The full staged Test suite (request shape, `.openAICompat` decode, untrusted
+// certificate, pin mismatch) is covered in `STTConnectionTestSuiteTests` via the MockURLProtocol
 // seam. The live custom-server round-trip + iCloud-Keychain sync of the custom
 // key are signed/hardware founder gates.
 //

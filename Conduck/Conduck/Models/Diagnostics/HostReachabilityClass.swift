@@ -59,13 +59,13 @@ enum HostReachabilityClass: Equatable, Sendable {
     static func classify(_ host: String?, transportHint: String? = nil) -> HostReachabilityClass {
         // Secondary signal first: an explicit tailnet transport overrides a
         // public-looking host. Only `.tailscale` implies the private tailnet;
-        // `.funnel` (public egress), `.cloudflare`, `.public`, `.selfsigned` say
-        // nothing about locality.
+        // `.funnel` (public egress), `.cloudflare` and `.public` say nothing
+        // about locality.
         if let raw = transportHint, let transport = PairingPayload.Transport(rawValue: raw) {
             switch transport {
             case .tailscale:
                 return .tailscale
-            case .funnel, .cloudflare, .publicCert, .selfsigned:
+            case .funnel, .cloudflare, .publicCert:
                 break
             }
         }

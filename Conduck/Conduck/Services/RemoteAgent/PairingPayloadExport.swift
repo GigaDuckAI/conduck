@@ -87,15 +87,12 @@ enum PairingPayloadExport {
         let token: String?
         /// Optional model override — omitted when nil/empty (built-ins omit it).
         let model: String?
-        /// Pinned SPKI SHA-256 hex — omitted unless self-signed.
-        let certFP: String?
     }
 
     /// The optional agent file-server half.
     struct FileServer: Equatable, Sendable {
         let url: String
         let credential: String
-        let certFP: String?
     }
 
     /// A complete v1 payload ready to serialize.
@@ -120,9 +117,8 @@ enum PairingPayloadExport {
     /// Serialize a payload to `conduck-setup:v1:<base64(minified JSON)>`. Pure +
     /// deterministic — the golden-vector tests assert exact equality against the
     /// bash wizard's output. Key order is FIXED to the wizard's python insertion
-    /// order: gateway `{kind, url, auth, name?, token?, model?, certFP?}`;
-    /// top-level `{v, gateway, transport, fileServer?}`; fileServer
-    /// `{url, credential, certFP?}`.
+    /// order: gateway `{kind, url, auth, name?, token?, model?}`; top-level
+    /// `{v, gateway, transport, fileServer?}`; fileServer `{url, credential}`.
     ///
     /// The `fileServer` block is emitted ONLY when the payload carries one whose
     /// `url` AND `credential` are both non-empty — matching the wizard's
@@ -146,9 +142,6 @@ enum PairingPayloadExport {
         if let model = gateway.model, !model.isEmpty {
             gatewayJSON += ",\"model\":" + pythonJSONString(model)
         }
-        if let certFP = gateway.certFP, !certFP.isEmpty {
-            gatewayJSON += ",\"certFP\":" + pythonJSONString(certFP)
-        }
         gatewayJSON += "}"
 
         var json = "{"
@@ -160,9 +153,6 @@ enum PairingPayloadExport {
             var fileServerJSON = "{"
             fileServerJSON += "\"url\":" + pythonJSONString(fileServer.url)
             fileServerJSON += ",\"credential\":" + pythonJSONString(fileServer.credential)
-            if let certFP = fileServer.certFP, !certFP.isEmpty {
-                fileServerJSON += ",\"certFP\":" + pythonJSONString(certFP)
-            }
             fileServerJSON += "}"
             json += ",\"fileServer\":" + fileServerJSON
         }
@@ -264,21 +254,19 @@ enum PairingPayloadExport {
             token = nil
         }
 
-        let certFP = await manager.getRemoteAgentCertFingerprint(for: ref)
-
-        // Transport: the stored per-ref hint when a pairing left one; otherwise a
-        // safe default the parser round-trips. A pinned (self-signed) gateway →
-        // `selfsigned`, so an importing device inherits the gateway pin for a
-        // same-host file server (see `SettingsViewModel+PairingImport`
-        // fileServer-pin logic); everything else → `public` (publicly-trusted
-        // cert, no device-side install, no special import behavior). Chosen over
-        // omitting the field so the wizard byte-parity and the file-lane pin
-        // inheritance both hold for a hand-configured, never-paired gateway.
+        // Transport: the stored per-ref hint when a pairing left one; otherwise
+        // `public`. Chosen over omitting the field so wizard byte-parity holds
+        // for a hand-configured, never-paired gateway too.
+        //
+        // A LOCALLY STORED CERTIFICATE PIN NEVER RIDES OUT. It is a per-device
+        // tightening the user typed in for a certificate THIS device already
+        // trusts; the importing device has its own trust store and decides for
+        // itself, against the live server. Exporting the pin would push one
+        // device's private narrowing onto another as if it were a fact about
+        // the server — and would break that device on ordinary renewal.
         let transport: String
         if let hint = await manager.getRemoteAgentTransportHint(for: ref), !hint.isEmpty {
             transport = hint
-        } else if let certFP, !certFP.isEmpty {
-            transport = PairingPayload.Transport.selfsigned.rawValue
         } else {
             transport = PairingPayload.Transport.publicCert.rawValue
         }
@@ -288,21 +276,16 @@ enum PairingPayloadExport {
             url: url.absoluteString,
             authScheme: authScheme,
             token: token,
-            model: model,
-            certFP: certFP
+            model: model
         )
 
         // File server: emitted iff BOTH url + credential exist (the wizard's
-        // `if FS_URL and FS_CRED`); its pin rides only when one is stored.
+        // `if FS_URL and FS_CRED`).
         var fileServer: FileServer?
         if let fsURL = await manager.getFileServerURL(for: ref),
            EndpointURLPolicy.isAdmissible(fsURL),
            let credential = await manager.getFileServerCredential(for: ref), !credential.isEmpty {
-            fileServer = FileServer(
-                url: fsURL.absoluteString,
-                credential: credential,
-                certFP: await manager.getFileServerCertFingerprint(for: ref)
-            )
+            fileServer = FileServer(url: fsURL.absoluteString, credential: credential)
         }
 
         return Payload(gateway: gateway, transport: transport, fileServer: fileServer)

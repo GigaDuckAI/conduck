@@ -2562,7 +2562,8 @@ actor SettingsManager {
     /// never drift (a key added to one list but not the other would sync on
     /// live changes yet be missing on a fresh install, or vice versa).
     /// NEVER widen to a blanket `fileServer.` scan: `certFingerprint.` is a
-    /// per-device TOFU pin, `keepImagesInline.` is the retired legacy bool,
+    /// per-device pin (an optional tightening on top of system trust, never
+    /// synced), `keepImagesInline.` is the retired legacy bool,
     /// and `testedLocally.`/`folderProbeRevision.`/`folderProbeAttempt.` are
     /// device-local probe provenance — all mirror-banned.
     private static let fileServerMirroredURLPrefix = "fileServer.url."
@@ -4234,8 +4235,8 @@ actor SettingsManager {
         // peer devices already believe). The `testedLocally` seed MUST land
         // first: after a remote `available=true` is written into defaults, a
         // local `available=true` no longer proves this device tested locally.
-        // Excluded by design: `fileServer.certFingerprint.*` (per-device TOFU
-        // pin) + `fileServer.keepImagesInline.*` (retired legacy, mirror-banned)
+        // Excluded by design: `fileServer.certFingerprint.*` (per-device pin,
+        // never synced) + `fileServer.keepImagesInline.*` (retired legacy, mirror-banned)
         // + the local-only probe bookkeeping keys (`testedLocally.` /
         // `folderProbeRevision.` / `folderProbeAttempt.` — never in KVS).
         ensureFileServerTestedLocallySeeded()
@@ -4553,8 +4554,9 @@ actor SettingsManager {
         // — matches the `watchReadRepliesAloudKey` block). `available=true`
         // arriving here means ANOTHER device passed the staged test; this
         // device adopts the verdict (the flag was dual-written to KVS for
-        // exactly this since day one). A self-signed setup whose pin is
-        // per-device degrades to a VISIBLE per-upload failure on this device —
+        // exactly this since day one). An optional pin is per-device (never
+        // synced), so a rotated-but-still-trusted cert this device hasn't
+        // re-pinned degrades to a VISIBLE per-upload failure on this device —
         // strictly better than the silent-off lane this mirror fixes.
         // `testedLocally` stays false: adoption is not local proof (it gates
         // the silent re-probe, not uploads).

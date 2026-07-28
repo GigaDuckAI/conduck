@@ -238,8 +238,10 @@ final class WSDDeclinedTurnTests: XCTestCase {
         )
         XCTAssertEqual(known.kind, .generic)
         XCTAssertEqual(known.title, "No reply")
-        XCTAssertEqual(known.body, AppError.remoteAgentUnreachable.errorDescription)
+        // Cause AND remedy — the row is the whole story for the failed turn.
+        XCTAssertEqual(known.body, AppError.remoteAgentUnreachable.descriptionWithRecovery)
         XCTAssertEqual(known.troubleshootCode, AppError.remoteAgentUnreachable.errorCode)
+        XCTAssertTrue(known.offersRetry, "an unreachable gateway can succeed on the next tap")
 
         // Legacy row (nil code) → neutral copy, no Diagnostics link.
         let legacy = DeclinedTurnPresentation.classify(
@@ -252,6 +254,22 @@ final class WSDDeclinedTurnTests: XCTestCase {
         XCTAssertEqual(legacy.kind, .generic)
         XCTAssertEqual(legacy.body, "This message wasn't delivered.")
         XCTAssertNil(legacy.troubleshootCode)
+        XCTAssertTrue(legacy.offersRetry, "no persisted taxonomy is not a terminal verdict")
+
+        // Terminal refusals keep their explanation and lose only the button
+        // that could never have honoured it — the identical request would meet
+        // the identical refusal, on both certificate families alike.
+        for terminal in [AppError.remoteAgentCertUntrusted, .remoteAgentCertMismatch, .remoteAgentAuthFailed] {
+            let refused = DeclinedTurnPresentation.classify(
+                failureCode: terminal.errorCode,
+                failureWireCode: nil,
+                turnHasOwnImages: false,
+                hadHistoryImages: nil,
+                hasResendableNonPhotoContent: true
+            )
+            XCTAssertFalse(refused.offersRetry, "\(terminal) is terminal — no Try again")
+            XCTAssertEqual(refused.body, terminal.descriptionWithRecovery)
+        }
     }
 
     // MARK: - 4. Store transitions

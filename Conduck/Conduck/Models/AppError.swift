@@ -114,7 +114,8 @@ enum AppError: LocalizedError {
 
     // Agent file transfer (44-50) — planned user-run file-server (rclone webdav over
     // HTTPS). The device PUTs file bytes to the server then references them in
-    // the chat turn. Fail-fast taxonomy: `maxAttempts` is 1 for all seven (the
+    // the chat turn. The family spans 44-50 plus 61, 66 and 70. Fail-fast
+    // taxonomy: `maxAttempts` is 1 for every member of it (the
     // staged item + a visible Retry control own retry, NOT a silent loop or
     // `PendingRetryStore`, so `shouldPreserveForRetry` is false for all).
     // Retryable (transient): upload-failed / unreachable / server-error.
@@ -208,6 +209,43 @@ enum AppError: LocalizedError {
     // Config problem, never retryable. Privacy: never name the credential.
     case fileTransferNotAFileServer  // 61 — host answers, but isn't serving files
 
+    // Certificate NOT TRUSTED (63-66) — ONE cause, one code per lane. This
+    // device rejected the chain the server presented. Strictly distinct from the
+    // `*CertMismatch` family (30/35/43/47), which fires only after the system
+    // ACCEPTED the chain and the presented key still disagreed with the pin —
+    // the interception shape, where the remedy is to stop and check. Here there
+    // is nothing to check and nothing to correct on the device at all: a pin can
+    // only TIGHTEN a trusted chain, never rescue an untrusted one (App Transport
+    // Security lets an app tighten trust evaluation but not loosen it), so
+    // "remove the pin and fall back on system trust" is never the remedy —
+    // system trust is what refused. Terminal and never retryable: the fix is on
+    // the SERVER, which is why all four share
+    // `CertificateTrustCopy.untrustedRemedy` verbatim — one cause must not ship
+    // four different remedies.
+    case remoteAgentCertUntrusted    // 63 — gateway certificate not trusted by this device
+    case sttCustomCertUntrusted      // 64 — custom STT endpoint's certificate not trusted
+    case ttsCustomCertUntrusted      // 65 — custom voice endpoint's certificate not trusted
+    case fileTransferCertUntrusted   // 66 — file-server certificate not trusted
+
+    // Pin could not be COMPUTED (67-70) — one code per lane, the third and
+    // narrowest certificate outcome. The system TRUSTED the chain and then
+    // Conduck could not hash the leaf's public key, because its algorithm is
+    // outside the SPKI prefix table (Ed25519, RSA-1024/8192, P-521). So the pin
+    // was never compared — nothing disagreed with anything.
+    //
+    // Kept out of BOTH other families on purpose. It is not 30/35/43/47: those
+    // mean a pinned key disagreed, which is the interception shape, and saying
+    // so here would raise the app's most alarming message at a user whose
+    // certificate is perfectly good. It is not 63-66 either: the chain passed,
+    // so there is nothing to fix on the server. Terminal and never retryable —
+    // the same key produces the same verdict every time — and all four share
+    // `CertificateTrustCopy.keyUnpinnableRemedy`, the one remedy in the app that
+    // may offer to clear a saved fingerprint (see that property for why).
+    case remoteAgentCertKeyUnpinnable    // 67 — gateway key algorithm can't be fingerprinted
+    case sttCustomCertKeyUnpinnable      // 68 — custom STT endpoint's key can't be fingerprinted
+    case ttsCustomCertKeyUnpinnable      // 69 — custom voice endpoint's key can't be fingerprinted
+    case fileTransferCertKeyUnpinnable   // 70 — file-server key can't be fingerprinted
+
     // Catch-all (99)
     case unknown(Error)
 
@@ -296,7 +334,12 @@ enum AppError: LocalizedError {
         case .remoteAgentServerError:
             return String(localized: "remoteAgent.error.serverError", defaultValue: "Your personal AI gateway reported an error.")
         case .remoteAgentCertMismatch:
-            return String(localized: "remoteAgent.error.certMismatch", defaultValue: "Your gateway's certificate fingerprint changed.")
+            // Each `*CertMismatch` line names the SERVER whose key disagreed;
+            // the remedy is shared and lives in `recoverySuggestion`. Never
+            // phrases this as the fingerprint having "changed" — the app cannot
+            // know that, and on the interception shape this verdict now has,
+            // nothing on the user's server changed at all.
+            return String(localized: "remoteAgent.error.certMismatch", defaultValue: "Your gateway's certificate doesn't match the fingerprint you pinned.")
         case .remoteAgentInvalidResponse:
             return String(localized: "remoteAgent.error.invalidResponse", defaultValue: "Your personal AI returned an unexpected response.")
         case .remoteAgentVisionUnsupported:
@@ -329,7 +372,7 @@ enum AppError: LocalizedError {
         case .sttCustomEndpointNotConfigured:
             return String(localized: "stt.error.customEndpointNotConfigured", defaultValue: "No custom STT endpoint is configured.")
         case .sttCustomCertMismatch:
-            return String(localized: "stt.error.customCertMismatch", defaultValue: "Your custom STT server's certificate fingerprint changed.")
+            return String(localized: "stt.error.customCertMismatch", defaultValue: "Your custom STT server's certificate doesn't match the fingerprint you pinned.")
 
         // Cloud Text-to-Speech (internal fallback signals — the spoken reply
         // silently falls back to Apple's voice, so these are rarely surfaced).
@@ -350,7 +393,7 @@ enum AppError: LocalizedError {
         case .ttsCustomEndpointNotConfigured:
             return String(localized: "tts.error.customEndpointNotConfigured", defaultValue: "No custom voice endpoint is configured.")
         case .ttsCustomCertMismatch:
-            return String(localized: "tts.error.customCertMismatch", defaultValue: "Your custom voice server's certificate fingerprint changed.")
+            return String(localized: "tts.error.customCertMismatch", defaultValue: "Your custom voice server's certificate doesn't match the fingerprint you pinned.")
 
         // Agent file transfer (user-run file-server). Never name the credential.
         case .fileTransferNotConfigured:
@@ -360,7 +403,7 @@ enum AppError: LocalizedError {
         case .fileTransferAuthFailed:
             return String(localized: "fileTransfer.error.authFailed", defaultValue: "Your file-server rejected the connection.")
         case .fileTransferCertMismatch:
-            return String(localized: "fileTransfer.error.certMismatch", defaultValue: "Your file-server's certificate fingerprint changed.")
+            return String(localized: "fileTransfer.error.certMismatch", defaultValue: "Your file server's certificate doesn't match the fingerprint you pinned.")
         case .fileTransferServerError:
             return String(localized: "fileTransfer.error.serverError", defaultValue: "Your file-server reported an error.")
         case .fileTransferUploadFailed:
@@ -369,6 +412,33 @@ enum AppError: LocalizedError {
             return String(localized: "fileTransfer.error.fileUnavailable", defaultValue: "That file is no longer on your gateway.")
         case .fileTransferNotAFileServer:
             return String(localized: "fileTransfer.error.notAFileServer", defaultValue: "That address answered, but it isn't serving your files.")
+
+        // Certificate not trusted. Each line names the SERVER whose certificate
+        // was refused (the banner can surface far from the screen that
+        // configured it); the remedy is shared and lives in `recoverySuggestion`.
+        // Never phrase this as the certificate having "changed" — nothing
+        // changed, and implying it did reads as an attack in progress.
+        case .remoteAgentCertUntrusted:
+            return String(localized: "remoteAgent.error.certUntrusted", defaultValue: "This device doesn't trust your gateway's certificate.")
+        case .sttCustomCertUntrusted:
+            return String(localized: "stt.error.customCertUntrusted", defaultValue: "This device doesn't trust your custom STT server's certificate.")
+        case .ttsCustomCertUntrusted:
+            return String(localized: "tts.error.customCertUntrusted", defaultValue: "This device doesn't trust your custom voice server's certificate.")
+        case .fileTransferCertUntrusted:
+            return String(localized: "fileTransfer.error.certUntrusted", defaultValue: "This device doesn't trust your file server's certificate.")
+
+        // Pin could not be computed. Each line names the SERVER and the actual
+        // cause — the KEY TYPE, not the certificate — so the user does not read
+        // it as "my certificate is broken". Never says the certificate doesn't
+        // match: nothing was compared.
+        case .remoteAgentCertKeyUnpinnable:
+            return String(localized: "remoteAgent.error.certKeyUnpinnable", defaultValue: "Your gateway's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.")
+        case .sttCustomCertKeyUnpinnable:
+            return String(localized: "stt.error.customCertKeyUnpinnable", defaultValue: "Your custom STT server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.")
+        case .ttsCustomCertKeyUnpinnable:
+            return String(localized: "tts.error.customCertKeyUnpinnable", defaultValue: "Your custom voice server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.")
+        case .fileTransferCertKeyUnpinnable:
+            return String(localized: "fileTransfer.error.certKeyUnpinnable", defaultValue: "Your file server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.")
 
         case .unknown(let error):
             return String(localized: "api.error.unknown", defaultValue: "An unexpected error occurred: \(error.localizedDescription)")
@@ -425,8 +495,6 @@ enum AppError: LocalizedError {
             return String(localized: "remoteAgent.error.timeout.recovery", defaultValue: "Try again — the gateway may be processing a long reply.")
         case .remoteAgentServerError:
             return String(localized: "remoteAgent.error.serverError.recovery", defaultValue: "Check the gateway logs, then try again.")
-        case .remoteAgentCertMismatch:
-            return String(localized: "remoteAgent.error.certMismatch.recovery", defaultValue: "Open Settings and update the pinned fingerprint, or remove the pin to use system trust.")
         case .remoteAgentInvalidResponse:
             return String(localized: "remoteAgent.error.invalidResponse.recovery", defaultValue: "Check the gateway is running an OpenAI-compatible /v1/chat/completions endpoint.")
         case .remoteAgentVisionUnsupported:
@@ -456,9 +524,7 @@ enum AppError: LocalizedError {
             return String(localized: "remoteAgent.error.modelRequired.recovery", defaultValue: "Open this gateway's settings and set a Model, for example llama3.")
         case .sttCustomEndpointNotConfigured:
             return String(localized: "stt.error.customEndpointNotConfigured.recovery", defaultValue: "Open Settings → STT and add your custom endpoint's URL.")
-        case .sttCustomCertMismatch:
-            return String(localized: "stt.error.customCertMismatch.recovery", defaultValue: "Open Settings and update the pinned fingerprint, or remove the pin to use system trust.")
-        // The three keys below carry a `.v2` suffix because the pre-redesign
+        // The two `.v2` keys below carry that suffix because the pre-redesign
         // strings are already in `Localizable.xcstrings`, and the catalog value
         // WINS over `defaultValue:` — rewording the default alone would ship the
         // stale copy. A new key uses its `defaultValue:`.
@@ -468,8 +534,6 @@ enum AppError: LocalizedError {
             return String(localized: "fileTransfer.error.unreachable.recovery", defaultValue: "Check your file-server is running and reachable from this device.")
         case .fileTransferAuthFailed:
             return String(localized: "fileTransfer.error.authFailed.recovery.v2", defaultValue: "Open Settings → Personal AI, tap this gateway, open File transfer, and generate a new password your file server accepts.")
-        case .fileTransferCertMismatch:
-            return String(localized: "fileTransfer.error.certMismatch.recovery.v2", defaultValue: "If you changed your file server's certificate, open its File transfer section, tap Forget file transfer, and set it up again. If you changed nothing, stop — the connection may be intercepted.")
         case .fileTransferServerError:
             return String(localized: "fileTransfer.error.serverError.recovery", defaultValue: "Check your file-server's logs, then try again.")
         case .fileTransferUploadFailed:
@@ -478,9 +542,50 @@ enum AppError: LocalizedError {
             return String(localized: "fileTransfer.error.fileUnavailable.recovery", defaultValue: "Re-attach the file and send again.")
         case .fileTransferNotAFileServer:
             return String(localized: "fileTransfer.error.notAFileServer.recovery", defaultValue: "It's most likely a login page, a dashboard, or the wrong address — not a file server. The file-server URL is a different address and port from your gateway's.")
+        // One cause, ONE remedy: all four certificate-not-trusted codes return
+        // the shared text verbatim — the same words the gateway editor and the
+        // voice-endpoint test suite render. The fix is on the server, so it
+        // cannot legitimately differ by lane, and four paraphrases of one
+        // instruction would read as four different problems.
+        case .remoteAgentCertUntrusted, .sttCustomCertUntrusted,
+             .ttsCustomCertUntrusted, .fileTransferCertUntrusted:
+            return CertificateTrustCopy.untrustedRemedy
+        // The pin-mismatch family gets the same treatment for the same reason,
+        // and `.ttsCustomCertMismatch` is listed here rather than left to
+        // `default:` — falling through would answer a verdict its own
+        // `isRetryable` calls terminal with "Try again."
+        case .remoteAgentCertMismatch, .sttCustomCertMismatch,
+             .ttsCustomCertMismatch, .fileTransferCertMismatch:
+            return CertificateTrustCopy.pinMismatchRemedy
+        // Same rule, third family: one cause, one remedy, verbatim on all four
+        // lanes. Listed explicitly rather than left to `default:` for the reason
+        // above — the generic "Try again." would invite a retry that reaches the
+        // identical verdict, and would bury the two things the user can act on.
+        case .remoteAgentCertKeyUnpinnable, .sttCustomCertKeyUnpinnable,
+             .ttsCustomCertKeyUnpinnable, .fileTransferCertKeyUnpinnable:
+            return CertificateTrustCopy.keyUnpinnableRemedy
         default:
-            return String(localized: "api.error.unknown.recovery", defaultValue: "Try again.")
+            return Self.genericRecovery
         }
+    }
+
+    /// The last-resort recovery. Named so `descriptionWithRecovery` can
+    /// recognise — and drop — it: a bare "Try again." bolted onto a terminal
+    /// refusal is exactly the retry invitation the certificate taxonomy exists
+    /// to prevent.
+    private static var genericRecovery: String {
+        String(localized: "api.error.unknown.recovery", defaultValue: "Try again.")
+    }
+
+    /// What happened AND what to do, as ONE string, for the surfaces that render
+    /// a single line and have no second slot for the remedy — and, unlike the
+    /// chat thread, no Troubleshoot chip that could reach one. Drops the generic
+    /// fallback rather than appending it, so a terminal refusal never picks up a
+    /// "Try again." it cannot honour.
+    var descriptionWithRecovery: String {
+        let what = errorDescription ?? ""
+        guard let recovery = recoverySuggestion, recovery != Self.genericRecovery else { return what }
+        return what.isEmpty ? recovery : "\(what) \(recovery)"
     }
 
     /// Whether the retry loop should treat this error as recoverable.
@@ -522,7 +627,18 @@ enum AppError: LocalizedError {
              .fileTransferCertMismatch, .fileTransferFileUnavailable,
              // The URL points at something that isn't a file server — retrying
              // the same PUT against the same login page cannot change the verdict.
-             .fileTransferNotAFileServer:
+             .fileTransferNotAFileServer,
+             // Certificate not trusted — terminal on every lane. The device will
+             // refuse the same certificate every time, so a retry only delays
+             // the message that names the server-side fix.
+             .remoteAgentCertUntrusted, .sttCustomCertUntrusted,
+             .ttsCustomCertUntrusted, .fileTransferCertUntrusted,
+             // Pin not computable — terminal too. The leaf's key algorithm is
+             // the same on every attempt, so the digest is unhashable every
+             // time; only reissuing the certificate or clearing the pin changes
+             // the outcome.
+             .remoteAgentCertKeyUnpinnable, .sttCustomCertKeyUnpinnable,
+             .ttsCustomCertKeyUnpinnable, .fileTransferCertKeyUnpinnable:
             return false
         case .unknown:
             return true
@@ -672,6 +788,14 @@ enum AppError: LocalizedError {
         case 60: return .remoteAgentModelRequired
         case 61: return .fileTransferNotAFileServer
         case 62: return .remoteAgentEndpointWrongEnvelope
+        case 63: return .remoteAgentCertUntrusted
+        case 64: return .sttCustomCertUntrusted
+        case 65: return .ttsCustomCertUntrusted
+        case 66: return .fileTransferCertUntrusted
+        case 67: return .remoteAgentCertKeyUnpinnable
+        case 68: return .sttCustomCertKeyUnpinnable
+        case 69: return .ttsCustomCertKeyUnpinnable
+        case 70: return .fileTransferCertKeyUnpinnable
         case 99: return .apiFailure(message: message ?? "")       // unknown(Error) — Error not reconstructible
         default:
             return .apiFailure(message: message ?? "")
@@ -757,6 +881,14 @@ extension AppError: CustomNSError {
         case .remoteAgentEndpointNotFound: return 59
         case .remoteAgentModelRequired: return 60
         case .fileTransferNotAFileServer: return 61
+        case .remoteAgentCertUntrusted: return 63
+        case .sttCustomCertUntrusted: return 64
+        case .ttsCustomCertUntrusted: return 65
+        case .fileTransferCertUntrusted: return 66
+        case .remoteAgentCertKeyUnpinnable: return 67
+        case .sttCustomCertKeyUnpinnable: return 68
+        case .ttsCustomCertKeyUnpinnable: return 69
+        case .fileTransferCertKeyUnpinnable: return 70
         case .unknown: return 99
         }
     }

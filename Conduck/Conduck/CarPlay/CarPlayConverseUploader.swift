@@ -75,17 +75,23 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
     private var responseBuffers: [Int: Data] = [:]
     private var bodyURLs: [Int: URL] = [:]
 
-    /// Task identifiers whose server-trust challenge THIS delegate cancelled (a
-    /// pinned-cert mismatch, or a cross-host hop that could not present the
-    /// pinned key). Kept in lockstep with `BackgroundRemoteAgent.pinRejectedTaskIDs`
-    /// — the two converse lanes must label a refused certificate identically, or
-    /// the same MITM reads as "untrusted certificate" in the app and "tap to
-    /// retry" in the car. Guarded by `stateLock` like every other registry here.
-    private var pinRejectedTaskIDs = Set<Int>()
+    /// The trust verdicts each in-flight task's server-trust challenge reached,
+    /// stored WHOLE. A background session hands the completion callback nothing
+    /// but a `URLError`, so this registry is the only place the verdict survives
+    /// — and it keeps all four together for the reason `AttemptTrustSignals`
+    /// exists: split across separate sets, a lane can pair one verdict with
+    /// another and, worse, silently drop `pinComparisonUnsupported`, which is the
+    /// only thing separating "Conduck cannot hash this key" from "your connection
+    /// may be intercepted". Kept in lockstep with
+    /// `BackgroundRemoteAgent.trustSignalsByTaskID` — the two converse lanes must
+    /// label a refused certificate identically, or the same MITM reads as
+    /// "untrusted certificate" in the app and "tap to retry" in the car. Guarded
+    /// by `stateLock` like every other registry here.
+    private var trustSignalsByTaskID: [Int: RemoteAgentTrustEvaluator.AttemptTrustSignals] = [:]
 
     /// Task identifiers whose response body exceeded
     /// `Constants.maxBackgroundResponseBytes` and were cancelled for it. Needed
-    /// for the same reason as `pinRejectedTaskIDs`: a bare `task.cancel()` is
+    /// for the same reason as `trustSignalsByTaskID`: a bare `task.cancel()` is
     /// indistinguishable from the driver pressing End.
     private var overCapTaskIDs = Set<Int>()
 
@@ -364,7 +370,7 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
     }
 
     /// TASK-level server-trust challenge handler — per-ref pinning for the
-    /// CarPlay converse hop (self-signed support). Recovers the turn's
+    /// CarPlay converse hop. Recovers the turn's
     /// `refRawValue` from `taskDescription` and resolves that ref's pinned SPKI
     /// fingerprint LIVE from the App Group, so a pin set / rotated after launch
     /// is always honoured and a cross-launch resume re-reads the durable pin.
@@ -387,17 +393,55 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
         let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: pin)
         let taskID = task.taskIdentifier
         evaluator.urlSession(session, didReceive: challenge) { disposition, credential in
-            // A cancel from the evaluator is a PIN REJECTION by construction (it
-            // only cancels a server-trust challenge on a mismatch, and it is only
-            // reached when a pin was recovered). Noted BEFORE the handler is
-            // forwarded, because URLSession then reports plain `.cancelled` —
-            // indistinguishable from the driver pressing End.
-            if disposition == .cancelAuthenticationChallenge {
+            // Record the evaluator's OWN verdicts rather than inferring from the
+            // disposition: a cancel here means "this device does not trust the
+            // chain", "the pinned key did not match", or "the key cannot be
+            // fingerprinted at all". Taken as ONE snapshot and noted BEFORE the
+            // handler is forwarded, because URLSession then reports plain
+            // `.cancelled` — indistinguishable from the driver pressing End.
+            let signals = evaluator.attemptSignals
+            if signals != .empty {
                 self.stateLock.lock()
-                self.pinRejectedTaskIDs.insert(taskID)
+                self.trustSignalsByTaskID[taskID] = signals
                 self.stateLock.unlock()
             }
             completionHandler(disposition, credential)
+        }
+    }
+
+    /// The certificate verdict a completed converse task's transport `urlError`
+    /// carries, or `nil` when it names no certificate (the caller then keeps its
+    /// own cancel / unreachable handling). Pure over its inputs and `static`, so
+    /// the one distinction a driver acts on differently is unit-testable without
+    /// a live session.
+    ///
+    /// Routed through `RemoteAgentTrustEvaluator.classifyTransportError` — the ONE
+    /// classifier every lane shares — with NO gate on the notes in front of it.
+    /// That is what gives the lane its unpinned certificate arm: on the
+    /// recommended unpinned posture (Tailscale Serve / Let's Encrypt) the trust
+    /// handler default-handles the challenge and records no note, so gating on
+    /// the notes sent `-1201…-1204` — the codes where the SYSTEM named the
+    /// certificate — to the generic unreachable fallback, which tells the driver
+    /// to check that a gateway that answered is running and invites a retry that
+    /// cannot succeed. `BackgroundRemoteAgent.mapURLError`,
+    /// `STTClient+Background`, `BackgroundFileTransfer.mapTransferError` and
+    /// `WatchNetworkFailureCopy` all carry the same arm.
+    ///
+    /// The generic `-1200` and a bare `-999` still classify as `.unreachable` /
+    /// `.cancelled` with neither note set, so a cold tunnel and the driver
+    /// pressing End are untouched.
+    static func certificateError(urlError: URLError,
+                                 signals: RemoteAgentTrustEvaluator.AttemptTrustSignals) -> AppError? {
+        switch RemoteAgentTrustEvaluator.classifyTransportError(urlError.code, signals: signals) {
+        case .untrustedCert: return .remoteAgentCertUntrusted
+        case .certMismatch: return .remoteAgentCertMismatch
+        // Kept apart from `.certMismatch` on this lane too: the driver's screen
+        // is the worst place to raise a false interception warning, and the
+        // remedy differs. Reachable here because the registry stores the whole
+        // snapshot — the loose-Bool form drops `pinComparisonUnsupported` and
+        // this verdict silently becomes a mismatch.
+        case .certKeyUnpinnable: return .remoteAgentCertKeyUnpinnable
+        case .timeout, .unreachable, .cancelled: return nil
         }
     }
 
@@ -419,7 +463,7 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
             responseBuffers.removeValue(forKey: id)
             let bodyURL = bodyURLs.removeValue(forKey: id)
             inFlight.removeValue(forKey: id)
-            pinRejectedTaskIDs.remove(id)
+            trustSignalsByTaskID.removeValue(forKey: id)
             overCapTaskIDs.remove(id)
             stateLock.unlock()
             if let bodyURL {
@@ -433,11 +477,12 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
         stateLock.lock()
         let entry = inFlight[id]
         let buffered = responseBuffers[id] ?? Data()
-        // Read (the `defer` above clears) both per-task delegate notes. Each
-        // records a reason THIS delegate cancelled the task, and both surface as
+        // Read (the `defer` above clears) every per-task delegate note. Each
+        // records a reason THIS delegate cancelled the task, and all surface as
         // `.cancelled`, so they must be consulted before the End-vs-failure
-        // disambiguation below.
-        let pinRejected = pinRejectedTaskIDs.contains(id)
+        // disambiguation below. `.empty` means this task reached no verdict —
+        // never a verdict inherited from some other task.
+        let trustSignals = trustSignalsByTaskID[id] ?? .empty
         let responseOverCap = overCapTaskIDs.contains(id)
         stateLock.unlock()
 
@@ -473,19 +518,15 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
                 routeError(.remoteAgentInvalidResponse, conversationID: conversationID, userMessageID: userMessageID, turnToken: turnToken)
                 return
             }
-            // OUR pin rejection. Classification delegated to the ONE shared
-            // classifier the foreground hop and `BackgroundRemoteAgent` use, so
-            // the lanes cannot drift. With `pinRejected == false` the classifier
-            // returns `.cancelled` and everything below is unchanged.
+            // A certificate verdict — OUR refusal (an untrusted chain or a
+            // pinned-key mismatch, carried by the per-task notes) or the SYSTEM
+            // naming the certificate on an unpinned lane. Both classes stay APART
+            // even here, where neither is fixable from the car: the driver hears
+            // which problem to go fix, not a guess. `nil` for everything else, so
+            // the cancel handling and the generic fallback below are unchanged.
             if let urlError = error as? URLError,
-               pinRejected,
-               RemoteAgentTrustEvaluator.classifyTransportError(
-                   urlError.code,
-                   hasPin: true,
-                   systemTrustRejected: false,
-                   pinRejected: true
-               ) == .certMismatch {
-                routeError(.remoteAgentCertMismatch, conversationID: conversationID, userMessageID: userMessageID, turnToken: turnToken)
+               let certError = Self.certificateError(urlError: urlError, signals: trustSignals) {
+                routeError(certError, conversationID: conversationID, userMessageID: userMessageID, turnToken: turnToken)
                 return
             }
             if let urlError = error as? URLError, urlError.code == .cancelled {
@@ -729,32 +770,18 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
     /// (`didCompleteWithError`, `entry == nil`), where nobody cancelled it and
     /// there is no live service or TTS to surface the failure. (The ordinary
     /// after-disconnect failure path in `routeError` no longer notifies — plan
-    /// D5 #4 cut.) Mirrors `BackgroundRemoteAgent.postFailureNotification`. Tap
-    /// deep-links to the conversation to retry. PRIVACY: interpolating error cases
-    /// (`.networkError`/`.decodingError`/`.unknown` can embed the gateway
-    /// hostname) map to the fixed `remoteAgentUnreachable` copy — defensive;
-    /// this path currently only receives fixed-copy cases.
+    /// D5 #4 cut.) Tap deep-links to the conversation to retry.
+    ///
+    /// DELEGATES to `BackgroundRemoteAgent.postFailureNotification` rather than
+    /// re-deriving the same content: this was a byte-identical transcription of
+    /// it, which is exactly how the two drifted into asserting the same wrong
+    /// cause ("Couldn't reach your personal AI" on a certificate the server
+    /// answered with). One copy, one title derivation, one privacy mapping — a
+    /// wheel-lane failure and a phone-lane failure cannot say different things
+    /// about the same error. The identifier is part of that shared contract
+    /// (`remoteAgent.failure.` is what keeps a failure tap out of auto-speak).
     private static func postFailureNotification(conversationID: UUID, error: AppError?) async {
-        let content = UNMutableNotificationContent()
-        content.title = String(localized: "Couldn't reach your personal AI")  // xcstrings
-        let fallback = String(localized: "Your message wasn't delivered. Open Conduck to retry.")  // xcstrings
-        switch error {
-        case .some(.networkError), .some(.decodingError), .some(.unknown):
-            content.body = AppError.remoteAgentUnreachable.errorDescription ?? fallback
-        case .some(let appError):
-            content.body = appError.errorDescription ?? fallback
-        case nil:
-            content.body = fallback
-        }
-        content.sound = .default
-        content.userInfo = [NotificationDeepLink.conversationIDKey: conversationID.uuidString]
-
-        let request = UNNotificationRequest(
-            identifier: "remoteAgent.failure.\(conversationID.uuidString)",
-            content: content,
-            trigger: nil
-        )
-        try? await UNUserNotificationCenter.current().add(request)
+        await BackgroundRemoteAgent.postFailureNotification(conversationID: conversationID, error: error)
     }
 }
 #endif

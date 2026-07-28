@@ -623,7 +623,7 @@ struct TTSProvider: Sendable {
     /// active-TTS value + the `tts.voice.custom-openai-tts` override key). The
     /// TTS sibling of the `custom-openai` STT provider: it SHARES that endpoint's
     /// stored base URL (`stt.custom.url`), API key (`stt.apiKey.custom-openai`),
-    /// optional self-signed cert pin, and auth scheme — one server, both
+    /// optional cert-pin tightening, and auth scheme — one server, both
     /// directions (STT → `/v1/audio/transcriptions`, TTS → `/v1/audio/speech`).
     ///
     /// Like `STTProvider.customOpenAICompat`, its `speechURL` is a SENTINEL never

@@ -270,8 +270,17 @@ final class DictationService: RecordingExclusivityAuthority {
                     )
                 }
                 lastError = error
+                // Cause AND remedy. `localizedDescription` on a `LocalizedError`
+                // is `errorDescription` alone, so the footer showed a certificate
+                // refusal's cause with no way out — the server-side routes, the
+                // "may be intercepted" warning and the "the certificate is fine"
+                // line all live in `recoverySuggestion`, and the popover has no
+                // second slot to reach one. `descriptionWithRecovery` drops the
+                // generic "Try again." fallback, so an ordinary retryable failure
+                // reads exactly as before and the Retry affordance keeps its own
+                // gate (`isRetryable`).
                 state = .error(
-                    message: error.localizedDescription,
+                    message: error.descriptionWithRecovery,
                     isRetryable: error.isRetryable
                 )
             } catch {
@@ -505,8 +514,11 @@ final class DictationService: RecordingExclusivityAuthority {
                 )
             }
             lastError = error
+            // Cause AND remedy, for the reason the retry path above states —
+            // this is the FIRST-attempt twin of that sink and the two must not
+            // render one failure two ways.
             state = .error(
-                message: error.localizedDescription,
+                message: error.descriptionWithRecovery,
                 isRetryable: error.isRetryable
             )
         } catch {

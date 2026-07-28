@@ -64,7 +64,11 @@ struct PairingExportSheet: View {
     /// Never logged, never persisted.
     @State private var setupCode: String?
     @State private var qrImage: CGImage?
-    @State private var preflightWarning = false
+
+    /// The preflight verdict, once it lands — `nil` until then, and `nil` for a
+    /// gateway that answered. Holding the VERDICT rather than a bool is what lets
+    /// a refused certificate say so; a bool could only ever mean "something".
+    @State private var preflightWarning: PairingExportPreflight?
     @State private var showsTextCode = false
     @State private var copied = false
     @State private var prepareFailure: PairingExportFailure?
@@ -226,8 +230,8 @@ struct PairingExportSheet: View {
     @ViewBuilder
     private var revealedSections: some View {
         warningSection
-        if preflightWarning {
-            preflightWarningSection
+        if let preflightWarning {
+            preflightWarningSection(preflightWarning)
         }
         qrSection
         textCodeSection
@@ -260,18 +264,25 @@ struct PairingExportSheet: View {
         }
     }
 
-    /// Soft, NON-blocking preflight warning — the gateway didn't answer just now.
-    private var preflightWarningSection: some View {
+    /// Soft, NON-blocking preflight warning. Each verdict gets its own text:
+    /// "didn't answer" can be this device's own connection and can clear by
+    /// itself; an untrusted certificate will meet every device that scans this
+    /// code and only a server-side change fixes it; a pin mismatch means the
+    /// system trusted the chain and the key under it still disagreed, which is
+    /// what an intercepted connection looks like; an unpinnable key means the
+    /// chain was trusted and the digest simply could not be computed, so nothing
+    /// is wrong with the server at all. One shared text would send a user hunting
+    /// their Wi-Fi for a problem their gateway owns.
+    private func preflightWarningSection(_ verdict: PairingExportPreflight) -> some View {
         Section {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "wifi.exclamationmark")
+                Image(systemName: isCertificateVerdict(verdict)
+                      ? "lock.trianglebadge.exclamationmark"
+                      : "wifi.exclamationmark")
                     .font(.subheadline)
                     .foregroundStyle(AppColors.warning)
                     .accessibilityHidden(true)
-                Text(LocalizedStringResource(
-                    "settings.pairing.export.preflightWarning",
-                    defaultValue: "Your gateway didn't answer just now, so this code may not work yet — your device may simply be offline. You can still show it."
-                ))
+                Text(preflightWarningText(verdict))
                     .font(.footnote)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -279,6 +290,49 @@ struct PairingExportSheet: View {
             .padding(.vertical, 4)
         }
         .listRowBackground(AppColors.warning.opacity(0.10))
+    }
+
+    /// All three certificate verdicts wear the lock glyph: none is a connectivity
+    /// problem, and a Wi-Fi badge would send the user to their router.
+    private func isCertificateVerdict(_ verdict: PairingExportPreflight) -> Bool {
+        verdict == .certificateNotTrusted
+            || verdict == .certificateMismatch
+            || verdict == .certificateKeyUnpinnable
+    }
+
+    /// All three certificate arms open with `CertificateTrustCopy` VERBATIM — the same
+    /// refusal every other surface renders — then add only what is specific to a
+    /// setup code. Never says the code "may not work yet"; nothing about scanning
+    /// it later makes a refused certificate acceptable.
+    private func preflightWarningText(_ verdict: PairingExportPreflight) -> String {
+        switch verdict {
+        case .certificateNotTrusted:
+            let consequence = String(
+                localized: "settings.pairing.export.preflightWarning.certUntrusted",
+                defaultValue: "Every device that scans this code will refuse the same certificate. You can still show it."
+            )
+            return "\(CertificateTrustCopy.untrustedRefusalWithRemedy) \(consequence)"
+        case .certificateMismatch:
+            // No "you can still show it" tail. On an untrusted chain the code
+            // itself is fine and the server is the problem; here the warning IS
+            // the message, and inviting the user onward past a possible
+            // interception is the one thing this arm must not do.
+            return CertificateTrustCopy.pinMismatchRefusalWithRemedy
+        case .certificateKeyUnpinnable:
+            // No consequence tail either, and for the opposite reason to the
+            // untrusted arm: the pin lives in THIS device's settings, not in the
+            // code, so a device that scans it meets no such problem. The shared
+            // remedy already says the certificate is fine.
+            return CertificateTrustCopy.keyUnpinnableRefusalWithRemedy
+        case .unreachable, .reachable:
+            // `.reachable` never arrives — the section only mounts on a warning.
+            // Grouped anyway so the switch stays exhaustive without a `default:`,
+            // which would silently give a future verdict the wrong words.
+            return String(
+                localized: "settings.pairing.export.preflightWarning",
+                defaultValue: "Your gateway didn't answer just now, so this code may not work yet — your device may simply be offline. You can still show it."
+            )
+        }
     }
 
     private var qrSection: some View {
@@ -553,7 +607,7 @@ struct PairingExportSheet: View {
     /// Build the code, render the QR, kick off the non-blocking preflight, and
     /// arm the auto-hide.
     private func reveal() async {
-        preflightWarning = false
+        preflightWarning = nil
         showsTextCode = false
         copied = false
         prepareFailure = nil
@@ -583,7 +637,7 @@ struct PairingExportSheet: View {
         Task {
             let result = await viewModel.preflightPairingExport(for: ref)
             if case .revealed = phase {
-                preflightWarning = (result == .unreachable)
+                preflightWarning = result == .reachable ? nil : result
             }
         }
 

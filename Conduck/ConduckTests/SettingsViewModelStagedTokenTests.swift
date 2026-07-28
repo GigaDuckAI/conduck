@@ -3,12 +3,12 @@
 // Conduck
 // SettingsViewModelStagedTokenTests.swift
 //
-// The gateway editor's staged-token contract (`StagedRemoteAgentToken`): Save /
-// Test Connection / cert Trust take a credential INTENT and resolve it VM-side
+// The gateway editor's staged-token contract (`StagedRemoteAgentToken`): Save
+// and Test Connection take a credential INTENT and resolve it VM-side
 // (Keychain never touches a View). These tests drive the intent paths that
 // resolve WITHOUT a live Keychain or network:
 //   - `.reuseVoiceKey` with no saved voice key fails closed (field-actionable
-//     message, nothing persisted, no probe fired) on Save, Test, and Trust.
+//     message, nothing persisted, no probe fired) on Save and Test.
 //   - `.stored` maps to the leave-the-saved-token-alone path — a fresh bearer
 //     config with no stored token fails the same guards the old empty
 //     `pendingToken` did.
@@ -187,36 +187,4 @@ final class SettingsViewModelStagedTokenTests: XCTestCase {
         )
     }
 
-    // MARK: - Trust: staged intent + pending-fingerprint promote
-
-    /// No pending fingerprint → Trust is a no-op under the new signature too.
-    func testTrustWithoutPendingFingerprint_noOp() async {
-        let vm = await makeVM()
-
-        await vm.trustPresentedRemoteCert(ref: openclaw, stagedToken: .stored)
-
-        XCTAssertEqual(vm.remoteAgentRowState(for: openclaw), .unset,
-                       "Trust with nothing pending must not touch the validation state.")
-    }
-
-    /// Trust promotes the presented fingerprint into the pin buffer FIRST, so a
-    /// `.reuseVoiceKey` dead-end still leaves the user's trust decision staged —
-    /// pasting a key and re-testing then pins against the approved cert.
-    func testTrustReuseVoiceKeyMissing_promotesFingerprintThenFailsClosed() async {
-        let vm = await makeVM()
-        let fp = String(repeating: "a", count: 64)
-        vm.remoteAgentPendingUntrustedCert[openclaw] = fp
-
-        await vm.trustPresentedRemoteCert(ref: openclaw, stagedToken: .reuseVoiceKey)
-
-        XCTAssertEqual(vm.remoteAgentCertFingerprints[openclaw], fp,
-                       "The presented fingerprint must be promoted into the editable pin buffer.")
-        XCTAssertNil(vm.remoteAgentPendingUntrustedCert[openclaw],
-                     "The pending TOFU banner must clear on Trust.")
-        XCTAssertEqual(
-            vm.remoteAgentRowState(for: openclaw),
-            .invalid(message: missingVoiceKeyMessage),
-            "A .reuseVoiceKey Trust with no voice key must fail closed with the field-actionable message, not probe."
-        )
-    }
 }

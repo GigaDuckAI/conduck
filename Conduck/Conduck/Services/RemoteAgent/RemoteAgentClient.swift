@@ -14,12 +14,13 @@
 // Pattern transferred from `STTClient.swift`:
 //   - Actor singleton with `static let shared`.
 //   - URLError → AppError mapping shape (`performRequest`).
-//   - Per-call `URLSession` injection — the client does NOT own its session.
+//   - Per-call `Transport` injection — the client does NOT own its session.
 //     Foreground call sites build one from `makePinnedForegroundSession(...)`
 //     (ephemeral + converse timeouts + the `RemoteAgentTrustEvaluator`
 //     delegate, so the user's per-ref cert pin and the cross-host-redirect
-//     refusal apply on the LIVE send path, not just in Test Connection); the
-//     background coordinator passes its configured background session.
+//     refusal apply on the LIVE send path, not just in Test Connection) and
+//     hand the session and its evaluator across as ONE required value — see
+//     `Transport` for why neither half may go missing.
 //
 // Out of scope for this foreground actor:
 //   - Background URLSession upload (`ConverseUploadCoordinator`) — needs
@@ -53,6 +54,51 @@ actor RemoteAgentClient {
     static let shared = RemoteAgentClient()
     private init() { }
 
+    // MARK: - Transport (session + the evaluator that reads its verdict)
+
+    /// The `URLSession` a send issues through, PAIRED with the trust evaluator
+    /// installed on it. ONE required parameter, not two optional ones — that
+    /// shape let a call site default to `URLSession.shared`, which cannot carry a
+    /// delegate and so silently disabled BOTH the user's certificate pin and the
+    /// cross-origin redirect refusal on a live send. A doc comment said exactly
+    /// that; nothing enforced it, and "every caller is correct today" is not a
+    /// property of an API.
+    ///
+    /// `.pinned(session:evaluator:)` is the only constructor a shipping build
+    /// has, and it cannot be called without an evaluator. `.unevaluated` — a
+    /// session with no verdict source, which is the honest description of a
+    /// `MockURLProtocol` stub that raises no server-trust challenge — is fenced
+    /// behind `#if DEBUG`, the same fence the other two trust seams use, so a
+    /// Release or Archive build cannot COMPILE an unevaluated send at all.
+    nonisolated struct Transport: Sendable {
+        let session: URLSession
+        let evaluator: RemoteAgentTrustEvaluator?
+
+        private init(session: URLSession, evaluator: RemoteAgentTrustEvaluator?) {
+            self.session = session
+            self.evaluator = evaluator
+        }
+
+        /// The production shape: the pair `makePinnedForegroundSession` returns,
+        /// carried across as a unit so the evaluator cannot be dropped in transit.
+        static func pinned(
+            session: URLSession,
+            evaluator: RemoteAgentTrustEvaluator
+        ) -> Transport {
+            Transport(session: session, evaluator: evaluator)
+        }
+
+        #if DEBUG
+        /// TEST-ONLY. A session with no evaluator: a mocked transport raises no
+        /// server-trust challenge, so there is no verdict to read and `.empty` is
+        /// the truthful snapshot. `#if DEBUG` IS the control — without it this is
+        /// simply the old unsafe default wearing a name.
+        static func unevaluated(session: URLSession) -> Transport {
+            Transport(session: session, evaluator: nil)
+        }
+        #endif
+    }
+
     // MARK: - Public API
 
     /// Issue a user turn to the configured gateway, sending the full
@@ -77,19 +123,13 @@ actor RemoteAgentClient {
     ///     keeps everything).
     ///   - newUserText: the user's new turn (already STT-decoded). Always
     ///     appended after the trimmed prior turns as a `role: "user"` message.
-    ///   - session: the `URLSession` to issue through. Every PRODUCTION caller
-    ///     supplies one that carries a `RemoteAgentTrustEvaluator` delegate —
-    ///     the macOS foreground sites build it with
-    ///     `makePinnedForegroundSession(pinnedFingerprintHex:)`, the background
-    ///     coordinator passes its configured background session (iOS + Watch).
-    ///     The `.shared` default exists ONLY for tests that inject a
-    ///     `MockURLProtocol` session; `.shared` cannot carry a delegate, so a
-    ///     production send on it would silently disable pinning.
-    ///   - trustEvaluator: the evaluator installed on `session`, when there is
-    ///     one. Read AFTER the awaited request so a pin rejection is told apart
-    ///     from a benign cancel (URLSession surfaces BOTH as `.cancelled`).
-    ///     Defaulted `nil` → the transport mapping behaves exactly as it does
-    ///     for an unpinned session.
+    ///   - transport: the session to issue through and the evaluator installed on
+    ///     it, as one value with NO default — see `Transport` for why the two
+    ///     travel together and why there is nothing to fall back to. Production
+    ///     builds it from `makePinnedForegroundSession(pinnedFingerprintHex:)`.
+    ///     The evaluator is read AFTER the awaited request so a pin rejection is
+    ///     told apart from a benign cancel (URLSession surfaces BOTH as
+    ///     `.cancelled`).
     /// - Returns: the agent's reply text.
     /// - Throws: `AppError` — typically `.remoteAgentAuthFailed`,
     ///   `.remoteAgentServerError`, `.remoteAgentInvalidResponse`, or a
@@ -114,8 +154,7 @@ actor RemoteAgentClient {
         // a silent default here would drop the instruction from exactly one
         // dispatch surface and resurrect the lost-output-file bug there.
         fileServerReady: Bool,
-        session: URLSession = .shared,
-        trustEvaluator: RemoteAgentTrustEvaluator? = nil
+        transport: Transport
     ) async throws -> String {
         let request = Self.buildRequest(
             url: url,
@@ -147,11 +186,7 @@ actor RemoteAgentClient {
         let diagStart = Date()
 #endif
 
-        let (data, response) = try await Self.performRequest(
-            request,
-            session: session,
-            trustEvaluator: trustEvaluator
-        )
+        let (data, response) = try await Self.performRequest(request, transport: transport)
 
 #if DEBUG
         let diagHTTP = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -366,8 +401,8 @@ actor RemoteAgentClient {
     /// single source of truth every gateway probe already uses — so the converse
     /// hop and Test Connection can never drift on what counts as a cert failure.
     ///
-    /// `hasPin` / `pinRejected` come from the session's evaluator (nil evaluator
-    /// → both false), which is what lets a PIN REJECTION be told apart from a
+    /// The signals come from the session's evaluator (no evaluator → `.empty`),
+    /// which is what lets a PIN REJECTION be told apart from a
     /// benign cancel: the evaluator answers a mismatch with
     /// `cancelAuthenticationChallenge`, and URLSession surfaces that as
     /// `.cancelled` (-999) — byte-identical to the chat-thread Cancel button.
@@ -375,28 +410,48 @@ actor RemoteAgentClient {
     /// default arm stays `CancellationError` so a user cancel never raises a
     /// spurious "Untrusted certificate" banner.
     ///
-    /// Deliberately does NOT pass the evaluator's `systemTrustRejected`: the
-    /// converse hop keeps its documented posture that a GENERIC
-    /// `.secureConnectionFailed` (-1200) is a transient cold-tunnel hiccup →
-    /// retryable, never a cert verdict. Only the specific server-certificate
-    /// codes and a confirmed pin rejection name the certificate.
-    static func mapTransportError(_ code: URLError.Code, hasPin: Bool, pinRejected: Bool) -> Error {
-        switch RemoteAgentTrustEvaluator.classifyTransportError(
-            code,
-            hasPin: hasPin,
-            systemTrustRejected: false,
-            pinRejected: pinRejected
-        ) {
+    /// `systemTrustRejected` comes from the same evaluator and is threaded
+    /// through, not hardcoded: without it the lane a user actually converses on
+    /// could never report a certificate problem at all. The cold-tunnel posture
+    /// survives because both signals are POSITIVE — a transient
+    /// `.secureConnectionFailed` (-1200) never reached a cert challenge, so both
+    /// are false and it stays retryable.
+    /// Every verdict comes from ONE `attemptSignals` snapshot off the evaluator
+    /// that answered this attempt's challenge. There is deliberately no
+    /// loose-Bool overload: any such surface silently drops
+    /// `pinComparisonUnsupported`, and a key Conduck cannot fingerprint goes back
+    /// to reporting as a possible interception.
+    static func mapTransportError(
+        _ code: URLError.Code,
+        signals: RemoteAgentTrustEvaluator.AttemptTrustSignals
+    ) -> Error {
+        switch RemoteAgentTrustEvaluator.classifyTransportError(code, signals: signals) {
         case .timeout:
             return AppError.remoteAgentTimeout
         case .unreachable:
             return AppError.remoteAgentUnreachable
-        case .untrustedCert, .certMismatch:
-            // Both land on the same user-facing case on the LIVE hop: the
-            // system (or the pin) named the certificate as the cause, and the
-            // remedy is identical — re-check the pinned cert. TOFU re-trust is
-            // a Settings-layer affordance, never offered mid-turn.
+        case .untrustedCert:
+            // This device rejected the chain. NOT a mismatch: no pin disagreed,
+            // nothing changed, and there is no pin to remove — removing one
+            // would only fall back on the system trust that just refused. The
+            // fix is on the server, and this case's copy names it.
+            return AppError.remoteAgentCertUntrusted
+        case .certMismatch:
+            // A pin disagreed with a chain the system DID trust — the ONLY class
+            // that may say the connection may be intercepted. The remedy is to
+            // STOP and check, never to edit the pin: dropping it here switches off
+            // the control that just caught something, and "the certificate
+            // changed" is a guess this app has no evidence for. The one place
+            // clearing a saved fingerprint is legitimate is
+            // `.certKeyUnpinnable`, where nothing was caught because nothing was
+            // compared.
             return AppError.remoteAgentCertMismatch
+        case .certKeyUnpinnable:
+            // System trust PASSED and the pin was never compared — the leaf's
+            // key algorithm has no SPKI prefix Conduck can hash. Separate code
+            // from `.certMismatch` so this user is never told their connection
+            // may be intercepted over a certificate that is fine.
+            return AppError.remoteAgentCertKeyUnpinnable
         case .cancelled:
             // A user-initiated task cancel (the chat-thread Cancel,
             // background-session teardown, structured-concurrency
@@ -412,17 +467,17 @@ actor RemoteAgentClient {
     /// thrown error.
     private static func performRequest(
         _ request: URLRequest,
-        session: URLSession,
-        trustEvaluator: RemoteAgentTrustEvaluator? = nil
+        transport: Transport
     ) async throws -> (Data, URLResponse) {
         do {
-            return try await session.data(for: request)
+            return try await transport.session.data(for: request)
         } catch let error as URLError {
-            let pin = trustEvaluator?.pinnedFingerprintHex
+            // `.empty` for a lane with no evaluator: no challenge was answered,
+            // so there is no verdict to read — never a posture inferred from
+            // whether a pin happens to be configured.
             throw mapTransportError(
                 error.code,
-                hasPin: !(pin ?? "").isEmpty,
-                pinRejected: trustEvaluator?.pinRejected ?? false
+                signals: transport.evaluator?.attemptSignals ?? .empty
             )
         } catch is CancellationError {
             // Preserve an upstream cancellation as-is rather than collapsing

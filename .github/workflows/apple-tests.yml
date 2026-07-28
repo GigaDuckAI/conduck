@@ -114,3 +114,69 @@ jobs:
             -scheme ConduckWatchTests \
             -destination 'platform=watchOS Simulator,id=${{ steps.simulators.outputs.watch_udid }}' \
             -derivedDataPath "$RUNNER_TEMP/conduck-watch-derived-data"
+
+  # `RemoteAgentLiveTLSTrustTests` is `#if os(macOS)`. With only the two
+  # simulator destinations above, that whole file was COMPILED OUT of every CI
+  # run — not skipped, not reported, invisible. It is the only suite that proves
+  # the certificate pin is enforced against a real TLS handshake, so a change
+  # that broke it produced a green build. This job is the macOS destination that
+  # closes that hole.
+  macos-live-tls:
+    name: macOS live TLS trust
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # THE REGRESSION GUARD, and the part that always runs. Compiling the macOS
+      # test bundle is what a hosted runner can do unconditionally, and it is
+      # what was actually missing: a `#if os(macOS)` file that nothing compiles
+      # cannot fail. Signing is stripped because a GitHub-hosted runner has no
+      # Apple Development identity — see the run step below for why that stops
+      # short of executing them.
+      - name: Compile the macOS test bundle (RemoteAgentLiveTLSTrustTests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild build-for-testing \
+            -project Conduck/Conduck.xcodeproj \
+            -scheme Conduck \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/conduck-macos-derived-data" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            CODE_SIGN_ENTITLEMENTS=
+
+      # EXECUTING them needs a signed host. The macOS test host is the Conduck
+      # app itself, and its entitlements (App Group, iCloud KVS, CloudKit) cannot
+      # be granted by ad-hoc signing: the launch dies with "Early unexpected exit,
+      # operation never finished bootstrapping" before a single test runs, and
+      # stripping the entitlements to get past signing produces the same crash.
+      # So this step runs on a runner that HAS an identity (self-hosted, or a
+      # hosted one with a certificate imported) and otherwise says loudly that it
+      # did not run. A `::warning::` in the run summary, never a silent pass —
+      # the whole reason this job exists is that "absent" once looked like "green".
+      #
+      # `run-live-tls-tests.sh` starts the loopback HTTPS fixture OUTSIDE the App
+      # Sandbox (the sandbox denies bind() to the test host and everything it
+      # spawns) and hands the tests its ports plus the openssl-computed pins.
+      # Without it every case skips with that instruction.
+      - name: Run the live TLS trust suite (needs a signing identity)
+        shell: bash
+        env:
+          CONDUCK_DERIVED_DATA: ${{ runner.temp }}/conduck-macos-derived-data
+        run: |
+          set -euo pipefail
+          if security find-identity -v -p codesigning | grep -q "Apple Development"; then
+            bash scripts/run-live-tls-tests.sh
+          else
+            echo "::warning title=Live TLS trust suite NOT RUN::No code-signing identity on this runner. RemoteAgentLiveTLSTrustTests COMPILED (previous step) but did NOT execute: the macOS test host is the sandboxed Conduck app and its App Group / iCloud KVS / CloudKit entitlements cannot be ad-hoc signed, so the host crashes before the first test. Run 'scripts/run-live-tls-tests.sh' on a machine with an Apple Development certificate."
+          fi

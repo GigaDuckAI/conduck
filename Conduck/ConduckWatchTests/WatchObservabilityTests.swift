@@ -127,4 +127,57 @@ final class WatchNetworkFailureCopyTests: XCTestCase {
             WatchNetworkFailureCopy.transportFailureMessage(for: NSError(domain: "Test", code: 42), fallback: fallback),
             fallback)
     }
+
+    // MARK: - Certificate arm
+
+    /// The UNPINNED lane's only certificate path: with no pin the evaluator
+    /// answers `.performDefaultHandling`, ATS refuses, and the completion carries
+    /// one of the codes where the trust layer named the certificate. Without this
+    /// arm the wrist said "Couldn't reach your personal AI. Try again." for a
+    /// terminal condition no retry can clear.
+    func testNamedCertificateCodesReturnTheSharedUntrustedCopy() {
+        for code in [URLError.Code.serverCertificateUntrusted, .serverCertificateHasUnknownRoot,
+                     .serverCertificateHasBadDate, .serverCertificateNotYetValid] {
+            let msg = WatchNetworkFailureCopy.transportFailureMessage(
+                for: URLError(code), fallback: fallback)
+            XCTAssertEqual(msg, CertificateTrustCopy.untrustedRefusalCompact,
+                           "code \(code.rawValue) must render the shared certificate copy")
+            XCTAssertNotEqual(msg, genericHint)
+        }
+    }
+
+    /// The cold-tunnel fence: a generic `-1200` is a transient handshake failure
+    /// on a perfectly good certificate as often as a real rejection, so it keeps
+    /// the caller's fallback rather than claiming a trust problem.
+    func testGenericSecureConnectionFailureKeepsTheFallback() {
+        XCTAssertEqual(
+            WatchNetworkFailureCopy.transportFailureMessage(
+                for: URLError(.secureConnectionFailed), fallback: fallback),
+            fallback)
+    }
+
+    /// The wrist copy is a TERMINAL refusal: it names the cause, hands the remedy
+    /// to the phone, and never invites a retry or claims the certificate changed.
+    func testCompactCertificateCopyIsTerminalAndPointsAtThePhone() {
+        let msg = CertificateTrustCopy.untrustedRefusalCompact
+        XCTAssertTrue(msg.contains("iPhone"))
+        XCTAssertTrue(msg.lowercased().contains("doesn't trust"))
+        for banned in ["try again", "changed", " yet", "running"] {
+            XCTAssertFalse(msg.lowercased().contains(banned),
+                           "terminal certificate copy must not contain \(banned)")
+        }
+    }
+
+    /// A pin mismatch on a chain the system DID trust keeps its OWN copy,
+    /// including the interception warning — the two causes must never collapse
+    /// into one message.
+    func testPinMismatchCopyIsDistinctAndWarnsAboutInterception() {
+        let mismatch = WatchNetworkFailureCopy.certificatePinMismatchMessage
+        XCTAssertNotEqual(mismatch, CertificateTrustCopy.untrustedRefusalCompact)
+        XCTAssertTrue(mismatch.contains("intercepted"))
+        for banned in ["try again", "remove the pin", "running"] {
+            XCTAssertFalse(mismatch.lowercased().contains(banned),
+                           "pin-mismatch copy must not contain \(banned)")
+        }
+    }
 }

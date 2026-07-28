@@ -23,8 +23,9 @@
 //   - Test (runs the FULL staged suite — the custom endpoint's default Test
 //     action) + Forget.
 //   - The rich staged checklist (`STTTestSuiteResultView`) with per-stage
-//     status + transcript + latency + iOS TOFU "Trust & Save".
-//   - Advanced DisclosureGroup — manual cert-fingerprint pin.
+//     status + transcript + latency. Read-only: every outcome is a pass or a
+//     terminal explained failure.
+//   - Advanced DisclosureGroup — the optional manual cert-fingerprint pin.
 //
 // Privacy invariants (same as the gateway body):
 //   - The API key never leaves the editor-local `pendingKey` buffer (seeded into /
@@ -32,9 +33,8 @@
 //     attempt. Keychain is the only persistence.
 //   - The masked tail is the only key surface once stored.
 //
-// Cross-platform (iOS + macOS): the body is shared. The TOFU "Trust & Save"
-// affordance lives inside `STTTestSuiteResultView` (iOS-only). UIKit-only
-// TextField modifiers are `#if os(iOS)`-gated.
+// Cross-platform (iOS + macOS): the body is shared. UIKit-only TextField
+// modifiers are `#if os(iOS)`-gated.
 
 import SwiftUI
 
@@ -746,17 +746,13 @@ struct CustomSTTConfigBody: View {
                     .foregroundStyle(AppColors.textSecondary)
             }
         case .invalid(let message):
-            // While the iOS TOFU affordance is up (untrusted cert, no pin), the
-            // checklist's banner is the richer prompt — suppress this red row.
-            if viewModel.customSTTPendingUntrustedCerts[uuid] == nil {
-                HStack(spacing: 6) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(AppColors.error)
-                    Text(message)
-                        .font(.subheadline)
-                        .foregroundStyle(AppColors.error)
-                        .multilineTextAlignment(.leading)
-                }
+            HStack(spacing: 6) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(AppColors.error)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.error)
+                    .multilineTextAlignment(.leading)
             }
         }
     }
@@ -767,31 +763,15 @@ struct CustomSTTConfigBody: View {
     private var testSuiteSection: some View {
         if let result = viewModel.sttTestSuiteResults[presetID] {
             Section {
-                STTTestSuiteResultView(
-                    result: result,
-                    onTrustAndSave: { trustAndSave() }
-                )
-                .padding(.vertical, 4)
+                STTTestSuiteResultView(result: result)
+                    .padding(.vertical, 4)
             } header: {
                 Text(LocalizedStringResource("settings.stt.custom.testResult.header", defaultValue: "Test result"))
             }
         }
     }
 
-    /// Pin the presented fingerprint into the buffer + re-VALIDATE (Trust-only —
-    /// no persist; Save commits). Requires the key again (privacy: never read
-    /// back from Keychain) — the user re-pastes before Trust. For `.none` auth no
-    /// key is needed. The SecureField buffer is NOT cleared (Save still needs it).
-    private func trustAndSave() {
-        let key = pendingKey
-        let url = viewModel.customSTTURLStrings[uuid] ?? ""
-        let model = viewModel.customSTTModels[uuid] ?? ""
-        Task {
-            await viewModel.trustPresentedCustomCert(for: uuid, url: url, key: key, model: model)
-        }
-    }
-
-    // MARK: - Advanced (manual cert pinning)
+    // MARK: - Advanced (optional manual cert pinning)
 
     private var advancedSection: some View {
         let fingerprintBinding = Binding<String>(
@@ -818,8 +798,8 @@ struct CustomSTTConfigBody: View {
                         .autocorrectionDisabled()
                         .textFieldStyle(.roundedBorder)
                     Text(LocalizedStringResource(
-                        "settings.remoteAgent.fingerprint.helperShort",
-                        defaultValue: "Leave empty for system trust. Self-signed certs are pinned automatically via Trust & Save above."
+                        "settings.remoteAgent.fingerprint.helperShort.v2",
+                        defaultValue: "Optional. Conduck already refuses any certificate this device doesn't trust; a fingerprint narrows that to one exact certificate. Leave it empty unless you have a reason."
                     ))
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)

@@ -15,8 +15,6 @@
 //      auth, and that a garbage-auth payload WITHOUT a token is rejected.
 //   2. TRANSPORT-HINT CLEARING — a re-import that omits the transport hint
 //      nil-removes the prior hint (App-Group only), never leaves it stale.
-//   3. FILE-SERVER PIN RESOLUTION — explicit-pin-wins; a non-self-signed
-//      recipe OR a different-host file-server yields NO spurious pin.
 //
 // `committedGatewayOnly` (the gateway-committed / file-server-credential-failed
 // partial state) is NOT covered: `setFileServerCredential` writes straight to
@@ -26,9 +24,8 @@
 //
 // Test isolation mirrors `SettingsViewModelPairingImportTests`: wipe App-Group
 // defaults + per-ref slots (+ KVS mirrors + migration latch) in setUp/tearDown.
-// Keychain-bound writes ride the `requireFileServerKeychainOrSkip` XCTSkip gate
-// (errSecMissingEntitlement on an unsigned build). Payloads are built from
-// locally-constructed JSON strings (no network); privacy: synthetic only.
+// Payloads are built from locally-constructed JSON strings (no network);
+// privacy: synthetic only.
 
 import XCTest
 @testable import Conduck
@@ -42,10 +39,6 @@ final class PairingImportBranchTests: XCTestCase {
     }()
 
     private let openclaw: RemoteAgentRef = .builtin(.openclaw)
-
-    /// Synthetic 64-hex SPKI fingerprints (the parser requires exactly 64 hex).
-    private let gatewayFP = String(repeating: "ab", count: 32)
-    private let explicitFSFP = String(repeating: "cd", count: 32)
 
     override func setUp() async throws {
         try await super.setUp()
@@ -109,7 +102,6 @@ final class PairingImportBranchTests: XCTestCase {
         url: String = "https://gw.example.test:18789",
         auth: String? = nil,
         token: String? = "tok-pairing-test",
-        certFP: String? = nil,
         model: String? = nil,
         fileServer: [String: Any]? = nil,
         transport: String? = nil
@@ -118,7 +110,6 @@ final class PairingImportBranchTests: XCTestCase {
         if let name { gateway["name"] = name }
         if let auth { gateway["auth"] = auth }
         if let token { gateway["token"] = token }
-        if let certFP { gateway["certFP"] = certFP }
         if let model { gateway["model"] = model }
         var dict: [String: Any] = ["v": 1, "gateway": gateway]
         if let fileServer { dict["fileServer"] = fileServer }
@@ -134,14 +125,13 @@ final class PairingImportBranchTests: XCTestCase {
         url: String = "https://gw.example.test:18789",
         auth: String? = nil,
         token: String? = "tok-pairing-test",
-        certFP: String? = nil,
         model: String? = nil,
         fileServer: [String: Any]? = nil,
         transport: String? = nil
     ) throws -> PairingPayload {
         let string = try makePairingString(
             kind: kind, name: name, url: url, auth: auth, token: token,
-            certFP: certFP, model: model, fileServer: fileServer, transport: transport
+            model: model, fileServer: fileServer, transport: transport
         )
         return try XCTUnwrap(
             try? PairingPayload.parse(string).get(),
@@ -155,17 +145,6 @@ final class PairingImportBranchTests: XCTestCase {
         await vm.loadSettings()
         await Task.yield()
         return vm
-    }
-
-    /// Probe the FILE-SERVER credential Keychain slot, skipping on an unsigned
-    /// build (errSecMissingEntitlement) — same posture as the sibling suite.
-    private func requireFileServerKeychainOrSkip(for ref: RemoteAgentRef) async throws {
-        do {
-            try await SettingsManager.shared.setFileServerCredential("probe-credential", for: ref)
-            try await SettingsManager.shared.clearFileServerCredential(for: ref)
-        } catch {
-            throw XCTSkip("Keychain access-group write requires a signed build (unsigned: \(error)).")
-        }
     }
 
     // MARK: - 1. Fail-closed auth (parser is the security boundary)
@@ -237,7 +216,7 @@ final class PairingImportBranchTests: XCTestCase {
             auth: "none", token: nil,
             transport: "tailscale"
         )
-        let firstOutcome = await vm.executePairingImportUsingPayloadPins(withHint, target: openclaw)
+        let firstOutcome = await vm.executePairingImportWithResolvedTrust(withHint, target: openclaw)
         XCTAssertEqual(firstOutcome, .committed, "A keyless builtin payload must commit.")
 
         let hintAfterFirst = await SettingsManager.shared.getRemoteAgentTransportHint(for: openclaw)
@@ -258,7 +237,7 @@ final class PairingImportBranchTests: XCTestCase {
             auth: "none", token: nil,
             transport: nil
         )
-        let secondOutcome = await vm.executePairingImportUsingPayloadPins(withoutHint, target: openclaw)
+        let secondOutcome = await vm.executePairingImportWithResolvedTrust(withoutHint, target: openclaw)
         XCTAssertEqual(secondOutcome, .committed)
 
         let hintAfterSecond = await SettingsManager.shared.getRemoteAgentTransportHint(for: openclaw)
@@ -266,93 +245,5 @@ final class PairingImportBranchTests: XCTestCase {
                      "A re-import that omits the transport hint MUST nil-remove the stale hint, not leave it.")
         XCTAssertNil(defaults.string(forKey: hintKey),
                      "The App-Group key must be removed, not merely shadowed.")
-    }
-
-    // MARK: - 3. File-server pin resolution
-
-    /// Explicit-pin-wins: when the fileServer block carries its OWN certFP, that
-    /// pin lands verbatim — independent of the gateway pin / transport recipe.
-    /// (Keychain-bound — the credential must land for the pin branch to run.)
-    func testFileServerExplicitPinWins() async throws {
-        try await requireFileServerKeychainOrSkip(for: openclaw)
-
-        let vm = await makeVM()
-        // Self-signed + same host (the conditions that WOULD copy the gateway
-        // pin) BUT an explicit fs pin is present → the explicit pin must win.
-        let payload = try makePayload(
-            kind: "openclaw",
-            url: "https://gw.example.test:18789",
-            auth: "none", token: nil,
-            certFP: gatewayFP,
-            fileServer: [
-                "url": "https://gw.example.test:8443",
-                "credential": "feedfacecafebeeffeedfacecafebeef",
-                "certFP": explicitFSFP
-            ],
-            transport: "selfsigned"
-        )
-
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
-        XCTAssertEqual(outcome, .committed, "A payload with a complete fileServer block must commit on a Keychain-capable host.")
-
-        let fsPin = await SettingsManager.shared.getFileServerCertFingerprint(for: openclaw)
-        XCTAssertEqual(fsPin, explicitFSFP,
-                       "An explicit fileServer certFP MUST win over the copyable gateway pin.")
-        XCTAssertNotEqual(fsPin, gatewayFP,
-                          "The gateway pin must NOT shadow an explicit fileServer pin.")
-    }
-
-    /// No spurious pin when the recipe is NOT self-signed: a `tailscale`
-    /// transport on the SAME host carries no public reason to copy a pin, so the
-    /// file-server pin must resolve to nil even though a gateway pin exists.
-    func testFileServerNoPinWhenTransportNotSelfsigned() async throws {
-        try await requireFileServerKeychainOrSkip(for: openclaw)
-
-        let vm = await makeVM()
-        let payload = try makePayload(
-            kind: "openclaw",
-            url: "https://gw.example.test:18789",
-            auth: "none", token: nil,
-            certFP: gatewayFP,
-            fileServer: [
-                "url": "https://gw.example.test:8443",
-                "credential": "feedfacecafebeeffeedfacecafebeef"
-            ],
-            transport: "tailscale"
-        )
-
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
-        XCTAssertEqual(outcome, .committed)
-
-        let fsPin = await SettingsManager.shared.getFileServerCertFingerprint(for: openclaw)
-        XCTAssertNil(fsPin,
-                     "A non-self-signed recipe must NOT copy the gateway pin to the file-server — no spurious pin.")
-    }
-
-    /// No spurious pin when the file-server rides a DIFFERENT host: even under a
-    /// self-signed recipe, the gateway pin only covers its own host, so a
-    /// different-host file-server gets no pin.
-    func testFileServerNoPinWhenDifferentHost() async throws {
-        try await requireFileServerKeychainOrSkip(for: openclaw)
-
-        let vm = await makeVM()
-        let payload = try makePayload(
-            kind: "openclaw",
-            url: "https://gw.example.test:18789",
-            auth: "none", token: nil,
-            certFP: gatewayFP,
-            fileServer: [
-                "url": "https://files.example.test:8443",
-                "credential": "feedfacecafebeeffeedfacecafebeef"
-            ],
-            transport: "selfsigned"
-        )
-
-        let outcome = await vm.executePairingImportUsingPayloadPins(payload, target: openclaw)
-        XCTAssertEqual(outcome, .committed)
-
-        let fsPin = await SettingsManager.shared.getFileServerCertFingerprint(for: openclaw)
-        XCTAssertNil(fsPin,
-                     "A self-signed gateway pin covers only its own host — a different-host file-server gets NO pin.")
     }
 }

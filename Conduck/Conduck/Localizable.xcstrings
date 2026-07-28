@@ -4,6 +4,72 @@
     "" : {
 
     },
+    "remoteAgent.notification.failure.certKeyUnpinnable.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fingerprint can't be checked"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.failure.certMismatch.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certificate doesn't match"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.failure.certUntrusted.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certificate not trusted"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.failure.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No reply from your personal AI"
+          }
+        }
+      }
+    },
+    "settings.certTrust.keyUnpinnable.refusal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
+    "settings.certTrust.keyUnpinnable.remedy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The certificate itself is fine and this device trusts it — only the fingerprint check can't run. Reissue it with an RSA 2048/3072/4096 or EC P-256/P-384 key, or clear the saved fingerprint in its settings to go back to ordinary system trust."
+          }
+        }
+      }
+    },
     "…" : {
 
     },
@@ -35,6 +101,17 @@
     },
     "A notification is how Conduck reaches you the moment your reply is ready." : {
 
+    },
+    "A photo in this chat was too large for your gateway. Start a new voice chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A photo in this chat was too large for your gateway. Start a new voice chat."
+          }
+        }
+      }
     },
     "About" : {
 
@@ -1260,17 +1337,6 @@
         }
       }
     },
-    "Couldn't verify your personal AI's certificate." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't verify your personal AI's certificate."
-          }
-        }
-      }
-    },
     "Create a setup code" : {
 
     },
@@ -2085,17 +2151,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Your gateway answered, but lists no models. Load a model on the server."
-          }
-        }
-      }
-    },
-    "diagnostics.gateway.untrustedCert" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This gateway's certificate isn't trusted yet."
           }
         }
       }
@@ -3342,35 +3397,35 @@
         }
       }
     },
+    "fileTransfer.error.certKeyUnpinnable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your file server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
     "fileTransfer.error.certMismatch" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Your file-server's certificate fingerprint changed."
+            "value" : "Your file server's certificate doesn't match the fingerprint you pinned."
           }
         }
       }
     },
-    "fileTransfer.error.certMismatch.recovery" : {
+    "fileTransfer.error.certUntrusted" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Open Settings and update the pinned fingerprint, or remove the pin to use system trust."
-          }
-        }
-      }
-    },
-    "fileTransfer.error.certMismatch.recovery.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "If you changed your file server's certificate, open its File transfer section, tap Forget file transfer, and set it up again. If you changed nothing, stop — the connection may be intercepted."
+            "value" : "This device doesn't trust your file server's certificate."
           }
         }
       }
@@ -3514,17 +3569,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tap Retry. If it keeps failing, check your file-server is running."
-          }
-        }
-      }
-    },
-    "fileTransfer.fingerprint.footer" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Only for self-signed certificates — paste the SPKI SHA-256 fingerprint."
           }
         }
       }
@@ -4581,17 +4625,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "About Pinned cert fingerprint"
-          }
-        }
-      }
-    },
-    "fileTransfer.tip.fingerprint.message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Most file servers prove who they are with a certificate your device already trusts, and you can leave this empty. If yours uses its own certificate instead, Conduck can remember that certificate's fingerprint — a short unique code — so it only ever hands your files to the real server, never to an impostor pretending to be it. A setup code fills this in for you; otherwise paste it from your file server."
           }
         }
       }
@@ -6111,6 +6144,28 @@
     "Personal AI" : {
 
     },
+    "pendingRetry.headline" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your last recording couldn't be sent."
+          }
+        }
+      }
+    },
+    "pendingRetry.headline.terminal" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your last recording couldn't be sent, and trying again would reach the same answer."
+          }
+        }
+      }
+    },
     "popover.answering" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -6698,24 +6753,35 @@
         }
       }
     },
+    "remoteAgent.error.certKeyUnpinnable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your gateway's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
     "remoteAgent.error.certMismatch" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your gateway's certificate fingerprint changed."
+            "value" : "Your gateway's certificate doesn't match the fingerprint you pinned."
           }
         }
       }
     },
-    "remoteAgent.error.certMismatch.recovery" : {
+    "remoteAgent.error.certUntrusted" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Settings and update the pinned fingerprint, or remove the pin to use system trust."
+            "state" : "translated",
+            "value" : "This device doesn't trust your gateway's certificate."
           }
         }
       }
@@ -7467,39 +7533,6 @@
         }
       }
     },
-    "settings.certTrust.approval.heading" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Certificate waiting for approval"
-          }
-        }
-      }
-    },
-    "settings.certTrust.approval.hint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Only approve a certificate you expect — one you set up on your own server."
-          }
-        }
-      }
-    },
-    "settings.certTrust.approval.trustButton" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Trust Certificate"
-          }
-        }
-      }
-    },
     "settings.certTrust.done" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7533,24 +7566,24 @@
         }
       }
     },
-    "settings.certTrust.manual.helper.fileServer" : {
+    "settings.certTrust.keyUnpinnable.refusal.compact" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A setup code fills this in for you; otherwise paste it from your file server."
+            "value" : "Conduck can't fingerprint your gateway's certificate key, so your pin can't be checked. Nothing is wrong with the certificate — open Conduck on your iPhone to fix the pin."
           }
         }
       }
     },
-    "settings.certTrust.manual.helper.gateway" : {
+    "settings.certTrust.manual.helper.v2" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Test Connection captures this for you when your server uses its own certificate — you rarely need to type it."
+            "value" : "Optional, and only ever a tightening: Conduck already refuses a certificate this device doesn't trust, and a fingerprint narrows that to one exact certificate. Paste it from the server you run."
           }
         }
       }
@@ -7577,13 +7610,35 @@
         }
       }
     },
-    "settings.certTrust.status.approval" : {
+    "settings.certTrust.pinMismatch.refusal" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This server showed a certificate this device doesn't recognize yet. If that's your own self-signed certificate, approve it below and Conduck will only ever accept this exact one."
+            "value" : "This server's certificate doesn't match the fingerprint you pinned."
+          }
+        }
+      }
+    },
+    "settings.certTrust.pinMismatch.refusal.compact" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your gateway's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "settings.certTrust.pinMismatch.remedy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If you replaced the server's certificate, update the pinned fingerprint in its settings. If you changed nothing, stop — the connection may be intercepted."
           }
         }
       }
@@ -7617,6 +7672,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Server certificate"
+          }
+        }
+      }
+    },
+    "settings.certTrust.untrusted.refusal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device doesn't trust the certificate this server presented, so Conduck won't connect to it."
+          }
+        }
+      }
+    },
+    "settings.certTrust.untrusted.refusal.compact" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device doesn't trust the server's certificate. Open Conduck on your iPhone to see how to fix it."
+          }
+        }
+      }
+    },
+    "settings.certTrust.untrusted.remedy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Give the server a publicly trusted certificate: Tailscale Serve issues one automatically, Let's Encrypt is free and also issues certificates for plain IP addresses, or put a domain in front with Caddy, which renews for you."
           }
         }
       }
@@ -8391,6 +8479,17 @@
         }
       }
     },
+    "settings.pairing.export.preflightWarning.certUntrusted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Every device that scans this code will refuse the same certificate. You can still show it."
+          }
+        }
+      }
+    },
     "settings.pairing.export.preparing" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8567,6 +8666,17 @@
         }
       }
     },
+    "settings.pairing.recovery.prompt.terminal" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your settings were saved, but the connection was refused for the reason above. Trying again would reach the same answer, so fix that first."
+          }
+        }
+      }
+    },
     "settings.pairing.recovery.retry" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -8589,24 +8699,13 @@
         }
       }
     },
-    "settings.pairing.review.certificate.named" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This code names the exact key to expect. Conduck checks it against the key the server presents before saving anything. If the certificate is already trusted on its own, that's a one-off check; if it isn't, Conduck asks before trusting the key from then on."
-          }
-        }
-      }
-    },
     "settings.pairing.review.certificate.standard" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Standard checks. This code doesn't name a particular key to expect."
+            "value" : "Standard checks. Conduck connects only if this device already trusts the server's certificate."
           }
         }
       }
@@ -8897,134 +8996,13 @@
         }
       }
     },
-    "settings.pairing.tofu.body" : {
+    "settings.pairing.trust.block.notTrusted" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "This gateway presented a self-signed certificate this device doesn't recognize. Trusting it pins this exact certificate on this device — from then on Conduck accepts only this one."
-          }
-        }
-      }
-    },
-    "settings.pairing.tofu.noFingerprint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This gateway uses a self-signed certificate with an unsupported key type. Pin it manually in the gateway's Server certificate row, or give the server a publicly-trusted certificate."
-          }
-        }
-      }
-    },
-    "settings.pairing.tofu.unexpected" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your setup code expected a publicly-trusted certificate here, not a self-signed one. On an untrusted network that can mean something is intercepting the connection. Re-run the setup on your server to confirm before you trust this."
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.block.contradiction" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ has a valid certificate, but its key is not the one this setup code names. That can mean something on the network is inspecting the connection, or that the code is out of date."
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.block.noClaim" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@'s certificate isn't trusted, and this setup code doesn't say which key to expect. A code for a self-signed server normally includes it."
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.block.unpinnable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@'s certificate isn't trusted and uses a key type Conduck can't pin. Reissue it with RSA 2048/3072/4096 or EC P-256/P-384."
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.block.untrustedMismatch" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@'s certificate isn't trusted, and its key is not the one this setup code names. Get a fresh code from whoever set the server up."
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.block.unverifiable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This setup code names a specific key for %@, but Conduck couldn't read the key the server presented, so it can't check them against each other."
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.blocked.disclosure.ignoreClaim" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "\n\nContinuing ignores the key this code names and uses standard certificate checks instead, which this server already passes."
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.blocked.disclosure.pin" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "\n\nContinuing trusts the key this server is presenting, permanently and exclusively:\n%@"
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.blocked.override.ignoreClaim" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Ignore the code's key"
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.blocked.override.pin" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Trust this server anyway"
+            "value" : "%1$@'s certificate isn't one this device trusts, so Conduck won't connect to it. %2$@"
           }
         }
       }
@@ -9040,72 +9018,6 @@
         }
       }
     },
-    "settings.pairing.trust.consent.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ that no one else vouches for, matching what this setup code names. Conduck will trust those exact keys from now on — and only those."
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.consent.both" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The gateway and its file server use certificates"
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.consent.confirm" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Trust & Connect"
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.consent.file" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The file server uses a certificate"
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.consent.gateway" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This gateway uses a certificate"
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.consent.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Trust this server's certificate?"
-          }
-        }
-      }
-    },
     "settings.pairing.trust.subject.file" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9117,17 +9029,6 @@
         }
       }
     },
-    "settings.pairing.trust.subject.file.inline" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "the file server"
-          }
-        }
-      }
-    },
     "settings.pairing.trust.subject.gateway" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9135,39 +9036,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "The gateway"
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.subject.gateway.inline" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "the gateway"
-          }
-        }
-      }
-    },
-    "settings.pairing.trust.unreachable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't reach %@ to check its certificate against this code. Try again when you can reach it."
-          }
-        }
-      }
-    },
-    "settings.pairing.trustRetry" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Trust certificate & retry"
           }
         }
       }
@@ -9531,17 +9399,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Server certificate"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.certRow.value.approvalNeeded" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Approval needed"
           }
         }
       }
@@ -10085,13 +9942,13 @@
         }
       }
     },
-    "settings.remoteAgent.fingerprint.helperShort" : {
+    "settings.remoteAgent.fingerprint.helperShort.v2" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Leave empty for system trust. Test Connection can pin a self-signed cert for you, or paste its SHA-256 hex."
+            "value" : "Optional. Conduck already refuses any certificate this device doesn't trust; a fingerprint narrows that to one exact certificate. Leave it empty unless you have a reason."
           }
         }
       }
@@ -10789,17 +10646,6 @@
         }
       }
     },
-    "settings.remoteAgent.summary.certApproval" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Certificate approval needed"
-          }
-        }
-      }
-    },
     "settings.remoteAgent.summary.checking" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11031,17 +10877,6 @@
         }
       }
     },
-    "settings.remoteAgent.tip.certFingerprint.message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Most servers prove who they are with a certificate your phone already trusts, and you can leave this empty. If your server uses its own certificate instead, Conduck can remember that certificate's fingerprint — a short unique code — so it can tell your real server from an impostor pretending to be it. Test Connection can capture the fingerprint for you; you never have to type it."
-          }
-        }
-      }
-    },
     "settings.remoteAgent.tip.certFingerprint.title" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11174,13 +11009,13 @@
         }
       }
     },
-    "settings.remoteAgent.tip.serverCertificate.message" : {
+    "settings.remoteAgent.tip.serverCertificate.message.v2" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Every https server shows a certificate to prove who it is before Conduck sends anything. Automatic means your device already recognizes it — right for most setups. If your server made its own certificate (self-signed), open this row to pin it: Conduck then accepts exactly that certificate and nothing else."
+            "value" : "Every https server shows a certificate to prove who it is before Conduck sends anything. Automatic means your device already recognizes it — right for most setups. Conduck refuses a certificate your device doesn't recognize, so a server that made its own needs a real one instead. Pinning is an optional extra: open this row to name one exact certificate and nothing else is accepted."
           }
         }
       }
@@ -11225,83 +11060,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Gateway URL"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.tofu.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This gateway uses a self-signed certificate. Trust it once to pin its fingerprint on this device."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.tofu.body.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Test Connection stopped: this gateway uses a self-signed certificate this device doesn't recognize yet. Review it to decide whether to trust this exact certificate."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.tofu.noFingerprint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This gateway uses a self-signed certificate with an unsupported key type. Pin it manually under Advanced, or use a publicly-trusted certificate."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.tofu.noFingerprint.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This gateway uses a self-signed certificate with an unsupported key type. Pin it manually in the Server certificate row below, or use a publicly-trusted certificate."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.tofu.reviewButton" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Review Certificate"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.tofu.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Untrusted certificate"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.tofu.trustButton" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Trust & Save"
           }
         }
       }
@@ -13506,17 +13264,6 @@
         }
       }
     },
-    "settings.voice.tts.preview.error.certMismatch" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The server's certificate didn't match your saved fingerprint."
-          }
-        }
-      }
-    },
     "settings.voice.tts.preview.error.contentBlocked" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -13908,6 +13655,17 @@
         }
       }
     },
+    "Something went wrong. Check Conduck on your iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something went wrong. Check Conduck on your iPhone."
+          }
+        }
+      }
+    },
     "Something went wrong. Try again." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -14134,24 +13892,35 @@
         }
       }
     },
+    "stt.error.customCertKeyUnpinnable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your custom STT server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
     "stt.error.customCertMismatch" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your custom STT server's certificate fingerprint changed."
+            "value" : "Your custom STT server's certificate doesn't match the fingerprint you pinned."
           }
         }
       }
     },
-    "stt.error.customCertMismatch.recovery" : {
-      "extractionState" : "extracted_with_value",
+    "stt.error.customCertUntrusted" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Settings and update the pinned fingerprint, or remove the pin to use system trust."
+            "state" : "translated",
+            "value" : "This device doesn't trust your custom STT server's certificate."
           }
         }
       }
@@ -14343,17 +14112,6 @@
         }
       }
     },
-    "stt.error.untrustedCert.recovery" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Settings and pin the certificate, or use a publicly-trusted certificate."
-          }
-        }
-      }
-    },
     "stt.test.assetMissing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14431,28 +14189,6 @@
         }
       }
     },
-    "stt.test.macUntrustedCert.hint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Self-signed certificate. Pin its fingerprint under Advanced to continue."
-          }
-        }
-      }
-    },
-    "stt.test.reachability.certMismatch" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Certificate doesn't match the pinned fingerprint."
-          }
-        }
-      }
-    },
     "stt.test.reachability.invalidResponse" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14497,17 +14233,6 @@
         }
       }
     },
-    "stt.test.reachability.untrustedCert" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Self-signed certificate — trust it to continue."
-          }
-        }
-      }
-    },
     "stt.test.skipped.blockedByAuth" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14519,13 +14244,13 @@
         }
       }
     },
-    "stt.test.skipped.blockedByReachability" : {
+    "stt.test.skipped.blockedByReachability.v2" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Skipped — the server wasn't reachable."
+            "value" : "Skipped — the connection to the server didn't complete."
           }
         }
       }
@@ -14559,50 +14284,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Transcription"
-          }
-        }
-      }
-    },
-    "stt.test.tofu.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This server uses a self-signed certificate. Trust it once to pin its fingerprint on this device."
-          }
-        }
-      }
-    },
-    "stt.test.tofu.noFingerprint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This server uses a self-signed certificate with an unsupported key type. Pin it manually under Advanced, or use a publicly-trusted certificate."
-          }
-        }
-      }
-    },
-    "stt.test.tofu.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Untrusted certificate"
-          }
-        }
-      }
-    },
-    "stt.test.tofu.trustButton" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Trust & Save"
           }
         }
       }
@@ -14931,6 +14612,17 @@
         }
       }
     },
+    "That AI model isn't available. Pick another in Conduck on your iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That AI model isn't available. Pick another in Conduck on your iPhone."
+          }
+        }
+      }
+    },
     "Thinking…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -14953,8 +14645,30 @@
         }
       }
     },
+    "This chat got too long for the model. Start a new voice chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This chat got too long for the model. Start a new voice chat."
+          }
+        }
+      }
+    },
     "This gateway has no file server set up, so your file couldn't be sent. Add one in Settings, then share it again." : {
 
+    },
+    "This gateway's file transfer isn't set up. Check it in Conduck on your iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This gateway's file transfer isn't set up. Check it in Conduck on your iPhone."
+          }
+        }
+      }
     },
     "This removes every conversation from this device and all your other devices. This cannot be undone." : {
       "extractionState" : "manual",
@@ -15380,13 +15094,35 @@
         }
       }
     },
+    "tts.error.customCertKeyUnpinnable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your custom voice server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked."
+          }
+        }
+      }
+    },
     "tts.error.customCertMismatch" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your custom voice server's certificate fingerprint changed."
+            "value" : "Your custom voice server's certificate doesn't match the fingerprint you pinned."
+          }
+        }
+      }
+    },
+    "tts.error.customCertUntrusted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device doesn't trust your custom voice server's certificate."
           }
         }
       }
@@ -15548,6 +15284,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "After setup, press %@ to talk."
+          }
+        }
+      }
+    },
+    "Unexpected error. Check your settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Unexpected error. Check your settings."
           }
         }
       }
@@ -15742,6 +15489,28 @@
     "You're almost ready." : {
 
     },
+    "Your AI provider is rate-limiting you. Free models often have a daily limit." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI provider is rate-limiting you. Free models often have a daily limit."
+          }
+        }
+      }
+    },
+    "Your AI provider is out of credits. Add credits with your provider." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI provider is out of credits. Add credits with your provider."
+          }
+        }
+      }
+    },
     "Your audio goes from this device straight to %@ and back. Nobody else sees it." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15753,8 +15522,30 @@
         }
       }
     },
+    "Your gateway couldn't use a photo in this chat. Start a new voice chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway couldn't use a photo in this chat. Start a new voice chat."
+          }
+        }
+      }
+    },
     "Your gateway is ready" : {
 
+    },
+    "Your gateway needs a model name. Set one in Conduck on your iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway needs a model name. Set one in Conduck on your iPhone."
+          }
+        }
+      }
     },
     "Your gateway, your rules" : {
 
@@ -15794,6 +15585,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Your personal AI rejected the token. Update it in Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "Your speech provider sent an unexpected response. Pick another provider in Conduck on your iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your speech provider sent an unexpected response. Pick another provider in Conduck on your iPhone."
           }
         }
       }

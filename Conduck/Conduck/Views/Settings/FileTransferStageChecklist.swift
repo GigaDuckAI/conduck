@@ -75,13 +75,17 @@ struct FileTransferStageChecklist: View {
         }
     }
 
+    /// Cause AND remedy — this checklist is the whole story for a failed stage.
+    /// It has no Troubleshoot chip and no second slot, so rendering
+    /// `errorDescription` alone would leave a terminal refusal (a certificate
+    /// this device won't accept) on screen with no way to act on it.
     private func stageDetail(_ stage: FileTransferTestStage) -> String? {
         guard let result, !result.success,
               stage.rawValue == result.reachedStage.rawValue,
               let failure = result.failure else {
             return nil
         }
-        return failure.errorDescription
+        return failure.descriptionWithRecovery
     }
 
     private func stageTitle(_ stage: FileTransferTestStage) -> LocalizedStringResource {

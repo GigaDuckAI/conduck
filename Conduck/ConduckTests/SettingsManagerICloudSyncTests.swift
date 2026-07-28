@@ -465,10 +465,11 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
     }
 
     func testInboundFileServerCertFingerprintAndLegacyKeyAreNeverMirrored() async {
-        // The cert pin is a PER-DEVICE TOFU artefact (never synced by design) and
-        // `keepImagesInline` is the retired legacy bool (mirror-banned). Even a
-        // hostile/buggy KVS push naming them must not land in defaults — the
-        // handler scans three EXPLICIT prefixes, never blanket `fileServer.`.
+        // The cert pin is a PER-DEVICE optional tightening (never synced by
+        // design) and `keepImagesInline` is the retired legacy bool
+        // (mirror-banned). Even a hostile/buggy KVS push naming them must not
+        // land in defaults — the handler scans three EXPLICIT prefixes, never
+        // blanket `fileServer.`.
         kvs.set("ab12", forKey: fileServerCertKeyOpenclaw)
         kvs.set(true, forKey: fileServerKeepInlineKeyOpenclaw)
 

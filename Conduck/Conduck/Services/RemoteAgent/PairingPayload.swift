@@ -15,6 +15,12 @@
 // ignored (forward-compat), required-field failures reject the whole
 // payload, optional hints degrade to nil.
 //
+// THE PAYLOAD NAMES NO CERTIFICATE. There is no field by which a setup code
+// can tell this device which key to expect, because a code is untrusted
+// input and a certificate claim inside it could only ever ask the app to
+// lower its standards. Trust is decided against the LIVE server, after the
+// user consents, by `PairingTrustDecision` — never against the code.
+//
 // PRIVACY (non-negotiable — see the spec's Privacy & Security section): the raw pairing string
 // embeds the gateway bearer token + file-server credential. NEVER log /
 // echo the raw string, the decoded JSON, the token, or the credential —
@@ -44,11 +50,11 @@ enum PairingParseError: Error, Equatable {
     /// this; the UI tells the user to update the app, not "bad code".
     case unsupportedVersion
     /// Bad base64 / bad JSON / missing-or-invalid required field / bearer
-    /// without token / custom without nonempty name / bad certFP /
-    /// missing `"v"` / a URL with no host or carrying `user:password@`
-    /// userinfo (`EndpointURLPolicy` — both URLs, no exceptions) / a
-    /// display string (`name`, `model`) carrying control or bidi scalars
-    /// or exceeding its length cap (`sanitizedDisplayText`).
+    /// without token / custom without nonempty name / missing `"v"` / a URL
+    /// with no host or carrying `user:password@` userinfo
+    /// (`EndpointURLPolicy` — both URLs, no exceptions) / a display string
+    /// (`name`, `model`) carrying control or bidi scalars or exceeding its
+    /// length cap (`sanitizedDisplayText`).
     case malformed
     /// Gateway or fileServer URL parses but its scheme isn't https — https
     /// is mandatory (`spec.md` Architectural Invariants); surfaced as its
@@ -68,9 +74,14 @@ struct PairingPayload: Equatable, Sendable {
 
     /// How the gateway is exposed — a HINT for setup-UI copy (e.g. "this
     /// gateway rides your tailnet"), never load-bearing for transport
-    /// behavior. Unknown future values decode to nil, not an error.
+    /// behavior OR for trust. Every member names a recipe that yields a
+    /// publicly-trusted certificate, because that is the only kind of
+    /// certificate this app can connect to at all: App Transport Security
+    /// lets an app TIGHTEN trust evaluation, never loosen it, so a pin can
+    /// only ever be an extra restriction on a chain the system already
+    /// accepts. Unknown future values decode to nil, not an error.
     enum Transport: String, Sendable {
-        case tailscale, funnel, cloudflare, selfsigned
+        case tailscale, funnel, cloudflare
         case publicCert = "public"
     }
 
@@ -79,10 +90,6 @@ struct PairingPayload: Equatable, Sendable {
         let url: URL
         /// Machine-minted shared credential — nonempty by contract.
         let credential: String
-        /// Pinned SPKI SHA-256 (lowercase 64-hex) — `conduck-connect` emits it
-        /// when the self-signed file host differs from the gateway host; optional
-        /// otherwise.
-        let certFP: String?
     }
 
     let kind: Kind
@@ -94,9 +101,6 @@ struct PairingPayload: Equatable, Sendable {
     /// Bearer token — present iff `authScheme == .bearer` (a stray token
     /// under `.none` is DROPPED so keyless stays an explicit choice).
     let token: String?
-    /// Pinned SPKI SHA-256, normalized to lowercase 64-hex (input may
-    /// carry `:` separators / uppercase — `openssl` fingerprint style).
-    let certFP: String?
     /// Optional model override for the converse `"model"` field.
     let model: String?
     let fileServer: FileServer?
@@ -217,8 +221,6 @@ struct PairingPayload: Equatable, Sendable {
             token = nil
         }
 
-        let certFP = try normalizedCertFP(gateway["certFP"])
-
         let model: String?
         if
             let rawModel = (gateway["model"] as? String)?
@@ -241,8 +243,7 @@ struct PairingPayload: Equatable, Sendable {
             guard let credential = fsDict["credential"] as? String, !credential.isEmpty else {
                 throw PairingParseError.malformed
             }
-            let fsCertFP = try normalizedCertFP(fsDict["certFP"])
-            fileServer = FileServer(url: fsURL, credential: credential, certFP: fsCertFP)
+            fileServer = FileServer(url: fsURL, credential: credential)
         }
 
         // transport — pure hint: unknown raw value → nil, never an error.
@@ -253,7 +254,6 @@ struct PairingPayload: Equatable, Sendable {
             url: url,
             authScheme: authScheme,
             token: token,
-            certFP: certFP,
             model: model,
             fileServer: fileServer,
             transport: transport
@@ -319,8 +319,8 @@ struct PairingPayload: Equatable, Sendable {
     //
     // Both sit far under what a QR code can even carry: the wizard's encoder
     // tops out at QR version 40 (~2.9 KB binary, ~2.2 KB of JSON after base64
-    // expansion), which the whole payload — URLs, token, credential, digests —
-    // must share. A field near either cap is already implausible on the wire.
+    // expansion), which the whole payload — URLs, token, credential — must
+    // share. A field near either cap is already implausible on the wire.
     private static let maxNameLength = 120
     private static let maxModelLength = 200
 
@@ -373,26 +373,5 @@ struct PairingPayload: Equatable, Sendable {
         default:
             return false
         }
-    }
-
-    /// Optional certFP field: nil/absent passes through; otherwise must be
-    /// a string that — after lowercasing + stripping `:` separators
-    /// (`openssl` fingerprint style) — is exactly 64 hex chars.
-    private static func normalizedCertFP(_ value: Any?) throws -> String? {
-        guard let value else { return nil }
-        guard let raw = value as? String else {
-            throw PairingParseError.malformed
-        }
-        let normalized = raw.lowercased().replacingOccurrences(of: ":", with: "")
-        // ASCII-only hex gate — `Character.isHexDigit` also accepts
-        // fullwidth variants, which must NOT slip into a pinned digest.
-        let hexDigits = Set("0123456789abcdef")
-        guard
-            normalized.count == 64,
-            normalized.allSatisfy({ hexDigits.contains($0) })
-        else {
-            throw PairingParseError.malformed
-        }
-        return normalized
     }
 }

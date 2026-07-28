@@ -208,8 +208,7 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             newUserImageFileRefs: newUserImageFileRefs,
             newUserTextFileServerRefs: newUserTextFileServerRefs,
             fileServerReady: fileServerReady,
-            session: pinnedSession,
-            trustEvaluator: trustEvaluator
+            transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
         )
         // Land in-process via the SHARED landing path (append → flip → output
         // detect → user reply notification → post `.remoteAgentTurnDidComplete`,

@@ -27,7 +27,12 @@
 //   - urlSession(_:task:didReceive:) (challenge) routes to
 //     RemoteAgentTrustEvaluator with the pin stamped onto the TASK at enqueue
 //     (FileTransferBackgroundMetadata.pinnedFingerprintHex), applied host-blind
-//     so a cross-origin redirect target must present the pinned key
+//     so a cross-origin redirect target must present the pinned key, and records
+//     the evaluator's OWN verdicts in the per-task registry
+//     (trustSignalsByTaskID) — the same shape CarPlayConverseUploader and
+//     BackgroundRemoteAgent use, and the only way didCompleteWithError can tell
+//     an untrusted CHAIN from a pinned KEY that disagreed from a key that cannot
+//     be fingerprinted, once URLSession has flattened all three into a bare -999
 //   - urlSession(_:task:willPerformHTTPRedirection:) refuses a cross-origin 3xx
 //     — a real veto on macOS (.default session), never delivered on iOS
 //     (background sessions always follow redirects)
@@ -160,7 +165,24 @@ final class BackgroundFileTransfer: NSObject {
     /// Guarded by `queue` for thread-safe access from delegate callbacks.
     private var inFlight: [Int: InFlightTransfer] = [:]
 
-    /// Serial queue guarding `inFlight`.
+    /// The verdicts each task's server-trust challenge reached, stored WHOLE.
+    /// Recorded from the evaluator's own answer at challenge time because
+    /// URLSession reports the resulting `cancelAuthenticationChallenge` as a bare
+    /// `.cancelled` (-999) — from the code alone that is indistinguishable from a
+    /// benign task cancellation and from every other refusal.
+    ///
+    /// One snapshot, not a set per verdict: the three refusals have three
+    /// remedies, and only ONE of them (a pin that disagreed with a chain the
+    /// system DID trust) carries the warning that the connection may be
+    /// intercepted. Collapsing them tells a user whose key rotated to go obtain a
+    /// trusted certificate they already have — or, in the other direction, warns
+    /// a user whose only problem is an unhashable key algorithm that they are
+    /// being intercepted. Kept in lockstep with
+    /// `CarPlayConverseUploader.trustSignalsByTaskID`, so the same refused
+    /// certificate reads identically on every lane. Guarded by `queue`.
+    private var trustSignalsByTaskID: [Int: RemoteAgentTrustEvaluator.AttemptTrustSignals] = [:]
+
+    /// Serial queue guarding `inFlight` and the per-task trust registry.
     private let queue = DispatchQueue(label: Constants.identityNamespace + ".bg-file-transfer")
 
     /// Stored completion handler from the system `.backgroundTask` callback.
@@ -280,7 +302,12 @@ final class BackgroundFileTransfer: NSObject {
         snapshot: SettingsManager.FileTransferSnapshot
     ) async {
         guard let slash = storedKey.lastIndex(of: "/") else { return }
-        let session = makeEphemeralSession(snapshot: snapshot)
+        // Best-effort, so the evaluator's verdict is deliberately not consulted:
+        // the PUT that follows is the authoritative attempt, it runs on the
+        // background session whose per-task notes DO carry the refusal, and it
+        // is the one that reports to the user. A second report here would give
+        // one refusal two voices.
+        let (session, _) = makeEphemeralSession(snapshot: snapshot)
         defer { session.finishTasksAndInvalidate() }
         await FileServerClient.ensureCollection(
             snapshot: snapshot,
@@ -329,8 +356,9 @@ final class BackgroundFileTransfer: NSObject {
             } catch {
                 // A parent-task cancellation completes through URLSession as
                 // URLError.cancelled. Preserve CancellationError for that
-                // caller-owned path while leaving an unrelated `.cancelled`
-                // transport verdict available for the cert-mismatch mapper.
+                // caller-owned path; a `.cancelled` with no parent cancellation
+                // behind it stays available to the mapper, which now sees the
+                // certificate verdict already resolved by the delegate.
                 try Task.checkCancellation()
                 throw error
             }
@@ -380,7 +408,7 @@ final class BackgroundFileTransfer: NSObject {
     func probeExists(snapshot: SettingsManager.FileTransferSnapshot,
                      storedKey: String) async -> FileProbeOutcome {
         let request = FileServerClient.buildProbeRequest(snapshot: snapshot, storedKey: storedKey)
-        let session = Self.makeEphemeralSession(snapshot: snapshot)
+        let (session, evaluator) = Self.makeEphemeralSession(snapshot: snapshot)
         defer { session.finishTasksAndInvalidate() }
         do {
             // `bytes(for:)` (NOT `data(for:)`): the response headers arrive
@@ -394,9 +422,13 @@ final class BackgroundFileTransfer: NSObject {
             guard let http = response as? HTTPURLResponse else { return .unknown }
             return FileServerClient.parseProbeOutcome(status: http.statusCode)
         } catch {
-            // A transport failure (unreachable / cert reject / cancel) is not a
-            // definitive "missing"; report unknown so callers don't false-delete.
-            return .unknown
+            // A transport failure is never a definitive "missing", so no arm
+            // here can produce one — callers must not false-delete. The split is
+            // between a failure that may clear on its own and one that cannot:
+            // ask the evaluator that answered this attempt's challenge, because
+            // the code alone cannot say (a refusal and a benign cancellation are
+            // both -999).
+            return Self.certificateRefusal(error, evaluator: evaluator) == nil ? .unknown : .certRefused
         }
     }
 
@@ -412,7 +444,7 @@ final class BackgroundFileTransfer: NSObject {
     func probeExistsWithLength(snapshot: SettingsManager.FileTransferSnapshot,
                                storedKey: String) async -> (FileProbeOutcome, Int64?) {
         let request = FileServerClient.buildProbeRequest(snapshot: snapshot, storedKey: storedKey)
-        let session = Self.makeEphemeralSession(snapshot: snapshot)
+        let (session, evaluator) = Self.makeEphemeralSession(snapshot: snapshot)
         defer { session.finishTasksAndInvalidate() }
         do {
             // See `probeExists`: `bytes(for:)` + immediate task cancel — the
@@ -426,9 +458,13 @@ final class BackgroundFileTransfer: NSObject {
             let size = outcome == .exists ? Self.parseProbeTotalLength(from: http) : nil
             return (outcome, size)
         } catch {
-            // Same fail-closed contract as `probeExists`: transport failure is not
-            // a definitive "missing", and it carries no size.
-            return (.unknown, nil)
+            // Same fail-closed contract as `probeExists` — transport failure is
+            // not a definitive "missing", and it carries no size — including the
+            // refusal split, so the two probes cannot tell a caller two
+            // different stories about one server.
+            let outcome: FileProbeOutcome =
+                Self.certificateRefusal(error, evaluator: evaluator) == nil ? .unknown : .certRefused
+            return (outcome, nil)
         }
     }
 
@@ -493,7 +529,9 @@ final class BackgroundFileTransfer: NSObject {
         var request = FileServerClient.buildDownloadRequest(snapshot: snapshot, storedKey: storedKey)
         request.setValue("bytes=0-\(maxBytes - 1)", forHTTPHeaderField: "Range")
         request.timeoutInterval = Constants.fileServerProbeTimeout
-        let session = Self.makeEphemeralSession(snapshot: snapshot)
+        // Best-effort preview enrichment: every failure yields "no preview", so
+        // there is no verdict for the evaluator to select between.
+        let (session, _) = Self.makeEphemeralSession(snapshot: snapshot)
         defer { session.finishTasksAndInvalidate() }
         return await Self.streamBounded(session: session, request: request, maxBytes: maxBytes)
     }
@@ -546,7 +584,9 @@ final class BackgroundFileTransfer: NSObject {
     func deleteFile(snapshot: SettingsManager.FileTransferSnapshot,
                     storedKey: String) async {
         let request = FileServerClient.buildDeleteRequest(snapshot: snapshot, storedKey: storedKey)
-        let session = Self.makeEphemeralSession(snapshot: snapshot)
+        // Orphan cleanup has no caller to report to, so the evaluator's verdict
+        // has nowhere to go. An orphan blob on the user's own server is harmless.
+        let (session, _) = Self.makeEphemeralSession(snapshot: snapshot)
         defer { session.finishTasksAndInvalidate() }
         _ = try? await session.data(for: request)
     }
@@ -599,19 +639,32 @@ final class BackgroundFileTransfer: NSObject {
 
     // MARK: - Ephemeral session (probe / delete / MKCOL)
 
-    /// A short-lived, cert-pinned session for interactive probe/delete/MKCOL requests.
+    /// A short-lived, cert-pinned session for interactive probe/delete/MKCOL
+    /// requests, RETURNED WITH ITS EVALUATOR.
     /// The `RemoteAgentTrustEvaluator` IS the delegate (the session retains it
     /// until invalidated), so this lane gets the pin compare AND the cross-host
     /// redirect refusal from the one shared trust component instead of a
     /// look-alike wrapper that could drift from it. The pin is applied host-blind
     /// — a redirect target's cert cannot match, which is the fail-closed answer.
-    private static func makeEphemeralSession(snapshot: SettingsManager.FileTransferSnapshot) -> URLSession {
+    ///
+    /// WHY THE EVALUATOR COMES BACK OUT. All three of its refusals reach the
+    /// caller as a bare `.cancelled` (-999), indistinguishable from a session
+    /// teardown or a parent-task cancellation, and this lane installs the
+    /// evaluator as the SESSION delegate — so `BackgroundFileTransfer`'s own
+    /// per-task note registry, which is what keeps the background lane's
+    /// verdicts attributable, never sees these challenges at all. Handing the
+    /// reference back is the only record of whose refusal a -999 was. Mirrors
+    /// `FileServerClient.makeProbeSession`, which returns the same pair for the
+    /// same reason. The caller owns invalidation.
+    private static func makeEphemeralSession(
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) -> (session: URLSession, evaluator: RemoteAgentTrustEvaluator) {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = Constants.fileServerProbeTimeout
         config.timeoutIntervalForResource = Constants.fileServerProbeTimeout
         let evaluator = RemoteAgentTrustEvaluator(
             pinnedFingerprintHex: snapshot.certFingerprintHex)
-        return URLSession(configuration: config, delegate: evaluator, delegateQueue: nil)
+        return (URLSession(configuration: config, delegate: evaluator, delegateQueue: nil), evaluator)
     }
 
     // MARK: - Error mapping
@@ -642,9 +695,68 @@ final class BackgroundFileTransfer: NSObject {
         }
     }
 
+    /// The file-transfer error a completed task's transport `urlError` means
+    /// GIVEN this delegate's own per-task trust notes, or `nil` when no note was
+    /// recorded (the caller keeps the raw error). Pure over its inputs and
+    /// `internal`, so the one distinction that a user acts on differently is
+    /// unit-testable without a live server.
+    ///
+    /// The verdicts must never collapse into one another. An untrusted chain is
+    /// fixed on the SERVER — give it a certificate this device would trust — and
+    /// `.fileTransferCertUntrusted` says exactly that. A pin that disagreed with
+    /// a chain the system DID trust is the interception case the pin exists to
+    /// catch, and `.fileTransferCertMismatch` is the only message that warns the
+    /// connection may be intercepted. Telling a user in that position to go
+    /// obtain a trusted certificate points them at something they already have.
+    ///
+    /// Classification is delegated to `RemoteAgentTrustEvaluator`, the ONE
+    /// classifier every lane shares, so the file lane cannot drift from the
+    /// converse and STT lanes on the same refusal. The WHOLE snapshot travels
+    /// here, not loose Bools: `pinComparisonUnsupported` is the only thing
+    /// separating "Conduck cannot hash this key" from the interception warning,
+    /// and a flattened form drops it silently.
+    static func trustError(urlError: URLError,
+                           signals: RemoteAgentTrustEvaluator.AttemptTrustSignals) -> AppError? {
+        guard signals != .empty else { return nil }
+        switch RemoteAgentTrustEvaluator.classifyTransportError(urlError.code, signals: signals) {
+        case .untrustedCert: return .fileTransferCertUntrusted
+        case .certMismatch:  return .fileTransferCertMismatch
+        // Chain trusted, pin never compared — its own code so this lane never
+        // borrows the mismatch warning for a certificate that is fine.
+        case .certKeyUnpinnable: return .fileTransferCertKeyUnpinnable
+        case .timeout, .unreachable, .cancelled: return nil
+        }
+    }
+
+    /// The certificate refusal an EPHEMERAL-session failure represents, or `nil`
+    /// when the failure was anything else.
+    ///
+    /// The ephemeral lane installs the evaluator as the SESSION delegate, so its
+    /// challenges never pass through this type's per-task note registry — the
+    /// evaluator's own snapshot is the only record, and it is scoped to the one
+    /// attempt the caller just awaited. Non-`URLError` failures are
+    /// unclassifiable and take the conservative `nil`.
+    ///
+    /// Routed through `trustError` rather than re-deriving the split, so the
+    /// interactive probes and the background transfers cannot come to different
+    /// conclusions about one refusal.
+    private static func certificateRefusal(
+        _ error: Error,
+        evaluator: RemoteAgentTrustEvaluator
+    ) -> AppError? {
+        guard let urlError = error as? URLError else { return nil }
+        return trustError(urlError: urlError, signals: evaluator.attemptSignals)
+    }
+
     /// Map a transport-layer error to the file-transfer AppError family.
-    /// Never reveals credentials.
-    private static func mapTransferError(_ error: Error, fallback: AppError) -> AppError {
+    /// Never reveals credentials. `internal` so the code→error contract is
+    /// unit-testable without a live session, like `completionError` above.
+    ///
+    /// It runs on the CALLER's side of the continuation, where the task — and
+    /// therefore its trust notes — is out of reach, so it deliberately owns no
+    /// trust disambiguation: `didCompleteWithError` has already resolved a noted
+    /// refusal into an `AppError`, and the first line here passes that through.
+    static func mapTransferError(_ error: Error, fallback: AppError) -> AppError {
         if let appError = error as? AppError { return appError }
         if let urlError = error as? URLError {
             switch urlError.code {
@@ -653,12 +765,13 @@ final class BackgroundFileTransfer: NSObject {
             case .serverCertificateUntrusted,
                  .serverCertificateHasBadDate,
                  .serverCertificateHasUnknownRoot,
-                 .serverCertificateNotYetValid,
-                 .cancelled:
-                // The specific server-certificate codes name the cert as the
-                // cause; `.cancelled` here is the trust-evaluator rejecting a
-                // pinned mismatch (it cancels the auth challenge).
-                return .fileTransferCertMismatch
+                 .serverCertificateNotYetValid:
+                // The SYSTEM named the certificate as the cause. Reaching here
+                // means no challenge recorded a note for this task (a reused
+                // connection, or a rejection the stack made before any
+                // challenge fired), so nothing compared a pinned digest and
+                // "untrusted" is the whole of what is known.
+                return .fileTransferCertUntrusted
             case .notConnectedToInternet,
                  .cannotConnectToHost,
                  .cannotFindHost,
@@ -667,11 +780,21 @@ final class BackgroundFileTransfer: NSObject {
                  .networkConnectionLost,
                  .secureConnectionFailed:
                 // GENERIC SSL failure (`-1200`) is NOT a cert-trust signal on
-                // its own; this long-lived background session can't read the
-                // per-challenge trust signals, so treat it as a transient
-                // handshake failure → unreachable, NOT a false cert mismatch.
+                // its own — with no note recorded it is a transient handshake
+                // failure → unreachable, NOT a false cert verdict.
                 return .fileTransferUnreachable
             default:
+                // `.cancelled` (-999) lands here, and must NOT be read as a
+                // certificate problem. Both of the evaluator's refusals set a
+                // note and were resolved by `didCompleteWithError` before the
+                // continuation threw; an un-noted -999 is a genuine
+                // cancellation (parent task, session invalidation), and the
+                // fallback is the honest "the transfer did not complete".
+                // Folding it in with the certificate codes told every real pin
+                // mismatch — a rotated key, or interception using a
+                // publicly-trusted certificate — to go get a trusted
+                // certificate, and dropped the one line that says the
+                // connection may be intercepted.
                 return fallback
             }
         }
@@ -716,16 +839,105 @@ extension BackgroundFileTransfer: URLSessionTaskDelegate {
                     task: URLSessionTask,
                     didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        answerTaskTrustChallenge(
+            session, task: task, challenge: challenge,
+            makeEvaluator: { RemoteAgentTrustEvaluator(pinnedFingerprintHex: $0) },
+            completionHandler: completionHandler)
+    }
+
+    #if DEBUG
+    /// TEST-ONLY entry into the delegate body above with the system-chain
+    /// verdict substituted. It exists because a pin is an ADDITIONAL restriction
+    /// on a chain the system already trusts: over an untrusted chain the
+    /// evaluator fails closed before it ever compares a digest, so the loopback
+    /// fixture's self-signed certificate cannot reach the pin compare, the
+    /// redirect veto, or anything else that happens after a completed handshake.
+    /// Substituting this one verdict stands in for "the device trusts this
+    /// chain" while the handshake and the `SecTrust` stay genuine
+    /// (`RemoteAgentLiveTLSTrustTests`, Group B).
+    ///
+    /// `#if DEBUG` IS the security control: `{ _ in true }` here switches chain
+    /// validation off for the whole file lane, and loopback plus self-addressed
+    /// IPs are ATS-exempt, so App Transport Security is not a backstop behind
+    /// it. A Release or Archive build cannot compile a call to this method
+    /// because the method is not in it. Same fence, same reason, as
+    /// `RemoteAgentTrustEvaluator`'s test-only initializer.
+    nonisolated func respondToTaskTrustChallenge(
+        _ session: URLSession,
+        task: URLSessionTask,
+        challenge: URLAuthenticationChallenge,
+        evaluateSystemTrust: @escaping @Sendable (SecTrust) -> Bool,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        answerTaskTrustChallenge(
+            session, task: task, challenge: challenge,
+            makeEvaluator: {
+                RemoteAgentTrustEvaluator(pinnedFingerprintHex: $0,
+                                          evaluateSystemTrust: evaluateSystemTrust)
+            },
+            completionHandler: completionHandler)
+    }
+    #endif
+
+    /// The shared body: resolve the task's pin, answer the challenge through the
+    /// evaluator `makeEvaluator` builds for it, and RECORD the evaluator's own
+    /// verdict against the task before forwarding the disposition. An UNPINNED
+    /// challenge never reaches the evaluator at all — see the guard below.
+    ///
+    /// The recording is load-bearing. Once `completionHandler` runs, URLSession
+    /// reports a cancelled challenge to `didCompleteWithError` as a bare
+    /// `.cancelled` (-999) — the same code a benign task cancellation produces,
+    /// for BOTH of the evaluator's refusals. Reading `systemTrustRejected` /
+    /// `pinRejected` off the evaluator here is what keeps "this device does not
+    /// trust the certificate" and "the pinned key disagreed" apart all the way
+    /// to the user, and the per-task registry is what carries them across a
+    /// long-lived, multi-transfer session that builds a fresh evaluator per
+    /// challenge.
+    private nonisolated func answerTaskTrustChallenge(
+        _ session: URLSession,
+        task: URLSessionTask,
+        challenge: URLAuthenticationChallenge,
+        makeEvaluator: (String?) -> RemoteAgentTrustEvaluator,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
         // Only server-trust challenges take the pinning path (client-cert /
         // HTTP-auth → default handling), mirroring `STTClient+Background`.
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        let pin = Self.taskPin(taskDescription: task.taskDescription)
-            ?? pinnedFingerprint(forHost: challenge.protectionSpace.host)
-        let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: pin)
-        evaluator.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+        // No pin → default ATS, and NO note recorded, matching the three sibling
+        // converse lanes. The evaluator's `SecTrustEvaluateWithError` call is
+        // ADVISORY: it also fails when evaluation could not COMPLETE (an OCSP
+        // fetch needing the network), and on the unpinned path the evaluator does
+        // not cancel — the system stays authoritative and may well accept the
+        // chain, so the transfer succeeds with a note on file. That note would
+        // then be free to relabel an ordinary later failure — a user cancelling a
+        // staged upload, say — as "this device doesn't trust your file server's
+        // certificate". With a pin the evaluator CANCELS a rejected chain, so a
+        // note can only ever describe a connection that was actually refused.
+        // The unpinned untrusted case is surfaced instead by the certificate arm
+        // in `mapTransferError`, which keys on the codes where the SYSTEM named
+        // the certificate.
+        guard let pin = Self.effectiveTaskPin(
+            taskDescription: task.taskDescription,
+            hostPin: pinnedFingerprint(forHost: challenge.protectionSpace.host)
+        ) else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        let evaluator = makeEvaluator(pin)
+        let taskID = task.taskIdentifier
+        evaluator.urlSession(session, didReceive: challenge) { disposition, credential in
+            // Noted BEFORE the disposition is forwarded, and synchronously, so
+            // the note is on file by the time URLSession delivers the task's
+            // terminal callback.
+            let signals = evaluator.attemptSignals
+            if signals != .empty {
+                self.queue.sync { self.trustSignalsByTaskID[taskID] = signals }
+            }
+            completionHandler(disposition, credential)
+        }
     }
 
     /// The pin stamped onto a task's `taskDescription` envelope at enqueue. nil
@@ -740,6 +952,19 @@ extension BackgroundFileTransfer: URLSessionTaskDelegate {
               !pin.isEmpty
         else { return nil }
         return pin
+    }
+
+    /// The pin a challenge on this task is answered with: the task's own
+    /// envelope first, the caller-resolved `hostPin` as the legacy fallback, and
+    /// `nil` — meaning "unpinned, default-handle it" — when neither yields a
+    /// non-empty value. An empty string is NOT a pin; treating it as one would
+    /// build an evaluator that can record a trust note for a lane the user never
+    /// pinned. Pure over its inputs, so that rule is unit-testable without the
+    /// live session the delegate needs.
+    static func effectiveTaskPin(taskDescription: String?, hostPin: String?) -> String? {
+        if let pin = taskPin(taskDescription: taskDescription) { return pin }
+        guard let hostPin, !hostPin.isEmpty else { return nil }
+        return hostPin
     }
 
     /// Refuse a cross-ORIGIN redirect; follow a same-origin one unchanged.
@@ -795,6 +1020,10 @@ extension BackgroundFileTransfer: URLSessionTaskDelegate {
                     task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         queue.async {
+            // Consume the per-task trust snapshot before any early return below,
+            // so the registry cannot grow across dropped or duplicate callbacks.
+            let trustSignals = self.trustSignalsByTaskID.removeValue(forKey: task.taskIdentifier) ?? .empty
+
             // No in-flight entry → this task completed in a RELAUNCHED process
             // (the in-memory registry was lost when the prior process died). We
             // deliberately drop it rather than recover from `taskDescription`'s
@@ -821,18 +1050,34 @@ extension BackgroundFileTransfer: URLSessionTaskDelegate {
                 statusCode: (task.response as? HTTPURLResponse)?.statusCode,
                 isUpload: isUpload)
 
+            // OUR certificate refusal, resolved HERE because this is the last
+            // place that can still see the task and therefore its trust
+            // snapshot. Every one of the evaluator's refusals reaches us as a
+            // bare `.cancelled` (-999); the snapshot is the only thing that says
+            // which one, and
+            // resolving it into an `AppError` now means `mapTransferError` (on
+            // the caller's side of the continuation) passes it straight
+            // through. With no verdict recorded nothing changes.
+            let resolvedError: Error?
+            if let urlError = error as? URLError,
+               let certError = Self.trustError(urlError: urlError, signals: trustSignals) {
+                resolvedError = certError
+            } else {
+                resolvedError = error
+            }
+
             switch entry.kind {
             case .upload(let continuation):
-                if let error {
-                    continuation.resume(throwing: error)
+                if let resolvedError {
+                    continuation.resume(throwing: resolvedError)
                 } else if let statusError {
                     continuation.resume(throwing: statusError)
                 } else {
                     continuation.resume(returning: ())
                 }
             case .download(let continuation):
-                if let error {
-                    continuation.resume(throwing: error)
+                if let resolvedError {
+                    continuation.resume(throwing: resolvedError)
                 } else if let statusError {
                     // Body (if any) was moved to a temp URL; clean it up.
                     if let url = entry.downloadedURL { try? FileManager.default.removeItem(at: url) }
@@ -931,7 +1176,7 @@ extension BackgroundFileTransfer: URLSessionDelegate {
     /// into `SettingsManager`) and relaunch-safe by construction.
     ///
     /// EDGE (same as the Watch resolver): two file servers on the SAME host
-    /// differing only by port is an unsupported self-signed-pin case — `URL.host`
+    /// differing only by port cannot each get their own pin — `URL.host`
     /// ignores the port, so the first matching ref's pin wins. Distinct hosts is
     /// the documented pinning recipe.
     ///

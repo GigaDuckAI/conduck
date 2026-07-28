@@ -86,6 +86,18 @@ enum DiagnosticsExplainer {
         58: "gateway-endpoint-unexpected-response", 59: "gateway-endpoint-not-found",
         60: "gateway-model-required", 61: "file-not-a-file-server",
         62: "gateway-endpoint-wrong-envelope",
+        // 63-66 are the certificate-NOT-TRUSTED family. The slugs stay visibly
+        // distinct from the `*-cert-mismatch` ones (30/35/43/47) so a pasted
+        // report never conflates "the device rejected the chain" with "a pin
+        // disagreed with a chain the device accepted".
+        63: "gateway-cert-untrusted", 64: "custom-stt-cert-untrusted",
+        65: "custom-tts-cert-untrusted", 66: "file-cert-untrusted",
+        // 67-70 are the pin-NOT-COMPUTABLE family: the device trusted the chain
+        // and Conduck could not hash the leaf's key algorithm, so no comparison
+        // happened. `-key-unpinnable` rather than anything containing "mismatch"
+        // or "untrusted" — a pasted report must not read as either.
+        67: "gateway-cert-key-unpinnable", 68: "custom-stt-cert-key-unpinnable",
+        69: "custom-tts-cert-key-unpinnable", 70: "file-cert-key-unpinnable",
         99: "unknown",
     ]
 }

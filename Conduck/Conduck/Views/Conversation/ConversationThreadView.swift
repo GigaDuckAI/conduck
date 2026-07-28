@@ -100,6 +100,13 @@ struct ConversationThreadView: View {
     /// mirrors `MessageBubble.didCopy`.
     @State private var didCopyAll = false
 
+    /// The terminal spoken-voice refusal behind the current built-in-voice
+    /// fallback, until the user dismisses it (`.spokenReplyVoiceRefused`).
+    /// EPHEMERAL and view-local, exactly like `usedFallbackVoice`: it describes
+    /// one playback attempt on one device, so nothing about it belongs in the
+    /// store or in sync.
+    @State private var voiceRefusal: AppError?
+
     /// ONE Quick Look presenter for the whole thread — deliberately NOT
     /// per-chip: macOS `QLPreviewPanel` is application-shared and
     /// responder-chain controlled, so row-local presenters inside the
@@ -141,7 +148,16 @@ struct ConversationThreadView: View {
                 if let sendError = viewModel.sendError, shouldShowSendErrorBanner {
                     sendErrorBanner(sendError)
                 }
+                // The reply WAS spoken (in the built-in voice) — so this
+                // explains, it never blocks, and it stays until dismissed.
+                if let voiceRefusal {
+                    voiceRefusalBanner(voiceRefusal)
+                }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .spokenReplyVoiceRefused)) { note in
+            guard let code = note.userInfo?[SpokenReplyVoiceRefusal.errorCodeKey] as? Int else { return }
+            voiceRefusal = AppError.from(errorCode: code, message: nil)
         }
         .sheet(isPresented: $vm.showingGatewaySheet) {
             gatewayLockSheet
@@ -432,6 +448,45 @@ struct ConversationThreadView: View {
             } label: {
                 Text(LocalizedStringResource(
                     "thread.hiddenPhotos.tryAgain", defaultValue: "Try photos again"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppColors.brandAmber)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .transition(.opacity)
+    }
+
+    /// Quiet notice for a reply that was read aloud in the BUILT-IN voice
+    /// because the chosen voice endpoint refused the request terminally. Muted
+    /// chrome, not `AppColors.error`: nothing failed for the user — they heard
+    /// their reply — but a refusal a retry cannot change would otherwise repeat
+    /// on every reply with no explanation anywhere. Carries the cause AND the
+    /// remedy, because this notice is the only place either appears: an
+    /// untrusted certificate is fixed on the SERVER, and a pinned key that
+    /// disagreed with a chain the system trusted warns that the connection may
+    /// be intercepted.
+    private func voiceRefusalBanner(_ error: AppError) -> some View {
+        VStack(spacing: 6) {
+            Text(LocalizedStringResource(
+                "thread.voiceRefused.banner",
+                defaultValue: "Read aloud in the built-in voice."))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppColors.textSecondary)
+            Text(verbatim: error.descriptionWithRecovery)
+                .font(.caption2)
+                .foregroundStyle(AppColors.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                voiceRefusal = nil
+            } label: {
+                Text(LocalizedStringResource(
+                    "thread.voiceRefused.dismiss", defaultValue: "Dismiss"))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.brandAmber)
             }
@@ -965,9 +1020,11 @@ private struct MessageBubble: View, Equatable {
     }
 
     /// Persistent inline error row under a failed user turn: outcome + safe
-    /// cause + actions ("Try again", plus the photo-specific recovery). Frozen
+    /// cause + REMEDY + the actions that can still change the outcome. Frozen
     /// copy via `DeclinedTurnPresentation`; vocabulary is "gateway", never
-    /// "model".
+    /// "model". "Try again" is gated on `presentation.offersRetry` — a terminal
+    /// refusal keeps its explanation and loses only the button that could never
+    /// have honoured it.
     private var deliveryErrorRow: some View {
         let presentation = declinedPresentation
         return VStack(alignment: .trailing, spacing: 5) {
@@ -987,15 +1044,17 @@ private struct MessageBubble: View, Equatable {
             // Actions stack vertically (trailing) — the photo-recovery labels
             // are long, and a horizontal row overflows the narrow popover.
             VStack(alignment: .trailing, spacing: 6) {
-                Button(action: onRetry) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "arrow.clockwise")
-                        Text(LocalizedStringResource("declinedTurn.action.tryAgain", defaultValue: "Try again"))
+                if presentation.offersRetry {
+                    Button(action: onRetry) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.clockwise")
+                            Text(LocalizedStringResource("declinedTurn.action.tryAgain", defaultValue: "Try again"))
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppColors.error)
                     }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppColors.error)
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 if presentation.offersResendWithoutPhoto {
                     Button(action: onResendWithoutPhoto) {
                         Text(LocalizedStringResource("declinedTurn.action.resendWithoutPhoto", defaultValue: "Resend without photo"))
@@ -1386,8 +1445,16 @@ private struct ServerFileDownloadChip: View {
 
     /// Tri-state download chrome: idle (no glyph — the chip itself is the tap
     /// target), busy (spinner), failed (error glyph + the inline message).
+    ///
+    /// `failed` carries `retryable` because a chip is a tap target by default,
+    /// and re-tapping a terminal refusal (a certificate this device won't
+    /// accept, a rejected file-server password, a URL that isn't a file server)
+    /// only replays the same refusal over the message it just printed. Nothing
+    /// but the taxonomy knows which failures those are, so the flag rides in
+    /// from `AppError.isRetryable`; every failure with no `AppError` behind it
+    /// stays retryable, because unknown is not terminal.
     private enum DownloadState: Equatable {
-        case idle, downloading, failed(String)
+        case idle, downloading, failed(message: String, retryable: Bool)
     }
     /// What a completed download hands off to: the Quick Look preview (default
     /// tap) or — macOS only — the `NSSavePanel` "Save As…" verb.
@@ -1416,6 +1483,27 @@ private struct ServerFileDownloadChip: View {
         isUserBubble ? AppColors.background.opacity(0.7) : AppColors.textTertiary
     }
 
+    /// Whether a tap can still reach a different outcome. False while a
+    /// download is in flight (already busy) and false once a terminal refusal
+    /// has landed — the SINGLE gate every entry point reads, so the chip, the
+    /// macOS Save As… button and its context-menu mirror can never disagree
+    /// about whether this file is still reachable.
+    private var acceptsTap: Bool {
+        switch state {
+        case .downloading: return false
+        case .failed(_, let retryable): return retryable
+        case .idle: return true
+        }
+    }
+
+    /// The refusal text under the chip name, when the last attempt failed.
+    /// Feeds the accessibility label too — the visible line wraps, but VoiceOver
+    /// reads the chip as one element, so without this the reason is inaudible.
+    private var failureMessage: String? {
+        if case .failed(let message, _) = state { return message }
+        return nil
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Button(action: { download(route: .preview) }) {
@@ -1439,14 +1527,17 @@ private struct ServerFileDownloadChip: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(state == .downloading)
+            .disabled(!acceptsTap)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text(String(
-                format: String(localized: LocalizedStringResource(
-                    "fileTransfer.preview.accessibility",
-                    defaultValue: "Download and preview file %@ from your gateway")),
-                name
-            )))
+            .accessibilityLabel(Text(([
+                String(
+                    format: String(localized: LocalizedStringResource(
+                        "fileTransfer.preview.accessibility",
+                        defaultValue: "Download and preview file %@ from your gateway")),
+                    name
+                ),
+                failureMessage
+            ] as [String?]).compactMap { $0 }.joined(separator: ". ")))
             #if os(macOS)
             saveAsButton
             #endif
@@ -1463,7 +1554,7 @@ private struct ServerFileDownloadChip: View {
         // menu may only mirror a visible control, never be the sole path).
         .contextMenu {
             Button(saveAsTitle) { download(route: .saveAs) }
-                .disabled(state == .downloading)
+                .disabled(!acceptsTap)
         }
         #endif
         // Large-download soft-confirm (>100 MB, KNOWN size) — mirrors the
@@ -1524,7 +1615,7 @@ private struct ServerFileDownloadChip: View {
                 .foregroundStyle(secondaryTint)
         }
         .buttonStyle(.plain)
-        .disabled(state == .downloading)
+        .disabled(!acceptsTap)
         .help(saveAsTitle)
         .accessibilityLabel(Text(String(
             format: String(localized: LocalizedStringResource(
@@ -1542,11 +1633,15 @@ private struct ServerFileDownloadChip: View {
             Text(LocalizedStringResource("fileTransfer.download.inProgress", defaultValue: "Downloading…"))
                 .font(.caption2)
                 .foregroundStyle(secondaryTint)
-        case .failed(let message):
+        case .failed(let message, _):
+            // NO line cap: this chip is the only place a download refusal is
+            // ever shown, and the half that gets clipped first is the remedy —
+            // the server-side routes to a trusted certificate, the setting to
+            // correct. A taller chip on failure is the cheaper cost.
             Text(message)
                 .font(.caption2)
                 .foregroundStyle(AppColors.error)
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         case .idle:
             if attachment.byteSize > 0 {
                 Text(AttachmentChipStyle.formattedSize(attachment.byteSize))
@@ -1560,7 +1655,7 @@ private struct ServerFileDownloadChip: View {
     /// (mirrors the upload-side large-file warning) before the multi-hundred-MB
     /// download begins; unknown size (byteSize == 0) downloads immediately.
     private func download(route: PostDownloadRoute) {
-        guard state != .downloading else { return }
+        guard acceptsTap else { return }
         pendingRoute = route
         if attachment.byteSize > Constants.fileTransferSoftConfirmBytes {
             showingLargeDownloadConfirm = true
@@ -1573,7 +1668,7 @@ private struct ServerFileDownloadChip: View {
     /// (Quick Look preview / macOS save panel). Fail-fast with a visible error
     /// (NO silent retry).
     private func beginDownload(route: PostDownloadRoute) {
-        guard state != .downloading else { return }
+        guard acceptsTap else { return }
         state = .downloading
         // Preview requests mint their claim NOW (the moment of user intent),
         // BEFORE the async download — completion order must not decide which
@@ -1620,14 +1715,26 @@ private struct ServerFileDownloadChip: View {
         }
     }
 
+    /// Cause AND remedy. The chip has no Troubleshoot chip, no detail sheet and
+    /// no second slot, so `errorDescription` alone left a terminal refusal on
+    /// screen naming a problem with no way to act on it — and, for a pinned key
+    /// that disagreed with a chain the system trusted, without the warning that
+    /// the connection may be intercepted (that sentence lives entirely in the
+    /// remedy half).
     @MainActor
     private func presentError(_ error: AppError) {
-        state = .failed(error.errorDescription ?? Self.genericFailureMessage)
+        let message = error.descriptionWithRecovery
+        state = .failed(
+            message: message.isEmpty ? Self.genericFailureMessage : message,
+            retryable: error.isRetryable
+        )
     }
 
+    /// No `AppError` behind it (an adoption failure, a non-taxonomy throw) —
+    /// unknown is not terminal, so the chip stays tappable.
     @MainActor
     private func presentGenericError() {
-        state = .failed(Self.genericFailureMessage)
+        state = .failed(message: Self.genericFailureMessage, retryable: true)
     }
 
     private static var genericFailureMessage: String {
@@ -1658,7 +1765,8 @@ private struct ServerFileDownloadChip: View {
             state = .idle
         } catch {
             try? FileManager.default.removeItem(at: tempURL)
-            state = .failed(Self.previewFailureMessage)
+            // Local adoption, not a server verdict — a fresh tap can succeed.
+            state = .failed(message: Self.previewFailureMessage, retryable: true)
         }
     }
 
@@ -1693,8 +1801,10 @@ private struct ServerFileDownloadChip: View {
             state = .idle
         } catch {
             // Surface save failures the way the download phase does, rather
-            // than silently going idle with no file written.
-            state = .failed(Self.saveFailureMessage)
+            // than silently going idle with no file written. A local write
+            // failure (full disk, read-only volume) is not a server verdict, so
+            // the chip stays tappable for another destination.
+            state = .failed(message: Self.saveFailureMessage, retryable: true)
         }
     }
     #endif

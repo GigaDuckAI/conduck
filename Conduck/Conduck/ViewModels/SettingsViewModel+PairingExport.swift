@@ -14,7 +14,8 @@
 // the gateway token + file-server credential. It is returned to the sheet and
 // held there only while revealed — NEVER logged, echoed, or written to disk.
 // The preflight reads the token to authenticate its probe but never surfaces it;
-// failure collapses to a boolean "didn't answer", carrying no payload content.
+// failure collapses to a verdict ("didn't answer" / "certificate refused"),
+// carrying no payload content.
 
 import Foundation
 
@@ -47,6 +48,25 @@ enum PairingExportPreflight: Equatable {
     /// The gateway didn't answer just now (offline, unreachable, or an error) —
     /// the sheet shows a soft warning but still lets the user reveal.
     case unreachable
+    /// This device refused the gateway's certificate. Kept SEPARATE from
+    /// `.unreachable` because the two have opposite shapes: "didn't answer" may
+    /// be this device's own connection and may clear on its own, while a refused
+    /// certificate is a fact about the SERVER that every scanning device will
+    /// meet, and only a server-side change fixes it.
+    case certificateNotTrusted
+    /// The system TRUSTED the gateway's chain and the key under it still
+    /// disagreed with the pinned fingerprint. A third verdict, not a shade of
+    /// `.unreachable`: "your device may simply be offline" in front of a
+    /// detected key mismatch tells the user to wait out the one failure they
+    /// must not wait out.
+    case certificateMismatch
+    /// The system TRUSTED the gateway's chain and Conduck could not compute an
+    /// SPKI digest for the leaf's key algorithm, so the pinned fingerprint could
+    /// not be COMPARED. A fourth verdict rather than a shade of
+    /// `.certificateMismatch`: nothing disagreed, so the interception warning
+    /// would be a false alarm — and not a shade of `.unreachable` either, since
+    /// the gateway answered and this device trusted it.
+    case certificateKeyUnpinnable
 }
 
 extension SettingsViewModel {
@@ -74,7 +94,8 @@ extension SettingsViewModel {
     /// shared Test Connection path) so the sheet can warn when the gateway isn't
     /// answering. NON-mutating: touches no `@Published` validation state (unlike
     /// `retestRemoteAgent`) — a reveal must not rewrite the editor's status row.
-    /// Never blocks the reveal; any failure (incl. an untrusted cert) → `.unreachable`.
+    /// Never blocks the reveal — the verdict only picks WHICH warning the sheet
+    /// shows, and a refused certificate gets its own (see `PairingExportPreflight`).
     func preflightPairingExport(for ref: RemoteAgentRef) async -> PairingExportPreflight {
         guard let url = await SettingsManager.shared.getRemoteAgentURL(for: ref) else {
             return .unreachable
@@ -102,9 +123,29 @@ extension SettingsViewModel {
                 authScheme: authScheme,
                 fingerprint: fingerprint
             )
-            // `.untrustedCert` (isSuccess == false) → warn: a device without the
-            // pin may fail, so the code "may not work" — reveal anyway.
-            return outcome.isSuccess ? .reachable : .unreachable
+            // Switched exhaustively rather than keyed on `isSuccess`, so a future
+            // outcome case has to be mapped here deliberately instead of falling
+            // into whichever warning happens to be the fallback.
+            switch outcome {
+            case .ok, .okNoModels:
+                return .reachable
+            case .untrustedCert:
+                return .certificateNotTrusted
+            }
+        } catch AppError.remoteAgentCertMismatch {
+            // Caught BEFORE the generic arm: `testConnection` reports a mismatch
+            // by throwing, so a bare `catch` collapses a detected key
+            // disagreement into "didn't answer" — the one verdict the sheet must
+            // not soften. `runPairingGatewayTest` forwards it; so does this.
+            return .certificateMismatch
+        } catch AppError.remoteAgentCertKeyUnpinnable {
+            // Caught for the same reason as the arm above, and separately from
+            // it: `testConnection` throws this too, so the generic arm would
+            // report "your device may simply be offline" for a gateway that
+            // answered and whose chain this device TRUSTED. Its own verdict
+            // because the mismatch words would raise an interception warning
+            // where nothing disagreed — only the digest could not be computed.
+            return .certificateKeyUnpinnable
         } catch {
             return .unreachable
         }

@@ -1299,9 +1299,34 @@ final class CarPlayRecordingService {
         case .remoteAgentAuthFailed:
             // xcstrings
             phrase = String(localized: "Your personal AI rejected the token. Update it in Conduck on your iPhone.")
-        case .remoteAgentCertMismatch:
-            // xcstrings
-            phrase = String(localized: "Couldn't verify your personal AI's certificate.")
+        case .remoteAgentCertMismatch, .sttCustomCertMismatch, .ttsCustomCertMismatch:
+            // Driver-safe brevity argues for a SHORT line, not a vague one. The
+            // shared compact form names the risk and points at the phone — the
+            // same words the wrist speaks, so one cause keeps one wording.
+            //
+            // All three lanes speak it, mirroring the untrusted arm below: the
+            // alternative is `default:` — "Something went wrong. Try again." —
+            // which invites a retry on a terminal refusal AND drops the one
+            // thing the driver must hear, that the connection may be
+            // intercepted. The shared line says "your gateway" while a custom
+            // voice endpoint is a different server; naming the wrong server is
+            // the cheaper error by a wide margin.
+            phrase = CertificateTrustCopy.pinMismatchRefusalCompact
+        case .remoteAgentCertUntrusted, .sttCustomCertUntrusted, .ttsCustomCertUntrusted:
+            // Spoken, so the full remedy would be unusable at the wheel — the
+            // shared compact form says WHICH problem it is and stops. The named
+            // routes to a trusted certificate wait on the phone, where the
+            // driver can act on them.
+            phrase = CertificateTrustCopy.untrustedRefusalCompact
+        case .remoteAgentCertKeyUnpinnable, .sttCustomCertKeyUnpinnable, .ttsCustomCertKeyUnpinnable:
+            // Spoken apart from the mismatch arm above, not folded into it: this
+            // verdict is reached only AFTER system trust passed, so the
+            // certificate is valid and nothing is intercepting anything. Speaking
+            // the interception warning at a driver whose only problem is a key
+            // algorithm Conduck can't hash is a false alarm on the one line that
+            // must never cry wolf. `default:` is just as wrong — "Something went
+            // wrong. Try again." invites a retry on a terminal refusal.
+            phrase = CertificateTrustCopy.keyUnpinnableRefusalCompact
         case .remoteAgentTimeout, .remoteAgentUnreachable:
             // xcstrings
             phrase = String(localized: "Couldn't reach your personal AI. Try again.")
@@ -1319,9 +1344,91 @@ final class CarPlayRecordingService {
             // before transcribe; this covers any other path that throws it.
             // xcstrings: hardening
             phrase = String(localized: "Custom voice endpoints aren't available in the car. Pick another provider in Conduck on your iPhone.")
+        case .sttDecodingFailure:
+            // Terminal: the provider answered in a shape Conduck can't parse, and
+            // it will answer the same way on the next ask. The only lever the
+            // driver has is a different provider, which lives on the phone.
+            // xcstrings: carplay-terminal
+            phrase = String(localized: "Your speech provider sent an unexpected response. Pick another provider in Conduck on your iPhone.")
+
+        // ── Terminal gateway verdicts (all `isRetryable == false`) ──────────
+        // Each arm below exists for the SAME reason the certificate arms above
+        // give: `default:` would speak "Something went wrong. Try again." at a
+        // driver whose next ask reaches the identical refusal — the cause
+        // dropped AND a retry invited, on a loop that cannot end. Reached from
+        // `CarPlayConverseUploader` via `RemoteAgentStatusMap` (402/429) and
+        // `RemoteAgentClient.classifyBodyError` (adapter wire codes + the
+        // 400/404/413 heuristics).
+        //
+        // Wording follows this file's rule: name the problem, then point at the
+        // ONE place the driver can act. For the three history-shaped verdicts
+        // that place is the car itself — ending the session lands on the
+        // list-picker whose first row is "New voice chat", and a fresh thread is
+        // exactly what drops the oversized history. Everything else waits on the
+        // phone, and the line says so instead of implying a fix at the wheel.
+        case .remoteAgentOutOfCredits:
+            // xcstrings: carplay-terminal
+            phrase = String(localized: "Your AI provider is out of credits. Add credits with your provider.")
+        case .remoteAgentRateLimited:
+            // Names no remedy at all, deliberately: the fix is TIME, and every
+            // phrasing of "wait, then ask again" is a retry invitation wearing a
+            // delay. Saying why it happened is the honest stopping point.
+            // xcstrings: carplay-terminal
+            phrase = String(localized: "Your AI provider is rate-limiting you. Free models often have a daily limit.")
+        case .remoteAgentModelUnavailable:
+            // xcstrings: carplay-terminal
+            phrase = String(localized: "That AI model isn't available. Pick another in Conduck on your iPhone.")
+        case .remoteAgentModelRequired:
+            // xcstrings: carplay-terminal
+            phrase = String(localized: "Your gateway needs a model name. Set one in Conduck on your iPhone.")
+        case .remoteAgentContextTooLong:
+            // xcstrings: carplay-terminal
+            phrase = String(localized: "This chat got too long for the model. Start a new voice chat.")
+        case .remoteAgentImageTooLarge:
+            // CarPlay attaches nothing itself — the offending image rides in the
+            // client-owned history this session replays, so a new thread is the
+            // whole fix and it is one tap away on the screen the driver is about
+            // to land on.
+            // xcstrings: carplay-terminal
+            phrase = String(localized: "A photo in this chat was too large for your gateway. Start a new voice chat.")
+        case .remoteAgentVisionUnsupported:
+            // Same history shape as the arm above. "Couldn't use a photo" rather
+            // than "can't read images": the client cannot tell the adapter from
+            // the engine, so it never attributes the decline.
+            // xcstrings: carplay-terminal
+            phrase = String(localized: "Your gateway couldn't use a photo in this chat. Start a new voice chat.")
+        case .fileTransferNotConfigured:
+            // Thrown by this file's own pre-enqueue lane revalidation when the
+            // ready file lane was removed or repointed mid-turn. Terminal for
+            // this session; the lane is rebuilt on the phone.
+            // xcstrings: carplay-terminal
+            phrase = String(localized: "This gateway's file transfer isn't set up. Check it in Conduck on your iPhone.")
         default:
-            // xcstrings
-            phrase = String(localized: "Something went wrong. Try again.")
+            // The catch-all stays, and it asks the taxonomy instead of assuming.
+            //
+            // "Try again." is genuinely RIGHT for what actually lands here now:
+            // `.unknown`, `.apiFailure` (the status map's fallback for an HTTP
+            // code nobody specialised) and the transport blips — all retryable,
+            // all plausibly different on the next ask.
+            //
+            // It is wrong for anything terminal, and the arms above cover only
+            // the terminal codes reachable TODAY. A case added to `AppError`
+            // later inherits this arm silently — which is precisely how a
+            // terminal verdict acquired a retry invitation here in the first
+            // place. So the split is made by `isRetryable`, the same property
+            // every other surface gates on: an unrecognised terminal failure
+            // degrades to a vague-but-honest line rather than a promise the
+            // request cannot keep. Named arms above stay copy choices (that is
+            // why `.noSpeechDetected` may still say "try again" — a re-ask there
+            // carries different audio and really can succeed); this arm is the
+            // safety net under them.
+            if error.isRetryable {
+                // xcstrings
+                phrase = String(localized: "Something went wrong. Try again.")
+            } else {
+                // xcstrings: carplay-terminal
+                phrase = String(localized: "Something went wrong. Check Conduck on your iPhone.")
+            }
         }
         endSession(speak: phrase)
     }

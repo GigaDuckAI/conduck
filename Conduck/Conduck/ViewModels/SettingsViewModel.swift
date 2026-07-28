@@ -414,9 +414,9 @@ final class SettingsViewModel {
     // `STTProviderListView`.
 
     /// In-flight / failure validation state per ref. Keys absent from
-    /// this dict resolve to `.unset`. Mirrors STT `keyStates`. The TOFU
-    /// path writes `.invalid` here (so macOS, which has no banner, still
-    /// surfaces an error) — see `validateAndSaveRemoteAgent`.
+    /// this dict resolve to `.unset`. Mirrors STT `keyStates`. Every probe
+    /// outcome lands here, including a rejected certificate — see
+    /// `validateAndSaveRemoteAgent`.
     var remoteAgentValidationStates: [RemoteAgentRef: KeyValidationState] = [:]
 
     /// Masked tail of each ref's persisted token (e.g. `"••••••••AB12"`).
@@ -437,8 +437,10 @@ final class SettingsViewModel {
     /// built-ins). Built-ins never surface this field. Missing key = empty.
     var remoteAgentModelStrings: [RemoteAgentRef: String] = [:]
 
-    /// Editable cert-fingerprint pin per ref (lowercase hex). Missing
-    /// key = no pin (system trust).
+    /// Editable cert-fingerprint pin per ref (lowercase hex). Missing key = no
+    /// pin. A pin is an ADDITIONAL restriction on a chain the system already
+    /// accepted — it narrows what connects, it can never rescue an untrusted
+    /// certificate.
     var remoteAgentCertFingerprints: [RemoteAgentRef: String] = [:]
 
     /// Editable auth-scheme buffer per ref — `.bearer` (token required) or
@@ -447,17 +449,6 @@ final class SettingsViewModel {
     /// Drives whether the token field is shown + whether Save/Test require a
     /// token. Missing key = `.bearer` (fail closed).
     var remoteAgentAuthSchemes: [RemoteAgentRef: RemoteAgentAuthScheme] = [:]
-
-    /// TOFU (Trust-On-First-Use) pending fingerprint PER ref. Non-nil
-    /// ONLY after a Test Connection against an untrusted self-signed cert
-    /// with NO pin set — holds the leaf cert's SPKI SHA-256 (lowercase hex)
-    /// the gateway presented, or `""` when the cert was untrusted but the
-    /// key algorithm was outside the V1 SPKI prefix table (untrusted, no
-    /// copyable fingerprint). The detail view renders the conditional
-    /// "Untrusted certificate · <fp> · [Trust & Save]" banner per ref;
-    /// `trustPresentedCertAndResave(ref:)` consumes it. Cleared on a
-    /// fresh probe / success / non-TOFU failure so the banner never lingers.
-    var remoteAgentPendingUntrustedCert: [RemoteAgentRef: String] = [:]
 
     /// Snapshot of which refs currently have a COMPLETE config
     /// (token AND URL — Decision E). Mirrors STT `storedPresetIDs`.
@@ -477,7 +468,7 @@ final class SettingsViewModel {
     /// status row tell "Connected" (a live probe actually succeeded) apart from
     /// "Saved" (config persisted but never verified — `saveRemoteAgent` marks the
     /// validation state `.valid` WITHOUT a probe, which would otherwise overclaim
-    /// "Connected"). Inserted on a validate/retest/trust success; removed on save
+    /// "Connected"). Inserted on a validate/retest success; removed on save
     /// (save ≠ verify) and clear.
     var remoteAgentLiveValidated: Set<RemoteAgentRef> = []
 
@@ -681,15 +672,16 @@ final class SettingsViewModel {
     var customVoiceEndpoints: [CustomVoiceEndpoint] = []
 
     /// Per-uuid validation / failure state for the endpoint config screen.
-    /// Mirrors `remoteAgentValidationStates[ref]`. `.invalid` is written on the
-    /// TOFU path too (so macOS, which has no banner, still surfaces an error).
+    /// Mirrors `remoteAgentValidationStates[ref]` — every probe outcome lands
+    /// here, including a rejected certificate.
     var customSTTValidationStates: [UUID: KeyValidationState] = [:]
 
     /// Per-uuid editable base-URL string buffer for the URL `TextField`.
     /// Persisted only on a successful save; floats while the user types.
     var customSTTURLStrings: [UUID: String] = [:]
 
-    /// Per-uuid editable cert-fingerprint pin (lowercase hex). Empty = system trust.
+    /// Per-uuid editable cert-fingerprint pin (lowercase hex). Empty = no pin.
+    /// Like the gateway's, it only narrows a chain the system already accepted.
     var customSTTCertFingerprints: [UUID: String] = [:]
 
     /// Per-uuid editable STT model override (default `whisper-1`).
@@ -708,13 +700,6 @@ final class SettingsViewModel {
     /// from key PRESENCE only — the raw key is NEVER read back into the View
     /// (privacy invariant). Nil = no key stored (or `.none` auth).
     var customSTTMaskedTails: [UUID: String] = [:]
-
-    /// Per-uuid TOFU pending fingerprint. Non-nil ONLY after a Test against an
-    /// untrusted self-signed cert with NO pin — holds the presented leaf SPKI
-    /// hex (or `""` when untrusted but no copyable fp). The iOS config body
-    /// renders the "Trust & Save" banner; cleared on a fresh probe / success /
-    /// non-TOFU failure.
-    var customSTTPendingUntrustedCerts: [UUID: String] = [:]
 
     /// Per-uuid staging buffer for the custom editor's `pendingTTSVoice` @State
     /// field. The View stashes it here just before calling `saveCustomVoiceEndpoint`
@@ -1025,6 +1010,11 @@ final class SettingsViewModel {
     /// Map AppError → user-facing message with provider-name substitution.
     /// Kept private so call sites can't accidentally leak the raw key by
     /// passing it as an interpolation arg.
+    ///
+    /// All three certificate verdicts are named explicitly rather than left to
+    /// `default:` — "Unexpected error. Try again." invites a retry that can only
+    /// fail again, and none of the three refusals is something a second tap can
+    /// change.
     private func friendlyMessage(for error: AppError, providerName: String) -> String {
         switch error {
         case .sttAuthFailed:
@@ -1033,8 +1023,37 @@ final class SettingsViewModel {
             return String(localized: "Can't reach \(providerName). Check connection.")
         case .sttServerError:
             return String(localized: "\(providerName) is having issues. Try again in a moment.")
+        case .sttCustomCertUntrusted:
+            // The shared refusal + remedy, verbatim — the same words the gateway
+            // editor and the voice-endpoint test suite render. `providerName` is
+            // deliberately unused: the fix is on the server, so it cannot differ
+            // by provider, and a paraphrase here would read as a second problem.
+            return CertificateTrustCopy.untrustedRefusalWithRemedy
+        case .sttCustomCertMismatch:
+            // A DIFFERENT failure from the one above, with its own shared words:
+            // the device DID trust the chain and only the pinned key disagreed.
+            // Never folded into the refusal — this one can mean an intercepted
+            // connection, so it says so, and it never suggests dropping the pin,
+            // which would trade the warning for silence.
+            return CertificateTrustCopy.pinMismatchRefusalWithRemedy
+        case .sttCustomCertKeyUnpinnable:
+            // A THIRD failure, not a shade of either: system trust already
+            // passed, so nothing is untrusted and nothing disagreed — Conduck
+            // just can't hash this key algorithm. Borrowing the mismatch words
+            // would raise an interception warning over a good certificate.
+            return CertificateTrustCopy.keyUnpinnableRefusalWithRemedy
         default:
-            return String(localized: "Unexpected error. Try again.")
+            // The catch-all answers for every verdict nobody enumerated above,
+            // so it asks the taxonomy instead of assuming. "Try again." is right
+            // for the retryable remainder (a transport blip, an HTTP code nobody
+            // specialised) and a promise the request cannot keep on anything
+            // terminal — and the arms above name only the terminal codes
+            // reachable TODAY, so a case added to `AppError` later inherits this
+            // arm silently. Same split as
+            // `CarPlayRecordingService.speakErrorAndEnd`'s catch-all.
+            return error.isRetryable
+                ? String(localized: "Unexpected error. Try again.")  // xcstrings
+                : String(localized: "Unexpected error. Check your settings.")  // xcstrings
         }
     }
 
@@ -1766,9 +1785,6 @@ final class SettingsViewModel {
         imageHistoryPolicies = nextImagePolicies
         remoteAgentMaskedTails = nextMasked
         remoteAgentValidationStates = nextStates
-        // A reload wipes any stale TOFU banner state — a banner only ever
-        // lives across a single user-driven Test → Trust interaction.
-        remoteAgentPendingUntrustedCert = [:]
 
         // Hydrate the per-ref file-server config alongside the gateway config
         // (same ref roster), so the setup guide renders the persisted URL /
@@ -2220,12 +2236,12 @@ final class SettingsViewModel {
         case invalid         // non-empty but not 64 hex → reject
     }
 
-    /// Normalize a user-typed SPKI SHA-256 fingerprint to the SAME canonical form
-    /// the QR parser accepts (`PairingPayload.normalizedCertFP`): trim, lowercase,
-    /// strip `:` separators (openssl style), require EXACTLY 64 hex chars. The
-    /// manual entry paths (gateway pin + file-server pin) previously only trimmed,
-    /// so a colon-form paste could never match a presented cert and persisted
-    /// silently as garbage — this closes that gap. Empty stays "no pin".
+    /// Normalize a user-typed SPKI SHA-256 fingerprint to the one canonical form a
+    /// stored pin may take: trim, lowercase, strip `:` separators (openssl style),
+    /// require EXACTLY 64 hex chars. Manual entry (gateway pin + file-server pin) is
+    /// the ONLY way a pin is ever set — a pairing payload carries no fingerprint —
+    /// so this is the single gate that keeps a colon-form paste from persisting as
+    /// garbage that could never match a presented cert. Empty stays "no pin".
     ///
     /// ASCII-only hex gate (not `Character.isHexDigit`, which also accepts
     /// fullwidth variants that must never enter a pinned digest). Pure + static so
@@ -2242,9 +2258,9 @@ final class SettingsViewModel {
     }
 
     /// VALIDATE-ONLY: probe `url` + `token` against the gateway's
-    /// `GET /v1/models` and surface `.checking` → `.valid` / `.invalid` (+ the
-    /// TOFU banner on an untrusted self-signed cert). Persists NOTHING —
-    /// `saveRemoteAgent` is the single commit point (buffer-until-Save, mirrors
+    /// `GET /v1/models` and surface `.checking` → `.valid` / `.invalid`.
+    /// Persists NOTHING — `saveRemoteAgent` is the single commit point
+    /// (buffer-until-Save, mirrors
     /// the custom-voice editor). Reflects the normalized URL / cert back into
     /// the buffers and populates the Model suggestion chips; the masked tail is
     /// set only on Save. Same provider-aware `friendlyMessage` mapping.
@@ -2328,10 +2344,11 @@ final class SettingsViewModel {
         // A `.systemTrustOnly` backend (OpenRouter) never sends a pin — drop any
         // stale value so a Test can't probe with it (mirrors the save clamp). The
         // carrier descriptor is `.systemTrustOnly` only for OpenRouter; a custom
-        // carries `.openclaw` (`.userPinnable`), so the normalization runs there.
-        // A hand-typed pin is normalized the same way the QR parser accepts one
+        // carries `.openclaw` (`.optionalUserPin`), so the normalization runs there.
+        // A hand-typed pin is normalized to the canonical manual-pin form
         // (trim/lowercase/strip ':' → 64 hex); garbage is rejected here rather
-        // than probed with (and later saved) as an unmatchable value.
+        // than probed with (and later saved) as an unmatchable value. A pairing
+        // payload never carries a fingerprint, so typing it is the only route in.
         let effectiveFingerprint: String?
         if descriptor.trust == .systemTrustOnly {
             effectiveFingerprint = nil
@@ -2349,8 +2366,6 @@ final class SettingsViewModel {
         }
 
         remoteAgentValidationStates[ref] = .checking
-        // Clear any prior TOFU banner for THIS ref — fresh probe.
-        remoteAgentPendingUntrustedCert[ref] = nil
         // A probe is in flight: the previous verdict (green mark + error code) is
         // now unproven, so retract BOTH before we know the new answer. Without
         // this, a re-test of an edited config keeps showing the old "Connected"
@@ -2387,23 +2402,15 @@ final class SettingsViewModel {
                 return
             }
 
-            // TOFU: no pin set + system rejected an untrusted self-signed
-            // cert. Do NOT persist — surface the captured fingerprint so the
-            // user can one-tap "Trust & Save" (which re-runs this method WITH
-            // the fp pinned).
-            if case .untrustedCert(let presentedHex) = outcome {
-                // `.some("")` is the "untrusted but no copyable fp" signal
-                // (unsupported key algorithm). Distinguish from `nil`.
-                remoteAgentPendingUntrustedCert[ref] = presentedHex ?? ""
-                // Set `.invalid` (not `.unset`) as the FALLBACK behind the banner:
-                // both iOS and macOS render the shared TOFU banner (keyed off
-                // `remoteAgentPendingUntrustedCert[ref]`) and suppress this red
-                // `statusFeedback` row while it's up. `.invalid` (with the cert-
-                // mismatch friendly message) means that if the banner ever fails to
-                // draw, the surface still shows a real error rather than the silent
-                // EmptyView `.unset` would produce.
+            // The system rejected this gateway's certificate chain. TERMINAL:
+            // a pin is an additional restriction on a chain the system already
+            // accepted, so nothing this editor could offer would make the
+            // connection work. Name the server-side fix and stop. The presented
+            // fingerprint is deliberately NOT captured — capturing it would only
+            // exist to trust it later.
+            if case .untrustedCert = outcome {
                 remoteAgentValidationStates[ref] = .invalid(
-                    message: Self.friendlyGatewayMessage(for: .remoteAgentCertMismatch)
+                    message: CertificateTrustCopy.untrustedRefusalWithRemedy
                 )
                 return
             }
@@ -2620,8 +2627,8 @@ final class SettingsViewModel {
         // (a legacy pin, or one seeded by a prior backend) would otherwise persist
         // and arm a future `remoteAgentCertMismatch`. CLEAR it on save (hiding the
         // field is not the same as clearing the value). Passing nil to the setter
-        // removes the key. For self-hosted/custom (`.userPinnable`) the hand-typed
-        // pin is normalized the same way the QR parser accepts one (trim/lowercase/
+        // removes the key. For self-hosted/custom (`.optionalUserPin`) the hand-typed
+        // pin is normalized to the canonical manual-pin form (trim/lowercase/
         // strip ':' → 64 hex); a garbage pin is rejected so Save never persists an
         // unmatchable value. Empty stays "no pin".
         let effectiveFingerprint: String?
@@ -2819,7 +2826,6 @@ final class SettingsViewModel {
     /// The editor's `pendingName` / `pendingToken` are View @State, discarded on
     /// dismiss — so this only resets the VM-side per-ref buffers.
     func cancelRemoteAgentEdit(ref: RemoteAgentRef) async {
-        remoteAgentPendingUntrustedCert.removeValue(forKey: ref)
         remoteAgentModelSuggestions.removeValue(forKey: ref)
         // Snapshot the probed tuple BEFORE re-hydrating. The verdict is retracted
         // only if reverting to storage actually MOVES one of those fields (see the
@@ -2967,7 +2973,7 @@ final class SettingsViewModel {
     /// re-paste the bearer token. Reads the stored token from Keychain in-actor
     /// (never surfaced to the UI) and routes through `validateRemoteAgent`
     /// (validate-only — Save commits) with the current field URL + pin, reusing
-    /// the existing probe / TOFU / friendly-error handling intact.
+    /// the existing probe / friendly-error handling intact.
     func retestRemoteAgent(ref: RemoteAgentRef, url: String) async {
         let backendName = displayName(for: ref)
         let authScheme = remoteAgentAuthSchemes[ref] ?? .bearer
@@ -3027,63 +3033,6 @@ final class SettingsViewModel {
     ) -> Bool {
         guard let activeConvBackend else { return false }
         return activeConvBackend == changedRef.rawString
-    }
-
-    /// TOFU "Trust": take the fingerprint the gateway presented on the last
-    /// untrusted-cert probe, write it into the editable pin BUFFER, and re-run
-    /// `validateRemoteAgent(...)` WITH the pin (validate-only — the pin persists
-    /// on Save like every other field). The re-run takes the pinning path so the
-    /// previously-untrusted cert now matches → `.valid`.
-    ///
-    /// The token is the staged INTENT resolved here (never read back into the
-    /// View — privacy invariant): `.typed` re-probes the buffer value, `.stored`
-    /// re-probes the saved Keychain token — so a returning user with a stored
-    /// token and an empty token field no longer dead-ends on Trust. Keyless
-    /// (`.none`) probes with no token regardless of what's staged. URL / model
-    /// come from the per-ref buffers (roster fallback for a custom's model).
-    ///
-    /// No-op when there's no pending fingerprint, or when the presented
-    /// fingerprint was empty (unsupported key algorithm — nothing to pin).
-    func trustPresentedRemoteCert(
-        ref: RemoteAgentRef,
-        stagedToken: StagedRemoteAgentToken,
-        name: String? = nil
-    ) async {
-        guard let fp = remoteAgentPendingUntrustedCert[ref], !fp.isEmpty else { return }
-        // Promote the captured fingerprint into this ref's editable pin buffer
-        // so a re-run (and the eventual Save) pins against it.
-        remoteAgentCertFingerprints[ref] = fp
-        remoteAgentPendingUntrustedCert[ref] = nil
-        // Custom-only: carry the name/model through the re-run (else the
-        // required-name guard fires). The caller passes the editor's current
-        // name; fall back to the cached roster on a re-test.
-        let custom: CustomGateway? = {
-            guard case .custom(let id) = ref else { return nil }
-            return customGateways.first(where: { $0.id == id })
-        }()
-        let authScheme = remoteAgentAuthSchemes[ref] ?? .bearer
-        let token: String
-        if authScheme == .none {
-            token = ""
-        } else {
-            token = (await resolveStagedToken(stagedToken, for: ref) ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            // The fingerprint stays promoted — pasting a key and re-testing
-            // should then pin against the cert the user already trusted.
-            if stagedToken == .reuseVoiceKey, token.isEmpty {
-                remoteAgentValidationStates[ref] = .invalid(message: Self.reuseMissingVoiceKeyMessage)
-                return
-            }
-        }
-        await validateRemoteAgent(
-            ref: ref,
-            url: remoteAgentURLStrings[ref] ?? "",
-            token: token,
-            authScheme: authScheme,
-            fingerprint: fp,
-            name: name ?? custom?.name,
-            model: remoteAgentModelStrings[ref] ?? custom?.model
-        )
     }
 
     /// Map `AppError` → user-facing message for EVERY gateway-probe surface: the
@@ -3147,8 +3096,23 @@ final class SettingsViewModel {
                           defaultValue: "Try again — the gateway may be processing a long reply.")
         case .remoteAgentCertMismatch:
             // Unreachable for a hosted backend (`.systemTrustOnly` never pins).
-            return String(localized: "remoteAgent.error.certMismatch.recovery",
-                          defaultValue: "Open Settings and update the pinned fingerprint, or remove the pin to use system trust.")
+            // The shared refusal + remedy, verbatim: the editor is the surface
+            // most likely to reach for the pin field, and this is exactly where
+            // the copy must NOT offer to drop the pin that caught the problem.
+            return CertificateTrustCopy.pinMismatchRefusalWithRemedy
+        case .remoteAgentCertUntrusted:
+            // The shared refusal + remedy, verbatim: the editor is where the
+            // user is most likely to reach for a pin, and this is exactly where
+            // the copy must say a pin cannot help.
+            return CertificateTrustCopy.untrustedRefusalWithRemedy
+        case .remoteAgentCertKeyUnpinnable:
+            // The shared refusal + remedy, verbatim. `default:` would render the
+            // cause with no way out, and this is the ONE screen holding the saved
+            // fingerprint — so the "clear the saved fingerprint" half of the
+            // remedy points at a field the user is already looking at. Legitimate
+            // here alone: system trust passed, so clearing the pin returns the
+            // connection to the evaluation that is already succeeding.
+            return CertificateTrustCopy.keyUnpinnableRefusalWithRemedy
         case .remoteAgentServerError:
             if hosted {
                 return String(localized: "remoteAgent.editor.serverError.hosted",
@@ -3289,7 +3253,6 @@ final class SettingsViewModel {
         // Forgetting is the strongest edit there is — retract the verdict and
         // disown any probe still in flight against the wiped config.
         invalidateLiveValidation(for: ref)
-        remoteAgentPendingUntrustedCert.removeValue(forKey: ref)
         customGateways = await SettingsManager.shared.customGateways()
         configuredRemoteAgentRefSet = Set(
             await SettingsManager.shared.configuredRemoteAgentRefs()
@@ -3322,11 +3285,9 @@ final class SettingsViewModel {
     /// (`regenerateFileServerCredential`) and the connection is proven by the
     /// staged `runFileTransferTest(for:)`. It DOES persist the optional manual pin
     /// the user typed in the setup guide's Advanced disclosure (normalized here the
-    /// same way the gateway pin is). TOFU cert capture — auto-pinning a presented
-    /// self-signed leaf — is deferred to the staged Test Connection (the
-    /// `FileServerClient.runConnectionTest` path the gateway TOFU pattern maps to
-    /// here); this method only persists an EXPLICITLY-typed pin, not the URL-write
-    /// TOFU (parity with how the gateway captures during Test, not the bare write).
+    /// same way the gateway pin is). Nothing else can ever write a pin: a
+    /// fingerprint reaches storage only because the user typed it, and it only
+    /// narrows a chain the system already accepted.
     /// File-server editor cert-pin field writes the buffered fingerprint for a ref
     /// (setup guide's Advanced disclosure). Change-guarded, mirroring
     /// `setRemoteAgentCertFingerprintBuffer`. Persisted by
@@ -3480,8 +3441,8 @@ final class SettingsViewModel {
             return
         }
 
-        // Normalize the optional manual pin (Advanced) the same way the QR parser
-        // does — trim/lowercase/strip ':' → require 64 hex. Reject garbage BEFORE
+        // Normalize the optional manual pin (Advanced) to the canonical manual-pin
+        // form — trim/lowercase/strip ':' → require 64 hex. Reject garbage BEFORE
         // persisting the URL so a bad pin can never leave a saved URL paired with an
         // unmatchable fingerprint. Empty stays "no pin" (system trust).
         let pin: String?
@@ -4017,9 +3978,6 @@ final class SettingsViewModel {
         if customSTTAuthSchemes != auths { customSTTAuthSchemes = auths }
         if customSTTMaskedTails != masked { customSTTMaskedTails = masked }
         if customSTTValidationStates != states { customSTTValidationStates = states }
-        // A reload wipes any stale TOFU banners — they only live across a single
-        // user-driven Test → Trust interaction.
-        if !customSTTPendingUntrustedCerts.isEmpty { customSTTPendingUntrustedCerts = [:] }
     }
 
     /// Whether a named custom endpoint is READY to be set active: a base URL is
@@ -4060,9 +4018,8 @@ final class SettingsViewModel {
     /// VALIDATE-ONLY (Save is the single commit point). Run the staged Test
     /// suite against the buffer values (`url` + `key` + the per-uuid model/auth/
     /// fingerprint buffers) and reflect the OUTCOME into observable state
-    /// (`sttTestSuiteResults` / `customSTTValidationStates` /
-    /// `customSTTPendingUntrustedCerts`) — but persist NOTHING. The actual
-    /// upsert / `setCustomSTT…` / `setAPIKey` happens only in
+    /// (`sttTestSuiteResults` / `customSTTValidationStates`) — but persist
+    /// NOTHING. The actual upsert / `setCustomSTT…` / `setAPIKey` happens only in
     /// `saveCustomVoiceEndpoint`. Mirrors the old `validateAndSaveRemoteAgent`
     /// trim → `https://`-only rejection (REUSED verbatim) → `.checking` → rich
     /// Test suite → `.valid` / `.invalid` shape; the result also lands in
@@ -4122,7 +4079,6 @@ final class SettingsViewModel {
         let resolvedModel = effectiveModel.isEmpty ? "whisper-1" : effectiveModel
 
         customSTTValidationStates[uuid] = .checking
-        customSTTPendingUntrustedCerts[uuid] = nil
 
         // The full transcribe URL the suite probes (base + path) — mirrors
         // `SettingsManager.customSTTTranscribeURL(for:)` so a Test before the
@@ -4137,23 +4093,6 @@ final class SettingsViewModel {
             fingerprint: effectiveFingerprint,
             model: resolvedModel
         )
-
-        // TOFU: untrusted self-signed cert, no pin → surface the captured
-        // fingerprint for one-tap "Trust". (Persistence never happened here.)
-        if let fp = result.pendingUntrustedCertFingerprint {
-            customSTTPendingUntrustedCerts[uuid] = fp
-            // `.invalid` (not `.unset`) so macOS (no banner) still surfaces an
-            // error rather than a silent dead-end. OWN key — the cert-MISMATCH
-            // key (`stt.error.customCertMismatch.recovery`, AppError) tells the
-            // user to UPDATE an existing pin, which is wrong here (TOFU: no pin
-            // exists yet); double-booking one key with two texts also let the
-            // catalog silently pick one variant for both contexts.
-            customSTTValidationStates[uuid] = .invalid(
-                message: String(localized: "stt.error.untrustedCert.recovery",
-                                defaultValue: "Open Settings and pin the certificate, or use a publicly-trusted certificate.")
-            )
-            return
-        }
 
         guard result.allPassed else {
             // The suite hard-failed a stage — surface the first failing stage's
@@ -4313,7 +4252,6 @@ final class SettingsViewModel {
     /// free of any appear-time race.
     func cancelCustomVoiceEndpointEdit(for uuid: UUID) async {
         clearStagedCustomTTSVoice(for: uuid)
-        customSTTPendingUntrustedCerts.removeValue(forKey: uuid)
 
         guard await SettingsManager.shared.customVoiceEndpoint(id: uuid) != nil else {
             // Draft — nothing persisted. Drop the in-memory row + per-uuid buffers.
@@ -4398,19 +4336,6 @@ final class SettingsViewModel {
         await validateCustomSTT(for: uuid, url: url, key: key, model: model)
     }
 
-    /// TOFU "Trust" for a named endpoint: pin the fingerprint the server
-    /// presented on the last untrusted-cert Test into the buffer and re-VALIDATE
-    /// (no persist — Save commits). Requires the key again (privacy: never read
-    /// back from Keychain) — the caller passes the SecureField buffer's value.
-    /// No-op when there's no pending fp, or when the presented fp was empty
-    /// (unsupported key algorithm).
-    func trustPresentedCustomCert(for uuid: UUID, url: String, key: String, model: String) async {
-        guard let fp = customSTTPendingUntrustedCerts[uuid], !fp.isEmpty else { return }
-        customSTTCertFingerprints[uuid] = fp
-        customSTTPendingUntrustedCerts[uuid] = nil
-        await validateCustomSTT(for: uuid, url: url, key: key, model: model)
-    }
-
     /// Wipe a named endpoint's configuration: URL, key, model, cert, auth —
     /// including the shared TTS direction's model — AND remove its roster entry.
     /// Falls the active STT/TTS pointer back to Apple if it pointed here (via
@@ -4428,7 +4353,6 @@ final class SettingsViewModel {
         customSTTAuthSchemes.removeValue(forKey: uuid)
         customSTTMaskedTails.removeValue(forKey: uuid)
         customSTTValidationStates.removeValue(forKey: uuid)
-        customSTTPendingUntrustedCerts.removeValue(forKey: uuid)
         customVoiceEndpoints.removeAll { $0.id == uuid }
         sttTestSuiteResults.removeValue(forKey: presetID)
         clearStagedCustomTTSVoice(for: uuid)
@@ -4444,7 +4368,7 @@ final class SettingsViewModel {
     /// Drive `STTConnectionTestSuite.run`, mirroring each progress tick into
     /// `sttTestSuiteResults[presetID]` on the main actor for live animation.
     /// Returns the final result so callers (`validateCustomSTT`) can
-    /// branch on `allPassed` / `pendingUntrustedCertFingerprint`. The progress
+    /// branch on `allPassed`. The progress
     /// closure hops back to `@MainActor` because the suite invokes it from its
     /// own (non-isolated) async context.
     @discardableResult

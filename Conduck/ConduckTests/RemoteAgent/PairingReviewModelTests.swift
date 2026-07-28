@@ -22,22 +22,17 @@ import XCTest
 @MainActor
 final class PairingReviewModelTests: XCTestCase {
 
-    private let gatewayFP = String(repeating: "ab", count: 32)
-    private let fileFP = String(repeating: "cd", count: 32)
-
     // MARK: - Fixtures
 
     private func makePayload(
         kind: String = "openclaw",
         name: String? = nil,
         url: String = "https://gw.example.test:18789",
-        certFP: String? = nil,
         fileServer: [String: Any]? = nil,
         transport: String? = nil
     ) throws -> PairingPayload {
         var gateway: [String: Any] = ["kind": kind, "url": url, "token": "tok-review-test"]
         if let name { gateway["name"] = name }
-        if let certFP { gateway["certFP"] = certFP }
         var dict: [String: Any] = ["v": 1, "gateway": gateway]
         if let fileServer { dict["fileServer"] = fileServer }
         if let transport { dict["transport"] = transport }
@@ -202,41 +197,28 @@ final class PairingReviewModelTests: XCTestCase {
         XCTAssertNil(makeModel(payload: try makePayload()).fileLane)
     }
 
-    // MARK: - Certificate (a claim, never an outcome)
+    // MARK: - The card carries no certificate claim
 
-    func testNoClaimAnywhereReadsAsStandardChecks() throws {
-        XCTAssertEqual(makeModel(payload: try makePayload()).certificate, .standardChecks)
-    }
-
-    func testAGatewayClaimMakesThisACertificateDecision() throws {
-        let model = makeModel(payload: try makePayload(certFP: gatewayFP))
-        XCTAssertEqual(model.certificate, .namesSpecificKey)
-    }
-
-    /// The row is about the IMPORT, not only the gateway half — a file server
-    /// whose key is pinned is just as much a certificate decision.
-    func testAFileServerOnlyClaimAlsoMakesThisACertificateDecision() throws {
-        let payload = try makePayload(
-            fileServer: ["url": "https://files.example.test", "credential": "cred", "certFP": fileFP]
-        )
-        XCTAssertEqual(makeModel(payload: payload).certificate, .namesSpecificKey)
-    }
-
-    /// The inherited claim (self-signed recipe + file server on the gateway's
-    /// host) counts too, and is read through the SAME helper the trust gate
-    /// checks and the import stores — not a second local rule.
-    func testTheInheritedSelfSignedClaimCountsAsAClaim() throws {
-        let payload = try makePayload(
+    /// The card is a pure function of the payload plus local state, and a
+    /// certificate field embedded in a hand-crafted code must not change ANY of
+    /// it. The parser ignores such a field; this proves the ignoring is total —
+    /// the model built from a code carrying one is identical, so there is no
+    /// remaining route by which a code's certificate assertion reaches a screen
+    /// or a comparison.
+    func testACodeCarryingACertificateFieldProducesTheIdenticalCard() throws {
+        let plain = try makePayload(
             url: "https://gw.example.test:18789",
-            certFP: gatewayFP,
-            fileServer: ["url": "https://gw.example.test:9443", "credential": "cred"],
-            transport: "selfsigned"
+            fileServer: ["url": "https://gw.example.test:9443", "credential": "cred"]
         )
-        XCTAssertEqual(
-            SettingsViewModel.claimedFileServerPin(for: payload), gatewayFP,
-            "Fixture must exercise the inheritance rule, or this test proves nothing."
+        let withSmuggledClaim = try makePayload(
+            url: "https://gw.example.test:18789",
+            fileServer: [
+                "url": "https://gw.example.test:9443",
+                "credential": "cred",
+                "certFP": String(repeating: "cd", count: 32)
+            ]
         )
-        XCTAssertEqual(makeModel(payload: payload).certificate, .namesSpecificKey)
+        XCTAssertEqual(makeModel(payload: plain), makeModel(payload: withSmuggledClaim))
     }
 
     // MARK: - Naming and the default pointer
@@ -281,7 +263,6 @@ final class PairingReviewModelTests: XCTestCase {
 
     func testAnUnchangedRebuildIsEqual() throws {
         let payload = try makePayload(
-            certFP: gatewayFP,
             fileServer: ["url": "https://files.example.test", "credential": "cred"]
         )
         XCTAssertEqual(

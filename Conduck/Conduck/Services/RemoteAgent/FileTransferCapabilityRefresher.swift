@@ -118,6 +118,17 @@ enum FileTransferCapabilityRefresher {
                 // Transient (offline / ambiguous) — the backoff timestamp recorded
                 // above gates the retry; no definitive revision is stamped.
                 break
+            case .certificateRefused:
+                // The connection was refused, so this probe learned nothing about
+                // folders. Handled like `.indeterminate` — no revision stamped —
+                // but it is a separate arm because the reasoning is different:
+                // there, a retry may succeed; here it cannot until something
+                // outside the app changes, and stamping a definitive revision
+                // would park the lane flat forever on the strength of a
+                // certificate problem. This sweep is SILENT and has no surface to
+                // report a refusal on; the user meets it on the next Test
+                // Connection, which does say so.
+                break
             }
         }
     }

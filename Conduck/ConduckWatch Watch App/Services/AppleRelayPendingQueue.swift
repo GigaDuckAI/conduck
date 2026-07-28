@@ -639,7 +639,32 @@ final class AppleRelayPendingQueue {
         switch error {
         case .networkError, .decodingError, .unknown:
             return AppError.remoteAgentUnreachable.errorDescription ?? fallback
+        // The three certificate families carry their REMEDY into the body, the
+        // same carve-out `BackgroundRemoteAgent.postFailureNotification` holds.
+        // `errorDescription` alone is the cause half, and each family keeps the
+        // part the user must read in the other half: the server-side routes to a
+        // trusted certificate, the "may be intercepted" warning, and — on an
+        // unpinnable key — that the certificate is fine and this device trusts
+        // it. This body mirrors to the paired iPhone's lock screen, which for a
+        // queued relay may be the only place the verdict is ever read. Still
+        // hostname-free: every remedy is fixed copy from `CertificateTrustCopy`,
+        // so the privacy rule above holds.
+        case .remoteAgentCertUntrusted, .sttCustomCertUntrusted,
+             .ttsCustomCertUntrusted, .fileTransferCertUntrusted,
+             .remoteAgentCertMismatch, .sttCustomCertMismatch,
+             .ttsCustomCertMismatch, .fileTransferCertMismatch,
+             .remoteAgentCertKeyUnpinnable, .sttCustomCertKeyUnpinnable,
+             .ttsCustomCertKeyUnpinnable, .fileTransferCertKeyUnpinnable:
+            return error.descriptionWithRecovery
         default:
+            // Cause-only ON PURPOSE, and NOT an instance of the cause-without-
+            // remedy defect: this queue's reachable payloads
+            // (`.appleSpeechModelNotInstalled`, `.audioProcessingFailed`) already
+            // END in their own instruction, so `descriptionWithRecovery` would
+            // print it twice ("… Record again. Record new audio."), which
+            // `WatchNotificationPrivacyTests.testNonInterpolatingCasesKeepTheirOwnCopy`
+            // locks against. The certificate families above are the carve-out
+            // precisely because THEY carry the remedy in the other half.
             return error.errorDescription ?? fallback
         }
     }

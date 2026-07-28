@@ -81,7 +81,7 @@ final class HostReachabilityClassTests: XCTestCase {
         // Funnel is PUBLIC egress — a down Funnel host is a real reachability
         // failure, NOT a Local-Network-permission one, so it must not force the hint.
         XCTAssertEqual(HostReachabilityClass.classify("myhost.example.com", transportHint: "funnel"), .publicHost)
-        // Cloudflare / public / self-signed transports say nothing about locality.
+        // Cloudflare / public transports say nothing about locality.
         XCTAssertEqual(HostReachabilityClass.classify("gateway.example.com", transportHint: "cloudflare"), .publicHost)
         XCTAssertEqual(HostReachabilityClass.classify("gateway.example.com", transportHint: "public"), .publicHost)
     }

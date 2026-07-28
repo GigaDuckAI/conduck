@@ -21,7 +21,7 @@
 //      gated (an import writing under unsaved edits would corrupt both).
 //   2. Connection — reuse callout (OpenRouter) · name (custom) · URL · auth
 //      toggle · token row (`SecretEntrySheet`) · Test Connection + remedy ·
-//      TOFU card · Server certificate row.
+//      Server certificate row.
 //   3. Model — its own section (OpenRouter required + discovery; custom
 //      optional).
 //   4. In chats — File transfer (pushes `GatewayFileTransferPage`; save/dirty-
@@ -37,11 +37,12 @@
 // File transfer sub-page is its own buffered editor with the same contract.
 // No zone narrates its commit timing — one contract needs no captions.
 //
-// Certificate trust is decided in ONE place — `CertificateTrustSheet`, opened
-// from the Server certificate row and from the TOFU card's "Review
-// Certificate" action. The row shows only plain-language values (Automatic /
-// Pinned on this device / Approval needed); the fingerprint jargon is
-// quarantined in the sheet.
+// The optional certificate pin is edited in ONE place — `CertificateTrustSheet`,
+// opened from the Server certificate row. The row shows only plain-language
+// values (Automatic / Pinned on this device); the fingerprint jargon is
+// quarantined in the sheet. A certificate this device doesn't trust is a
+// TERMINAL Test Connection failure with no affordance attached: pinning can
+// only narrow what is accepted, never widen it, so the fix is on the server.
 //
 // Shared field sub-views (`nameField`/`urlField`/`authToggle`/`secretRow`/
 // `modelField`/`imageHistoryPicker`/`badgeFields`) are each independently
@@ -59,10 +60,9 @@
 //     commit/probe time — the raw key never enters this View.
 //   - The masked tail is the only token surface in `.valid` state.
 //
-// Cross-platform (iOS + macOS): the body is shared, including the TOFU card —
-// both platforms surface a pending untrusted cert through it (the `.invalid`
-// row stays suppressed while one is pending). UIKit-only TextField modifiers
-// (`.textContentType(.URL)`, `.keyboardType`, `.textInputAutocapitalization`)
+// Cross-platform (iOS + macOS): the body is shared. UIKit-only TextField
+// modifiers (`.textContentType(.URL)`, `.keyboardType`,
+// `.textInputAutocapitalization`)
 // are `#if os(iOS)`-gated. macOS additionally applies the settings content
 // rail (720pt max width) + increased section-header prominence; iOS keeps the
 // stock inset-grouped metrics.
@@ -90,7 +90,7 @@ struct RemoteAgentConfigBody: View {
     @State private var pendingToken: String = ""
 
     /// OpenRouter lane: the voice-key reuse is STAGED, not instant — tapping the
-    /// callout only sets this flag; Save/Test/trust resolve it VM-side via
+    /// callout only sets this flag; Save and Test resolve it VM-side via
     /// `StagedRemoteAgentToken.reuseVoiceKey`. Participates in `isDirty` and
     /// `canSave` (a staged key satisfies the hosted lane's key requirement).
     /// Typing a token clears it; Save success and rehydrate clear it.
@@ -100,8 +100,7 @@ struct RemoteAgentConfigBody: View {
     /// a `SecureField` exists — never inline in this Form).
     @State private var showingSecretSheet: Bool = false
 
-    /// Drives the `CertificateTrustSheet` — opened from the Server certificate
-    /// row and from the TOFU card's "Review Certificate" action.
+    /// Drives the `CertificateTrustSheet` — opened from the Server certificate row.
     @State private var showingCertSheet: Bool = false
 
     /// Drives the pairing-EXPORT sheet ("Set up on another device") — re-renders
@@ -291,10 +290,10 @@ struct RemoteAgentConfigBody: View {
         builtinDescriptor?.category == .hostedModel ? GatewayFieldTips.apiKey : GatewayFieldTips.bearerToken
     }
 
-    /// The token INTENT for every VM call (Save / Test / certificate trust) —
-    /// the one resolution site, so the three paths can't disagree. A staged
-    /// voice-key reuse wins; a typed buffer next; otherwise the ref's saved
-    /// Keychain token (`.stored` — which a keyless lane resolves to "none").
+    /// The token INTENT for every VM call (Save / Test) — the one resolution
+    /// site, so the two paths can't disagree. A staged voice-key reuse wins; a
+    /// typed buffer next; otherwise the ref's saved Keychain token (`.stored` —
+    /// which a keyless lane resolves to "none").
     private var stagedToken: StagedRemoteAgentToken {
         if stagedVoiceKeyReuse { return .reuseVoiceKey }
         return pendingToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -330,21 +329,7 @@ struct RemoteAgentConfigBody: View {
             )
         }
         .sheet(isPresented: $showingCertSheet) {
-            CertificateTrustSheet(
-                variant: .gateway,
-                fingerprint: certFingerprintBinding,
-                pendingCapturedFingerprint: viewModel.remoteAgentPendingUntrustedCert[ref],
-                onTrustCaptured: {
-                    // Approving the captured cert stages the fingerprint (the
-                    // sheet wrote it through the binding) and kicks the automatic
-                    // re-test with the current token intent. Save still commits.
-                    let staged = stagedToken
-                    let name = isCustom ? pendingName : nil
-                    Task {
-                        await viewModel.trustPresentedRemoteCert(ref: ref, stagedToken: staged, name: name)
-                    }
-                }
-            )
+            CertificateTrustSheet(fingerprint: certFingerprintBinding)
         }
         .sheet(isPresented: $showingCredentialHelp) {
             if let source = builtinDescriptor?.credentialSource {
@@ -607,9 +592,9 @@ struct RemoteAgentConfigBody: View {
 
     // MARK: - Zone 2: Connection (fields guarded off the descriptor)
 
-    /// The Save-scoped credentials zone, ending in Test Connection and the trust
-    /// surfaces (TOFU card + Server certificate row). Each sub-view guards itself
-    /// off the descriptor: `urlField`/`authToggle` hide for OpenRouter (fixed
+    /// The Save-scoped credentials zone, ending in Test Connection and the
+    /// Server certificate row. Each sub-view guards itself off the descriptor:
+    /// `urlField`/`authToggle` hide for OpenRouter (fixed
     /// endpoint, locked auth); `nameField` is custom-only; the certificate row
     /// hides for `.systemTrustOnly`. The Model field lives in its own Save-scoped
     /// section directly below — for hosted/custom lanes whose model suggestions
@@ -625,7 +610,6 @@ struct RemoteAgentConfigBody: View {
             secretRow
             actionRow
             endpointRemedyCallout
-            tofuCard
             serverCertificateRow
         } header: {
             zoneHeader {
@@ -1748,20 +1732,16 @@ struct RemoteAgentConfigBody: View {
                 EmptyView()
             }
         case .invalid(let message):
-            // While the TOFU card is up (untrusted cert, no pin), it is the
-            // richer prompt — suppress this red row to avoid a duplicate.
-            if viewModel.remoteAgentPendingUntrustedCert[ref] == nil {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(AppColors.error)
-                        Text(message)
-                            .font(.subheadline)
-                            .foregroundStyle(AppColors.error)
-                            .multilineTextAlignment(.leading)
-                    }
-                    troubleshootAffordance
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(AppColors.error)
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.error)
+                        .multilineTextAlignment(.leading)
                 }
+                troubleshootAffordance
             }
         }
     }
@@ -1806,68 +1786,7 @@ struct RemoteAgentConfigBody: View {
         }
     }
 
-    // MARK: - TOFU card (in the Connection zone, below Test Connection)
-    //
-    // Cross-platform. The VM populates `remoteAgentPendingUntrustedCert` on EVERY
-    // platform (a self-signed LAN gateway is the macOS norm too), and the red
-    // `statusFeedback` row is suppressed whenever it's set — so BOTH platforms must
-    // render the card here, or a macOS Test Connection against a self-signed
-    // gateway dead-ends on a spinner then nothing. The card explains why the test
-    // stopped and offers ONE action — "Review Certificate" → the shared
-    // `CertificateTrustSheet`, where the trust decision (and the jargon) lives.
-
-    @ViewBuilder
-    private var tofuCard: some View {
-        if let fp = viewModel.remoteAgentPendingUntrustedCert[ref] {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "lock.trianglebadge.exclamationmark")
-                        .foregroundStyle(AppColors.warning)
-                    Text(LocalizedStringResource(
-                        "settings.remoteAgent.tofu.title",
-                        defaultValue: "Untrusted certificate"
-                    ))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppColors.textPrimary)
-                }
-                if fp.isEmpty {
-                    // Unsupported key type: nothing was captured, so there is no
-                    // certificate to review — inline copy pointing at the manual
-                    // pin in the Server certificate row.
-                    Text(LocalizedStringResource(
-                        "settings.remoteAgent.tofu.noFingerprint.v2",
-                        defaultValue: "This gateway uses a self-signed certificate with an unsupported key type. Pin it manually in the Server certificate row below, or use a publicly-trusted certificate."
-                    ))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(LocalizedStringResource(
-                        "settings.remoteAgent.tofu.body.v2",
-                        defaultValue: "Test Connection stopped: this gateway uses a self-signed certificate this device doesn't recognize yet. Review it to decide whether to trust this exact certificate."
-                    ))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button {
-                        showingCertSheet = true
-                    } label: {
-                        Label(
-                            LocalizedStringResource("settings.remoteAgent.tofu.reviewButton", defaultValue: "Review Certificate"),
-                            systemImage: "checkmark.shield.fill"
-                        )
-                        .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(AppColors.brandAmber)
-                }
-            }
-            .padding(.vertical, 4)
-            .listRowBackground(AppColors.warning.opacity(0.10))
-        }
-    }
-
-    // MARK: - Server certificate row (the trust surface; plain-language values)
+    // MARK: - Server certificate row (the pin surface; plain-language values)
 
     /// Write-through to the staged fingerprint buffer — the same contract as the
     /// URL field: a re-pinned (or un-pinned) cert is a different trust decision,
@@ -1880,8 +1799,8 @@ struct RemoteAgentConfigBody: View {
         )
     }
 
-    /// "Server certificate" — the one row on the page that names the trust
-    /// decision, showing a plain-language value; everything jargon-bearing (the
+    /// "Server certificate" — the one row on the page that names the optional
+    /// pin, showing a plain-language value; everything jargon-bearing (the
     /// fingerprint, SPKI) is quarantined in `CertificateTrustSheet`. Hidden for
     /// hosted-model built-ins on a public CA (OpenRouter, `.systemTrustOnly`):
     /// their leaf certs rotate, and letting a user pin one would arm a future
@@ -1932,18 +1851,11 @@ struct RemoteAgentConfigBody: View {
         }
     }
 
-    /// The row's plain-language value. Priority: a captured-but-undecided cert
-    /// outranks everything (the sheet's approval card is waiting); ANY buffer
-    /// that diverged from its appear-time snapshot owes a Save — including a
-    /// CLEARED pin, where the persisted fingerprint still governs connections
-    /// until Save commits the removal; then the two resting values.
+    /// The row's plain-language value. ANY buffer that diverged from its
+    /// appear-time snapshot owes a Save — including a CLEARED pin, where the
+    /// persisted fingerprint still governs connections until Save commits the
+    /// removal; then the two resting values.
     private var certRowValue: LocalizedStringResource {
-        if viewModel.remoteAgentPendingUntrustedCert[ref] != nil {
-            return LocalizedStringResource(
-                "settings.remoteAgent.certRow.value.approvalNeeded",
-                defaultValue: "Approval needed"
-            )
-        }
         let buffer = viewModel.remoteAgentCertFingerprints[ref] ?? ""
         let bufferEmpty = buffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if buffer != originalCert {
@@ -1969,11 +1881,10 @@ struct RemoteAgentConfigBody: View {
         )
     }
 
-    /// Amber only where the user owes an action (a pending approval / an unsaved
-    /// pin change, in EITHER direction) — the resting values stay quiet.
+    /// Amber only where the user owes an action (an unsaved pin change, in
+    /// EITHER direction) — the resting values stay quiet.
     private var certRowValueIsActionable: Bool {
-        if viewModel.remoteAgentPendingUntrustedCert[ref] != nil { return true }
-        return (viewModel.remoteAgentCertFingerprints[ref] ?? "") != originalCert
+        (viewModel.remoteAgentCertFingerprints[ref] ?? "") != originalCert
     }
 
     // MARK: - Zone 4: In chats

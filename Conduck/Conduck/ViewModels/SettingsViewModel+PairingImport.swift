@@ -68,15 +68,41 @@ enum PairingImportOutcome: Equatable {
 /// per-ref validation row).
 enum PairingGatewayTestOutcome: Equatable {
     case passed
-    /// TOFU opportunity: no pin set + the system rejected a self-signed cert.
-    /// The sheet offers trust-and-retry — it persists the presented
-    /// fingerprint via `SettingsManager.setRemoteAgentCertFingerprint(_:for:)`
-    /// then re-invokes the test (which reads the persisted pin). A nil / empty
-    /// fingerprint means the cert's key algorithm yielded nothing pinnable.
-    case untrustedCert(presentedFingerprintHex: String?)
     /// Probe failed — `message` is the existing user-facing `AppError`
-    /// recovery copy (never embeds the token or URL).
-    case failed(message: String)
+    /// recovery copy (never embeds the token or URL) and `error` is the
+    /// taxonomy entry that produced it. An untrusted certificate lands here
+    /// like any other failure: there is no first-contact affordance to route it
+    /// to, because a pin cannot make an untrusted chain acceptable to the
+    /// system.
+    ///
+    /// THE ERROR TRAVELS WITH THE MESSAGE, and that is the load-bearing part. A
+    /// message alone is prose — it cannot tell a gateway that is merely down
+    /// from a certificate this device refuses, so the sheet's recovery section
+    /// offered "Try again" on a verdict that reaches the identical answer every
+    /// attempt. Every other failure surface gates on `AppError.isRetryable`
+    /// (`DeclinedTurnPresentation.offersRetry`, `StagedAttachment.failure(for:)`,
+    /// `ServerFileDownloadChip.acceptsTap`); carrying the error here is what
+    /// lets this one do the same instead of special-casing certificates.
+    ///
+    /// `nil` only where no typed error stands behind the copy — unknown is not
+    /// terminal, so it keeps the retry.
+    case failed(message: String, error: AppError?)
+
+    /// `AppError` is `LocalizedError`, NOT `Equatable` (its `Error`-carrying
+    /// cases can't synthesize `==`), so compare the failure by its stable
+    /// numeric `errorCode` — the same shape `FileTransferTestResult` uses, and
+    /// for the same reason: this value stays `Equatable` for tests without
+    /// forcing an `AppError: Equatable` conformance across the whole taxonomy.
+    static func == (lhs: PairingGatewayTestOutcome, rhs: PairingGatewayTestOutcome) -> Bool {
+        switch (lhs, rhs) {
+        case (.passed, .passed):
+            return true
+        case let (.failed(lhsMessage, lhsError), .failed(rhsMessage, rhsError)):
+            return lhsMessage == rhsMessage && lhsError?.errorCode == rhsError?.errorCode
+        case (.passed, .failed), (.failed, .passed):
+            return false
+        }
+    }
 }
 
 extension SettingsViewModel {
@@ -231,13 +257,12 @@ extension SettingsViewModel {
     /// - Parameters:
     ///   - resolvedGatewayPin: the certificate pin to persist for the gateway —
     ///     `nil` for ordinary system trust. This is the DECIDED value from
-    ///     `resolvePairingTrust`, never `payload.certFP`. The payload's claim is
-    ///     an assertion by whoever generated the code; it reaches storage only
-    ///     after it has been checked against the key the server actually
-    ///     presented and, where an exception is involved, explicitly accepted.
-    ///   - resolvedFileServerPin: the same, for the file-server lane (already
-    ///     accounts for the same-host inheritance rule — see
-    ///     `claimedFileServerPin(for:)`).
+    ///     `resolvePairingTrust`. Keeping it a parameter is what makes "no pin
+    ///     from a setup code ever reaches storage" readable at the call site
+    ///     rather than inferable from the payload type: this method takes its
+    ///     pins from a decision, and a payload has no certificate field to
+    ///     offer one from.
+    ///   - resolvedFileServerPin: the same, for the file-server lane.
     func executePairingImport(
         _ payload: PairingPayload,
         target: RemoteAgentRef,
@@ -250,7 +275,10 @@ extension SettingsViewModel {
         // `.bearer` and fail the token guard.
         remoteAgentURLStrings[target] = payload.url.absoluteString
         remoteAgentAuthSchemes[target] = payload.authScheme
-        // The DECIDED pin, never `payload.certFP` — see the parameter docs.
+        // The DECIDED pin — see the parameter docs. Empty clears any pin the
+        // slot held, which is right: an import replaces the gateway wholesale,
+        // and a pin the user typed for the OLD certificate would fail TLS
+        // against the new one.
         remoteAgentCertFingerprints[target] = resolvedGatewayPin ?? ""
         var customName: String? = nil
         if case .custom(let name) = payload.kind {
@@ -304,14 +332,11 @@ extension SettingsViewModel {
                 outcome = .committedGatewayOnly
             }
             if outcome == .committed {
-                // File-server pin: the DECIDED value. The claim-side inheritance
-                // rule (explicit pin wins, else a same-host self-signed gateway
-                // pin covers it) now lives in `claimedFileServerPin(for:)`, which
-                // is what the trust probe CHECKED — computing it a second time
-                // here is how a check and a write drift apart.
-                // Still canonicalized through the SAME normalization the save
-                // path uses, so the persisted mirror can never diverge from the
-                // draft signature's colon-stripped form.
+                // File-server pin: the DECIDED value, which `resolvePairingTrust`
+                // only ever resolves to nil. Still routed through the SAME
+                // normalization the save path uses, so a future decision that
+                // does yield a pin cannot land in a form the persisted mirror
+                // and the draft signature disagree about.
                 let rawPin: String? = resolvedFileServerPin
                 let pin: String?
                 if case .valid(let hex) = Self.normalizeCertFingerprint(rawPin) {
@@ -358,11 +383,9 @@ extension SettingsViewModel {
 
     /// Probe the just-imported gateway (`GET /v1/models` via the existing
     /// `testConnection` path). Reads the PERSISTED config for `target` —
-    /// matching `retestRemoteAgent`'s stored-credential posture, and so a
-    /// trust-and-retry (which persists the pin via
-    /// `setRemoteAgentCertFingerprint` before re-invoking) is picked up —
-    /// falling back to the payload only for slots not yet readable (e.g. a
-    /// Keychain token read failing transiently right after the write).
+    /// matching `retestRemoteAgent`'s stored-credential posture — falling back
+    /// to the payload only for slots not yet readable (e.g. a Keychain token
+    /// read failing transiently right after the write).
     ///
     /// Privacy: the token never leaves this method — no log, no retention,
     /// and failure copy is the existing secret-free `AppError` recovery text.
@@ -392,10 +415,19 @@ extension SettingsViewModel {
                 authScheme: authScheme,
                 fingerprint: fingerprint
             )
-            if case .untrustedCert(let presentedHex) = outcome {
-                // TOFU: surface the captured fingerprint; the sheet's
-                // trust-and-retry persists it then re-invokes this method.
-                return .untrustedCert(presentedFingerprintHex: presentedHex)
+            if case .untrustedCert = outcome {
+                // Terminal, not an offer. A pin cannot rescue a chain the system
+                // rejected — App Transport Security permits tightening trust
+                // evaluation, never loosening it — so there is nothing to propose
+                // and the message names the server-side remedy instead. Shared
+                // wording, not a local string: this is the same cause the editor
+                // and the voice-endpoint test suite report, and one cause the user
+                // meets three ways must not come with three different remedies.
+                // The code rides along so the sheet reads the same terminality
+                // every other surface reads, rather than inferring it from the
+                // wording.
+                return .failed(message: CertificateTrustCopy.untrustedRefusalWithRemedy,
+                               error: .remoteAgentCertUntrusted)
             }
             // Reflect the pass into the per-ref validation row so the
             // Settings detail screen shows green without a separate re-test.
@@ -410,9 +442,13 @@ extension SettingsViewModel {
             // Shared mapping with the editor's Test Connection
             // (`SettingsViewModel.friendlyGatewayMessage`) — a private copy here
             // would drift and re-swallow every failure added after it.
-            return .failed(message: SettingsViewModel.friendlyGatewayMessage(for: error))
+            return .failed(message: SettingsViewModel.friendlyGatewayMessage(for: error),
+                           error: error)
         } catch {
-            return .failed(message: String(localized: "Unexpected error. Try again."))
+            // No typed error behind this copy, so no terminality claim either —
+            // the sheet keeps its retry, because unknown is not terminal.
+            return .failed(message: String(localized: "Unexpected error. Try again."),
+                           error: nil)
         }
     }
 }

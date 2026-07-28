@@ -71,7 +71,7 @@ final class RemoteAgentClientTests: XCTestCase {
             priorTurns: prior,
             newUserText: "follow-up",
             fileServerReady: false,
-            session: session
+            transport: .unevaluated(session: session)
         )
 
         XCTAssertEqual(reply, "hi")
@@ -128,7 +128,7 @@ final class RemoteAgentClientTests: XCTestCase {
             priorTurns: [],
             newUserText: "hello",
             fileServerReady: false,
-            session: session
+            transport: .unevaluated(session: session)
         )
 
         XCTAssertEqual(reply, "hermes reply")
@@ -172,7 +172,7 @@ final class RemoteAgentClientTests: XCTestCase {
             priorTurns: prior,
             newUserText: "newest",
             fileServerReady: false,
-            session: session
+            transport: .unevaluated(session: session)
         )
 
         let body = try XCTUnwrap(capturedBody)
@@ -200,7 +200,8 @@ final class RemoteAgentClientTests: XCTestCase {
         await assertThrowsAppError(.remoteAgentAuthFailed) {
             try await RemoteAgentClient.shared.send(
                 backend: .openclaw, url: self.baseURL, token: self.token,
-                newUserText: "hi", fileServerReady: false, session: self.session
+                newUserText: "hi", fileServerReady: false,
+                transport: .unevaluated(session: self.session)
             )
         }
     }
@@ -214,7 +215,8 @@ final class RemoteAgentClientTests: XCTestCase {
         await assertThrowsAppError(.remoteAgentServerError) {
             try await RemoteAgentClient.shared.send(
                 backend: .openclaw, url: self.baseURL, token: self.token,
-                newUserText: "hi", fileServerReady: false, session: self.session
+                newUserText: "hi", fileServerReady: false,
+                transport: .unevaluated(session: self.session)
             )
         }
     }
@@ -229,7 +231,8 @@ final class RemoteAgentClientTests: XCTestCase {
         await assertThrowsAppError(.remoteAgentInvalidResponse) {
             try await RemoteAgentClient.shared.send(
                 backend: .openclaw, url: self.baseURL, token: self.token,
-                newUserText: "hi", fileServerReady: false, session: self.session
+                newUserText: "hi", fileServerReady: false,
+                transport: .unevaluated(session: self.session)
             )
         }
     }
@@ -246,7 +249,8 @@ final class RemoteAgentClientTests: XCTestCase {
         do {
             _ = try await RemoteAgentClient.shared.send(
                 backend: .openclaw, url: baseURL, token: token,
-                newUserText: "hi", fileServerReady: false, session: session
+                newUserText: "hi", fileServerReady: false,
+                transport: .unevaluated(session: session)
             )
             XCTFail("Expected a thrown error for a cancelled request")
         } catch is CancellationError {
@@ -321,72 +325,26 @@ final class RemoteAgentClientTests: XCTestCase {
                        "Bearer header MUST be set on the probe — the test verifies auth+connectivity.")
     }
 
-    // The pairing trust matrix must compare the key on the wire against the pin a
-    // scanned code claims EVEN WHEN ordinary trust already accepted the chain
-    // (`PairingTrustDecision`). `TestConnectionOutcome` carries the presented
-    // fingerprint only on its `.untrustedCert` arm, so the success arms would
-    // otherwise discard it and make that comparison impossible.
-    func testTestConnectionReportRetainsPresentedFingerprintOnSuccess() async throws {
-        let liveKey = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
-        MockURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!, statusCode: 200,
-                httpVersion: "HTTP/1.1", headerFields: nil
-            )!
-            return (response, Data(#"{"data":[{"id":"llama3"}]}"#.utf8))
-        }
-
-        let report = try await RemoteAgentClient.shared.testConnectionReportForTesting(
-            backend: .openclaw,
-            url: baseURL,
-            token: token,
-            session: session,
-            presentedFingerprint: { liveKey }
-        )
-
-        XCTAssertEqual(report.outcome, .ok)
-        XCTAssertEqual(report.presentedFingerprintHex, liveKey,
-                       "The presented leaf fingerprint must survive the SUCCESS path, not just the untrusted-cert path.")
-    }
-
-    func testTestConnectionReportRetainsPresentedFingerprintOnEmptyModelList() async throws {
-        let liveKey = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+    /// An empty `data` array is a PASS with a caveat, not a failure: the route
+    /// exists and speaks the protocol, but a gateway advertising zero models
+    /// cannot answer a turn. Asserted here on the full wire path — the body
+    /// verdict has its own unit test, and this one proves the distinct outcome
+    /// survives the transport + status layers rather than collapsing to `.ok`.
+    func testTestConnectionEmptyModelListPassesAsNoModels() async throws {
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             return (response, Data(#"{"data":[]}"#.utf8))
         }
 
-        let report = try await RemoteAgentClient.shared.testConnectionReportForTesting(
+        let outcome = try await RemoteAgentClient.shared.testConnectionForTesting(
             backend: .openclaw,
             url: baseURL,
             token: token,
-            session: session,
-            presentedFingerprint: { liveKey }
+            session: session
         )
 
-        XCTAssertEqual(report.outcome, .okNoModels)
-        XCTAssertEqual(report.presentedFingerprintHex, liveKey,
-                       "`.okNoModels` is a success arm too — it must retain the fingerprint.")
-    }
-
-    func testTestConnectionReportRetainsPresentedFingerprintOnUntrustedCert() async throws {
-        let liveKey = "beef0123456789abcdefbeef0123456789abcdefbeef0123456789abcdefbeef"
-        MockURLProtocol.requestHandler = { _ in
-            throw URLError(.serverCertificateUntrusted)
-        }
-
-        let report = try await RemoteAgentClient.shared.testConnectionReportForTesting(
-            backend: .openclaw,
-            url: baseURL,
-            token: token,
-            session: session,
-            presentedFingerprint: { liveKey },
-            systemTrustRejected: { true }
-        )
-
-        XCTAssertEqual(report.outcome, .untrustedCert(presentedFingerprintHex: liveKey))
-        XCTAssertEqual(report.presentedFingerprintHex, liveKey,
-                       "The report's fingerprint must agree with the one embedded in the outcome — one capture, one value.")
+        XCTAssertEqual(outcome, .okNoModels,
+                       "A structurally valid but empty model list must stay distinguishable from a flat green.")
     }
 
     // MARK: - Pairing trust probe (unpinned; handshake-completion semantics)
@@ -394,8 +352,8 @@ final class RemoteAgentClientTests: XCTestCase {
     /// THE contract that separates this probe from Test Connection: a 401 proves
     /// the TLS handshake was accepted and the password was wrong — two completely
     /// different facts. Test Connection throws on 401, which would make the trust
-    /// matrix read an ordinarily-trusted server as unreachable and skip the
-    /// pin-contradiction check entirely.
+    /// matrix read an ordinarily-trusted server as unreachable and refuse an
+    /// import that should have proceeded.
     func testPairingTrustProbeTreatsAnyHTTPResponseAsHandshakeCompletion() async {
         for status in [200, 401, 403, 404, 500] {
             MockURLProtocol.requestHandler = { request in
@@ -405,7 +363,7 @@ final class RemoteAgentClientTests: XCTestCase {
             }
 
             let signals = await RemoteAgentClient.shared.pairingTrustProbeForTesting(
-                url: baseURL, token: token, payloadPinHex: nil, session: session)
+                url: baseURL, token: token, session: session)
 
             XCTAssertTrue(signals.requestCompleted,
                           "HTTP \(status) still proves the handshake was accepted.")
@@ -414,41 +372,42 @@ final class RemoteAgentClientTests: XCTestCase {
         }
     }
 
-    func testPairingTrustProbeCarriesTheClaimAndThePresentedKey() async {
-        let claimed = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
-        let live = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+    /// A completed handshake means the system accepted the chain, so the import
+    /// proceeds under ordinary trust and stores NO pin — retaining one would break
+    /// the gateway at its next certificate renewal.
+    func testPairingTrustProbeUnderOrdinaryTrustProceedsWithoutAPin() async {
         MockURLProtocol.requestHandler = { request in
             (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
              Data(#"{"data":[]}"#.utf8))
         }
 
         let signals = await RemoteAgentClient.shared.pairingTrustProbeForTesting(
-            url: baseURL, token: token, payloadPinHex: claimed, session: session,
-            presentedFingerprint: { live })
+            url: baseURL, token: token, session: session)
 
-        XCTAssertEqual(signals.payloadPinHex, claimed, "The claim must be carried through for comparison, never probed under.")
-        XCTAssertEqual(signals.presentedFingerprintHex, live)
-        // Wired end to end: this is the enterprise-inspection row.
-        XCTAssertEqual(PairingTrustDecision.decide(signals), .blocked(.pinContradictsLiveServer))
+        XCTAssertTrue(signals.requestCompleted)
+        XCTAssertEqual(PairingTrustDecision.decide(signals), .useOrdinaryTrust)
     }
 
     func testPairingTrustProbeClassifiesAnUntrustedCertificate() async {
         MockURLProtocol.requestHandler = { _ in throw URLError(.serverCertificateUntrusted) }
 
         let signals = await RemoteAgentClient.shared.pairingTrustProbeForTesting(
-            url: baseURL, token: token, payloadPinHex: nil, session: session,
-            presentedFingerprint: { "beef0123456789abcdefbeef0123456789abcdefbeef0123456789abcdefbeef" },
+            url: baseURL, token: token, session: session,
             systemTrustRejected: { true })
 
         XCTAssertFalse(signals.requestCompleted)
         XCTAssertEqual(signals.transportClass, .untrustedCert)
+        // Terminal: a certificate the device does not trust cannot be pinned into
+        // acceptance, so there is no arm the import can proceed past.
+        XCTAssertEqual(PairingTrustDecision.decide(signals),
+                       .blocked(.certificateNotPubliclyTrusted))
     }
 
     func testPairingTrustProbeReportsTransientFailureWithoutThrowing() async {
         MockURLProtocol.requestHandler = { _ in throw URLError(.timedOut) }
 
         let signals = await RemoteAgentClient.shared.pairingTrustProbeForTesting(
-            url: baseURL, token: token, payloadPinHex: nil, session: session)
+            url: baseURL, token: token, session: session)
 
         XCTAssertFalse(signals.requestCompleted)
         XCTAssertEqual(signals.transportClass, .timeout)
@@ -498,10 +457,10 @@ final class RemoteAgentClientTests: XCTestCase {
         // PIN SET + cert changed: `RemoteAgentTrustEvaluator` refuses the
         // mismatch via cancelAuthenticationChallenge → URLError(.cancelled)
         // AND sets `pinRejected`. With a pin configured this MUST stay a hard
-        // error — never auto-offer re-trust (that defeats pinning). TOFU is
-        // offered ONLY when no pin is set. (The mock bypasses the real
-        // evaluator, so we inject `pinRejected: { true }` to simulate the
-        // genuine-mismatch signal.)
+        // error — never auto-offer re-trust (that defeats pinning, and there
+        // is no re-trust affordance anywhere in this app). (The mock bypasses
+        // the real evaluator, so we inject `pinRejected: { true }` to
+        // simulate the genuine-mismatch signal.)
         MockURLProtocol.requestHandler = { request in
             throw URLError(.cancelled)
         }
@@ -509,7 +468,7 @@ final class RemoteAgentClientTests: XCTestCase {
         await assertThrowsAppError(.remoteAgentCertMismatch) {
             try await RemoteAgentClient.shared.testConnectionForTesting(
                 backend: .openclaw, url: self.baseURL, token: self.token,
-                session: self.session, hasPin: true,
+                session: self.session, challengeRefused: true,
                 pinRejected: { true }
             )
         }
@@ -524,7 +483,7 @@ final class RemoteAgentClientTests: XCTestCase {
         await assertThrowsAppError(.remoteAgentUnreachable) {
             try await RemoteAgentClient.shared.testConnectionForTesting(
                 backend: .openclaw, url: self.baseURL, token: self.token,
-                session: self.session, hasPin: false
+                session: self.session, challengeRefused: false
             )
         }
     }
@@ -537,24 +496,24 @@ final class RemoteAgentClientTests: XCTestCase {
         await assertThrowsAppError(.remoteAgentUnreachable) {
             try await RemoteAgentClient.shared.testConnectionForTesting(
                 backend: .openclaw, url: self.baseURL, token: self.token,
-                session: self.session, hasPin: false,
+                session: self.session, challengeRefused: false,
                 systemTrustRejected: { false }
             )
         }
     }
 
-    func testTestConnectionSecureConnectionFailedSystemRejectedIsTOFU() async throws {
-        // A genuine no-pin rejection that surfaced via the generic code (the
-        // system DID reject) is still a TOFU opportunity.
+    func testTestConnectionSecureConnectionFailedSystemRejectedIsUntrustedCert() async throws {
+        // A genuine no-pin rejection that surfaced via the GENERIC code must
+        // still name the certificate — `systemTrustRejected` is the only thing
+        // that tells it apart from a cold-tunnel hiccup carrying the same code.
         MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
         let outcome = try await RemoteAgentClient.shared.testConnectionForTesting(
             backend: .openclaw, url: baseURL, token: token,
-            session: session, hasPin: false,
-            presentedFingerprint: { "abcabcabcabc1234" },
+            session: session, challengeRefused: false,
             systemTrustRejected: { true }
         )
-        XCTAssertEqual(outcome, .untrustedCert(presentedFingerprintHex: "abcabcabcabc1234"),
-                       "A real system rejection (systemTrustRejected) must still offer TOFU even via the generic code.")
+        XCTAssertEqual(outcome, .untrustedCert,
+                       "A real system rejection must be reported as an untrusted certificate even via the generic code.")
     }
 
     func testTestConnectionSecureConnectionFailedPinTransientIsUnreachable() async {
@@ -564,7 +523,7 @@ final class RemoteAgentClientTests: XCTestCase {
         await assertThrowsAppError(.remoteAgentUnreachable) {
             try await RemoteAgentClient.shared.testConnectionForTesting(
                 backend: .openclaw, url: self.baseURL, token: self.token,
-                session: self.session, hasPin: true,
+                session: self.session, challengeRefused: true,
                 pinRejected: { false }
             )
         }
@@ -581,60 +540,60 @@ final class RemoteAgentClientTests: XCTestCase {
         await assertThrowsAppError(.remoteAgentUnreachable) {
             try await RemoteAgentClient.shared.send(
                 backend: .openclaw, url: self.baseURL, token: self.token,
-                newUserText: "hi", fileServerReady: false, session: self.session
+                newUserText: "hi", fileServerReady: false,
+                transport: .unevaluated(session: self.session)
             )
         }
     }
 
-    func testSendSpecificCertCodeStillMapsToCertMismatch() async {
-        // A specific server-certificate code on the live hop still surfaces as
-        // a cert mismatch (the system named the cert as the cause).
+    func testSendSpecificCertCodeMapsToCertUntrusted() async {
+        // A specific server-certificate code on the live hop names the CERTIFICATE
+        // as the cause. With no pin on this session nothing could have
+        // mismatched, so the user gets the untrusted-certificate error and its
+        // server-side remedy — never "update the pinned fingerprint".
         MockURLProtocol.requestHandler = { _ in throw URLError(.serverCertificateUntrusted) }
-        await assertThrowsAppError(.remoteAgentCertMismatch) {
+        await assertThrowsAppError(.remoteAgentCertUntrusted) {
             try await RemoteAgentClient.shared.send(
                 backend: .openclaw, url: self.baseURL, token: self.token,
-                newUserText: "hi", fileServerReady: false, session: self.session
+                newUserText: "hi", fileServerReady: false,
+                transport: .unevaluated(session: self.session)
             )
         }
     }
 
-    func testTestConnectionUntrustedCertNoPinReturnsTOFUOutcome() async throws {
-        // NO pin set + system rejected an untrusted self-signed cert →
-        // `.untrustedCert(fp)`: a TOFU opportunity, NOT a thrown error. The
-        // captured leaf fingerprint comes from the evaluator (here injected
-        // via the test closure).
-        let presentedFP = "deadbeefcafef00d"
+    func testTestConnectionUntrustedCertNoPinIsATerminalOutcomeNotAThrow() async throws {
+        // NO pin set + the system rejected the certificate → `.untrustedCert`:
+        // an explained refusal the UI can render, NOT a thrown error and NOT an
+        // offer to trust it.
         MockURLProtocol.requestHandler = { request in
             throw URLError(.serverCertificateUntrusted)
         }
 
         let outcome = try await RemoteAgentClient.shared.testConnectionForTesting(
             backend: .openclaw, url: baseURL, token: token,
-            session: session, hasPin: false,
-            presentedFingerprint: { presentedFP }
+            session: session, challengeRefused: false
         )
 
-        XCTAssertEqual(outcome, .untrustedCert(presentedFingerprintHex: presentedFP),
-                       "No-pin self-signed rejection must return .untrustedCert with the presented fingerprint (TOFU), not throw.")
+        XCTAssertEqual(outcome, .untrustedCert,
+                       "A no-pin certificate rejection must return the terminal .untrustedCert outcome, not throw.")
     }
 
-    func testTestConnectionUntrustedCertNoPinNoFingerprintStillReturnsTOFU() async throws {
-        // Untrusted self-signed, NO pin, but the leaf key algorithm is
-        // outside the V1 SPKI prefix table → evaluator captured nil. The
-        // outcome is still `.untrustedCert(nil)` (untrusted, no copyable fp)
-        // — the UI banner then offers manual pinning instead of one-tap.
+    func testTestConnectionUnknownRootAlsoSurfacesTheSameTerminalOutcome() async throws {
+        // A SECOND unambiguous certificate-rejection code, with neither trust
+        // signal set. The classifier treats the whole `serverCertificate*` family
+        // alike, so the user gets one refusal with one remedy however CFNetwork
+        // words the failure — never a second, differently-shaped cert error.
         MockURLProtocol.requestHandler = { request in
             throw URLError(.serverCertificateHasUnknownRoot)
         }
 
         let outcome = try await RemoteAgentClient.shared.testConnectionForTesting(
             backend: .openclaw, url: baseURL, token: token,
-            session: session, hasPin: false,
-            presentedFingerprint: { nil }
+            session: session, challengeRefused: false
         )
 
-        XCTAssertEqual(outcome, .untrustedCert(presentedFingerprintHex: nil),
-                       "Untrusted self-signed with an unsupported key algorithm must still surface .untrustedCert(nil), not throw.")
+        XCTAssertEqual(outcome, .untrustedCert,
+                       "Every code in the server-certificate family must land on .untrustedCert, not throw.")
     }
 
     func testTestConnectionRequestUsesShortTimeout() {
@@ -741,9 +700,31 @@ final class RemoteAgentClientTests: XCTestCase {
     // chat-thread Cancel button. Only a CONFIRMED `pinRejected` may upgrade it.
 
     func testCancelWithConfirmedPinRejectionMapsToCertMismatch() {
-        let mapped = RemoteAgentClient.mapTransportError(.cancelled, hasPin: true, pinRejected: true)
+        let mapped = RemoteAgentClient.mapTransportError(
+            .cancelled,
+            signals: .init(systemTrustRejected: false,
+                           challengeRefused: true,
+                           pinRejected: true,
+                           pinComparisonUnsupported: false))
         XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertMismatch.errorCode,
                        "A pin mismatch must surface as a cert error, not vanish as a benign cancel — otherwise a MITM reads as 'the user cancelled'.")
+    }
+
+    func testCancelFromTheFailClosedTrustArmMapsToCertUntrusted() {
+        // The evaluator cancels a PINNED challenge when the system rejects the
+        // chain (fail closed), which URLSession reports as -999. Without the
+        // `systemTrustRejected` signal that lands in the benign-cancel arm and
+        // the user is told nothing at all — and it must NOT land on the
+        // mismatch code either: the pinned fingerprint was never consulted, so
+        // "update the pinned fingerprint" would be the wrong instruction.
+        let mapped = RemoteAgentClient.mapTransportError(
+            .cancelled,
+            signals: .init(systemTrustRejected: true,
+                           challengeRefused: true,
+                           pinRejected: false,
+                           pinComparisonUnsupported: false))
+        XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertUntrusted.errorCode,
+                       "A connection refused because this device does not trust the certificate must reach the user as an UNTRUSTED-certificate error, not as a pin mismatch or a silent cancel.")
     }
 
     func testCancelOnAPinnedSessionWithoutRejectionStaysBenign() {
@@ -751,14 +732,22 @@ final class RemoteAgentClientTests: XCTestCase {
         // still be a benign `CancellationError`. Broadening the `.cancelled` arm
         // would raise a spurious "Untrusted certificate" banner on every cancel
         // and clobber any prior failure classification.
-        let mapped = RemoteAgentClient.mapTransportError(.cancelled, hasPin: true, pinRejected: false)
+        let mapped = RemoteAgentClient.mapTransportError(
+            .cancelled,
+            signals: .init(systemTrustRejected: false,
+                           challengeRefused: true,
+                           pinRejected: false,
+                           pinComparisonUnsupported: false))
         XCTAssertTrue(mapped is CancellationError,
-                      "Cancel without a confirmed pin rejection is a user abort, not a cert failure.")
+                      "Cancel with NEITHER trust signal set is a user abort, not a cert failure.")
     }
 
-    func testUnpinnedTransportMappingIsUnchanged() {
-        // The unpinned converse path (every existing caller, incl. all tests)
-        // must map EXACTLY as it did before the trust signals were threaded in.
+    func testUnpinnedTransportMapping() {
+        // The unpinned converse path (every existing caller, incl. all tests).
+        // The transport classes are untouched by the trust signals; the four
+        // server-certificate codes name the CERTIFICATE, and with no pin
+        // configured there is nothing that could have mismatched — so they are
+        // untrusted-certificate, never mismatch.
         let expected: [(URLError.Code, Int?)] = [
             (.timedOut, AppError.remoteAgentTimeout.errorCode),
             (.cannotConnectToHost, AppError.remoteAgentUnreachable.errorCode),
@@ -767,19 +756,24 @@ final class RemoteAgentClientTests: XCTestCase {
             (.cannotFindHost, AppError.remoteAgentUnreachable.errorCode),
             (.dnsLookupFailed, AppError.remoteAgentUnreachable.errorCode),
             (.resourceUnavailable, AppError.remoteAgentUnreachable.errorCode),
-            (.serverCertificateUntrusted, AppError.remoteAgentCertMismatch.errorCode),
-            (.serverCertificateHasBadDate, AppError.remoteAgentCertMismatch.errorCode),
-            (.serverCertificateHasUnknownRoot, AppError.remoteAgentCertMismatch.errorCode),
-            (.serverCertificateNotYetValid, AppError.remoteAgentCertMismatch.errorCode),
+            (.serverCertificateUntrusted, AppError.remoteAgentCertUntrusted.errorCode),
+            (.serverCertificateHasBadDate, AppError.remoteAgentCertUntrusted.errorCode),
+            (.serverCertificateHasUnknownRoot, AppError.remoteAgentCertUntrusted.errorCode),
+            (.serverCertificateNotYetValid, AppError.remoteAgentCertUntrusted.errorCode),
             // GENERIC SSL failure stays RETRYABLE — a cold tunnel produces it on
-            // a perfectly-trusted cert, and the converse hop deliberately does
-            // not consult `systemTrustRejected`.
+            // a perfectly-trusted cert, and with NEITHER trust signal set nothing
+            // ever rejected a certificate.
             (.secureConnectionFailed, AppError.remoteAgentUnreachable.errorCode),
             (.badServerResponse, AppError.remoteAgentUnreachable.errorCode),
             (.cancelled, nil),   // nil = CancellationError, not an AppError
         ]
         for (code, expectedCode) in expected {
-            let mapped = RemoteAgentClient.mapTransportError(code, hasPin: false, pinRejected: false)
+            let mapped = RemoteAgentClient.mapTransportError(
+            code,
+            signals: .init(systemTrustRejected: false,
+                           challengeRefused: false,
+                           pinRejected: false,
+                           pinComparisonUnsupported: false))
             if let expectedCode {
                 XCTAssertEqual((mapped as? AppError)?.errorCode, expectedCode,
                                "Unpinned mapping drifted for \(code)")
@@ -793,14 +787,39 @@ final class RemoteAgentClientTests: XCTestCase {
     func testGenericTLSFailureWithConfirmedPinRejectionIsCertMismatch() {
         // With a pin set AND the evaluator confirming it cancelled, the generic
         // `-1200` is a real mismatch rather than a cold-tunnel hiccup.
-        let mapped = RemoteAgentClient.mapTransportError(.secureConnectionFailed, hasPin: true, pinRejected: true)
+        let mapped = RemoteAgentClient.mapTransportError(
+            .secureConnectionFailed,
+            signals: .init(systemTrustRejected: false,
+                           challengeRefused: true,
+                           pinRejected: true,
+                           pinComparisonUnsupported: false))
         XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertMismatch.errorCode)
     }
 
     func testGenericTLSFailureOnAPinnedSessionWithoutRejectionStaysRetryable() {
-        let mapped = RemoteAgentClient.mapTransportError(.secureConnectionFailed, hasPin: true, pinRejected: false)
+        let mapped = RemoteAgentClient.mapTransportError(
+            .secureConnectionFailed,
+            signals: .init(systemTrustRejected: false,
+                           challengeRefused: true,
+                           pinRejected: false,
+                           pinComparisonUnsupported: false))
         XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentUnreachable.errorCode,
-                       "A pinned gateway over a cold tunnel must stay retryable — `pinRejected == false` means the trust layer never rejected anything.")
+                       "A pinned gateway over a cold tunnel must stay retryable — NEITHER signal set means the trust layer never rejected anything.")
+    }
+
+    func testGenericTLSFailureWithSystemTrustRejectionIsCertUntrusted() {
+        // The converse hop's own lane: -1200 with the evaluator reporting that
+        // the device does not trust the chain. Hardcoding `systemTrustRejected:
+        // false` here is what made a certificate problem unreportable on the
+        // lane the user actually converses on.
+        let mapped = RemoteAgentClient.mapTransportError(
+            .secureConnectionFailed,
+            signals: .init(systemTrustRejected: true,
+                           challengeRefused: false,
+                           pinRejected: false,
+                           pinComparisonUnsupported: false))
+        XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertUntrusted.errorCode,
+                       "An untrusted certificate on the live converse hop must name the certificate, not read as 'unreachable, try again' and not as a pin mismatch.")
     }
 
     // MARK: - Stream helpers (existing)

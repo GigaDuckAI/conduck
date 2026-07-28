@@ -94,6 +94,24 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// no error anywhere. MAIN-CONFINED.
     private var overCapTaskKeys: Set<TaskKey> = []
 
+    /// Converse tasks whose server-trust challenge the trust delegate refused
+    /// because THIS DEVICE DOES NOT TRUST the presented chain. Recorded BEFORE
+    /// the disposition is forwarded and consumed by `handleConverseCompletion`,
+    /// for the same reason as `overCapTaskKeys`: URLSession reports a cancelled
+    /// challenge as a plain `URLError.cancelled`, byte-identical to a live
+    /// in-process cancel — which the converse verdict drops SILENTLY
+    /// (`.cleanupOnly`: no bubble, no notification, no Retry). Without this note
+    /// a pinned gateway whose certificate the watch rejects made the user's
+    /// spoken turn vanish off the wrist with the live machine left in
+    /// `.uploading`. MAIN-CONFINED — same contract as `responseData` above.
+    /// stored WHOLE, never split per verdict: an untrusted chain is fixed on the
+    /// server, a key that disagreed under a still-trusted chain is what an
+    /// intercepted connection looks like, and a key the watch cannot fingerprint
+    /// is neither — the wrist must say which one, and only the full snapshot
+    /// carries `pinComparisonUnsupported`. Same registry shape as
+    /// `BackgroundRemoteAgent.trustSignalsByTaskID`. MAIN-CONFINED.
+    private var trustSignalsByTaskKey: [TaskKey: RemoteAgentTrustEvaluator.AttemptTrustSignals] = [:]
+
     /// Capture-supersede token per STT task (the
     /// `WatchRecordingService.captureGeneration` captured at enqueue).
     /// Consulted by `handleSTTCompletion` so a cancelled capture's transcript
@@ -506,32 +524,102 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         responseData[key, default: Data()].append(data)
     }
 
-    /// Server-trust challenge. The converse session pins against the gateway's
-    /// stored SPKI fingerprint (self-signed support); the STT session
-    /// uses default ATS handling (Mistral/etc. carry publicly-trusted certs).
+    /// TASK-level server-trust challenge handler. The converse session applies
+    /// the gateway's stored SPKI fingerprint as an optional pin ON TOP OF system
+    /// trust (see `RemoteAgentTrustEvaluator`) — it can only tighten, never
+    /// rescue, an untrusted chain; the STT session uses default ATS handling
+    /// (Mistral/etc. carry publicly-trusted certs).
+    ///
+    /// TASK-level, not session-level, because the per-task notes below need a
+    /// task identity to key on — and for a server-trust challenge a session-level
+    /// handler takes precedence over this one, so exactly one of the two may
+    /// exist. Same shape as `CarPlayConverseUploader` / `BackgroundRemoteAgent` /
+    /// `STTClient+Background`, which all implement only this variant. Both
+    /// sessions route through it; the STT session takes the plain
+    /// default-handling arm.
     ///
     /// Build the evaluator HERE, reading the CURRENT
     /// fingerprint, rather than once in a property initializer. At a cold
     /// ControlWidget launch the in-memory fingerprint was nil until the durable
     /// stores hydrated it (`WatchSettingsReader`); a once-built evaluator would
-    /// have captured that nil and failed to pin a self-signed gateway. A fresh
-    /// read per challenge always sees the hydrated value (and any rotation).
+    /// have captured that nil and failed to apply a pin the user had already
+    /// typed in. A fresh read per challenge always sees the hydrated value (and
+    /// any rotation).
     func urlSession(
         _ session: URLSession,
+        task: URLSessionTask,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        if session === converseSession {
-            // The converse session is shared across backends, so resolve
-            // the pin for THIS challenge's host (not a single global fingerprint),
-            // letting concurrent in-flight turns to different gateways each pin
-            // their own self-signed cert.
-            let host = challenge.protectionSpace.host
-            let fingerprint = WatchSettingsReader.shared.remoteAgentCertFingerprint(forHost: host)
-            let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: fingerprint)
-            evaluator.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
-        } else {
+        guard session === converseSession,
+              challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
+        else {
             completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        // The converse session is shared across backends, so resolve the pin for
+        // THIS TASK's gateway (not a single global fingerprint), letting
+        // concurrent in-flight turns to different gateways each apply their own
+        // pin on top of system trust. The ref comes from the task's own
+        // `taskDescription` envelope, stamped at enqueue and durable across a
+        // relaunch — the Watch carries its ref rawString in `backendRawValue`,
+        // the same value that chose the URL and token, so the pin can never
+        // belong to a different gateway than the request.
+        //
+        // HOST-BLIND, deliberately, matching every sibling background lane
+        // (`RemoteAgentTrustEvaluator.converseTaskPin(for:metadata:)`,
+        // `STTClient+Background`, `BackgroundFileTransfer`). A background
+        // `URLSession` always follows redirects and never delivers
+        // `willPerformHTTPRedirection` (SDK contract), so this callback is the
+        // ONLY place the wrist can push back on a cross-host hop. Resolving by
+        // CHALLENGE HOST instead returned nil for a redirect target and degraded
+        // exactly that hop to default ATS — the pin stopped applying precisely
+        // where it mattered, letting a compromised gateway replay the request
+        // body (the conversation history and the bearer header) to any host
+        // holding an ordinary publicly-trusted certificate. Host-blind, that
+        // target must present the PINNED KEY or the evaluator cancels.
+        //
+        // HONEST LIMIT — a mitigation, not a redirect veto, identical to the one
+        // documented on `converseTaskPin`: a pin compare proves "same key", not
+        // "same origin". Point the wrist's gateway at the TERMINAL URL.
+        let fingerprint = task.taskDescription
+            .flatMap { try? RemoteAgentBackgroundMetadata.decode($0) }
+            .map(\.backendRawValue)
+            .flatMap { WatchSettingsReader.shared.remoteAgentCertFingerprint(forRef: $0) }
+
+        // No pin → default ATS, and NO note recorded. The evaluator's
+        // `SecTrustEvaluateWithError` call inside a challenge is ADVISORY: it
+        // also fails when evaluation could not complete (an OCSP/CRL fetch that
+        // needed the network, say), and on the unpinned path it does not cancel,
+        // so the system may go on to accept the chain and the request succeed.
+        // A note recorded there would therefore be free to mislabel an ordinary
+        // later failure — including a genuine user cancel — as a certificate
+        // problem. With a pin the evaluator CANCELS a rejected chain, so a note
+        // can only ever describe a connection that was actually refused. The
+        // unpinned untrusted case is surfaced instead by the certificate arm in
+        // `WatchNetworkFailureCopy`, which keys on the codes where the SYSTEM
+        // named the certificate.
+        guard let fingerprint, !fingerprint.isEmpty else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        let evaluator = RemoteAgentTrustEvaluator(pinnedFingerprintHex: fingerprint)
+        let key = TaskKey(wake: .converse, id: task.taskIdentifier)
+        evaluator.urlSession(session, didReceive: challenge) { disposition, credential in
+            // Record the evaluator's OWN verdicts rather than inferring from the
+            // disposition: a cancel here means "this device does not trust the
+            // chain", "the pinned key did not match", or "the key cannot be
+            // fingerprinted at all", and the three must not be collapsed. Noted BEFORE the handler is forwarded, because
+            // URLSession afterwards reports plain `.cancelled` — indistinguishable
+            // from a user cancel, which the verdict drops silently. The evaluator
+            // invokes this handler synchronously on the session's `.main` delegate
+            // queue, which is this class's confinement contract, so the writes
+            // land on the same serial queue as every other registry here.
+            let signals = evaluator.attemptSignals
+            if signals != .empty { self.trustSignalsByTaskKey[key] = signals }
+            completionHandler(disposition, credential)
         }
     }
 
@@ -779,20 +867,25 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         }
 
         // Classify FIRST via the pure `WatchConverseCompletionVerdict` (unit-
-        // tested branch ordering: over-cap → cancel disambiguation → transport →
-        // missing response → status map → decode → conversationID), then EXECUTE
-        // the verdict below. Both reads that the `defer` above destroys — the
-        // registry presence for the `.cancelled` disambiguation and OUR over-cap
-        // note — happen here, BEFORE it runs (ordering contract). The over-cap
-        // note is consumed (removed) so the set cannot grow across dropped tasks.
+        // tested branch ordering: over-cap → certificate refusal → cancel
+        // disambiguation → transport → missing response → status map → decode →
+        // conversationID), then EXECUTE the verdict below. Every read that the
+        // `defer` above destroys — the registry presence for the `.cancelled`
+        // disambiguation and OUR per-task delegate notes — happens here, BEFORE
+        // it runs (ordering contract). Each note records a reason THIS delegate
+        // cancelled the task, and all of them surface as `.cancelled`, so they
+        // must be consulted before that disambiguation. All are consumed
+        // (removed) so the sets cannot grow across dropped tasks.
         let responseOverCap = overCapTaskKeys.remove(key) != nil
+        let trustSignals = trustSignalsByTaskKey.removeValue(forKey: key) ?? .empty
         let verdict = WatchConverseCompletionVerdict.make(
             metadata: metadata,
             httpStatus: (task.response as? HTTPURLResponse)?.statusCode,
             body: responseData[key],
             transportError: error,
             registryEntryPresent: multipartTempFiles[key] != nil,
-            responseOverCap: responseOverCap
+            responseOverCap: responseOverCap,
+            trustSignals: trustSignals
         )
 
         switch verdict {
@@ -914,11 +1007,53 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // ordinary Retry affordance, instead of vanishing as a cancel.
             WatchLog.error(.converse, "converse.bg.overcap")
             return String(localized: "Couldn't read the reply from your personal AI.")
+        case .certificateUntrusted:
+            // ONE cause, ONE wording: the shared text every other surface renders,
+            // in its wrist form (the three server-side routes don't fit here, so it
+            // points at the phone that can show them). Never "check the server is
+            // running", never "not trusted yet", never a retry prompt — the fix is
+            // on the server and nothing on the watch can change the outcome.
+            WatchLog.error(.converse, "converse.bg.certUntrusted")
+            return CertificateTrustCopy.untrustedRefusalCompact
+        case .certificatePinMismatch:
+            // Kept APART from the untrusted case even though neither is fixable
+            // from the wrist: the user hears which problem to go fix, not a guess.
+            WatchLog.error(.converse, "converse.bg.certMismatch")
+            return WatchNetworkFailureCopy.certificatePinMismatchMessage
+        case .certificateKeyUnpinnable:
+            // Apart from both for the same reason: the wrist can't fix any of
+            // them, but the user still hears WHICH problem to go fix — and this
+            // one must not borrow the interception warning.
+            WatchLog.error(.converse, "converse.bg.certKeyUnpinnable")
+            return WatchNetworkFailureCopy.certificateKeyUnpinnableMessage
         case .cancelledAcrossLaunch, .missingHTTPResponse:
             return String(localized: "Couldn't reach your personal AI. Try again.")
         case .httpStatus(let status):
             WatchLog.error(.converse, "converse.bg.http", ["status": status])
-            return String(localized: "Couldn't reach your personal AI. Try again.")
+            // A bare status is not a verdict. Rendering one line of connectivity
+            // copy for EVERY non-2xx drops the cause and invites a retry on the
+            // terminal ones — 402 (out of credits) and 429 (rate limited) refuse
+            // identically every time, so the wrist would loop forever on them.
+            // Route through the SAME map the phone and CarPlay lanes use, so one
+            // status means one verdict on every surface, and let
+            // `descriptionWithRecovery` decide the wording: it appends each
+            // code's own remedy and DROPS the generic "Try again." precisely so a
+            // terminal refusal cannot pick one up. The Watch's Retry affordance
+            // is drawn separately, so nothing here needs to invite one.
+            //
+            // Hostname-free: every arm of the map returns fixed copy (the
+            // fallback interpolates the numeric code only), which is what the
+            // wrist requires — this text mirrors to the paired iPhone's lock
+            // screen, readable without an unlock.
+            guard let error = RemoteAgentStatusMap.unified.map(status) else {
+                // 2xx cannot reach a failure verdict; keep the old line as the
+                // impossible-case fallback rather than inventing new copy.
+                return String(localized: "Couldn't reach your personal AI. Try again.")
+            }
+            let body = error.descriptionWithRecovery
+            return body.isEmpty
+                ? String(localized: "Couldn't reach your personal AI. Try again.")
+                : body
         case .undecodableReply:
             return String(localized: "Couldn't read the reply from your personal AI.")
         case .noConversationID:

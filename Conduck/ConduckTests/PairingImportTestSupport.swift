@@ -6,36 +6,36 @@
 // Shared helper for the pairing-import PERSISTENCE tests.
 //
 // `executePairingImport` takes RESOLVED certificate pins — the values
-// `resolvePairingTrust` decided after probing the server — precisely so the
-// pins a payload CLAIMS can never reach storage unchecked. The persistence
-// tests, however, are about the commit mechanics (slot writes, roster upsert,
-// rollback, transport hints), not about the trust decision, and they were
-// written against payload-carried pins.
+// `resolvePairingTrust` decided after probing the server. A pairing payload
+// carries no certificate field at all, so the resolver's only possible answer
+// is "ordinary system trust", and every import therefore commits with `nil`
+// pins. The persistence tests are about the commit mechanics (slot writes,
+// roster upsert, rollback, transport hints), not about the trust decision.
 //
-// This helper says explicitly what those tests mean: "persist as if the trust
-// gate had decided to honour exactly what the payload asked for." Trust
-// decisions themselves are covered by `PairingTrustDecisionTests` and the
-// probe tests in `RemoteAgentClientTests`.
+// This helper says explicitly what those tests mean: "persist the way a real
+// import does, with the pins the trust gate actually produces." Trust decisions
+// themselves are covered by `PairingTrustDecisionTests` and the probe tests in
+// `RemoteAgentClientTests`.
 
 import Foundation
 @testable import Conduck
 
 extension SettingsViewModel {
 
-    /// Import using the pins the PAYLOAD claims, as the resolved values.
+    /// Import with the pins a resolved pairing always carries: none.
     ///
-    /// Test-only. Production code must route through `resolvePairingTrust` —
-    /// calling `executePairingImport` with `payload.certFP` in the app would
-    /// reinstate the unchecked-pin hole this parameterisation exists to close.
-    func executePairingImportUsingPayloadPins(
+    /// Test-only — production code routes through `resolvePairingTrust`, which
+    /// is what proves the server was reachable and trusted before anything is
+    /// written.
+    func executePairingImportWithResolvedTrust(
         _ payload: PairingPayload,
         target: RemoteAgentRef
     ) async -> PairingImportOutcome {
         await executePairingImport(
             payload,
             target: target,
-            resolvedGatewayPin: payload.certFP,
-            resolvedFileServerPin: SettingsViewModel.claimedFileServerPin(for: payload)
+            resolvedGatewayPin: nil,
+            resolvedFileServerPin: nil
         )
     }
 }

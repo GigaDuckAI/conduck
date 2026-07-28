@@ -2338,6 +2338,26 @@ final class DiagnosticsRunner {
         case .unreachable:
             let code = AppError.fileTransferUnreachable.errorCode
             return (.failed(code: code), DiagnosticsExplainer.explain(code: code).fix)
+        case .certUntrusted:
+            // Its own code, so the row shows the certificate remedy instead of
+            // the unreachable row's "check your file-server is running" — the
+            // host answered, so that instruction leads nowhere.
+            let code = AppError.fileTransferCertUntrusted.errorCode
+            return (.failed(code: code), DiagnosticsExplainer.explain(code: code).fix)
+        case .certMismatch:
+            // Kept apart from `.certUntrusted` for the same reason the staged
+            // test keeps them apart: this device TRUSTED the certificate and the
+            // pinned key still disagreed, which is the one outcome that means the
+            // connection may be intercepted. Sending that user after a trusted
+            // certificate points them at something they already have.
+            let code = AppError.fileTransferCertMismatch.errorCode
+            return (.failed(code: code), DiagnosticsExplainer.explain(code: code).fix)
+        case .certKeyUnpinnable:
+            // Third certificate outcome, its own row: this device trusted the
+            // chain and the pin was never compared, so neither the certificate
+            // remedy above nor the interception warning applies.
+            let code = AppError.fileTransferCertKeyUnpinnable.errorCode
+            return (.failed(code: code), DiagnosticsExplainer.explain(code: code).fix)
         }
     }
 
@@ -2382,13 +2402,16 @@ final class DiagnosticsRunner {
                     )
                 )
             case .untrustedCert:
+                // FAILED, not `.warning`: a warning reads as "works, but tidy
+                // this up later", and there is no later — this device refuses
+                // the certificate on every attempt until the SERVER is given a
+                // publicly-trusted one. Routed through the code so the row
+                // shows the same remedy every other lane shows.
+                let code = AppError.remoteAgentCertUntrusted.errorCode
                 return ProbeOutcome(
                     checkID: input.checkID,
-                    status: .warning,
-                    detail: String(
-                        localized: "diagnostics.gateway.untrustedCert",
-                        defaultValue: "This gateway's certificate isn't trusted yet."
-                    )
+                    status: .failed(code: code),
+                    detail: DiagnosticsExplainer.explain(code: code).fix
                 )
             }
         } catch {

@@ -67,7 +67,7 @@ final class RemoteAgentVisionErrorTests: XCTestCase {
                 token: "test-token",
                 newUserText: "describe this image",
                 fileServerReady: false,
-                session: makeMockSession()
+                transport: .unevaluated(session: makeMockSession())
             )
             XCTFail("Expected an AppError throw for HTTP \(status); got a reply: \(reply)")
             throw AppError.remoteAgentInvalidResponse  // unreachable; keeps signature non-optional

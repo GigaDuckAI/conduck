@@ -358,9 +358,13 @@ final class FileServerConnectionTests: XCTestCase {
         XCTAssertEqual(result.failure?.errorCode, 45, "cannotConnectToHost → fileTransferUnreachable (45)")
     }
 
-    /// A TLS rejection (serverCertificateUntrusted) WITH a pinned fingerprint →
-    /// cert mismatch (`fileTransferCertMismatch`, code 47).
-    func testCertUntrustedWithPinMapsToCertMismatch() async {
+    /// A TLS rejection (serverCertificateUntrusted) WITH a pinned fingerprint,
+    /// and NO confirmed pin rejection → certificate-not-trusted (66), the SAME
+    /// answer as the unpinned case below. The system named the certificate; the
+    /// pin was never consulted, so reporting 47 ("your fingerprint changed")
+    /// would send the user to edit a pin that had nothing to do with it — and
+    /// would spend the interception warning that only a real mismatch earns.
+    func testCertUntrustedWithAPinButNoPinRejectionStaysCertUntrusted() async {
         let snap = makeSnapshot(fingerprint: "aabbcc")  // pinned
         MockURLProtocol.requestHandler = { _ in
             throw URLError(.serverCertificateUntrusted)
@@ -370,13 +374,17 @@ final class FileServerConnectionTests: XCTestCase {
 
         XCTAssertFalse(result.success)
         XCTAssertEqual(result.reachedStage, .reachability)
-        XCTAssertEqual(result.failure?.errorCode, 47,
-                       "cert-rejection WITH a pin → fileTransferCertMismatch (47)")
+        XCTAssertEqual(result.failure?.errorCode, 66,
+                       "cert-rejection with a pin but no confirmed pin rejection → fileTransferCertUntrusted (66)")
+        XCTAssertNotEqual(result.failure?.errorCode, 47,
+                          "a pin merely EXISTING must never relabel a system certificate rejection as a key mismatch")
     }
 
-    /// The SAME TLS rejection WITHOUT a pin → unreachable (45), NOT cert
-    /// mismatch. This is the pin-vs-no-pin distinction.
-    func testCertUntrustedWithoutPinMapsToUnreachableNotCertMismatch() async {
+    /// The SAME TLS rejection WITHOUT a pin → certificate-not-trusted (66), NOT
+    /// cert mismatch (47) and NOT unreachable (45). 45 is wrong here: the host
+    /// answered, so "check your file-server is running" points the user at
+    /// nothing.
+    func testCertUntrustedWithoutPinMapsToCertUntrusted() async {
         let snap = makeSnapshot(fingerprint: nil)  // no pin
         MockURLProtocol.requestHandler = { _ in
             throw URLError(.serverCertificateUntrusted)
@@ -384,8 +392,8 @@ final class FileServerConnectionTests: XCTestCase {
 
         let result = await FileServerClient.runConnectionTest(snapshot: snap, session: session)
 
-        XCTAssertEqual(result.failure?.errorCode, 45,
-                       "cert-rejection with NO pin → fileTransferUnreachable (45)")
+        XCTAssertEqual(result.failure?.errorCode, 66,
+                       "cert-rejection with NO pin → fileTransferCertUntrusted (66)")
         XCTAssertNotEqual(result.failure?.errorCode, 47,
                           "without a pin, a TLS reject must NOT be reported as a cert mismatch")
     }
@@ -628,5 +636,114 @@ final class FileServerConnectionTests: XCTestCase {
         MockURLProtocol.requestHandler = { _ in throw URLError(.cannotConnectToHost) }
         let outcome = await FileServerClient.probeReachability(snapshot: snap, session: session)
         XCTAssertEqual(outcome, .unreachable)
+    }
+
+    // MARK: - The two file-lane probes must tell ONE story about one server
+
+    /// One attempt's verdicts, STATED IN FULL — the shape the probe seam takes.
+    /// Nothing here is inferred from the snapshot's pin: a seam that derived
+    /// `challengeRefused` from "a pin is configured" let these cases lock a
+    /// shape production never produces (a cold tunnel raises no challenge, so
+    /// nothing can have refused it), and it kept alive on a test path the exact
+    /// pin-as-proxy the classifier removed.
+    private func signals(
+        systemTrustRejected: Bool = false,
+        challengeRefused: Bool = false,
+        pinRejected: Bool = false,
+        pinComparisonUnsupported: Bool = false
+    ) -> @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals {
+        let snapshot = RemoteAgentTrustEvaluator.AttemptTrustSignals(
+            systemTrustRejected: systemTrustRejected,
+            challengeRefused: challengeRefused,
+            pinRejected: pinRejected,
+            pinComparisonUnsupported: pinComparisonUnsupported)
+        return { snapshot }
+    }
+
+    func testProbeReachabilityReportsAConfirmedPinMismatchAsItsOwnOutcome() async {
+        // THE DEFECT: the reach probe read only `systemTrustRejected`, so a
+        // genuine pin mismatch — the host presented a certificate this device
+        // TRUSTS and the pinned key disagreed — collapsed into `.unreachable`
+        // and Diagnostics rendered "check your file-server is running". That is
+        // the one signal that means the connection may be intercepted, and it
+        // was being thrown away for a row about a server that is running fine.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
+        let outcome = await FileServerClient.probeReachability(
+            snapshot: makeSnapshot(fingerprint: "aabbcc"),
+            session: session,
+            signalsOverride: signals(challengeRefused: true, pinRejected: true))
+        XCTAssertEqual(outcome, .certMismatch,
+                       "A confirmed digest disagreement keeps its own outcome — it is not a reachability problem and not an untrusted certificate.")
+    }
+
+    func testProbeReachabilityKeepsTheUntrustedVerdictAheadOfTheMismatch() async {
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
+        let outcome = await FileServerClient.probeReachability(
+            snapshot: makeSnapshot(fingerprint: "aabbcc"),
+            session: session,
+            signalsOverride: signals(systemTrustRejected: true,
+                                     challengeRefused: true,
+                                     pinRejected: true))
+        XCTAssertEqual(outcome, .certUntrusted,
+                       "Same precedence as every other lane: a chain this device refused is the truthful statement, so it outranks the key mismatch.")
+    }
+
+    func testProbeReachabilityGivesAnUnpinnableKeyItsOwnOutcome() async {
+        // System trust PASSED and nothing disagreed — the leaf's key algorithm
+        // is outside the SPKI prefix table, so no digest could be computed to
+        // compare. Reading that as `.certMismatch` would raise the app's most
+        // alarming message over a certificate that is fine.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
+        let outcome = await FileServerClient.probeReachability(
+            snapshot: makeSnapshot(fingerprint: "aabbcc"),
+            session: session,
+            signalsOverride: signals(challengeRefused: true,
+                                     pinRejected: true,
+                                     pinComparisonUnsupported: true))
+        XCTAssertEqual(outcome, .certKeyUnpinnable,
+                       "A key Conduck cannot fingerprint is not an interception signal and must not borrow the mismatch outcome.")
+    }
+
+    func testProbeReachabilityNamesTheCertificateWhenTheSystemDoes() async {
+        // No evaluator signal at all (an injected session carries none), but the
+        // SYSTEM named the certificate in the error code. The staged write test
+        // has always resolved these to a certificate verdict; the reach probe
+        // discarded them, so the same server produced two different stories.
+        for code in [URLError.Code.serverCertificateUntrusted, .serverCertificateHasBadDate,
+                     .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid] {
+            MockURLProtocol.requestHandler = { _ in throw URLError(code) }
+            let outcome = await FileServerClient.probeReachability(
+                snapshot: makeSnapshot(fingerprint: nil),
+                session: session)
+            XCTAssertEqual(outcome, .certUntrusted,
+                           "\(code): the host answered and this device refused its certificate — never 'check your file-server is running'.")
+        }
+    }
+
+    func testProbeReachabilityLeavesAColdTunnelRetryable() async {
+        // The regression guard both probes share: a generic `-1200` with neither
+        // signal set is a transient handshake failure, not a certificate verdict.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
+        let outcome = await FileServerClient.probeReachability(
+            snapshot: makeSnapshot(fingerprint: "aabbcc"),
+            session: session,
+            signalsOverride: signals())
+        XCTAssertEqual(outcome, .unreachable,
+                       "A cold tunnel on a pinned lane must stay retryable — no verdict fired, so nothing rejected a certificate.")
+    }
+
+    func testProbeReachabilityLeavesAnUnpinnedCancelAlone() async {
+        // An unpinned probe cannot be cancelled BY the evaluator (it returns
+        // default handling), so a -999 there is a real cancellation — even with
+        // the advisory system-trust flag latched. `challengeRefused: false` is
+        // the whole statement now, and it is the honest one: the evaluator did
+        // not refuse this challenge.
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
+        let outcome = await FileServerClient.probeReachability(
+            snapshot: makeSnapshot(fingerprint: nil),
+            session: session,
+            signalsOverride: signals(systemTrustRejected: true))
+        XCTAssertEqual(outcome, .unreachable,
+                       "An unpinned cancel is not a certificate verdict; promoting it would blame the certificate for a cancelled probe.")
     }
 }

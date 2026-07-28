@@ -1292,7 +1292,8 @@ enum Constants {
     /// SHA-256 file-server leaf-cert fingerprint, lowercased hex. Format
     /// `fileServer.certFingerprint.<suffix>`. Empty → default ATS / system
     /// trust (correct for Tailscale Serve / Let's Encrypt). NEVER synced —
-    /// a cert pin is a per-machine TOFU artefact.
+    /// a cert pin is a per-machine tightening the user typed in on top of
+    /// system trust, not a fact about the server to propagate.
     static func fileServerCertFingerprintKey(for ref: RemoteAgentRef) -> String {
         "fileServer.certFingerprint." + ref.storageKeySuffix
     }

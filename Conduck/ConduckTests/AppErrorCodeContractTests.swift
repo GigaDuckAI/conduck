@@ -107,6 +107,15 @@ final class AppErrorCodeContractTests: XCTestCase {
         ("remoteAgentEndpointNotFound",   .remoteAgentEndpointNotFound,      59),
         ("remoteAgentModelRequired",      .remoteAgentModelRequired,         60),
         ("fileTransferNotAFileServer",    .fileTransferNotAFileServer,       61),
+        ("remoteAgentEndpointWrongEnvelope", .remoteAgentEndpointWrongEnvelope, 62),
+        ("remoteAgentCertUntrusted",      .remoteAgentCertUntrusted,         63),
+        ("sttCustomCertUntrusted",        .sttCustomCertUntrusted,           64),
+        ("ttsCustomCertUntrusted",        .ttsCustomCertUntrusted,           65),
+        ("fileTransferCertUntrusted",     .fileTransferCertUntrusted,        66),
+        ("remoteAgentCertKeyUnpinnable",  .remoteAgentCertKeyUnpinnable,     67),
+        ("sttCustomCertKeyUnpinnable",    .sttCustomCertKeyUnpinnable,       68),
+        ("ttsCustomCertKeyUnpinnable",    .ttsCustomCertKeyUnpinnable,       69),
+        ("fileTransferCertKeyUnpinnable", .fileTransferCertKeyUnpinnable,    70),
         ("unknown",                       .unknown(NSError(domain: "test", code: 0)), 99),
     ]
 
@@ -181,22 +190,22 @@ final class AppErrorCodeContractTests: XCTestCase {
     // MARK: - Completeness guard
 
     func testForwardTableIsExhaustiveOverEmittedCodes() {
-        // The getter emits codes 1...61 with 27 omitted (reserved gap), plus
-        // the catch-all 99 — that is 60 + 1 = 61 distinct codes. If a NEW case
+        // The getter emits codes 1...70 with 27 omitted (reserved gap), plus
+        // the catch-all 99 — that is 69 + 1 = 70 distinct codes. If a NEW case
         // is added to AppError without a row in `forwardTable`, this count
         // diverges and forces a test update. (Computed independently of the
         // table to avoid the table validating itself.)
-        let expectedDistinctCodes = Set((1...61).filter { $0 != 27 }).union([99])
-        XCTAssertEqual(expectedDistinctCodes.count, 61,
-                       "Sanity: 1...61 minus the 27 gap plus 99 = 61 distinct codes.")
+        let expectedDistinctCodes = Set((1...70).filter { $0 != 27 }).union([99])
+        XCTAssertEqual(expectedDistinctCodes.count, 70,
+                       "Sanity: 1...70 minus the 27 gap plus 99 = 70 distinct codes.")
 
         let tableCodes = Self.forwardTable.map(\.code)
         XCTAssertEqual(Set(tableCodes).count, tableCodes.count,
                        "Forward table must have no duplicate codes (each case owns a unique slot).")
         XCTAssertEqual(Set(tableCodes), expectedDistinctCodes,
-                       "Forward table must cover EXACTLY the codes the getter emits (1...61 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
-        XCTAssertEqual(Self.forwardTable.count, 61,
-                       "Forward table must enumerate all 61 emittable codes — a new AppError case without a row here is a wire-contract gap.")
+                       "Forward table must cover EXACTLY the codes the getter emits (1...70 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
+        XCTAssertEqual(Self.forwardTable.count, 70,
+                       "Forward table must enumerate all 70 emittable codes — a new AppError case without a row here is a wire-contract gap.")
     }
 
     // MARK: - Locked isRetryable flags (load-bearing)
@@ -259,5 +268,185 @@ final class AppErrorCodeContractTests: XCTestCase {
     func testAudioMicBusyCodeIs53() {
         XCTAssertEqual(AppError.audioMicBusy.errorCode, 53,
                        "Code 53 is reserved for .audioMicBusy (macOS concurrent-capture refusal).")
+    }
+
+    // MARK: - Certificate-not-trusted family (63-66)
+
+    func testCertUntrustedCodesAreDistinctFromCertMismatch() {
+        // The whole point of 63-66: a chain this device REJECTED must never
+        // decode as a pin disagreement. Sharing a slot would put "update the
+        // pinned fingerprint, or remove the pin to use system trust" — advice
+        // that cannot work, because system trust is what refused — in front of
+        // a user whose only real fix is on the server.
+        let untrusted: [(String, AppError, Int)] = [
+            ("remoteAgentCertUntrusted", .remoteAgentCertUntrusted, 63),
+            ("sttCustomCertUntrusted", .sttCustomCertUntrusted, 64),
+            ("ttsCustomCertUntrusted", .ttsCustomCertUntrusted, 65),
+            ("fileTransferCertUntrusted", .fileTransferCertUntrusted, 66),
+        ]
+        let mismatchCodes = Set([
+            AppError.remoteAgentCertMismatch.errorCode,
+            AppError.sttCustomCertMismatch.errorCode,
+            AppError.ttsCustomCertMismatch.errorCode,
+            AppError.fileTransferCertMismatch.errorCode,
+        ])
+        for (name, error, code) in untrusted {
+            XCTAssertEqual(error.errorCode, code, "\(name) must own code \(code).")
+            XCTAssertFalse(mismatchCodes.contains(error.errorCode),
+                           "\(name) must not share a code with the *CertMismatch family — the two carry opposite remedies.")
+            XCTAssertEqual(AppError.from(errorCode: code, message: nil).errorCode, code,
+                           "Code \(code) must round-trip through from(errorCode:) — the Watch relay decodes this slot.")
+            XCTAssertFalse(error.isRetryable,
+                           "\(name) is terminal — this device refuses the same certificate on every attempt.")
+        }
+    }
+
+    func testCertUntrustedFamilyShipsOneSharedRemedy() {
+        // One cause, one remedy. Four paraphrases of "get the server a trusted
+        // certificate" would read as four different problems, so every lane
+        // returns `CertificateTrustCopy.untrustedRemedy` verbatim.
+        let remedy = CertificateTrustCopy.untrustedRemedy
+        for error in [AppError.remoteAgentCertUntrusted, .sttCustomCertUntrusted,
+                      .ttsCustomCertUntrusted, .fileTransferCertUntrusted] {
+            XCTAssertEqual(error.recoverySuggestion, remedy,
+                           "Code \(error.errorCode) must render the SHARED untrusted-certificate remedy verbatim.")
+        }
+    }
+
+    // MARK: - Pin-mismatch family (30/35/43/47)
+
+    func testCertMismatchFamilyShipsOneSharedRemedy() {
+        // Same rule as the untrusted family, for the same reason. The mismatch
+        // verdict now fires ONLY after the system accepted the chain, so every
+        // lane is looking at the same interception shape and must say the same
+        // thing. `.ttsCustomCertMismatch` is included deliberately: it used to
+        // fall through to the generic "Try again." on a verdict its own
+        // `isRetryable` calls terminal.
+        let remedy = CertificateTrustCopy.pinMismatchRemedy
+        for error in [AppError.remoteAgentCertMismatch, .sttCustomCertMismatch,
+                      .ttsCustomCertMismatch, .fileTransferCertMismatch] {
+            XCTAssertEqual(error.recoverySuggestion, remedy,
+                           "Code \(error.errorCode) must render the SHARED pin-mismatch remedy verbatim.")
+            XCTAssertFalse(error.isRetryable,
+                           "Code \(error.errorCode) is terminal — the same key meets the same pin on every attempt.")
+        }
+    }
+
+    func testCertMismatchCopyWarnsAndNeverOffersToDropThePin() {
+        // The load-bearing half: a pin that disagreed with a TRUSTED chain is the
+        // one case where pinning caught something real, so the copy must name the
+        // risk — and must never suggest removing the control that caught it, or
+        // claim a certificate changed when the app cannot know that.
+        for error in [AppError.remoteAgentCertMismatch, .sttCustomCertMismatch,
+                      .ttsCustomCertMismatch, .fileTransferCertMismatch] {
+            let copy = "\(error.errorDescription ?? "") \(error.recoverySuggestion ?? "")".lowercased()
+            XCTAssertTrue(copy.contains("intercepted"),
+                          "Code \(error.errorCode) must warn that the connection may be intercepted.")
+            XCTAssertFalse(copy.contains("remove the pin"),
+                           "Code \(error.errorCode) must not offer to drop the pin that caught the problem.")
+            XCTAssertFalse(copy.contains("changed."),
+                           "Code \(error.errorCode) must not assert the certificate changed — nothing may have.")
+            XCTAssertFalse(copy.contains("try again"),
+                           "Code \(error.errorCode) is terminal — it must not invite a retry.")
+            XCTAssertFalse(copy.contains("is running"),
+                           "Code \(error.errorCode) must not send the user to check whether the server is running.")
+        }
+    }
+
+    func testDescriptionWithRecoveryDropsTheGenericFallback() {
+        // The single-line surfaces (the file-transfer checklist, the setup
+        // guide's inline status, the pairing sheet's file stage) render this. It
+        // must carry a real remedy and must NOT bolt "Try again." onto a verdict
+        // that cannot be retried.
+        XCTAssertEqual(AppError.fileTransferCertUntrusted.descriptionWithRecovery,
+                       "\(AppError.fileTransferCertUntrusted.errorDescription ?? "") \(CertificateTrustCopy.untrustedRemedy)")
+        // `.remoteAgentOutOfCredits` has no recovery arm, so it lands on the
+        // generic fallback — which this property drops rather than appends.
+        XCTAssertEqual(AppError.remoteAgentOutOfCredits.descriptionWithRecovery,
+                       AppError.remoteAgentOutOfCredits.errorDescription)
+    }
+
+    func testCertUntrustedCopyNeverClaimsTheCertificateChanged() {
+        // "changed" implies an active attack on a configuration the user never
+        // touched. Nothing changed — the certificate was never trustable here.
+        for error in [AppError.remoteAgentCertUntrusted, .sttCustomCertUntrusted,
+                      .ttsCustomCertUntrusted, .fileTransferCertUntrusted] {
+            let copy = "\(error.errorDescription ?? "") \(error.recoverySuggestion ?? "")".lowercased()
+            XCTAssertFalse(copy.contains("changed"),
+                           "Code \(error.errorCode) must not tell the user the certificate changed.")
+            XCTAssertFalse(copy.contains("remove the pin"),
+                           "Code \(error.errorCode) must not offer to drop the pin — system trust is what refused.")
+            XCTAssertFalse(copy.contains("is running"),
+                           "Code \(error.errorCode) must not send the user to check whether the server is running.")
+        }
+    }
+
+    // MARK: - Key-cannot-be-fingerprinted family (67-70)
+
+    private static let keyUnpinnableFamily: [AppError] = [
+        .remoteAgentCertKeyUnpinnable, .sttCustomCertKeyUnpinnable,
+        .ttsCustomCertKeyUnpinnable, .fileTransferCertKeyUnpinnable,
+    ]
+
+    func testCertKeyUnpinnableCodesAreDistinctFromBothCertificateRefusals() {
+        // 67-70 exist because the other two families would both LIE here. The
+        // chain is system-trusted and nothing disagreed with anything — Conduck
+        // just cannot hash this key algorithm — so a mismatch code would warn of
+        // interception that isn't happening, and an untrusted code would send the
+        // user to fix a server that is already correct.
+        let otherCertificateCodes = Set([
+            AppError.remoteAgentCertMismatch.errorCode, AppError.sttCustomCertMismatch.errorCode,
+            AppError.ttsCustomCertMismatch.errorCode, AppError.fileTransferCertMismatch.errorCode,
+            AppError.remoteAgentCertUntrusted.errorCode, AppError.sttCustomCertUntrusted.errorCode,
+            AppError.ttsCustomCertUntrusted.errorCode, AppError.fileTransferCertUntrusted.errorCode,
+        ])
+        for (error, code) in zip(Self.keyUnpinnableFamily, 67...70) {
+            XCTAssertEqual(error.errorCode, code, "Code \(code) is reserved for this lane's unpinnable-key verdict.")
+            XCTAssertFalse(otherCertificateCodes.contains(error.errorCode),
+                           "Code \(code) must not share a slot with either certificate-refusal family.")
+            XCTAssertEqual(AppError.from(errorCode: code, message: nil).errorCode, code,
+                           "Code \(code) must round-trip through from(errorCode:) — the Watch relay decodes this slot.")
+            XCTAssertFalse(error.isRetryable,
+                           "Code \(code) is terminal — the same key meets the same prefix table on every attempt.")
+        }
+    }
+
+    func testCertKeyUnpinnableFamilyShipsOneSharedRemedy() {
+        // Same rule as the other two families: one cause, one remedy, verbatim.
+        for error in Self.keyUnpinnableFamily {
+            XCTAssertEqual(error.recoverySuggestion, CertificateTrustCopy.keyUnpinnableRemedy,
+                           "Code \(error.errorCode) must render the SHARED unpinnable-key remedy verbatim.")
+        }
+    }
+
+    func testCertKeyUnpinnableCopyNeverWarnsOfInterceptionAndDoesOfferToClearThePin() {
+        // Both halves are load-bearing and pull in opposite directions from the
+        // mismatch family's rules, which is why they are locked here.
+        //
+        // NEVER "intercepted": this arm is reached only after system trust
+        // PASSED. A false interception warning on a good certificate is how users
+        // learn to dismiss the real one.
+        //
+        // MUST offer clearing the saved fingerprint: that phrase is banned
+        // everywhere else in the app because it normally means "switch off the
+        // control that just caught something". Here nothing was caught, and
+        // dropping the pin returns the connection to the system trust that is
+        // already passing — so it is a real remedy, and a later reader deleting it
+        // as a rule violation must trip this test.
+        for error in Self.keyUnpinnableFamily {
+            let copy = "\(error.errorDescription ?? "") \(error.recoverySuggestion ?? "")".lowercased()
+            XCTAssertFalse(copy.contains("intercepted"),
+                           "Code \(error.errorCode) must NOT warn of interception — system trust passed.")
+            XCTAssertTrue(copy.contains("fingerprint"),
+                          "Code \(error.errorCode) must name the fingerprint check as the thing that could not run.")
+            XCTAssertTrue(copy.contains("clear the saved fingerprint"),
+                          "Code \(error.errorCode) must keep the one legitimate offer to drop a pin — see the remedy's doc comment.")
+            XCTAssertFalse(copy.contains("try again"),
+                           "Code \(error.errorCode) is terminal — it must not invite a retry.")
+            XCTAssertFalse(copy.contains("is running"),
+                           "Code \(error.errorCode) must not send the user to check whether the server is running.")
+            XCTAssertFalse(copy.contains("changed"),
+                           "Code \(error.errorCode) must not assert the certificate changed — nothing did.")
+        }
     }
 }

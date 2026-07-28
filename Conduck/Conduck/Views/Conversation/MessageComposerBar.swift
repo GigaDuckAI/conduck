@@ -390,10 +390,20 @@ struct MessageComposerBar: View {
         }
     }
 
+    /// Cause AND remedy (`descriptionWithRecovery`). This banner is the ONLY
+    /// slot the macOS composer has for a capture failure — no second line, no
+    /// Troubleshoot chip — and `InAppAudioRecorder`'s `.error` carries the whole
+    /// `AppError` taxonomy, certificate verdicts included. The cause alone
+    /// strips a pin mismatch of "the connection may be intercepted", leaves an
+    /// untrusted chain with no server-side fix named, and turns an unpinnable
+    /// key into a server fault the user would go hunting. `descriptionWithRecovery`
+    /// drops the generic "Try again." rather than appending it, so a terminal
+    /// refusal reads as terminal here.
     @ViewBuilder
     private var errorBanner: some View {
         if case .error(let appError) = recorder.state {
-            Text(appError.errorDescription ?? String(localized: "Something went wrong."))  // xcstrings
+            let message = appError.descriptionWithRecovery
+            Text(message.isEmpty ? String(localized: "Something went wrong.") : message)  // xcstrings
                 .font(.caption)
                 .foregroundStyle(AppColors.error)
                 .multilineTextAlignment(.center)
@@ -1205,10 +1215,13 @@ struct MessageComposerBar: View {
             } catch is CancellationError {
                 // Tile is being removed — leave it.
             } catch {
+                // `.failed` (badge + Retry), or `.refused(reason)` when the error
+                // is terminal — the tile then says what happened and shows no
+                // Retry, because an identical request can only fail identically.
                 guard let i = attachments.firstIndex(where: { $0.id == id }),
                       attachments[i].serverOwnerRef == ref,
                       attachments[i].serverOwnerSnapshot == snapshot else { return }
-                attachments[i].serverUploadState = .failed
+                attachments[i].serverUploadState = .failure(for: error)
             }
             uploadTasks[id] = nil
         }
@@ -1389,10 +1402,13 @@ struct MessageComposerBar: View {
             } catch is CancellationError {
                 // Tile is being removed — leave it.
             } catch {
+                // `.failed` (badge + Retry), or `.refused(reason)` when the error
+                // is terminal — the tile then says what happened and shows no
+                // Retry, because an identical request can only fail identically.
                 guard let i = attachments.firstIndex(where: { $0.id == id }),
                       attachments[i].serverOwnerRef == ref,
                       attachments[i].serverOwnerSnapshot == snapshot else { return }
-                attachments[i].serverUploadState = .failed
+                attachments[i].serverUploadState = .failure(for: error)
             }
             uploadTasks[id] = nil
         }
@@ -1402,12 +1418,14 @@ struct MessageComposerBar: View {
     /// Re-kick a FAILED server upload (the strip's Retry) under the SAME staging
     /// file + the SAME storedKey minted at stage time (reused from
     /// `serverStoredKeys` so the retry overwrites the partial blob rather than
-    /// orphaning it under a fresh key).
+    /// orphaning it under a fresh key). Guarded on `serverUploadRetryable`, not
+    /// `serverUploadFailed`: a `.refused` tile offers no Retry, and a
+    /// programmatic call must not re-open one.
     private func retryServerUpload(id: UUID) {
         guard !attachmentDispatchInProgress else { return }
         guard let index = attachments.firstIndex(where: { $0.id == id }),
               case .serverFile(let url, let originalName, _) = attachments[index].kind,
-              attachments[index].serverUploadFailed,
+              attachments[index].serverUploadRetryable,
               let ref = attachments[index].serverOwnerRef,
               let snapshot = attachments[index].serverOwnerSnapshot else { return }
         attachments[index].serverUploadState = .uploading(progress: 0)
@@ -1468,10 +1486,13 @@ struct MessageComposerBar: View {
             } catch is CancellationError {
                 // Tile is being removed — leave it.
             } catch {
+                // `.failed` (badge + Retry), or `.refused(reason)` when the error
+                // is terminal — the tile then says what happened and shows no
+                // Retry, because an identical request can only fail identically.
                 guard let i = attachments.firstIndex(where: { $0.id == id }),
                       attachments[i].serverOwnerRef == ref,
                       attachments[i].serverOwnerSnapshot == snapshot else { return }
-                attachments[i].serverUploadState = .failed
+                attachments[i].serverUploadState = .failure(for: error)
             }
             uploadTasks[id] = nil
         }

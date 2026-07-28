@@ -1166,9 +1166,17 @@ struct DictationPopoverView: View {
     /// exists — the not-configured early returns set `sendError` WITHOUT writing
     /// a bubble, so there's nothing to re-fire. Dismiss clears the error and the
     /// retained reply / start hint returns.
+    ///
+    /// Retry is ALSO gated on the verdict being retryable, the same question the
+    /// window's failed-turn row answers through `DeclinedTurnPresentation`. The
+    /// popover is that row's macOS twin and must not offer what the window
+    /// withholds: a certificate this device refuses, a rejected bearer token or a
+    /// URL that isn't an AI endpoint sends the identical request into the
+    /// identical refusal, and the spinner covers the remedy the banner just
+    /// printed.
     private func sendErrorActions(vm: ConversationDetailViewModel) -> some View {
         HStack(spacing: 12) {
-            if let failed = lastFailedUserTurn {
+            if let failed = lastFailedUserTurn, sendErrorIsRetryable(vm) {
                 Button(action: { Task { await vm.retry(failed) } }) {
                     Text(String(localized: LocalizedStringResource(
                         "popover.retry",
@@ -1214,6 +1222,18 @@ struct DictationPopoverView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
         }
+    }
+
+    /// Whether the failed agent turn can be re-sent, from `AppError.isRetryable`.
+    ///
+    /// Reconstructed from the banner's `sendErrorCode` — the same round-trip the
+    /// Troubleshoot affordance beside it already makes — because that code is the
+    /// only piece of the verdict the view is given. `nil` means a plain notice
+    /// with no taxonomy behind it (a dropped attachment), which has never been a
+    /// terminal transport refusal, so it keeps the button.
+    private func sendErrorIsRetryable(_ vm: ConversationDetailViewModel) -> Bool {
+        guard let code = vm.sendErrorCode else { return true }
+        return AppError.from(errorCode: code, message: nil).isRetryable
     }
 }
 #endif

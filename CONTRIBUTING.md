@@ -62,22 +62,35 @@ Two things that are intentional, not broken:
   `ConduckTests` bundle (the main app-logic suite) on an iOS Simulator.
 - watchOS-only logic has its own bundle: run the **ConduckWatchTests** scheme
   against a watchOS Simulator.
-- Certificate pinning has one suite that neither of those runs:
-  `scripts/run-live-tls-tests.sh` drives `RemoteAgentTrustPolicyTests`' live
-  counterpart against a real loopback HTTPS server with a self-signed
-  certificate, so a pin mismatch, a cross-origin redirect, and the file lane's
-  task-carried pin are exercised through a genuine TLS handshake rather than a
-  stubbed transport. It needs a script because the macOS test host is a
-  sandboxed app and the App Sandbox denies `bind()` to it and to anything it
-  spawns; the script stands the server up outside the sandbox. **Run it after
-  touching anything under `Services/RemoteAgent/`** — a broken pin is invisible
-  to every other test, because unpinned requests still succeed.
+- Certificate trust has one suite that neither of those runs:
+  `RemoteAgentLiveTLSTrustTests` drives a real loopback HTTPS server, so an
+  untrusted chain being refused, a pin mismatch, a cross-origin redirect, and
+  the file lane's task-carried pin are exercised through a genuine TLS
+  handshake rather than a stubbed transport. Start it with
+  `scripts/run-live-tls-tests.sh`: the macOS test host is a sandboxed app and
+  the App Sandbox denies `bind()` to it and to anything it spawns, so the
+  script stands the server up outside the sandbox. **Run it after touching
+  anything under `Services/RemoteAgent/`** — a broken trust decision is
+  invisible to every other test, because requests still succeed.
+
+  In short: **compiled on every PR, executed only where a signing identity
+  exists.** That file is `#if os(macOS)`, so the simulator jobs compile it out
+  entirely — and a file nothing compiles can never fail. CI therefore builds
+  the macOS test bundle unconditionally, which is the real guard, and runs the
+  suite only when the runner has an Apple Development certificate, saying so
+  loudly when it does not. A GitHub-hosted runner **cannot** execute it: the
+  test host is the Conduck app itself, and its App Group / iCloud KVS /
+  CloudKit entitlements cannot be granted by ad-hoc signing, so the host dies
+  at launch before the first test. Running it for real needs your own signed
+  machine (or a self-hosted runner). Do not read a green CI run as proof the
+  trust layer still works.
 
 Some tests skip themselves in community builds: cases that touch the live
 Keychain skip on unsigned simulator builds, and the official-identity lock
 tests skip under the community identity. Skips there are expected — failures
 are not. Please keep the suite green. Pull requests and pushes to `main` run
-both complete simulator suites in GitHub Actions.
+both complete simulator suites in GitHub Actions, plus the macOS compile of
+the live-TLS bundle.
 
 ## Pull requests
 

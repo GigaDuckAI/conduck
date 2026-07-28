@@ -51,6 +51,13 @@ struct ContentView: View {
     /// affordance can build its `DiagnosticsFocus`. nil = no code (a plain notice
     /// or nothing pending) → no button.
     @State private var pendingRetryErrorCode: Int? = nil
+    /// Whether the failure the retry card is currently reporting can be retried
+    /// at all (`AppError.isRetryable`). Seeded from the store's arming code and
+    /// re-keyed by every failed Retry, so a terminal verdict — a certificate
+    /// this device refuses, a rejected key — withdraws the button instead of
+    /// leaving one that can only reach the same refusal again. Reset on every
+    /// `refreshPendingRetryState()`, so a server-side fix restores it.
+    @State private var pendingRetryIsRetryable: Bool = true
 
     /// True when minting the first conversation failed at send time (rare
     /// Core Data write error) — drives the explanatory alert; the draft text
@@ -359,6 +366,7 @@ struct ContentView: View {
                             isRetrying: isRetrying,
                             retryErrorMessage: retryErrorMessage,
                             onRetry: retryButtonTapped,
+                            errorIsRetryable: pendingRetryIsRetryable,
                             troubleshootFocus: DiagnosticsFocus(errorCode: pendingRetryErrorCode, ref: nil)
                         )
                         .padding(.horizontal, 16)
@@ -801,9 +809,22 @@ struct ContentView: View {
     /// together, so the card and its Troubleshoot affordance stay in sync across
     /// every lifecycle / foreground / dictation-result path. Both are cheap
     /// metadata-only reads (no audio load).
+    ///
+    /// The retryability flag is DERIVED from the same code rather than assumed
+    /// true: it is the store's arming verdict, and re-deriving it here is what
+    /// lets a terminal Retry failure withdraw the button for this session and
+    /// hand it back on the next foreground, once the user has had a chance to
+    /// act on the remedy.
     private func refreshPendingRetryState() async {
         hasPendingRetry = await PendingRetryStore.shared.hasPending()
         pendingRetryErrorCode = await PendingRetryStore.shared.pendingErrorCode()
+        pendingRetryIsRetryable = pendingRetryErrorCode
+            .map { AppError.from(errorCode: $0, message: nil).isRetryable } ?? true
+        // A sticky terminal line belongs to the verdict that produced it, and
+        // that verdict is what just got re-read. Dropping it with the flag keeps
+        // the card from showing "trying again would reach the same answer" beside
+        // a Retry button this refresh has restored.
+        retryErrorMessage = nil
     }
 
     private func refreshConfiguredFlag() async {
@@ -1100,6 +1121,7 @@ struct ContentView: View {
 
         guard let pending = await PendingRetryStore.shared.load() else {
             pendingRetryErrorCode = nil
+            pendingRetryIsRetryable = true
             withAnimation { hasPendingRetry = false }
             return
         }
@@ -1153,20 +1175,40 @@ struct ContentView: View {
             await PendingRetryGuard.cancelAllDeferredNotifications()
 
             pendingRetryErrorCode = nil
+            pendingRetryIsRetryable = true
             withAnimation { hasPendingRetry = false }
             // The recovered transcript continues into the converse path.
             await sendTurn(response.text)
 
         } catch let error as AppError {
-            presentRetryError(error.errorDescription ?? String(localized: "Couldn't send — try again in a minute."))  // xcstrings
+            // Re-key the card to the failure the user is looking at NOW, not the
+            // one that armed the store: the Troubleshoot chip pointed at the
+            // arming code, so a retry that died on a certificate opened
+            // Diagnostics on the transcription outage instead. The message
+            // carries cause AND remedy — this card has no second slot, and the
+            // certificate verdicts keep their whole actionable half there.
+            pendingRetryErrorCode = error.errorCode
+            pendingRetryIsRetryable = error.isRetryable
+            let message = error.descriptionWithRecovery
+            presentRetryError(
+                message.isEmpty ? String(localized: "Couldn't send — try again in a minute.") : message,  // xcstrings
+                sticky: !error.isRetryable
+            )
         } catch {
             presentRetryError(String(localized: "Couldn't send — try again in a minute."))  // xcstrings
         }
     }
 
+    /// Show the retry card's secondary error line.
+    ///
+    /// `sticky` keeps it up: on a terminal verdict this line IS the remedy, and
+    /// the Retry button is gone, so auto-dismissing after 3.5 s would clear the
+    /// only instruction on screen and leave a card that explains nothing. It
+    /// clears on the next refresh, alongside the retryability flag it belongs to.
     @MainActor
-    private func presentRetryError(_ message: String) {
+    private func presentRetryError(_ message: String, sticky: Bool = false) {
         withAnimation { retryErrorMessage = message }
+        guard !sticky else { return }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 3_500_000_000)
             if retryErrorMessage == message && !isRetrying {
