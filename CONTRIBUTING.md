@@ -66,7 +66,11 @@ Two things that are intentional, not broken:
   `RemoteAgentLiveTLSTrustTests` drives a real loopback HTTPS server, so an
   untrusted chain being refused, a pin mismatch, a cross-origin redirect, and
   the file lane's task-carried pin are exercised through a genuine TLS
-  handshake rather than a stubbed transport. Start it with
+  handshake rather than a stubbed transport. The fixture listens on loopback,
+  which App Transport Security — Apple's platform rule for app network
+  traffic — exempts, so the suite proves Conduck's own trust logic and never
+  ATS itself. Nothing in the test suite can prove how the app behaves against
+  a remote host. Start it with
   `scripts/run-live-tls-tests.sh`: the macOS test host is a sandboxed app and
   the App Sandbox denies `bind()` to it and to anything it spawns, so the
   script stands the server up outside the sandbox. **Run it after touching
@@ -129,11 +133,11 @@ word you say to it. One rule follows from that, and it is not negotiable:
 > transcript, a reply, or a file name — not even at debug level.**
 
 Hostnames count as private data here. A self-hosted gateway is usually named
-after the machine it runs on (`box.local`, `mini.tail9f2c.ts.net`), so logging
-it publishes the shape of someone's home network or VPN. And logs are not as
-transient as they look: entries at `notice` and `error` level persist in the
-system log, which means they end up inside any sysdiagnose a user later attaches
-to a public bug report.
+after the machine it runs on (`box.example.com`, `mini.tail9f2c.ts.net`), so
+logging it publishes the shape of someone's home network or VPN. And logs are
+not as transient as they look: entries at `notice` and `error` level persist in
+the system log, which means they end up inside any sysdiagnose a user later
+attaches to a public bug report.
 
 What that means in practice:
 

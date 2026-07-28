@@ -14,11 +14,23 @@ That is the entire pipeline. Speech recognition and read-aloud default to Apple'
 
 ## What it works with
 
-- **Self-hosted agent gateways** — OpenClaw and Hermes presets, plus any custom OpenAI-compatible endpoint. Guided setup via the companion [conduck-connect](https://github.com/gigaduckai/conduck-connect) pairing wizard; manual URL + token entry always works.
+- **Self-hosted agent gateways** — OpenClaw and Hermes presets, plus any custom OpenAI-compatible endpoint. Guided setup via the companion [conduck-connect](https://github.com/gigaduckai/conduck-connect) pairing wizard; manual URL + token entry always works. Either way the gateway needs a certificate your devices already trust — see [Connecting to your gateway](#connecting-to-your-gateway).
 - **Hosted models as an on-ramp** — OpenRouter, for multi-turn chat before you run a gateway. A hosted model endpoint is not your server: it covers chat, not agent tools or file exchange.
 - **Voice both ways** — on-device Apple speech by default; optional cloud speech-to-text and text-to-speech providers, all BYO-key, including custom OpenAI-compatible speech endpoints.
 - **Attachments and files** — images and text/code files in the conversation, and full file exchange with your agent (send arbitrary files, pull generated files back with previews) through your own WebDAV file server.
 - **Every surface, natively** — action-button voice capture and a share-sheet extension on iPhone/iPad, a menu-bar + Dock app with global hotkeys and screenshot-and-ask on the Mac, quick voice capture on the Watch, hands-free multi-turn voice in CarPlay.
+
+## Connecting to your gateway
+
+Your gateway needs an `https://` address whose certificate your Apple devices already trust. A self-signed certificate — or one from a private certificate authority you run yourself — is refused, and Conduck cannot offer to ignore that: App Transport Security, the platform rule Apple applies to every app's network traffic, lets an app make certificate checks stricter, never looser. The fix is always on the server.
+
+Three routes, all free, none needing a paid domain:
+
+- **[Tailscale Serve](https://tailscale.com/kb/1312/serve)** — issues a trusted certificate automatically on your own private network, with nothing exposed publicly.
+- **[Let's Encrypt](https://letsencrypt.org)** — free certificates, including for plain IP addresses, so no domain is required.
+- **A domain in front of the gateway**, using [Caddy](https://caddyserver.com) or another reverse proxy that obtains and renews certificates for you.
+
+Step-by-step instructions for each: [conduck.com/setup](https://conduck.com/setup/).
 
 ## Platforms
 

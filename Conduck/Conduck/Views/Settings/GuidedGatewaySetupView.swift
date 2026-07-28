@@ -301,13 +301,15 @@ struct GuidedGatewaySetupView: View {
         // Pairing import is a CONTAINER-level sheet, not a Step — it is reachable
         // from both the fork ("I already have a code") and the commands step
         // ("scan / paste"). On a successful import `onImported` stores the ref;
-        // when the sheet dismisses with a ref set, advance to that lane's
-        // success. A dismiss with no import leaves the user where they were.
+        // when the sheet dismisses with a ref set, advance to the shared
+        // success step. A dismiss with no import leaves the user where they were.
         .sheet(isPresented: $showingPairingImport, onDismiss: {
             // Advance to success ONLY on a verified connection (`connectedRef`),
             // carrying the ref so the success screen names the gateway + its
-            // default/file-sharing state. A failed/cert-pending import leaves
-            // `connectedRef` nil → stay put (the sheet showed its own recovery).
+            // default/file-sharing state. A failed import leaves `connectedRef`
+            // nil → stay put (the sheet showed its own recovery). A certificate
+            // refusal is one such failure: it is terminal and ends the import
+            // before stage 1, never a pending state this flow waits on.
             if let ref = connectedRef {
                 connectedRef = nil
                 goToSuccess(ref)

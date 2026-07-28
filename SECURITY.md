@@ -71,11 +71,18 @@ Because the entire payload is chosen by whoever produced the code, nothing insid
 it can prove where it came from. Conduck therefore treats importing one as a
 consent step rather than a verification: before anything is contacted or stored,
 the app shows the exact destination it is about to save and what accepting
-grants, and it settles the certificate question against the live server rather
-than against the code's claim. Reports about that boundary are very much in
-scope — a fact the review screen states wrongly, a way to reach the network or
-storage before the user consents, or a way to steer the certificate decision by
-choosing what the code contains.
+grants, and it settles the certificate question against the live server. The
+payload carries no certificate field at all, and one hand-crafted into a code is
+ignored. Reports about that boundary are very much in scope — a fact the review
+screen states wrongly, a way to reach the network or storage before the user
+consents, or anything inside a code that changes the certificate outcome.
+
+That settlement can only go one way. Conduck runs under App Transport Security —
+Apple's platform rule for app network traffic — with no exemptions, so a
+certificate the device does not trust is refused outright, and no surface in the
+app offers to trust a server anyway. The optional certificate fingerprint a user
+can pin only narrows a chain the system has already accepted; it can never admit
+one.
 
 ## Safe harbor
 
