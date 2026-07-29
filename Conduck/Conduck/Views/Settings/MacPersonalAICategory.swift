@@ -157,7 +157,7 @@ struct MacPersonalAICategory: View {
     // MARK: - Gateway list
 
     /// "Full agent gateways" — the user's own self-hosted backends (OpenClaw /
-    /// Hermes; tools, memory, file attachments). Mirrors
+    /// Hermes; tools, file attachments). Mirrors
     /// `PersonalAISettingsView.selfHostedGatewaySection`.
     private var selfHostedGatewaySection: some View {
         Section {

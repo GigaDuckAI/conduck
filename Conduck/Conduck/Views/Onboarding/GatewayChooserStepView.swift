@@ -81,7 +81,7 @@ struct GatewayChooserStepView: View {
                     OnboardingChoiceCard(
                         icon: "server.rack",
                         title: "OpenClaw or Hermes server", // xcstrings: gateway-chooser
-                        subtitle: "Full personal AI server — tools, memory, and files.", // xcstrings: gateway-chooser
+                        subtitle: "Full personal AI server — tools and file access.", // xcstrings: gateway-chooser
                         action: onFullAgent
                     )
 

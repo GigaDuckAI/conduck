@@ -17,7 +17,7 @@ import SwiftUI
 /// same `conduck-connect.sh --setup` command. The hosted-model (OpenRouter) lane is NOT a
 /// `GatewaySetupLane` — it has its own dedicated step view.
 enum GatewaySetupLane: Hashable {
-    /// OpenClaw / Hermes — a full personal-AI server (tools, memory, files).
+    /// OpenClaw / Hermes — a full personal-AI server (tools, files).
     case fullAgent
     /// Any OpenAI-compatible endpoint the user runs (Ollama / vLLM / LiteLLM…).
     case custom

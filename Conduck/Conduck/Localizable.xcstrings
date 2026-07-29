@@ -4778,7 +4778,7 @@
         }
       }
     },
-    "Full personal AI server — tools, memory, and files." : {
+    "Full personal AI server — tools and file access." : {
 
     },
     "gateway.commands.cta.paste" : {
@@ -9134,7 +9134,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Tools, memory, file attachments."
+            "value" : "Tools and file attachments. Conduck sends each chat's context with every message."
           }
         }
       }

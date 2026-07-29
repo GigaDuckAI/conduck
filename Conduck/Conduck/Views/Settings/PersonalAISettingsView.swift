@@ -138,7 +138,7 @@ struct PersonalAISettingsView: View {
     // MARK: - Gateway List
 
     /// "Full agent gateways" — the user's own self-hosted OpenClaw / Hermes
-    /// backends (tools, memory, file attachments — the recommended path).
+    /// backends (tools, file attachments — the recommended path).
     private var selfHostedGatewaySection: some View {
         Section {
             ForEach(viewModel.personalAIRows.filter {

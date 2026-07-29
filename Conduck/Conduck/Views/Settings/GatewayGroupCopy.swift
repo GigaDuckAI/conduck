@@ -30,7 +30,7 @@ enum GatewayGroupCopy {
     )
     static let fullAgentFooter = LocalizedStringResource(
         "settings.personalAI.fullAgent.footer",
-        defaultValue: "Tools, memory, file attachments."
+        defaultValue: "Tools and file attachments. Conduck sends each chat's context with every message."
     )
 
     /// "Hosted model" — OpenRouter (no server, no tools/files).
