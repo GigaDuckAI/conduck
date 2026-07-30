@@ -381,7 +381,12 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
             // Dispatch-time fact for the SUCCESS record, by the same argument as
             // the line above: the delegate may land this reply after a relaunch,
             // and by then the live config may be a different gateway entirely.
-            dispatchChatSignature: await SettingsManager.shared.gatewayChatSuccessSignature(for: ref)
+            // Built from THIS request's own url/scheme/model — the values baked
+            // into `request` above — not from a fresh settings read, which would
+            // describe whatever the user edited to while the body was encoding.
+            dispatchChatSignature: await SettingsManager.shared.gatewayChatSuccessSignature(
+                for: ref, url: url, authScheme: authScheme, model: model
+            )
         )
         let metadataString: String
         do {
@@ -903,7 +908,11 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
 
     // MARK: - Error mapping (mirrors RemoteAgentClient.performRequest)
 
-    private static func mapURLError(_ error: URLError) -> AppError {
+    /// Internal, not private: `CarPlayConverseUploader` runs its own background
+    /// session and must reach the SAME transport taxonomy. A second copy there
+    /// is how the CarPlay lane drifted to a blanket `.remoteAgentUnreachable`
+    /// for every non-certificate transport failure in the first place.
+    static func mapURLError(_ error: URLError) -> AppError {
         switch error.code {
         case .timedOut:
             return .remoteAgentTimeout

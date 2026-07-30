@@ -106,6 +106,43 @@ final class GatewayChatSuccessTests: XCTestCase {
         )
     }
 
+    // MARK: - writer/reader agreement
+
+    /// The dispatch site signs the request it is ABOUT to send; the reader signs
+    /// the CURRENT stored config. They must be the same function of the same
+    /// inputs, or the record can never validate and the feature silently does
+    /// nothing — the exact failure mode that has no crash and no red test.
+    ///
+    /// The model is where this actually broke: a custom gateway keeps its model
+    /// on its roster entry and never writes the per-ref model slot, so a reader
+    /// that consulted the slot signed nil for every custom while the dispatch
+    /// site signed the real model.
+    @MainActor
+    func testDispatchOverloadMatchesTheSignatureFunction() async {
+        let manager = SettingsManager.shared
+        let ref = RemoteAgentRef.custom(UUID())
+
+        let dispatch = await manager.gatewayChatSuccessSignature(
+            for: ref, url: url, authScheme: .bearer, model: "gpt-oss"
+        )
+        XCTAssertEqual(
+            dispatch,
+            GatewayChatSuccess.signature(
+                url: url, authScheme: .bearer, model: "gpt-oss",
+                // The ref is unconfigured, so no pin is stored — the overload
+                // reads the live pin, which is nil here.
+                pinnedFingerprintHex: nil, kind: ref.rawString
+            ),
+            "the dispatch overload must be the plain signature function over the values it was handed"
+        )
+
+        let other = await manager.gatewayChatSuccessSignature(
+            for: ref, url: url, authScheme: .bearer, model: "llama"
+        )
+        XCTAssertNotEqual(dispatch, other,
+                          "a model the request actually carries must reach the signature")
+    }
+
     // MARK: - the record round-trips
 
     func testRecordCodableRoundTrip() throws {

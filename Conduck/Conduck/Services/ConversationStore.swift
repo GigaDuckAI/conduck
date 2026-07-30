@@ -1034,7 +1034,18 @@ actor ConversationStore {
         do {
             return try await context.perform { [context] in
                 let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
-                request.predicate = NSPredicate(format: "status == %@ AND role == %@", "failed", "user")
+                // `failureCode != nil` is what separates a GATEWAY failure from a
+                // user CANCEL. Cancelling flips the turn to `failed` (so the Retry
+                // chip appears and the row can't strand at `sending`) but writes no
+                // classification, by design — a cancel is not a gateway verdict.
+                // Without this clause every cancelled turn arrived in the pasted
+                // support report as `send-failure … code=none`, manufacturing
+                // failures the gateway never had. Fail closed in the same
+                // direction as the orphan drop below: a failure nobody classified
+                // is one nobody can act on.
+                request.predicate = NSPredicate(
+                    format: "status == %@ AND role == %@ AND failureCode != nil", "failed", "user"
+                )
                 request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
                 request.fetchLimit = limit
                 // The parent is read for `backend`, so fault it in with the rows

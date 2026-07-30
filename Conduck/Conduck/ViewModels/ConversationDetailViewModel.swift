@@ -1664,8 +1664,16 @@ final class ConversationDetailViewModel {
                 // read at send time — never at landing. A turn can run for
                 // minutes and the user can edit the gateway meanwhile; a
                 // landing-time read would credit the NEW configuration with the
-                // OLD one's success.
-                let dispatchChatSignature = await SettingsManager.shared.gatewayChatSuccessSignature(for: snapshot.ref)
+                // OLD one's success. Built from `snapshot`'s own values for the
+                // same reason one step earlier: the snapshot is what the request
+                // below actually carries, so a fresh settings read here could
+                // describe a gateway this turn never touched.
+                let dispatchChatSignature = await SettingsManager.shared.gatewayChatSuccessSignature(
+                    for: snapshot.ref,
+                    url: snapshot.url,
+                    authScheme: snapshot.authScheme,
+                    model: snapshot.model
+                )
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,
@@ -2345,8 +2353,16 @@ final class ConversationDetailViewModel {
                 // read at send time — never at landing. A turn can run for
                 // minutes and the user can edit the gateway meanwhile; a
                 // landing-time read would credit the NEW configuration with the
-                // OLD one's success.
-                let dispatchChatSignature = await SettingsManager.shared.gatewayChatSuccessSignature(for: snapshot.ref)
+                // OLD one's success. Built from `snapshot`'s own values for the
+                // same reason one step earlier: the snapshot is what the request
+                // below actually carries, so a fresh settings read here could
+                // describe a gateway this turn never touched.
+                let dispatchChatSignature = await SettingsManager.shared.gatewayChatSuccessSignature(
+                    for: snapshot.ref,
+                    url: snapshot.url,
+                    authScheme: snapshot.authScheme,
+                    model: snapshot.model
+                )
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,

@@ -238,6 +238,40 @@ final class DiagnosticsRunner {
     /// meaningless.
     private(set) var lastScopedGatewayCheck: ScopedGatewayCheck?
 
+    /// Render the failed-send section. Split out of `copyBlock()` as a pure
+    /// static so the ONE thing that must never leak can be asserted directly
+    /// against hostile facts: reached only through `copyBlock()`, the section is
+    /// testable only when the device under test happens to hold failed turns, so
+    /// a regression that piped a raw value in here would ship green.
+    ///
+    /// Every field is already redacted at CAPTURE (`redactFailedSends`); this
+    /// only formats. It must therefore never reach for anything but the facts.
+    static func failedSendLines(_ facts: [FailedSendFact], now: Date) -> [String] {
+        guard !facts.isEmpty else { return ["Recent failed sends: none"] }
+        var lines = ["Recent failed sends: \(facts.count) distinct"]
+        for fact in facts {
+            let code = fact.code.map { "\($0) (\(DiagnosticsExplainer.slug(forCode: $0)))" } ?? "none"
+            let age = Self.relativeAge(now.timeIntervalSince(fact.createdAt))
+            lines.append("send-failure: \(fact.backendToken) code=\(code) wire=\(fact.wireToken) device=\(fact.deviceToken) turn-age=\(age)")
+        }
+        return lines
+    }
+
+    /// Drop the scoped stamp only when it describes `ref`. A stamp for a
+    /// DIFFERENT gateway is still true, and clearing it would silently retract a
+    /// caption the user is reading about a row nothing here touched.
+    private func clearScopedGatewayCheck(for ref: RemoteAgentRef) {
+        if lastScopedGatewayCheck?.ref == ref { lastScopedGatewayCheck = nil }
+    }
+
+    /// Bumped once per `runConnectionChecks()` entry. A scoped recheck captures
+    /// it at dispatch and refuses to apply its outcome if it has moved — the
+    /// sweep-side half of an exclusion that `isTestingConnections` alone only
+    /// enforces in one direction (a recheck yields to a running sweep, but a
+    /// sweep starting AFTER a recheck was dispatched would otherwise be
+    /// overwritten by that older, slower probe).
+    private var connectionSweepGeneration = 0
+
     /// The staged write-test result PER GATEWAY (reuses the file-server engine
     /// type) — drives that lane's `FileTransferStageChecklist`.
     private(set) var fileTransferResults: [RemoteAgentRef: FileTransferTestResult] = [:]
@@ -1543,6 +1577,12 @@ final class DiagnosticsRunner {
         // second entry early-returns; reset UNCONDITIONALLY on exit.
         guard !isTestingConnections else { return }
         isTestingConnections = true
+        // Bumped BEFORE any await so an in-flight scoped recheck — dispatched
+        // while no sweep was running, and therefore past its entry guard — can
+        // see that a sweep has since owned these rows, and drop its own outcome
+        // instead of landing last and overwriting the sweep's verdict with a
+        // staler one.
+        connectionSweepGeneration &+= 1
         defer { isTestingConnections = false }
 
         // First tap seeds the checklist; every later tap re-reads the LOCAL config
@@ -1688,6 +1728,23 @@ final class DiagnosticsRunner {
         for ref: RemoteAgentRef,
         manager: SettingsManager
     ) async -> GatewayProbeInput? {
+        await makeGatewayProbeContext(for: ref, manager: manager)?.input
+    }
+
+    /// The probe input AND the signature of the exact configuration it was built
+    /// from, derived from ONE snapshot read.
+    ///
+    /// `Why one read:` taking the input from snapshot A and the dispatch
+    /// signature from a second read that returned snapshot B defeats the very
+    /// gate the signature exists to be. The post-probe check compares the live
+    /// signature against the dispatch signature, so a mid-build edit would leave
+    /// them both equal to B while the probe actually ran against A — and A's
+    /// verdict would green B's configuration, which is precisely the false green
+    /// the gate is there to stop.
+    private static func makeGatewayProbeContext(
+        for ref: RemoteAgentRef,
+        manager: SettingsManager
+    ) async -> (input: GatewayProbeInput, signature: String)? {
         guard let snapshot = await manager.remoteAgentSnapshot(for: ref) else { return nil }
         let carrierBackend: RemoteAgentBackend = {
             if case .builtin(let backend) = ref { return backend }
@@ -1696,7 +1753,7 @@ final class DiagnosticsRunner {
         let descriptor = RemoteAgentBackendRegistry.lookup(id: carrierBackend)
         let transportHint = await manager.getRemoteAgentTransportHint(for: ref)
         let hostClass = HostReachabilityClass.classify(snapshot.url.host, transportHint: transportHint)
-        return GatewayProbeInput(
+        let input = GatewayProbeInput(
             checkID: Self.connectionCheckID(for: ref),
             backend: carrierBackend,
             url: snapshot.url,
@@ -1707,6 +1764,13 @@ final class DiagnosticsRunner {
             bodyShape: descriptor.verdictBodyShape,
             isLocalHost: hostClass.suggestsLocalNetworkPermission
         )
+        let signature = Self.gatewaySignature(
+            url: snapshot.url,
+            token: snapshot.token,
+            authScheme: snapshot.authScheme,
+            fingerprint: snapshot.certFingerprintHex
+        )
+        return (input, signature)
     }
 
     /// Re-probe ONE gateway. The action a Troubleshoot-landed user actually needs:
@@ -1731,12 +1795,24 @@ final class DiagnosticsRunner {
         defer { gatewayRecheckRunning.remove(ref) }
 
         let manager = SettingsManager.shared
-        guard let input = await Self.makeGatewayProbeInput(for: ref, manager: manager),
-              let dispatchSignature = await Self.liveGatewaySignature(for: ref, manager: manager)
-        else { return }
+        // ONE read for both — see `makeGatewayProbeContext`.
+        guard let context = await Self.makeGatewayProbeContext(for: ref, manager: manager) else { return }
+        let input = context.input
+        let dispatchSignature = context.signature
+        let sweepGenerationAtDispatch = connectionSweepGeneration
 
         setStatus(input.checkID, .running)
         let outcome = await Self.probeGateway(input)
+
+        // Yield to a sweep that started while this probe was in flight: it re-ran
+        // every row from scratch, so its verdict is at least as fresh as this one
+        // and it owns the `lastChecked` stamp this path deliberately never moves.
+        // Landing on top of it would show a one-gateway result as if the whole
+        // sweep had produced it.
+        guard connectionSweepGeneration == sweepGenerationAtDispatch else {
+            clearScopedGatewayCheck(for: ref)
+            return
+        }
 
         // Drop the outcome if the gateway's config moved while the probe ran.
         // Compared against the LIVE persisted config rather than the runner's
@@ -1749,6 +1825,11 @@ final class DiagnosticsRunner {
               liveSignature == dispatchSignature
         else {
             setStatus(input.checkID, .notRun, detail: nil)
+            // The row just became "not run", so any earlier scoped stamp for THIS
+            // ref now captions a check of a configuration that no longer exists.
+            // Leaving it would date a claim about the gateway the user just
+            // edited to, which nothing has ever checked.
+            clearScopedGatewayCheck(for: ref)
             return
         }
 
@@ -2293,17 +2374,7 @@ final class DiagnosticsRunner {
         // persist, so a fixed problem stays listed and must not be read as
         // evidence about the configuration in force right now. `age` is the age of
         // the TURN (no `failedAt` is recorded), which is why the label says turn.
-        if factFailedSends.isEmpty {
-            lines.append("Recent failed sends: none")
-        } else {
-            lines.append("Recent failed sends: \(factFailedSends.count) distinct")
-            let now = Date()
-            for fact in factFailedSends {
-                let code = fact.code.map { "\($0) (\(DiagnosticsExplainer.slug(forCode: $0)))" } ?? "none"
-                let age = Self.relativeAge(now.timeIntervalSince(fact.createdAt))
-                lines.append("send-failure: \(fact.backendToken) code=\(code) wire=\(fact.wireToken) device=\(fact.deviceToken) turn-age=\(age)")
-            }
-        }
+        lines.append(contentsOf: Self.failedSendLines(factFailedSends, now: Date()))
 
         lines.append("--")
         for check in checks {

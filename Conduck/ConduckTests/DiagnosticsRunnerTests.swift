@@ -732,9 +732,12 @@ final class DiagnosticsRunnerTests: XCTestCase {
         XCTAssertTrue(facts.allSatisfy { $0.backendToken == "unknown" })
     }
 
-    /// The whole report, end to end, with a hostile failure row present: the
-    /// existing allowlist assertions must still hold with the new section in it.
-    func testCopyBlockWithFailedSendsStaysPasteSafe() async {
+    /// The section header is unconditional. This runs on a device with no failed
+    /// turns, so it proves the EMPTY branch only — the populated branch is
+    /// asserted directly in `testFailedSendLinesStayPasteSafeWhenPopulated`,
+    /// because a test that merely calls `copyBlock()` can never guarantee the
+    /// store holds a row to render.
+    func testCopyBlockAlwaysCarriesTheFailedSendSection() async {
         let runner = DiagnosticsRunner()
         await runner.runAutoReads()
         let block = runner.copyBlock()
@@ -744,6 +747,31 @@ final class DiagnosticsRunnerTests: XCTestCase {
         }
         XCTAssertTrue(block.contains("Recent failed sends:"),
                       "the section is unconditional: 'none' is itself a useful support fact")
+    }
+
+    /// The populated branch, asserted where it can actually be forced. Facts are
+    /// redacted at capture, so this pins the FORMATTER: it may compose only from
+    /// the tokens handed to it, and a future edit that reached for a raw value
+    /// would have to fail here.
+    func testFailedSendLinesStayPasteSafeWhenPopulated() {
+        let hostile = DiagnosticsRunner.redactFailedSends(
+            [
+                failedTurn(code: 55, wire: "model_not_found", backend: "custom_\(UUID().uuidString)"),
+                failedTurn(code: 26, wire: "totally-made-up-code", backend: "openclaw"),
+            ],
+            customOrdinals: [:]
+        )
+        let lines = DiagnosticsRunner.failedSendLines(hostile, now: Date())
+
+        XCTAssertEqual(lines.count, hostile.count + 1, "one header plus one line per distinct fact")
+        XCTAssertTrue(lines[0].hasPrefix("Recent failed sends: "))
+        let rendered = lines.joined(separator: "\n")
+        for needle in ["http", "://", "Bearer ", "custom_", "totally-made-up-code"] {
+            XCTAssertFalse(rendered.contains(needle),
+                           "the rendered section leaked '\(needle)':\n\(rendered)")
+        }
+        XCTAssertTrue(rendered.contains("custom-gateway#"),
+                      "a custom gateway must still be IDENTIFIABLE by ordinal — redaction that erases which gateway failed makes the report useless")
     }
 
     // MARK: - Scoped per-gateway recheck
@@ -762,7 +790,14 @@ final class DiagnosticsRunnerTests: XCTestCase {
 
     /// The scoped stamp must NOT masquerade as a full run: `lastChecked` is the
     /// whole-sweep stamp and a one-gateway probe may never move it.
-    func testScopedRecheckNeverRestampsTheFullRun() async {
+    ///
+    /// COVERAGE LIMIT — read before trusting this: the ref is unconfigured, so
+    /// this (like its sibling above) exercises the EARLY RETURN, not the probe.
+    /// Reaching the apply path needs a live `GET /v1/models`, which no unit test
+    /// may fire. The apply path's own guards — sweep-generation, live-signature
+    /// re-read — are therefore founder-QA territory, not suite-covered. Do not
+    /// read a green suite as proof the scoped recheck applies correctly.
+    func testScopedRecheckOfUnconfiguredRefNeverRestampsTheFullRun() async {
         let runner = DiagnosticsRunner()
         await runner.runAutoReads()
         let before = runner.lastChecked

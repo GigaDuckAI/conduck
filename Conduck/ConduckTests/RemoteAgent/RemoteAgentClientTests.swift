@@ -844,6 +844,36 @@ final class RemoteAgentClientTests: XCTestCase {
                        "An untrusted certificate on the live converse hop must name the certificate, not read as 'unreachable, try again' and not as a pin mismatch.")
     }
 
+    // MARK: - Transport taxonomy shared across the dispatch lanes
+
+    /// Every lane must classify a transport failure the SAME way, because the
+    /// distinction gates what the user is told about delivery: a refused
+    /// connection or a dead hostname never opened a connection (73), airplane
+    /// mode is the device's own fault (3), and a connection lost mid-flight may
+    /// already have been executed by the far side (19).
+    ///
+    /// Pinned here because `CarPlayConverseUploader` now routes through this same
+    /// mapper. It previously carried its own blanket `.remoteAgentUnreachable`
+    /// for every non-certificate transport error, which told a driver to go
+    /// investigate a gateway that had never been contacted.
+    func testTransportErrorsClassifyByDeliveryCertainty() {
+        let cases: [(URLError.Code, AppError)] = [
+            (.cannotConnectToHost, .remoteAgentNotEstablished),
+            (.cannotFindHost, .remoteAgentNotEstablished),
+            (.dnsLookupFailed, .remoteAgentNotEstablished),
+            (.notConnectedToInternet, .noInternetConnection),
+            (.networkConnectionLost, .remoteAgentUnreachable),
+            (.timedOut, .remoteAgentTimeout),
+        ]
+        for (code, expected) in cases {
+            XCTAssertEqual(
+                BackgroundRemoteAgent.mapURLError(URLError(code)).errorCode,
+                expected.errorCode,
+                "URLError \(code.rawValue) must classify as \(expected.errorCode) on every lane"
+            )
+        }
+    }
+
     // MARK: - Stream helpers (existing)
 
     /// URLProtocol surfaces request bodies via `httpBodyStream` when set

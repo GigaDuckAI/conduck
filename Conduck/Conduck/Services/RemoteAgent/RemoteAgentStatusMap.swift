@@ -58,18 +58,25 @@ struct RemoteAgentStatusMap: Sendable {
             // (common on OpenRouter `:free` models). Non-retryable (no auto-retry
             // that would worsen the limit; the user retries manually after a wait).
             return .remoteAgentRateLimited
-        case 502, 503, 504, 530:
+        case 502, 503, 504, 521, 522, 523, 524, 525, 526, 530:
             // Something in the route ANSWERED, but not the gateway's own
             // application. Kept ahead of the 5xx arm because 29's remedy sends
             // the user to read gateway logs, and in every one of these cases the
-            // gateway may never have received the request — a Cloudflare 530 in
-            // particular means the tunnel is up and its origin is not.
+            // gateway's application may never have seen the request at all.
             //
-            // 530 is Cloudflare-specific but the copy is deliberately generic:
-            // 502/503/504 can equally come from a reverse proxy, the gateway
-            // itself, or the model provider behind it, and only the response
-            // body could tell them apart. Naming a tunnel here would send some
-            // users to restart the one component that is working.
+            // 521–526 and 530 are Cloudflare edge↔origin conditions: the edge
+            // answered on the origin's behalf after failing to reach it (521 origin
+            // down, 522 connect timeout, 523 origin unreachable, 524 origin
+            // silent, 525/526 origin TLS). 530 (Cloudflare error 1033) means the
+            // hostname does not route to a live origin at all — a quick tunnel
+            // that has expired or moved — NOT that a tunnel is up and its origin
+            // is sick.
+            //
+            // The copy stays deliberately generic even so: 502/503/504 can
+            // equally come from a reverse proxy, the gateway itself, or the model
+            // provider behind it, and only the response body could tell them
+            // apart. Naming a tunnel here would send some users to restart the
+            // one component that is working.
             return .remoteAgentServiceUnavailable
         case 500..<600:
             return .remoteAgentServerError

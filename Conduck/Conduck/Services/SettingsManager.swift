@@ -2253,17 +2253,57 @@ actor SettingsManager {
         defaults.set(data, forKey: Constants.remoteAgentLastChatSuccessKey(for: ref))
     }
 
+    /// The signature of the configuration a request is ACTUALLY being dispatched
+    /// under — built from the values the caller already captured and is about to
+    /// send with, never re-read from storage.
+    ///
+    /// `Why:` a dispatch site captures its gateway snapshot, then does real work
+    /// before the request leaves (assemble history, encode the body, write it to
+    /// disk, mint a pinned session). Re-reading settings at the END of that
+    /// stretch means an edit landing inside it produces a signature describing
+    /// the NEW configuration while the request on the wire carries the OLD one —
+    /// so the old gateway's success would be stored as proof the new one works.
+    /// That is the exact false claim this record exists to prevent, arriving
+    /// through the back door.
+    ///
+    /// The pin is still read live: unlike URL / scheme / model, it is resolved by
+    /// the transport at challenge time (the background delegate re-resolves it
+    /// per task after a relaunch), so the live value IS the one that will be
+    /// enforced — and it is what the reader compares against.
+    func gatewayChatSuccessSignature(
+        for ref: RemoteAgentRef,
+        url: URL,
+        authScheme: RemoteAgentAuthScheme,
+        model: String?
+    ) -> String {
+        GatewayChatSuccess.signature(
+            url: url,
+            authScheme: authScheme,
+            model: model,
+            pinnedFingerprintHex: getRemoteAgentCertFingerprint(for: ref),
+            kind: ref.rawString
+        )
+    }
+
     /// The signature of a ref's CURRENT stored configuration, or nil when the ref
     /// isn't configured here. Shared by the reader, the writer and every dispatch
     /// site, so all three agree on what counts as "the same configuration".
+    ///
+    /// Resolved THROUGH `remoteAgentSnapshot` so the model component is exactly
+    /// the one that goes on the wire. Reading `getRemoteAgentModel(for:)` here
+    /// instead is wrong in two directions: a CUSTOM gateway keeps its model on
+    /// the roster entry and never writes that per-ref slot, so every custom
+    /// signed a nil model and an edit from a working model to a broken one left
+    /// the signature unchanged — the record survived a change that breaks every
+    /// send. And a self-hosted built-in picks its model server-side, so a stale
+    /// value in the slot would sign a model no request ever carries.
     func gatewayChatSuccessSignature(for ref: RemoteAgentRef) -> String? {
-        guard let url = getRemoteAgentURL(for: ref) else { return nil }
-        return GatewayChatSuccess.signature(
-            url: url,
-            authScheme: getRemoteAgentAuthScheme(for: ref),
-            model: getRemoteAgentModel(for: ref),
-            pinnedFingerprintHex: getRemoteAgentCertFingerprint(for: ref),
-            kind: ref.rawString
+        guard let snapshot = remoteAgentSnapshot(for: ref) else { return nil }
+        return gatewayChatSuccessSignature(
+            for: ref,
+            url: snapshot.url,
+            authScheme: snapshot.authScheme,
+            model: snapshot.model
         )
     }
 

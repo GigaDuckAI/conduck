@@ -577,7 +577,15 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
             #if DEBUG
             print("[CarPlay] Converse upload failed: \(error.localizedDescription)")
             #endif
-            routeError(.remoteAgentUnreachable, conversationID: conversationID, userMessageID: userMessageID, turnToken: turnToken)
+            // Same transport taxonomy as the other three lanes. A blanket
+            // `.remoteAgentUnreachable` here erased the distinction the taxonomy
+            // exists for: a refused connection or a dead hostname never opened a
+            // connection (73), and airplane mode is the device's own fault (3) —
+            // neither is "your gateway answered badly", which is what 19's copy
+            // invites the driver to go investigate. The certificate and cancel
+            // arms above already returned, so this only ever sees what they left.
+            let transportError = (error as? URLError).map(BackgroundRemoteAgent.mapURLError) ?? .remoteAgentUnreachable
+            routeError(transportError, conversationID: conversationID, userMessageID: userMessageID, turnToken: turnToken)
             return
         }
 

@@ -33,22 +33,26 @@ final class RemoteAgentStatusMapTests: XCTestCase {
     // MARK: - Server errors (5xx)
 
     func test5xxMapsToServerError() {
-        // 502/503/504/530 are deliberately NOT in this list — they carry their
-        // own verdict (see the next test). What remains is the class where the
-        // gateway's own application reported the failure, so "check the gateway
-        // logs" is sound advice.
-        for code in [500, 501, 505, 599] {
+        // 502/503/504, the Cloudflare 521–526 band and 530 are deliberately NOT
+        // in this list — they carry their own verdict (see the next test). What
+        // remains is the class where the gateway's own application reported the
+        // failure, so "check the gateway logs" is sound advice.
+        for code in [500, 501, 505, 520, 527, 599] {
             XCTAssertEqual(map.map(code)?.errorCode, AppError.remoteAgentServerError.errorCode,
                            "HTTP \(code) must map to .remoteAgentServerError")
         }
     }
 
     func testRouteOutagesAreNotGenericServerErrors() {
-        // A 530 means a Cloudflare tunnel is up and its ORIGIN is unreachable —
-        // the request never arrived, so sending the user to read gateway logs
-        // points them at a machine that saw nothing. 502/503/504 share the shape:
-        // something answered, but not the gateway's application.
-        for code in [502, 503, 504, 530] {
+        // These all mean something in the ROUTE answered on the gateway's behalf
+        // after failing to reach it — so "read your gateway's logs" points the
+        // user at a machine that saw nothing.
+        //
+        // The Cloudflare band is edge↔origin: 521 origin down, 522 connect
+        // timeout, 523 origin unreachable, 524 origin silent, 525/526 origin TLS,
+        // and 530 (error 1033) the hostname routing to no live origin at all —
+        // the shape of an expired quick tunnel. 502/503/504 share it generically.
+        for code in [502, 503, 504, 521, 522, 523, 524, 525, 526, 530] {
             XCTAssertEqual(map.map(code)?.errorCode, AppError.remoteAgentServiceUnavailable.errorCode,
                            "HTTP \(code) must map to .remoteAgentServiceUnavailable, not the generic 5xx")
         }
