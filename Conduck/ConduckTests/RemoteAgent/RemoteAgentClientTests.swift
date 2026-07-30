@@ -430,7 +430,9 @@ final class RemoteAgentClientTests: XCTestCase {
 
     func testTestConnectionServerErrorMapsToServerError() async {
         MockURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!
+            // 500, not 503: a 503 now carries the route-outage verdict, because
+            // something answered but not the gateway's own application.
+            let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
             return (response, Data())
         }
 
@@ -441,9 +443,23 @@ final class RemoteAgentClientTests: XCTestCase {
         }
     }
 
-    func testTestConnectionUnreachableMapsToUnreachable() async {
+    func testTestConnectionRefusedConnectionMapsToNotEstablished() async {
         MockURLProtocol.requestHandler = { request in
             throw URLError(.cannotConnectToHost)
+        }
+
+        // The PROBE reports the same distinction the send path does, so Test
+        // Connection and a failed chat never disagree about what went wrong.
+        await assertThrowsAppError(.remoteAgentNotEstablished) {
+            try await RemoteAgentClient.shared.testConnectionForTesting(
+                backend: .openclaw, url: self.baseURL, token: self.token, session: self.session
+            )
+        }
+    }
+
+    func testTestConnectionDroppedConnectionStaysUncertain() async {
+        MockURLProtocol.requestHandler = { request in
+            throw URLError(.networkConnectionLost)
         }
 
         await assertThrowsAppError(.remoteAgentUnreachable) {
@@ -750,11 +766,17 @@ final class RemoteAgentClientTests: XCTestCase {
         // untrusted-certificate, never mismatch.
         let expected: [(URLError.Code, Int?)] = [
             (.timedOut, AppError.remoteAgentTimeout.errorCode),
-            (.cannotConnectToHost, AppError.remoteAgentUnreachable.errorCode),
-            (.notConnectedToInternet, AppError.remoteAgentUnreachable.errorCode),
+            // Delivery-certainty split. These three prove no connection ever
+            // opened, so their copy may tell the user a retry is unlikely to
+            // repeat gateway-side work.
+            (.cannotConnectToHost, AppError.remoteAgentNotEstablished.errorCode),
+            (.cannotFindHost, AppError.remoteAgentNotEstablished.errorCode),
+            (.dnsLookupFailed, AppError.remoteAgentNotEstablished.errorCode),
+            // THIS DEVICE has no route — must not implicate the user's server.
+            (.notConnectedToInternet, AppError.noInternetConnection.errorCode),
+            // Stay UNCERTAIN: a dropped connection may have delivered the request
+            // first, and `.resourceUnavailable` is too vague to promise anything.
             (.networkConnectionLost, AppError.remoteAgentUnreachable.errorCode),
-            (.cannotFindHost, AppError.remoteAgentUnreachable.errorCode),
-            (.dnsLookupFailed, AppError.remoteAgentUnreachable.errorCode),
             (.resourceUnavailable, AppError.remoteAgentUnreachable.errorCode),
             (.serverCertificateUntrusted, AppError.remoteAgentCertUntrusted.errorCode),
             (.serverCertificateHasBadDate, AppError.remoteAgentCertUntrusted.errorCode),

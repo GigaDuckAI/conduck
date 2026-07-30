@@ -283,7 +283,10 @@ enum STTConnectionTestSuite {
             switch RemoteAgentTrustEvaluator.classifyTransportError(error.code, signals: signals()) {
             case .timeout:
                 update(.reachability, .failed(reason: Self.timeoutReason))
-            case .unreachable, .cancelled:
+            case .unreachable, .notEstablished, .offline, .cancelled:
+                // The gateway lane splits these further to reason about whether a
+                // request may already have run; a transcription probe has no such
+                // stake, so they share the one unreachable reason.
                 update(.reachability, .failed(reason: Self.unreachableReason))
             case .certMismatch:
                 // Pin set + the evaluator confirmed a genuine mismatch → hard

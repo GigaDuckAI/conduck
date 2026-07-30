@@ -441,7 +441,9 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
         // snapshot — the loose-Bool form drops `pinComparisonUnsupported` and
         // this verdict silently becomes a mismatch.
         case .certKeyUnpinnable: return .remoteAgentCertKeyUnpinnable
-        case .timeout, .unreachable, .cancelled: return nil
+        // Returning nil hands the failure to this lane's own arms, which is
+        // where the non-certificate transport classes get their copy.
+        case .timeout, .unreachable, .notEstablished, .offline, .cancelled: return nil
         }
     }
 

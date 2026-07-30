@@ -148,7 +148,9 @@ enum PairingTrustDecision {
         case .cancelled:
             return .unreachable(.cancelled)
 
-        case .unreachable:
+        case .unreachable, .notEstablished, .offline:
+            // A pairing import only needs "could this device reach it?", so the
+            // gateway lane's finer delivery-certainty split collapses here.
             return .unreachable(.unreachable)
 
         case nil:

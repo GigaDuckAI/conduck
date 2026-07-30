@@ -92,12 +92,29 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
     /// Optional for backward compatibility with tasks enqueued before v7.
     let fileTransferLaneID: String?
 
+    /// The gateway CONFIG signature captured at dispatch
+    /// (`GatewayChatSuccess.signature`). Rides the task metadata for the same
+    /// reason `requestHadHistoryImages` does: it is a DISPATCH-TIME fact that
+    /// cannot be reconstructed when the reply lands. A turn can run for minutes
+    /// and the user can edit the gateway meanwhile, so recomputing at landing
+    /// would credit the NEW configuration with a success the OLD one earned.
+    ///
+    /// Carries no secret: it is a truncated SHA-256 over canonical config
+    /// strings, with the token contributing presence only.
+    ///
+    /// `nil` = unknown (old in-flight blobs, or a ref that wasn't configured at
+    /// dispatch) → no success is recorded, which is the fail-closed direction.
+    /// ADDITIVE + TOLERANT — same `decodeIfPresent` rationale as
+    /// `shareEnvelopeID`.
+    let dispatchChatSignature: String?
+
     /// Explicit memberwise init with `shareEnvelopeID` / `userMessageID` /
-    /// `stampsActiveConversation` / `requestHadHistoryImages` DEFAULTED to
-    /// `nil` so the existing construction sites (CarPlay uploader, the
-    /// converse `send(...)`'s non-share callers, tests) stay byte-identical —
-    /// only sites that know the value pass one. (A synthesized memberwise
-    /// init can't carry a default, hence the hand-written one.)
+    /// `stampsActiveConversation` / `requestHadHistoryImages` /
+    /// `dispatchChatSignature` DEFAULTED to `nil` so the existing construction
+    /// sites (CarPlay uploader, the converse `send(...)`'s non-share callers,
+    /// tests) stay byte-identical — only sites that know the value pass one. (A
+    /// synthesized memberwise init can't carry a default, hence the hand-written
+    /// one.)
     init(
         bodyPath: String,
         conversationID: String,
@@ -107,7 +124,8 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
         userMessageID: UUID? = nil,
         stampsActiveConversation: Bool? = nil,
         requestHadHistoryImages: Bool? = nil,
-        fileTransferLaneID: String? = nil
+        fileTransferLaneID: String? = nil,
+        dispatchChatSignature: String? = nil
     ) {
         self.bodyPath = bodyPath
         self.conversationID = conversationID
@@ -118,6 +136,7 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
         self.stampsActiveConversation = stampsActiveConversation
         self.requestHadHistoryImages = requestHadHistoryImages
         self.fileTransferLaneID = fileTransferLaneID
+        self.dispatchChatSignature = dispatchChatSignature
     }
 
     /// JSON-encode + UTF-8 stringify for attachment to

@@ -58,18 +58,33 @@ struct RemoteAgentStatusMap: Sendable {
             // (common on OpenRouter `:free` models). Non-retryable (no auto-retry
             // that would worsen the limit; the user retries manually after a wait).
             return .remoteAgentRateLimited
+        case 502, 503, 504, 530:
+            // Something in the route ANSWERED, but not the gateway's own
+            // application. Kept ahead of the 5xx arm because 29's remedy sends
+            // the user to read gateway logs, and in every one of these cases the
+            // gateway may never have received the request — a Cloudflare 530 in
+            // particular means the tunnel is up and its origin is not.
+            //
+            // 530 is Cloudflare-specific but the copy is deliberately generic:
+            // 502/503/504 can equally come from a reverse proxy, the gateway
+            // itself, or the model provider behind it, and only the response
+            // body could tell them apart. Naming a tunnel here would send some
+            // users to restart the one component that is working.
+            return .remoteAgentServiceUnavailable
         case 500..<600:
             return .remoteAgentServerError
         default:
-            // Localized fallback for HTTP codes neither backend specialises.
-            // Surfaces as "Unknown error (HTTP 599)" — actionable for support
-            // tickets without leaking backend names. (4xx other than 401/403
-            // is rare on a chat-completions endpoint; if it surfaces this
-            // catches it without losing the code.)
-            return .apiFailure(message: String(
-                localized: "remoteAgent.error.unknownHTTPStatus",
-                defaultValue: "Unknown error (HTTP \(code))"
-            ))
+            // A status no backend specialises. Carries the NUMBER, which is the
+            // whole point: this arm used to build "Unknown error (HTTP 599)" and
+            // hand it to `.apiFailure`, whose `errorDescription` discards its
+            // associated message — so every unmapped status rendered as
+            // "Something went wrong with the last request." The number is the
+            // one actionable fact available, and 71 keeps it.
+            //
+            // Deliberately NOT routed back through `.apiFailure`: that case is
+            // the collapse target for text arriving off the Watch relay wire, so
+            // surfacing its message would open a copy-injection path.
+            return .remoteAgentUnexpectedStatus(status: code)
         }
     }
 

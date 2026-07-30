@@ -146,9 +146,51 @@ struct DiagnosticsContent: View {
                 Text(focus.fix)
                     .font(.callout)
                     .foregroundStyle(AppColors.textPrimary)
+                // The action this card existed without. A Troubleshoot-landed user
+                // had exactly one route forward — the top "Test everything" button,
+                // which writes into every file lane and runs a billable
+                // transcription to answer a question about ONE gateway.
+                //
+                // Offered only for a focused ref that is actually configured: a
+                // focus can carry no ref at all, and an unconfigured focused ref is
+                // already explained by its own `focused.missing` row, which a
+                // re-probe cannot help.
+                if let ref = runner.focusedRef,
+                   runner.gatewayDisplayOrder.contains(where: { $0.ref == ref }) {
+                    recheckButton(for: ref)
+                        .padding(.top, 2)
+                }
             }
             .padding(.vertical, 2)
         }
+    }
+
+    /// Re-probe ONE gateway. Same house-standard bordered action as the file lane's
+    /// staged test directly beneath it, but deliberately a DIFFERENT verb: two
+    /// buttons one row apart both reading "Test Connection" would be worse than a
+    /// duller label, and this one tests the gateway while that one tests the file
+    /// server.
+    @ViewBuilder
+    private func recheckButton(for ref: RemoteAgentRef) -> some View {
+        Button {
+            Task { await runner.recheckGateway(for: ref) }
+        } label: {
+            if runner.gatewayRecheckRunning.contains(ref) {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(Text(LocalizedStringResource(
+                        "diagnostics.action.checking", defaultValue: "Checking…")))
+            } else {
+                Label(
+                    LocalizedStringResource("diagnostics.action.recheckGateway", defaultValue: "Check Again"),
+                    systemImage: "arrow.clockwise"
+                )
+                .font(.subheadline.weight(.semibold))
+                .labelStyle(AccentGlyphActionLabelStyle())
+            }
+        }
+        .buttonStyle(.bordered)
+        .disabled(runner.gatewayRecheckRunning.contains(ref) || runner.isRunningAllTests)
     }
 
     // MARK: Test everything
@@ -219,24 +261,111 @@ struct DiagnosticsContent: View {
     private var summaryRow: some View {
         if runner.attentionCount > 0 {
             Label {
-                Text(runner.attentionCount == 1
-                    ? LocalizedStringResource("diagnostics.summary.attention.one", defaultValue: "1 item needs attention")
-                    : LocalizedStringResource("diagnostics.summary.attention.many", defaultValue: "\(runner.attentionCount) items need attention"))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppColors.textPrimary)
+                // The scoped stamp rides the AMBER branch too — this is the case it
+                // exists for. A user re-probing a broken gateway needs to know the
+                // red they are looking at is a second ago, not ten minutes ago.
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(runner.attentionCount == 1
+                        ? LocalizedStringResource("diagnostics.summary.attention.one", defaultValue: "1 item needs attention")
+                        : LocalizedStringResource("diagnostics.summary.attention.many", defaultValue: "\(runner.attentionCount) items need attention"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                    scopedCheckLine
+                }
             } icon: {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(AppColors.warning)
             }
         } else if runner.checksSettledGreen {
             Label {
-                Text(LocalizedStringResource("diagnostics.summary.passed", defaultValue: "Checks passed"))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppColors.textPrimary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(LocalizedStringResource("diagnostics.summary.passed", defaultValue: "Checks passed"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                    lastCheckedLine
+                }
             } icon: {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(AppColors.success)
             }
+        }
+    }
+
+    /// When the last sweep finished. A bare green "Checks passed" is a trust trap
+    /// — a pass from three days ago reads as current, and nothing on screen said
+    /// otherwise even though the runner had already recorded the time.
+    ///
+    /// Names the WHOLE RUN, not a single check: this stamp covers a full sweep
+    /// (gateways, file lanes, speech), so "connected" or "model list passed" would
+    /// be wrong. It is deliberately never restamped by a single-gateway re-probe —
+    /// that would claim freshness for every row nobody touched — so a scoped
+    /// re-probe adds its own line beneath instead.
+    @ViewBuilder
+    private var lastCheckedLine: some View {
+        if let lastChecked = runner.lastChecked {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(LocalizedStringResource(
+                    "diagnostics.summary.lastChecked",
+                    defaultValue: "Full check run \(lastChecked.formatted(.relative(presentation: .named)))"
+                ))
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+                scopedCheckLine
+            }
+        } else {
+            // Nothing has been probed yet this launch, so the green comes from
+            // local reads alone. Say so rather than implying a network check ran.
+            Text(LocalizedStringResource(
+                "diagnostics.summary.notCheckedYet",
+                defaultValue: "Setup looks right — tap Test everything to check the connection"
+            ))
+                .font(.caption2)
+                .foregroundStyle(AppColors.textTertiary)
+        }
+    }
+
+    /// "A real chat turn completed here" — the claim no check on this screen can
+    /// make, stated once per gateway.
+    ///
+    /// Absence is rendered NEUTRALLY, never as a failure: a gateway paired five
+    /// minutes ago has nothing recorded and nothing is wrong with it. The line
+    /// exists because the opposite reading is the trap — a green row above it
+    /// proves reachability and sign-in, and a user needs to know that is not the
+    /// same as a working conversation.
+    @ViewBuilder
+    private func chatProvenLine(for ref: RemoteAgentRef) -> some View {
+        if let at = runner.chatSuccesses[ref] {
+            Text(LocalizedStringResource(
+                "diagnostics.gateway.chatProven",
+                defaultValue: "Last reply received \(at.formatted(.relative(presentation: .named)))"
+            ))
+                .font(.caption2)
+                .foregroundStyle(AppColors.textTertiary)
+        } else {
+            Text(LocalizedStringResource(
+                "diagnostics.gateway.chatUnproven",
+                defaultValue: "No reply received on this device yet"
+            ))
+                .font(.caption2)
+                .foregroundStyle(AppColors.textTertiary)
+        }
+    }
+
+    /// A single-gateway re-probe's own stamp, sitting beneath the whole-run one.
+    /// Exists because the two claims are genuinely different sizes: the full-run
+    /// stamp must not move for one gateway, but a user who just tapped "Check
+    /// Again" needs to see that THAT probe ran. Names the gateway (view-only — a
+    /// user's gateway name never reaches the copied report).
+    @ViewBuilder
+    private var scopedCheckLine: some View {
+        if let scoped = runner.lastScopedGatewayCheck,
+           let entry = runner.gatewayDisplayOrder.first(where: { $0.ref == scoped.ref }) {
+            Text(LocalizedStringResource(
+                "diagnostics.summary.scopedCheck",
+                defaultValue: "\(entry.displayName) checked \(scoped.date.formatted(.relative(presentation: .named)))"
+            ))
+                .font(.caption2)
+                .foregroundStyle(AppColors.textTertiary)
         }
     }
 
@@ -250,7 +379,32 @@ struct DiagnosticsContent: View {
         Section {
             ForEach(runner.gatewayDisplayOrder) { entry in
                 if let check = runner.checks.first(where: { $0.id == entry.connectionCheckID }) {
-                    DiagnosticCheckRow(check: check, titleOverride: entry.displayName)
+                    // Row + its own re-probe, laid out like `fileServerSubRow`:
+                    // stacked under the status at accessibility text sizes so
+                    // neither the copy nor the button is crushed in the narrow
+                    // trailing slot.
+                    VStack(alignment: .leading, spacing: 6) {
+                        if dynamicTypeSize.isAccessibilitySize {
+                            DiagnosticCheckRow(check: check, titleOverride: entry.displayName)
+                            recheckButton(for: entry.ref)
+                                .padding(.leading, 30)
+                                .accessibilityLabel(Text(LocalizedStringResource(
+                                    "diagnostics.action.recheckGateway.a11y",
+                                    defaultValue: "Check the connection to \(entry.displayName) again")))
+                        } else {
+                            HStack(alignment: .top, spacing: 10) {
+                                DiagnosticCheckRow(check: check, titleOverride: entry.displayName)
+                                Spacer(minLength: 8)
+                                recheckButton(for: entry.ref)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .accessibilityLabel(Text(LocalizedStringResource(
+                                        "diagnostics.action.recheckGateway.a11y",
+                                        defaultValue: "Check the connection to \(entry.displayName) again")))
+                            }
+                        }
+                        chatProvenLine(for: entry.ref)
+                            .padding(.leading, 30)
+                    }
                 }
                 if let lane = runner.fileLanes.first(where: { $0.ref == entry.ref }) {
                     fileServerSubRow(lane)

@@ -171,7 +171,7 @@ enum CustomOpenAISTTProbe: STTProbe {
             // pin was never compared. Its own code — the probe must not report
             // a possible interception it has no evidence for.
             return .sttCustomCertKeyUnpinnable
-        case .timeout, .unreachable, .cancelled:
+        case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
             // No certificate verdict. A cold tunnel's generic
             // `.secureConnectionFailed` lands here (both signals are POSITIVE)
             // and keeps the probe's existing retryable outcome.

@@ -842,7 +842,7 @@ enum FileServerClient {
             case .untrustedCert: return .certUntrusted
             case .certMismatch: return .certMismatch
             case .certKeyUnpinnable: return .certKeyUnpinnable
-            case .timeout, .unreachable, .cancelled: return .unreachable
+            case .timeout, .unreachable, .notEstablished, .offline, .cancelled: return .unreachable
             }
         }
     }
@@ -1102,7 +1102,7 @@ enum FileServerClient {
             case .untrustedCert: self = .untrusted
             case .certMismatch: self = .mismatch
             case .certKeyUnpinnable: self = .keyUnpinnable
-            case .timeout, .unreachable, .cancelled: return nil
+            case .timeout, .unreachable, .notEstablished, .offline, .cancelled: return nil
             }
         }
 

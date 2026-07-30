@@ -524,7 +524,24 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchec
     /// `.cancelled`/-999) without ever setting `pinRejected`.
     enum TransportErrorClass: Equatable, Sendable {
         case timeout
+        /// The UNCERTAIN bucket: the attempt failed and the app cannot tell
+        /// whether the request reached the gateway. What lands here is a dropped
+        /// connection, a cold TLS handshake with no trust verdict, and anything
+        /// unrecognised — i.e. exactly the cases where a retry might repeat work
+        /// the gateway already did. The two situations the app CAN be definite
+        /// about were split out into `.notEstablished` and `.offline`.
         case unreachable
+        /// No connection was ever established — the name did not resolve, or the
+        /// host refused. Delivery is UNLIKELY, and the copy says "unlikely", not
+        /// "nothing was sent": without transport metrics the app cannot prove a
+        /// negative, and even metrics could not prove the far side didn't run it.
+        ///
+        /// Deliberately excludes `.resourceUnavailable`, which is ambiguous
+        /// enough that it stays in `.unreachable`.
+        case notEstablished
+        /// THIS DEVICE has no usable network. Split out so an aeroplane-mode
+        /// failure stops telling the user to go check a server that is fine.
+        case offline
         /// This device does not trust the presented certificate. TERMINAL —
         /// there is no trust-on-first-use affordance anywhere in the app; the
         /// remedy is a certificate the device would trust.
@@ -601,12 +618,23 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchec
         switch code {
         case .timedOut:
             return .timeout
+        case .notConnectedToInternet:
+            // The device itself has no route. Answered before the host-shaped
+            // codes below so a failure that is entirely local never gets
+            // reported as a problem with the user's server.
+            return .offline
         case .cannotConnectToHost,
-             .notConnectedToInternet,
-             .networkConnectionLost,
              .cannotFindHost,
-             .dnsLookupFailed,
+             .dnsLookupFailed:
+            // The connection never opened: DNS gave nothing, or the host
+            // actively refused. These are the only codes definite enough to
+            // tell the user a retry is unlikely to repeat gateway-side work.
+            return .notEstablished
+        case .networkConnectionLost,
              .resourceUnavailable:
+            // Stay UNCERTAIN. A dropped connection may have delivered the
+            // request first, and `.resourceUnavailable` is too vague to promise
+            // anything about delivery.
             return .unreachable
         case .serverCertificateUntrusted,
              .serverCertificateHasBadDate,

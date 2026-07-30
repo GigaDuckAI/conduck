@@ -724,7 +724,7 @@ final class BackgroundFileTransfer: NSObject {
         // Chain trusted, pin never compared — its own code so this lane never
         // borrows the mismatch warning for a certificate that is fine.
         case .certKeyUnpinnable: return .fileTransferCertKeyUnpinnable
-        case .timeout, .unreachable, .cancelled: return nil
+        case .timeout, .unreachable, .notEstablished, .offline, .cancelled: return nil
         }
     }
 

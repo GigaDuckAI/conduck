@@ -357,4 +357,85 @@ final class WatchConverseCompletionVerdictTests: XCTestCase {
             return XCTFail("A non-UUID conversationID must be a soft failure, got \(verdict)")
         }
     }
+
+    // MARK: - body-aware classification (ORDER is the contract)
+
+    /// An adapter-contract wire code must classify EXACTLY, and must OUTRANK the
+    /// status map. 400 is status-mapped, so if the map ran first this would come
+    /// back as a bare `.httpStatus(400)` — which is precisely the behaviour the
+    /// branch replaces: the wrist would name no cause while the phone named
+    /// "this gateway can't accept photos".
+    func testWireCodeBodyOutranksTheStatusMap() {
+        let body = Data(#"{"error":{"code":"image_unsupported","message":"no vision"}}"#.utf8)
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: 400, body: body,
+            transportError: nil, registryEntryPresent: true
+        )
+        guard case .failure(.classifiedBody(let classified), let conversationID) = verdict else {
+            return XCTFail("A frozen wire code must classify as classifiedBody, got \(verdict)")
+        }
+        XCTAssertEqual(classified.wireCode, .imageUnsupported)
+        XCTAssertEqual(classified.appError.errorCode, AppError.remoteAgentVisionUnsupported.errorCode,
+                       "the wrist must reach the SAME taxonomy code the phone lane reaches")
+        XCTAssertEqual(conversationID, cid)
+    }
+
+    /// Body classification also covers the heuristic (code-less) path — a gateway
+    /// that sends prose instead of a contract code still gets a named cause.
+    func testHeuristicBodyClassifiesWithoutAWireCode() {
+        let body = Data(#"{"error":{"message":"This model's maximum context length is 8192 tokens"}}"#.utf8)
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: 400, body: body,
+            transportError: nil, registryEntryPresent: true
+        )
+        guard case .failure(.classifiedBody(let classified), _) = verdict else {
+            return XCTFail("A heuristic-matched body must classify as classifiedBody, got \(verdict)")
+        }
+        XCTAssertNil(classified.wireCode, "no contract code was sent, so none may be claimed")
+        XCTAssertEqual(classified.appError.errorCode, AppError.remoteAgentContextTooLong.errorCode)
+    }
+
+    /// The fall-through must be INTACT: a non-2xx whose body says nothing
+    /// classifiable still reaches the status map, exactly as before. A body pass
+    /// that swallowed these would lose the 402/429-style terminal verdicts.
+    func testUnclassifiableBodyStillFallsToTheStatusMap() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: 500, body: Data(#"{"error":{"message":"boom"}}"#.utf8),
+            transportError: nil, registryEntryPresent: true
+        )
+        guard case .failure(.httpStatus(let status), _) = verdict else {
+            return XCTFail("An unclassifiable body must fall through to httpStatus, got \(verdict)")
+        }
+        XCTAssertEqual(status, 500)
+    }
+
+    /// No body at all (the completion delivered none) must not change the verdict
+    /// a status alone earns — the classifier is skipped, never fed empty bytes.
+    func testNilBodyStillFallsToTheStatusMap() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: 429, body: nil,
+            transportError: nil, registryEntryPresent: true
+        )
+        guard case .failure(.httpStatus(let status), _) = verdict else {
+            return XCTFail("A nil body must fall through to httpStatus, got \(verdict)")
+        }
+        XCTAssertEqual(status, 429)
+    }
+
+    /// A 2xx reply is untouched by the new branch: the classifier's own status gate
+    /// declines it, so the happy path still decodes. Guards against the body pass
+    /// hijacking a successful turn whose reply text happens to contain matching
+    /// prose.
+    func testSuccessfulReplyMentioningAnErrorPhraseStillDecodes() {
+        let verdict = WatchConverseCompletionVerdict.make(
+            metadata: metadata(), httpStatus: 200,
+            body: replyBody("your maximum context length is fine, and image_unsupported is not set"),
+            transportError: nil, registryEntryPresent: true
+        )
+        guard case .reply(let text, let conversationID, _) = verdict else {
+            return XCTFail("A 2xx reply must still decode as a reply, got \(verdict)")
+        }
+        XCTAssertTrue(text.contains("maximum context length"))
+        XCTAssertEqual(conversationID, cid)
+    }
 }

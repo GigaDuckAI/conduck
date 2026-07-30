@@ -430,6 +430,21 @@ actor RemoteAgentClient {
             return AppError.remoteAgentTimeout
         case .unreachable:
             return AppError.remoteAgentUnreachable
+        case .notEstablished:
+            return AppError.remoteAgentNotEstablished
+        case .offline:
+            // Reuses the existing generic offline case rather than minting a
+            // gateway-flavoured twin: its copy ("No internet. Conduck needs
+            // Wi-Fi or cellular to work.") is already exactly right, and it
+            // correctly stops implicating the user's server.
+            //
+            // Verified safe for this lane: `shouldPreserveForRetry` is false for
+            // code 3 (only `persistentNetworkFailure` and two STT cases are
+            // true), so nothing gets queued into `PendingRetryStore`; and no
+            // gateway send path reads `maxAttempts`, so its value of 3 cannot
+            // resurrect automatic retries here. The never-silent-retry invariant
+            // holds — retry stays a user tap.
+            return AppError.noInternetConnection
         case .untrustedCert:
             // This device rejected the chain. NOT a mismatch: no pin disagreed,
             // nothing changed, and there is no pin to remove — removing one

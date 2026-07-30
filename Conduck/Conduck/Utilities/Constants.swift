@@ -983,6 +983,19 @@ enum Constants {
         "remoteAgent.transportHint." + ref.storageKeySuffix
     }
 
+    /// Per-ref record of the last SUCCESSFUL chat round-trip from THIS device
+    /// (`GatewayChatSuccess`, JSON). Format
+    /// `remoteAgent.lastChatSuccess.<suffix>`.
+    ///
+    /// App-Group UserDefaults ONLY — never iCloud KVS, never the Watch broadcast
+    /// envelope, for a stronger reason than the transport hint's: the record's
+    /// entire meaning is "a turn completed FROM HERE". Syncing it would let a
+    /// success on the iPhone silence the wrist's or the Mac's real problem, and
+    /// would assert a route (cellular, tailnet-from-Watch) that was never proven.
+    static func remoteAgentLastChatSuccessKey(for ref: RemoteAgentRef) -> String {
+        "remoteAgent.lastChatSuccess." + ref.storageKeySuffix
+    }
+
     /// Tailscale's App Store product page — deep-linked by the pairing-import
     /// guidance when the imported transport hint is `tailscale` and the user
     /// still needs the Tailscale client on THIS device to reach their

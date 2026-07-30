@@ -1028,6 +1028,25 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             return WatchNetworkFailureCopy.certificateKeyUnpinnableMessage
         case .cancelledAcrossLaunch, .missingHTTPResponse:
             return String(localized: "Couldn't reach your personal AI. Try again.")
+        case .classifiedBody(let classified):
+            // Metadata only — the numeric code and the frozen wire code. The body
+            // that produced this is never logged (it is an agent reply / server
+            // error text).
+            WatchLog.error(.converse, "converse.bg.bodyClassified", [
+                "code": classified.appError.errorCode,
+                "wire": classified.wireCode?.rawValue ?? "none"
+            ])
+            // Same rendering contract as the status arm below: let
+            // `descriptionWithRecovery` append this code's OWN remedy and drop the
+            // generic "Try again." — these classifications are terminal for the
+            // turn as sent (an unsupported image, a model that does not exist, a
+            // history that does not fit), so inviting a bare retry would loop the
+            // wrist forever. Hostname-free: every arm returns fixed copy, which
+            // matters because this text mirrors to the paired iPhone's lock screen.
+            let body = classified.appError.descriptionWithRecovery
+            return body.isEmpty
+                ? String(localized: "Couldn't reach your personal AI. Try again.")
+                : body
         case .httpStatus(let status):
             WatchLog.error(.converse, "converse.bg.http", ["status": status])
             // A bare status is not a verdict. Rendering one line of connectivity

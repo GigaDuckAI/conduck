@@ -377,7 +377,11 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
             // delegate may classify after a relaunch, long after `priorTurns`
             // is gone): does this request carry historical image parts?
             requestHadHistoryImages: ConverseRequest.containsImageParts(priorTurns),
-            fileTransferLaneID: fileTransferSnapshot?.durableLaneID
+            fileTransferLaneID: fileTransferSnapshot?.durableLaneID,
+            // Dispatch-time fact for the SUCCESS record, by the same argument as
+            // the line above: the delegate may land this reply after a relaunch,
+            // and by then the live config may be a different gateway entirely.
+            dispatchChatSignature: await SettingsManager.shared.gatewayChatSuccessSignature(for: ref)
         )
         let metadataString: String
         do {
@@ -720,7 +724,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         // passed and the pin was never compared, so neither a
                         // server fix nor an interception warning applies.
                         case .certKeyUnpinnable: certError = .remoteAgentCertKeyUnpinnable
-                        case .timeout, .unreachable, .cancelled: certError = nil
+                        case .timeout, .unreachable, .notEstablished, .offline, .cancelled: certError = nil
                         }
                         if let certError {
                             resolve(.failure(certError))
@@ -877,6 +881,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                     userMessageID: userMessageID,
                     stampsActiveConversation: metadata?.stampsActiveConversation ?? false,
                     fileTransferLaneID: metadata?.fileTransferLaneID,
+                    dispatchChatSignature: metadata?.dispatchChatSignature,
                     didPersist: {
                         resolve(.success(reply))
                     }
@@ -902,11 +907,17 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         switch error.code {
         case .timedOut:
             return .remoteAgentTimeout
+        // Kept in lockstep with `RemoteAgentTrustEvaluator.classifyTransportError`'s
+        // arms of the same names — this duplicate exists because a background
+        // session's completion callback cannot read the evaluator's per-challenge
+        // signals, not because the transport taxonomy differs. Change both.
+        case .notConnectedToInternet:
+            return .noInternetConnection
         case .cannotConnectToHost,
-             .notConnectedToInternet,
-             .networkConnectionLost,
              .cannotFindHost,
-             .dnsLookupFailed,
+             .dnsLookupFailed:
+            return .remoteAgentNotEstablished
+        case .networkConnectionLost,
              .resourceUnavailable:
             return .remoteAgentUnreachable
         case .serverCertificateUntrusted,
@@ -956,6 +967,10 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         userMessageID: UUID?,
         stampsActiveConversation: Bool,
         fileTransferLaneID: String? = nil,
+        /// Gateway config signature captured at DISPATCH (from the task
+        /// metadata). nil = unknown / pre-upgrade blob → no success recorded,
+        /// which is the fail-closed direction.
+        dispatchChatSignature: String? = nil,
         didPersist: (() -> Void)? = nil
     ) async -> Bool {
         let agentMessageID = UUID()
@@ -1019,6 +1034,18 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         let refRawString = (try? await ConversationStore.shared
             .fetchConversation(id: conversationID))?.backend ?? backendRawValue
         let ref = refRawString.flatMap(RemoteAgentRef.init(rawString:))
+
+        // "Chat works from this device, under this config." Written only now —
+        // the reply is decoded AND durably persisted, so the claim can never
+        // outlive the turn backing it. The signature is the DISPATCH-time one
+        // carried in the task metadata (this reply may be landing after a
+        // relaunch); the setter drops it if the live config has since moved.
+        if let ref, let dispatchChatSignature {
+            await SettingsManager.shared.recordGatewayChatSuccess(
+                for: ref,
+                dispatchSignature: dispatchChatSignature
+            )
+        }
 
         // User-visible completion is released immediately after durable landing.
         // Output probes are optional recovery work and must never delay the

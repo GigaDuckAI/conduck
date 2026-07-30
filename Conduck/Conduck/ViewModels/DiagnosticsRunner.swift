@@ -66,6 +66,38 @@ import Speech
 #endif
 
 /// Voice-preview playback state for the "Speak a sample" affordance.
+/// One failed send, reduced to report-safe tokens. Every field is a closed
+/// vocabulary by the time it reaches this type, which is what makes the copy
+/// block's allowlist enforceable BY CONSTRUCTION rather than by review: there is
+/// no raw URL, UUID, host, token or server text anywhere in it to leak.
+struct FailedSendFact: Equatable, Sendable {
+    /// A locked builtin raw value (`openclaw`), or the anonymous
+    /// `custom-gateway#N` ordinal — never `custom_<uuid>`. `custom-gateway#?`
+    /// when the bound gateway is gone (no ordinal exists to name it).
+    let backendToken: String
+    /// `AppError.errorCode`, or nil on a legacy row that recorded none.
+    let code: Int?
+    /// A FROZEN `AdapterWireCode` raw value, or `none`/`other`. The wire string
+    /// arrives from the server, so an unrecognised one collapses to `other`
+    /// rather than being echoed.
+    let wireToken: String
+    /// Base device only (`phone`/`watch`/`mac`/`carplay`) — the `-text`/`-voice`
+    /// modality suffix is dropped.
+    let deviceToken: String
+    /// TURN-CREATION time. There is no `failedAt` on the record, so this is the
+    /// age of the turn, not of the failure — the emitted label must not imply
+    /// otherwise.
+    let createdAt: Date
+}
+
+/// One scoped gateway re-probe: which gateway, and when. Carries no outcome —
+/// the gateway's own `checks` row already holds that, and duplicating it here is
+/// how the row and the stamp would drift.
+struct ScopedGatewayCheck: Equatable, Sendable {
+    let ref: RemoteAgentRef
+    let date: Date
+}
+
 enum DiagnosticVoicePreviewState: Equatable {
     case idle
     case preparing
@@ -192,6 +224,20 @@ final class DiagnosticsRunner {
     /// disables while its ref is in the set.
     private(set) var fileTransferTestRunning: Set<RemoteAgentRef> = []
 
+    /// Refs whose SCOPED gateway re-probe is in flight — the per-gateway "Check
+    /// again" action. Free and non-mutating (the same `/v1/models`-class probe the
+    /// sweep runs), so unlike the file/transcription tests it needs no cost
+    /// warning; it is tracked per ref for the same reason: one gateway's button
+    /// disables without freezing the others.
+    private(set) var gatewayRecheckRunning: Set<RemoteAgentRef> = []
+
+    /// The most recent scoped gateway re-probe (ref + when). Transient and
+    /// deliberately NOT persisted: it exists so a user who rechecks one gateway
+    /// sees that THAT probe just ran, without the full-sweep stamp lying about
+    /// rows nobody touched. Cleared on every rebuild — a config change makes it
+    /// meaningless.
+    private(set) var lastScopedGatewayCheck: ScopedGatewayCheck?
+
     /// The staged write-test result PER GATEWAY (reuses the file-server engine
     /// type) — drives that lane's `FileTransferStageChecklist`.
     private(set) var fileTransferResults: [RemoteAgentRef: FileTransferTestResult] = [:]
@@ -217,7 +263,8 @@ final class DiagnosticsRunner {
     /// only, NOT this, so two DIFFERENT per-row tests can still run concurrently.)
     var isBusy: Bool {
         isRunningAllTests || isTestingConnections || isTranscribing
-            || !fileTransferTestRunning.isEmpty || isCheckingWatch
+            || !fileTransferTestRunning.isEmpty || !gatewayRecheckRunning.isEmpty
+            || isCheckingWatch
             || permissionRequestInFlight != nil
             || voicePreview == .preparing || voicePreview == .playing
     }
@@ -395,6 +442,23 @@ final class DiagnosticsRunner {
     /// signature / relative age) — never text, keys, URLs, or voice names.
     private var factTTSOutcomes: [TTSOutcomeEvent] = []
 
+    /// Recent FAILED chat turns, already reduced to report-safe tokens at capture
+    /// time (the raw `custom_<uuid>` and the raw wire string stop at the
+    /// redaction boundary and never reach a stored field). Fixes the report's
+    /// worst property: `copyBlock()` iterates probe results only, so it could read
+    /// all-green while every real send was failing.
+    private var factFailedSends: [FailedSendFact] = []
+
+    /// Per-gateway "a real chat turn completed from THIS device under the CURRENT
+    /// config" — the one claim no probe can make. Read through the accessor that
+    /// compares config signatures, so a gateway edited since its last success
+    /// correctly reads as unproven rather than carrying a stale green.
+    private(set) var chatSuccesses: [RemoteAgentRef: Date] = [:]
+
+    /// Report-safe form of `chatSuccesses`: anonymized gateway token + bucketed
+    /// age, in the gateway rows' display order.
+    private var factChatSuccesses: [(token: String, at: Date)] = []
+
     /// Watch health transport — production defaults to the platform impl;
     /// ConduckTests inject a fake to drive the round trip deterministically.
     private let watchHealthTransport: any WatchHealthTransport
@@ -542,6 +606,36 @@ final class DiagnosticsRunner {
         let shareTargetsHealthy = Self.shareTargetsSnapshotHealthy(hasGateways: !refs.isEmpty)
         let pendingRetry = await PendingRetryStore.shared.diagnosticSnapshot()
         let storageFreeBytes = Self.appGroupFreeBytes()
+        // Recent FAILED sends — the same singleton-diagnostic-accessor idiom as
+        // the two reads above, and deliberately on THIS tier: a local Core Data
+        // read, no egress, no billing, so it refreshes on every rebuild and is
+        // idempotent by construction. Over-fetched then deduped, because a run of
+        // identical retries against one gateway would otherwise crowd out a second
+        // gateway that is also failing.
+        let failedSends = Self.redactFailedSends(
+            await ConversationStore.shared.recentFailedTurnSummaries(limit: 20),
+            customOrdinals: customOrdinals
+        )
+        // Per-ref chat-success records. The accessor itself drops a record whose
+        // config signature no longer matches, so an edited gateway reads as
+        // unproven here without this loop knowing the invalidation rules.
+        var newChatSuccesses: [RemoteAgentRef: Date] = [:]
+        for ref in refs {
+            if let success = await manager.getGatewayChatSuccess(for: ref) {
+                newChatSuccesses[ref] = success.at
+            }
+        }
+        // Report form: the anonymous ordinal, never a user's gateway name.
+        let chatSuccessFacts: [(token: String, at: Date)] = refs.compactMap { ref in
+            guard let at = newChatSuccesses[ref] else { return nil }
+            let token: String = {
+                switch ref {
+                case .builtin(let backend): return backend.rawValue
+                case .custom: return "custom-gateway#\(customOrdinals[ref] ?? 0)"
+                }
+            }()
+            return (token: token, at: at)
+        }
 
         // --- Per-gateway file lanes (the founder's ask: file server is PER
         // gateway) — one lane per FILE-CAPABLE gateway (`openrouter` excluded via
@@ -824,6 +918,9 @@ final class DiagnosticsRunner {
         factSyncErrorCount = syncErrorCount
         // Device-local forensic ring (@MainActor, local read — no outbound).
         factTTSOutcomes = TTSOutcomeLog.shared.events()
+        factFailedSends = failedSends
+        chatSuccesses = newChatSuccesses
+        factChatSuccesses = chatSuccessFacts
         factMicPermission = micName
         factSpeechPermission = speechName
         factSpeechApplicable = speechApplicable
@@ -1183,6 +1280,18 @@ final class DiagnosticsRunner {
         // Prune write-test drill-downs for gateways that no longer have a lane.
         fileTransferResults = fileTransferResults.filter { newFileLaneSignatures[$0.key] != nil }
 
+        // Retire the scoped-recheck stamp in LOCKSTEP with the gateway row it
+        // describes: the row carries its probe result forward while its signature
+        // is unchanged, so clearing the stamp on every rebuild (foreground, appear,
+        // a remote settings post) would leave a green row above a vanished
+        // "checked just now". Both drop together when the gateway's config moves or
+        // the gateway goes away.
+        if let stamped = lastScopedGatewayCheck,
+           newGatewaySignatures[stamped.ref] == nil
+               || newGatewaySignatures[stamped.ref] != gatewaySignatures[stamped.ref] {
+            lastScopedGatewayCheck = nil
+        }
+
         // --- Commit (disable the row-insert animation on a structural change) ---
         fileLanes = newFileLanes
         gatewayDisplayOrder = newGatewayDisplayOrder
@@ -1460,25 +1569,8 @@ final class DiagnosticsRunner {
         // a locality BOOL (never the host string) that gates the Local-Network hint.
         var gatewayInputs: [GatewayProbeInput] = []
         for ref in refs {
-            guard let snapshot = await manager.remoteAgentSnapshot(for: ref) else { continue }
-            let carrierBackend: RemoteAgentBackend = {
-                if case .builtin(let backend) = ref { return backend }
-                return .openclaw
-            }()
-            let descriptor = RemoteAgentBackendRegistry.lookup(id: carrierBackend)
-            let transportHint = await manager.getRemoteAgentTransportHint(for: ref)
-            let hostClass = HostReachabilityClass.classify(snapshot.url.host, transportHint: transportHint)
-            gatewayInputs.append(GatewayProbeInput(
-                checkID: Self.connectionCheckID(for: ref),
-                backend: carrierBackend,
-                url: snapshot.url,
-                token: snapshot.token ?? "",
-                authScheme: snapshot.authScheme,
-                fingerprint: snapshot.certFingerprintHex,
-                probePath: descriptor.verdictProbePath,
-                bodyShape: descriptor.verdictBodyShape,
-                isLocalHost: hostClass.suggestsLocalNetworkPermission
-            ))
+            guard let input = await Self.makeGatewayProbeInput(for: ref, manager: manager) else { continue }
+            gatewayInputs.append(input)
         }
 
         // Per-gateway file-server reach+auth probe inputs — one per CONFIGURED
@@ -1573,11 +1665,116 @@ final class DiagnosticsRunner {
         }
         lastChecked = Date()
         connectionChecksHaveRun = true
+        // A full sweep re-probed every gateway, so the single-gateway stamp is
+        // now redundant noise beside a fresher whole-run stamp.
+        lastScopedGatewayCheck = nil
 
         // Re-probe network + iCloud on the explicit tap so a recovered network /
         // fixed iCloud sign-in reflects without a relaunch. Coalesces via the
         // `connectivityProbeInFlight` latch if the initial phase-2 is still landing.
         await reprobeConnectivity()
+    }
+
+    /// Build ONE gateway's probe input from live local reads. The SINGLE
+    /// construction site, shared by the sweep and by `recheckGateway(for:)` —
+    /// `Why:` the two paths must not drift on `probePath` / `bodyShape` (the pair
+    /// that decides which envelope a 2xx body is validated against) or on the
+    /// locality bool that gates the Local-Network hint. Nil when the ref has no
+    /// snapshot (removed, or not send-able on this device).
+    ///
+    /// The url/token/fingerprint flow ONLY onto the probe request — never into a
+    /// check detail or the copy block.
+    private static func makeGatewayProbeInput(
+        for ref: RemoteAgentRef,
+        manager: SettingsManager
+    ) async -> GatewayProbeInput? {
+        guard let snapshot = await manager.remoteAgentSnapshot(for: ref) else { return nil }
+        let carrierBackend: RemoteAgentBackend = {
+            if case .builtin(let backend) = ref { return backend }
+            return .openclaw
+        }()
+        let descriptor = RemoteAgentBackendRegistry.lookup(id: carrierBackend)
+        let transportHint = await manager.getRemoteAgentTransportHint(for: ref)
+        let hostClass = HostReachabilityClass.classify(snapshot.url.host, transportHint: transportHint)
+        return GatewayProbeInput(
+            checkID: Self.connectionCheckID(for: ref),
+            backend: carrierBackend,
+            url: snapshot.url,
+            token: snapshot.token ?? "",
+            authScheme: snapshot.authScheme,
+            fingerprint: snapshot.certFingerprintHex,
+            probePath: descriptor.verdictProbePath,
+            bodyShape: descriptor.verdictBodyShape,
+            isLocalHost: hostClass.suggestsLocalNetworkPermission
+        )
+    }
+
+    /// Re-probe ONE gateway. The action a Troubleshoot-landed user actually needs:
+    /// `runAllTests()` is the only other route forward, and it writes a probe file
+    /// into EVERY configured file lane and runs a BILLABLE transcription —
+    /// diagnosing one broken gateway must do neither.
+    ///
+    /// Scoped by construction: no file-lane write, no transcription, no
+    /// connectivity re-probe, and it does NOT restamp `lastChecked` — that stamp
+    /// means "the whole sweep ran", so restamping it here would claim freshness
+    /// for rows nobody re-probed. The scoped result gets its own transient stamp
+    /// (`lastScopedGatewayCheck`) instead.
+    func recheckGateway(for ref: RemoteAgentRef) async {
+        // Same reason `runFileTransferTest` refuses during the sweep: the sweep is
+        // writing this row too, so last-writer-wins could show the stale result
+        // over the fresh one. `isTestingConnections` is true ONLY inside the sweep.
+        guard !isTestingConnections else { return }
+        // Non-re-entrant PER REF — a second tap on the same gateway while its probe
+        // is in flight is a no-op; a different gateway can probe concurrently.
+        guard !gatewayRecheckRunning.contains(ref) else { return }
+        gatewayRecheckRunning.insert(ref)
+        defer { gatewayRecheckRunning.remove(ref) }
+
+        let manager = SettingsManager.shared
+        guard let input = await Self.makeGatewayProbeInput(for: ref, manager: manager),
+              let dispatchSignature = await Self.liveGatewaySignature(for: ref, manager: manager)
+        else { return }
+
+        setStatus(input.checkID, .running)
+        let outcome = await Self.probeGateway(input)
+
+        // Drop the outcome if the gateway's config moved while the probe ran.
+        // Compared against the LIVE persisted config rather than the runner's
+        // rebuild state: the runner's `gatewaySignatures` only moves when a
+        // rebuild happens, so an edit in another window (or an inbound KVS
+        // update) could leave it stale and let the OLD credentials' verdict green
+        // the NEW config. A false green is not harmless just because this path
+        // persists nothing — it is the whole answer the user acts on.
+        guard let liveSignature = await Self.liveGatewaySignature(for: ref, manager: manager),
+              liveSignature == dispatchSignature
+        else {
+            setStatus(input.checkID, .notRun, detail: nil)
+            return
+        }
+
+        var detail = outcome.detail
+        let networkPassed = checks.first(where: { $0.id == "connection.network" })?.status == .passed
+        if case .failed = outcome.status, input.isLocalHost, networkPassed {
+            detail = Self.appendLocalNetworkHint(detail)
+        }
+        setStatus(outcome.checkID, outcome.status, detail: detail)
+        lastScopedGatewayCheck = ScopedGatewayCheck(ref: ref, date: Date())
+    }
+
+    /// The live per-ref gateway signature, read fresh from persisted config.
+    /// `Hasher` is fine here (dispatch and apply happen in ONE process, one run);
+    /// it would NOT be fine for anything durable across launches.
+    private static func liveGatewaySignature(
+        for ref: RemoteAgentRef,
+        manager: SettingsManager
+    ) async -> String? {
+        guard let snap = await manager.remoteAgentSnapshot(for: ref) else { return nil }
+        return Self.gatewaySignature(
+            url: snap.url,
+            token: snap.token,
+            authScheme: snap.authScheme,
+            fingerprint: snap.certFingerprintHex
+        )
     }
 
     /// Update one file lane's reach/auth field (+ detail). Setting `detail: nil`
@@ -2075,6 +2272,39 @@ final class DiagnosticsRunner {
             }
         }
 
+        // Proven chat, per gateway. The counterweight to every probe line above:
+        // those say "reachable and signed in", this says "a turn actually
+        // completed from this device". Absence is NEUTRAL, never a failure — a
+        // fresh pairing has nothing here and nothing is wrong.
+        if factChatSuccesses.isEmpty {
+            lines.append("Chat proven: none on this device")
+        } else {
+            let now = Date()
+            let proven = factChatSuccesses.map { "\($0.token) \(Self.relativeAge(now.timeIntervalSince($0.at)))" }
+            lines.append("Chat proven: \(proven.joined(separator: ", "))")
+        }
+
+        // Recent FAILED sends — the one section that reports what actually
+        // happened on the wire rather than what a probe thinks. Without it a
+        // report can read entirely green while chat has never once worked, which
+        // is precisely the report that gets pasted into a help request.
+        //
+        // Labelled "Recent failed sends", NEVER "current failures": these rows
+        // persist, so a fixed problem stays listed and must not be read as
+        // evidence about the configuration in force right now. `age` is the age of
+        // the TURN (no `failedAt` is recorded), which is why the label says turn.
+        if factFailedSends.isEmpty {
+            lines.append("Recent failed sends: none")
+        } else {
+            lines.append("Recent failed sends: \(factFailedSends.count) distinct")
+            let now = Date()
+            for fact in factFailedSends {
+                let code = fact.code.map { "\($0) (\(DiagnosticsExplainer.slug(forCode: $0)))" } ?? "none"
+                let age = Self.relativeAge(now.timeIntervalSince(fact.createdAt))
+                lines.append("send-failure: \(fact.backendToken) code=\(code) wire=\(fact.wireToken) device=\(fact.deviceToken) turn-age=\(age)")
+            }
+        }
+
         lines.append("--")
         for check in checks {
             var marker: String
@@ -2179,6 +2409,69 @@ final class DiagnosticsRunner {
     /// block's `custom-gateway#N` tag + `file[custom-gateway#N]` line use, so the
     /// on-screen "Custom gateway N" fallback (shown when a custom's roster name is
     /// missing/empty) and the pasted report never disagree for a given ref.
+    /// Reduce persisted failed turns to report-safe facts: dedupe, then take the
+    /// newest few.
+    ///
+    /// **Dedupe is not cosmetic.** A single broken gateway produces a run of
+    /// identical failures in one conversation, so an undeduped "newest 5" is five
+    /// copies of one fact — and the report then hides the OTHER gateway that is
+    /// also failing, which is the case the section exists to expose. Collapsed on
+    /// (gateway, code, wire, device): same gateway failing the same way from the
+    /// same surface is ONE finding, however many times the user retried.
+    ///
+    /// Redaction happens HERE, at the boundary, not at emit time — so no raw
+    /// `custom_<uuid>` or server-supplied wire string is ever held in runner state
+    /// to be leaked by a later formatting change.
+    static func redactFailedSends(
+        _ summaries: [ConversationStore.FailedTurnSummary],
+        customOrdinals: [RemoteAgentRef: Int],
+        keeping: Int = 5
+    ) -> [FailedSendFact] {
+        var seen: Set<String> = []
+        var out: [FailedSendFact] = []
+        for summary in summaries.sorted(by: { $0.createdAt > $1.createdAt }) {
+            let backendToken: String = {
+                guard let raw = summary.backend,
+                      let ref = RemoteAgentRef(rawString: raw) else { return "unknown" }
+                switch ref {
+                case .builtin(let backend):
+                    // Locked raw values (`openclaw`/`hermes`/`openrouter`) — a
+                    // closed vocabulary, safe to name.
+                    return backend.rawValue
+                case .custom:
+                    // The ONE canonical ordinal, so a report line and the
+                    // on-screen "Custom gateway N" always agree. A gateway the
+                    // user has since deleted has no ordinal — say so rather than
+                    // inventing one, and never fall back to the UUID.
+                    guard let ordinal = customOrdinals[ref] else { return "custom-gateway#?" }
+                    return "custom-gateway#\(ordinal)"
+                }
+            }()
+            let wireToken: String = {
+                guard let raw = summary.failureWireCode else { return "none" }
+                // Validated through the frozen vocabulary: an unrecognised code is
+                // arbitrary server text, so it collapses rather than echoing.
+                return AdapterWireCode(rawValue: raw)?.rawValue ?? "other"
+            }()
+            let deviceToken: String = {
+                guard let raw = summary.sourceDevice, !raw.isEmpty else { return "unknown" }
+                return MessageRowFormatters.baseDevice(from: raw)
+            }()
+            let key = "\(backendToken)|\(summary.failureCode.map(String.init) ?? "-")|\(wireToken)|\(deviceToken)"
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            out.append(FailedSendFact(
+                backendToken: backendToken,
+                code: summary.failureCode,
+                wireToken: wireToken,
+                deviceToken: deviceToken,
+                createdAt: summary.createdAt
+            ))
+            if out.count == keeping { break }
+        }
+        return out
+    }
+
     static func customOrdinals(_ refs: [RemoteAgentRef]) -> [RemoteAgentRef: Int] {
         var map: [RemoteAgentRef: Int] = [:]
         var n = 0
@@ -2387,7 +2680,22 @@ final class DiagnosticsRunner {
             )
             switch outcome {
             case .ok:
-                return ProbeOutcome(checkID: input.checkID, status: .passed, detail: nil)
+                // Green, but SCOPED green — and the scope is the whole point. This
+                // probe asks the gateway for its model list; it never sends a turn.
+                // A user reading a bare green row concludes "chat works", then hits
+                // a wrong model / model-required / vision-unsupported failure on
+                // their first real message with nothing on this screen having
+                // hinted at it. Same honesty shape as the file lane's reach probe,
+                // which likewise refuses to let a cheap check speak for the
+                // expensive one it cannot perform.
+                return ProbeOutcome(
+                    checkID: input.checkID,
+                    status: .passed,
+                    detail: String(
+                        localized: "diagnostics.gateway.reach.ok",
+                        defaultValue: "Reachable and signed in. This checks the model list — sending a message is the only thing that proves chat works."
+                    )
+                )
             case .okNoModels:
                 // The route is real and speaks the protocol — but a gateway
                 // advertising zero models cannot answer a turn, so this is a

@@ -133,11 +133,38 @@ final class RemoteAgentFingerprintTests: XCTestCase {
                        "Timeout is a timeout regardless of pin/trust signals.")
     }
 
-    func testClassifyUnreachableFamily() {
-        for code in [URLError.Code.cannotConnectToHost, .notConnectedToInternet,
-                     .networkConnectionLost, .cannotFindHost, .dnsLookupFailed, .resourceUnavailable] {
-            XCTAssertEqual(classify(code), .unreachable, "\(code) must be unreachable")
+    func testClassifyUnreachableFamilyStaysUncertain() {
+        // What remains in `.unreachable` after the delivery-certainty split is
+        // exactly the set where the app CANNOT tell whether the request reached
+        // the gateway — a dropped connection may have delivered it first, and
+        // `.resourceUnavailable` is too vague to promise anything either way.
+        // That matters because these gateways run tools: the copy for this class
+        // has to warn that a retry may repeat work.
+        for code in [URLError.Code.networkConnectionLost, .resourceUnavailable] {
+            XCTAssertEqual(classify(code), .unreachable, "\(code) must stay uncertain")
         }
+    }
+
+    func testClassifyConnectionNeverEstablished() {
+        // The name did not resolve, or the host refused: no connection opened, so
+        // delivery is unlikely and the copy may say so.
+        for code in [URLError.Code.cannotConnectToHost, .cannotFindHost, .dnsLookupFailed] {
+            XCTAssertEqual(classify(code), .notEstablished, "\(code) must classify as notEstablished")
+        }
+    }
+
+    func testClassifyDeviceOfflineIsNotTheServersFault() {
+        // Aeroplane mode used to be reported as "could not reach your gateway",
+        // which sent the user to check a server that was perfectly fine.
+        XCTAssertEqual(classify(.notConnectedToInternet), .offline,
+                       "a device with no route must classify as offline, not as a gateway problem")
+    }
+
+    func testUnknownTransportCodesStayUncertainRatherThanClaimingNonDelivery() {
+        // Fail SAFE, not confident: an unrecognised code must never inherit the
+        // "unlikely to have reached it" promise, because we have no evidence for it.
+        XCTAssertEqual(classify(.badServerResponse), .unreachable,
+                       "an unrecognised transport code must default to the uncertain class")
     }
 
     func testClassifySpecificCertCodesResolveToUntrustedWithoutASignal() {

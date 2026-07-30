@@ -116,6 +116,13 @@ final class AppErrorCodeContractTests: XCTestCase {
         ("sttCustomCertKeyUnpinnable",    .sttCustomCertKeyUnpinnable,       68),
         ("ttsCustomCertKeyUnpinnable",    .ttsCustomCertKeyUnpinnable,       69),
         ("fileTransferCertKeyUnpinnable", .fileTransferCertKeyUnpinnable,    70),
+        // Gateway failure forensics. 71 carries a status on the way OUT but
+        // reconstructs without one (a bare code cannot restore a second integer,
+        // and the relay `message` is untrusted) — so the round-trip test below
+        // treats it like the other lossy-associated-value cases.
+        ("remoteAgentUnexpectedStatus",   .remoteAgentUnexpectedStatus(status: 503), 71),
+        ("remoteAgentServiceUnavailable", .remoteAgentServiceUnavailable,    72),
+        ("remoteAgentNotEstablished",     .remoteAgentNotEstablished,        73),
         ("unknown",                       .unknown(NSError(domain: "test", code: 0)), 99),
     ]
 
@@ -195,17 +202,17 @@ final class AppErrorCodeContractTests: XCTestCase {
         // is added to AppError without a row in `forwardTable`, this count
         // diverges and forces a test update. (Computed independently of the
         // table to avoid the table validating itself.)
-        let expectedDistinctCodes = Set((1...70).filter { $0 != 27 }).union([99])
-        XCTAssertEqual(expectedDistinctCodes.count, 70,
-                       "Sanity: 1...70 minus the 27 gap plus 99 = 70 distinct codes.")
+        let expectedDistinctCodes = Set((1...73).filter { $0 != 27 }).union([99])
+        XCTAssertEqual(expectedDistinctCodes.count, 73,
+                       "Sanity: 1...73 minus the 27 gap plus 99 = 73 distinct codes.")
 
         let tableCodes = Self.forwardTable.map(\.code)
         XCTAssertEqual(Set(tableCodes).count, tableCodes.count,
                        "Forward table must have no duplicate codes (each case owns a unique slot).")
         XCTAssertEqual(Set(tableCodes), expectedDistinctCodes,
-                       "Forward table must cover EXACTLY the codes the getter emits (1...70 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
-        XCTAssertEqual(Self.forwardTable.count, 70,
-                       "Forward table must enumerate all 70 emittable codes — a new AppError case without a row here is a wire-contract gap.")
+                       "Forward table must cover EXACTLY the codes the getter emits (1...73 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
+        XCTAssertEqual(Self.forwardTable.count, 73,
+                       "Forward table must enumerate all 73 emittable codes — a new AppError case without a row here is a wire-contract gap.")
     }
 
     // MARK: - Locked isRetryable flags (load-bearing)

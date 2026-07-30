@@ -413,7 +413,7 @@ actor STTClient {
                     // the key type is the problem rather than warned about an
                     // interception that nothing here is evidence of.
                     throw AppError.sttCustomCertKeyUnpinnable
-                case .timeout, .unreachable, .cancelled:
+                case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
                     // No certificate verdict — the classifier's transport
                     // classes carry no per-lane copy, so fall through to the
                     // code mapping that already owns the STT taxonomy. A cold
