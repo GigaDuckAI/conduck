@@ -2069,6 +2069,12 @@ actor SettingsManager {
         iCloudStore.removeObject(forKey: key)
         // Transport hint is App-Group only (never KVS) — single-store removal.
         defaults.removeObject(forKey: Constants.remoteAgentTransportHintKey(for: ref))
+        // Same staleness argument, one step stronger: a reused ref pointed at a
+        // DIFFERENT server must never inherit a "chat worked here" record the
+        // forgotten gateway earned. The signature guard would already reject it,
+        // but leaving it behind means a reconfigured gateway that happens to
+        // reproduce the old signature would resurrect a foreign success.
+        defaults.removeObject(forKey: Constants.remoteAgentLastChatSuccessKey(for: ref))
         postSettingsDidChangeRemotely()
     }
 
@@ -2213,6 +2219,92 @@ actor SettingsManager {
     func getRemoteAgentTransportHint(for ref: RemoteAgentRef) -> String? {
         let raw = defaults.string(forKey: Constants.remoteAgentTransportHintKey(for: ref))
         return (raw?.isEmpty == false) ? raw : nil
+    }
+
+    /// Read the last recorded successful chat round-trip for a ref, **only if it
+    /// still describes the CURRENT configuration**. A caller can therefore never
+    /// accidentally trust a success the present config never earned: the
+    /// signature comparison is inside the accessor, not left to each reader.
+    ///
+    /// Nil means "nothing proven from this device under this config" — which is a
+    /// legitimate, neutral state (a fresh pairing, a just-edited gateway), never a
+    /// failure. Renderers must say so neutrally.
+    func getGatewayChatSuccess(for ref: RemoteAgentRef) -> GatewayChatSuccess? {
+        guard let data = defaults.data(forKey: Constants.remoteAgentLastChatSuccessKey(for: ref)),
+              let record = try? JSONDecoder().decode(GatewayChatSuccess.self, from: data),
+              let expected = gatewayChatSuccessSignature(for: ref),
+              record.signature == expected
+        else { return nil }
+        return record
+    }
+
+    /// Record a successful chat round-trip. `dispatchSignature` is the signature
+    /// captured when the request was SENT — never recomputed here.
+    ///
+    /// `Why:` a turn can take minutes, and the user can edit the gateway while it
+    /// is in flight. Recomputing at landing time would credit the NEW
+    /// configuration with a success the OLD one earned, which is precisely the
+    /// false claim this whole record exists to avoid. A dispatch signature that no
+    /// longer matches the live config is DROPPED rather than stored.
+    func recordGatewayChatSuccess(for ref: RemoteAgentRef, dispatchSignature: String, at date: Date = Date()) {
+        guard let live = gatewayChatSuccessSignature(for: ref), live == dispatchSignature else { return }
+        let record = GatewayChatSuccess(signature: dispatchSignature, at: date)
+        guard let data = try? JSONEncoder().encode(record) else { return }
+        defaults.set(data, forKey: Constants.remoteAgentLastChatSuccessKey(for: ref))
+    }
+
+    /// The signature of the configuration a request is ACTUALLY being dispatched
+    /// under — built from the values the caller already captured and is about to
+    /// send with, never re-read from storage.
+    ///
+    /// `Why:` a dispatch site captures its gateway snapshot, then does real work
+    /// before the request leaves (assemble history, encode the body, write it to
+    /// disk, mint a pinned session). Re-reading settings at the END of that
+    /// stretch means an edit landing inside it produces a signature describing
+    /// the NEW configuration while the request on the wire carries the OLD one —
+    /// so the old gateway's success would be stored as proof the new one works.
+    /// That is the exact false claim this record exists to prevent, arriving
+    /// through the back door.
+    ///
+    /// The pin is still read live: unlike URL / scheme / model, it is resolved by
+    /// the transport at challenge time (the background delegate re-resolves it
+    /// per task after a relaunch), so the live value IS the one that will be
+    /// enforced — and it is what the reader compares against.
+    func gatewayChatSuccessSignature(
+        for ref: RemoteAgentRef,
+        url: URL,
+        authScheme: RemoteAgentAuthScheme,
+        model: String?
+    ) -> String {
+        GatewayChatSuccess.signature(
+            url: url,
+            authScheme: authScheme,
+            model: model,
+            pinnedFingerprintHex: getRemoteAgentCertFingerprint(for: ref),
+            kind: ref.rawString
+        )
+    }
+
+    /// The signature of a ref's CURRENT stored configuration, or nil when the ref
+    /// isn't configured here. Shared by the reader, the writer and every dispatch
+    /// site, so all three agree on what counts as "the same configuration".
+    ///
+    /// Resolved THROUGH `remoteAgentSnapshot` so the model component is exactly
+    /// the one that goes on the wire. Reading `getRemoteAgentModel(for:)` here
+    /// instead is wrong in two directions: a CUSTOM gateway keeps its model on
+    /// the roster entry and never writes that per-ref slot, so every custom
+    /// signed a nil model and an edit from a working model to a broken one left
+    /// the signature unchanged — the record survived a change that breaks every
+    /// send. And a self-hosted built-in picks its model server-side, so a stale
+    /// value in the slot would sign a model no request ever carries.
+    func gatewayChatSuccessSignature(for ref: RemoteAgentRef) -> String? {
+        guard let snapshot = remoteAgentSnapshot(for: ref) else { return nil }
+        return gatewayChatSuccessSignature(
+            for: ref,
+            url: snapshot.url,
+            authScheme: snapshot.authScheme,
+            model: snapshot.model
+        )
     }
 
     /// Persist a SPECIFIC ref's transport hint. Pass nil / empty to remove.

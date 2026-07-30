@@ -506,6 +506,21 @@ struct ConversationThreadView: View {
                 .font(.caption)
                 .foregroundStyle(AppColors.error)
                 .multilineTextAlignment(.center)
+            // Which gateway failed, and from where. With several gateways
+            // configured, "your personal AI" doesn't identify anything, and a
+            // failure that came off the wrist or the car looks identical to one
+            // from this device.
+            //
+            // UI-ONLY: the real gateway name must never reach the pasteable
+            // diagnostic report, which anonymises customs to `custom-gateway#N`.
+            // It is safe here because this view is not a source for `copyBlock()`
+            // — nothing renders into `checks`, `DiagnosticsFocus`, or any `fact*`.
+            if let attribution = sendErrorAttribution {
+                Text(attribution)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .multilineTextAlignment(.center)
+            }
             // Troubleshoot deep-link — shown only when the failure is one
             // Diagnostics can help with (the failable `DiagnosticsFocus` init is
             // the single filter: nil code or a non-troubleshootable class → no
@@ -520,6 +535,29 @@ struct ConversationThreadView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .transition(.opacity)
+    }
+
+    /// "Home VPS" or "Home VPS · Watch" — the bound gateway, plus the originating
+    /// surface when it was somewhere other than the device in the user's hands.
+    ///
+    /// The surface is named ONLY for the Watch and CarPlay. Those are the two
+    /// places where a failure the user is now reading about happened somewhere
+    /// else entirely, which is genuinely disorienting. Echoing "iPhone" back at
+    /// someone holding an iPhone adds nothing, and `unknown` (the legacy/nil
+    /// fallback) would be noise.
+    private var sendErrorAttribution: String? {
+        let gateway = viewModel.backendDisplayName
+        guard !gateway.isEmpty else { return nil }
+        guard let failedID = viewModel.sendErrorMessageID,
+              let raw = viewModel.messages.first(where: { $0.id == failedID })?.sourceDevice,
+              case let base = MessageRowFormatters.baseDevice(from: raw),
+              base == "watch" || base == "carplay"
+        else {
+            // Pre-flight failures carry no message row, and same-device failures
+            // need no surface — the gateway name alone is the useful half.
+            return gateway
+        }
+        return "\(gateway) · \(MessageRowFormatters.label(forDevice: base))"
     }
 
     // MARK: - Gateway lock/clone sheet

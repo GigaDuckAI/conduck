@@ -363,7 +363,7 @@ actor TTSClient {
                     // this key algorithm — its own code, so the remedy names
                     // the key type instead of raising an interception warning.
                     throw AppError.ttsCustomCertKeyUnpinnable
-                case .timeout, .unreachable, .cancelled:
+                case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
                     // No certificate verdict — fall through to the code mapping
                     // that owns the TTS taxonomy. A cold tunnel's generic
                     // `.secureConnectionFailed` lands here (both trust signals

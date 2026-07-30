@@ -246,6 +246,30 @@ enum AppError: LocalizedError {
     case ttsCustomCertKeyUnpinnable      // 69 — custom voice endpoint's key can't be fingerprinted
     case fileTransferCertKeyUnpinnable   // 70 — file-server key can't be fingerprinted
 
+    // Gateway failure forensics (71-73). These exist because the send path used
+    // to collapse three very different situations into copy the user could not
+    // act on: an unmapped status, a route/upstream outage, and a connection that
+    // never opened all rendered as `.apiFailure`'s "Something went wrong".
+    //
+    // `status` is OPTIONAL on purpose. A live failure knows the number and says
+    // it; a failure reconstructed from a persisted `failureCode` (or off the
+    // Watch relay wire) does NOT — `from(errorCode:message:)` carries a code,
+    // never a second integer, and the discarded `.apiFailure` text is untrusted
+    // input that must never be parsed back into copy. So the number degrades to
+    // absent rather than becoming a guess.
+    case remoteAgentUnexpectedStatus(status: Int?)  // 71 — a status Conduck has no mapping for
+    // 502/503/504/530: something ANSWERED, but not the gateway itself. Kept out
+    // of 29 (`serverError`) because 29 sends the user to read gateway logs, and
+    // here the gateway may never have seen the request. Deliberately does NOT
+    // name Cloudflare or "the tunnel": a 502/504 can equally come from the
+    // gateway's own model provider, which the user cannot restart.
+    case remoteAgentServiceUnavailable             // 72 — a server in the route is unavailable
+    // The connection never opened (DNS didn't resolve, or the host refused).
+    // Split from 19 so the copy can say delivery is unlikely. It says "unlikely",
+    // never "nothing was sent": without transport metrics the app cannot prove a
+    // negative, and even metrics could not prove the gateway didn't execute.
+    case remoteAgentNotEstablished                 // 73 — no connection was established
+
     // Catch-all (99)
     case unknown(Error)
 
@@ -333,6 +357,17 @@ enum AppError: LocalizedError {
             return String(localized: "remoteAgent.error.timeout", defaultValue: "Your personal AI took too long to respond.")
         case .remoteAgentServerError:
             return String(localized: "remoteAgent.error.serverError", defaultValue: "Your personal AI gateway reported an error.")
+        case .remoteAgentUnexpectedStatus(let status):
+            // Two keys, not one interpolation with a placeholder value: a
+            // reconstructed failure has no number, and "HTTP 0" would be a lie.
+            if let status {
+                return String(localized: "remoteAgent.error.unexpectedStatus", defaultValue: "Your gateway answered with HTTP \(status), which Conduck doesn't recognise.")
+            }
+            return String(localized: "remoteAgent.error.unexpectedStatus.unknown", defaultValue: "Your gateway answered in a way Conduck doesn't recognise.")
+        case .remoteAgentServiceUnavailable:
+            return String(localized: "remoteAgent.error.serviceUnavailable", defaultValue: "A server involved in this connection is temporarily unavailable.")
+        case .remoteAgentNotEstablished:
+            return String(localized: "remoteAgent.error.notEstablished", defaultValue: "Conduck couldn't open a connection to your gateway.")
         case .remoteAgentCertMismatch:
             // Each `*CertMismatch` line names the SERVER whose key disagreed;
             // the remedy is shared and lives in `recoverySuggestion`. Never
@@ -488,13 +523,30 @@ enum AppError: LocalizedError {
         case .remoteAgentNotConfigured:
             return String(localized: "remoteAgent.error.notConfigured.recovery", defaultValue: "Open Settings → Personal AI and add a URL and bearer token.")
         case .remoteAgentUnreachable:
-            return String(localized: "remoteAgent.error.unreachable.recovery", defaultValue: "Check the gateway is running and accessible from this device.")
+            // `.v2`: 19 is now the UNCERTAIN bucket. The codes that prove a
+            // connection never opened moved to 73, and a genuinely offline
+            // device moved to 3, so what remains here (a dropped connection, a
+            // non-URLError throw, a cold TLS handshake with no trust verdict)
+            // is exactly the set where the app cannot tell whether the request
+            // landed. Saying so matters because these gateways run tools.
+            // Catalog-value-wins rule: a reworded existing key ships the OLD
+            // string, so this is a new key.
+            return String(localized: "remoteAgent.error.unreachable.recovery.v2", defaultValue: "Check the gateway is reachable from this device. Conduck can't tell whether the request arrived, so if it could run tools, check the gateway before trying again.")
         case .remoteAgentAuthFailed:
             return String(localized: "remoteAgent.error.authFailed.recovery", defaultValue: "Open Settings and verify the bearer token for your gateway.")
         case .remoteAgentTimeout:
-            return String(localized: "remoteAgent.error.timeout.recovery", defaultValue: "Try again — the gateway may be processing a long reply.")
+            // `.v2`: a timeout is the other half of the uncertain bucket — the
+            // gateway may still be working, and a second attempt can repeat
+            // both the work and its cost on the user's own key.
+            return String(localized: "remoteAgent.error.timeout.recovery.v2", defaultValue: "It may still be working on this one. Check the gateway before trying again, because another attempt could repeat the work and the cost.")
         case .remoteAgentServerError:
             return String(localized: "remoteAgent.error.serverError.recovery", defaultValue: "Check the gateway logs, then try again.")
+        case .remoteAgentUnexpectedStatus:
+            return String(localized: "remoteAgent.error.unexpectedStatus.recovery", defaultValue: "That came from your server, or from something in front of it. Check both, then try again.")
+        case .remoteAgentServiceUnavailable:
+            return String(localized: "remoteAgent.error.serviceUnavailable.recovery", defaultValue: "Check your gateway, anything in front of it such as a tunnel or proxy, and the model provider it uses.")
+        case .remoteAgentNotEstablished:
+            return String(localized: "remoteAgent.error.notEstablished.recovery", defaultValue: "Check the address is still current and the gateway is running. The request most likely never reached it.")
         case .remoteAgentInvalidResponse:
             return String(localized: "remoteAgent.error.invalidResponse.recovery", defaultValue: "Check the gateway is running an OpenAI-compatible /v1/chat/completions endpoint.")
         case .remoteAgentVisionUnsupported:
@@ -597,6 +649,10 @@ enum AppError: LocalizedError {
              .sttTooManyRequests,
              .remoteAgentUnreachable,
              .remoteAgentTimeout, .remoteAgentServerError,
+             // 72/73 are transient by nature: a route outage clears, and a
+             // gateway that is down or moved can come back. Both still retry
+             // only on an explicit user tap (`maxAttempts` 1 below).
+             .remoteAgentServiceUnavailable, .remoteAgentNotEstablished,
              .ttsProviderUnreachable, .ttsEmptyAudio, .ttsRateLimited,
              .fileTransferUploadFailed, .fileTransferUnreachable,
              .fileTransferServerError:
@@ -620,6 +676,10 @@ enum AppError: LocalizedError {
              // the verdict; the user has to fix the server or the URL.
              .remoteAgentEndpointUnexpectedResponse, .remoteAgentEndpointWrongEnvelope,
              .remoteAgentEndpointNotFound, .remoteAgentModelRequired,
+             // 71 joins the route family: a status Conduck has no mapping for
+             // is a configuration or middlebox fact, and the same request
+             // against the same URL returns the same status.
+             .remoteAgentUnexpectedStatus,
              .sttCustomEndpointNotConfigured, .sttCustomCertMismatch,
              .ttsSynthesisFailed, .ttsUnauthorized, .ttsContentBlocked,
              .ttsCustomEndpointNotConfigured, .ttsCustomCertMismatch,
@@ -796,6 +856,14 @@ enum AppError: LocalizedError {
         case 68: return .sttCustomCertKeyUnpinnable
         case 69: return .ttsCustomCertKeyUnpinnable
         case 70: return .fileTransferCertKeyUnpinnable
+        // 71 reconstructs WITHOUT its status. The wire and the persisted row
+        // carry a code and nothing else, and `message` here is untrusted text
+        // (it arrives off the Watch relay), so parsing a number back out of it
+        // would be both unreliable and a copy-injection path. Absent number →
+        // the `.unknown` variant of the copy.
+        case 71: return .remoteAgentUnexpectedStatus(status: nil)
+        case 72: return .remoteAgentServiceUnavailable
+        case 73: return .remoteAgentNotEstablished
         case 99: return .apiFailure(message: message ?? "")       // unknown(Error) — Error not reconstructible
         default:
             return .apiFailure(message: message ?? "")
@@ -889,6 +957,9 @@ extension AppError: CustomNSError {
         case .sttCustomCertKeyUnpinnable: return 68
         case .ttsCustomCertKeyUnpinnable: return 69
         case .fileTransferCertKeyUnpinnable: return 70
+        case .remoteAgentUnexpectedStatus: return 71
+        case .remoteAgentServiceUnavailable: return 72
+        case .remoteAgentNotEstablished: return 73
         case .unknown: return 99
         }
     }

@@ -592,4 +592,217 @@ final class DiagnosticsRunnerTests: XCTestCase {
         XCTAssertFalse(runner.checks.contains { $0.category == .connection && $0.id == "connection.notifications" },
                        "no Connection check may carry the moved-out notifications id")
     }
+
+    // MARK: - Recent failed sends → the copy block (redaction by construction)
+
+    private func failedTurn(
+        code: Int? = 19,
+        wire: String? = nil,
+        device: String? = "phone",
+        backend: String?,
+        ageSeconds: TimeInterval = 60
+    ) -> ConversationStore.FailedTurnSummary {
+        ConversationStore.FailedTurnSummary(
+            failureCode: code,
+            failureWireCode: wire,
+            sourceDevice: device,
+            backend: backend,
+            createdAt: Date().addingTimeInterval(-ageSeconds)
+        )
+    }
+
+    /// A custom gateway is named by its CANONICAL config-order ordinal, never by
+    /// the `custom_<uuid>` the conversation actually stores. The ordinal is shared
+    /// with the on-screen "Custom gateway N" so the report and the screen can't
+    /// disagree.
+    func testCustomGatewayFailureCarriesTheOrdinalNotTheUUID() {
+        let uuid = UUID()
+        let ref = RemoteAgentRef.custom(uuid)
+        let facts = DiagnosticsRunner.redactFailedSends(
+            [failedTurn(backend: ref.rawString)],
+            customOrdinals: [ref: 2]
+        )
+        XCTAssertEqual(facts.count, 1)
+        XCTAssertEqual(facts.first?.backendToken, "custom-gateway#2")
+        XCTAssertFalse(facts.first!.backendToken.contains(uuid.uuidString),
+                       "a gateway UUID must never reach a report fact")
+        XCTAssertFalse(facts.first!.backendToken.contains("custom_"),
+                       "the raw ref prefix must not survive redaction")
+    }
+
+    /// A gateway the user has since DELETED has no ordinal. Say so — never fall
+    /// back to the UUID, and never silently borrow another gateway's number.
+    func testDeletedCustomGatewayIsAnonymousRatherThanIdentified() {
+        let ref = RemoteAgentRef.custom(UUID())
+        let facts = DiagnosticsRunner.redactFailedSends(
+            [failedTurn(backend: ref.rawString)],
+            customOrdinals: [:]
+        )
+        XCTAssertEqual(facts.first?.backendToken, "custom-gateway#?")
+    }
+
+    /// `failureWireCode` is server-supplied text. Only the FROZEN vocabulary may be
+    /// echoed; anything else collapses to `other`, so a gateway cannot inject
+    /// arbitrary content into a report the user pastes into a help request.
+    func testUnknownWireCodeCollapsesInsteadOfEchoing() {
+        let hostile = "https://evil.example/leak?token=abc123"
+        let facts = DiagnosticsRunner.redactFailedSends(
+            [failedTurn(wire: hostile, backend: RemoteAgentRef.builtin(.openclaw).rawString)],
+            customOrdinals: [:]
+        )
+        XCTAssertEqual(facts.first?.wireToken, "other")
+        for needle in ["http", "://", "evil.example", "abc123"] {
+            XCTAssertFalse(facts.first!.wireToken.contains(needle),
+                           "the report fact must not echo server text (\(needle))")
+        }
+    }
+
+    func testFrozenWireCodeIsPreserved() {
+        let facts = DiagnosticsRunner.redactFailedSends(
+            [failedTurn(wire: "model_not_found", backend: RemoteAgentRef.builtin(.hermes).rawString)],
+            customOrdinals: [:]
+        )
+        XCTAssertEqual(facts.first?.wireToken, "model_not_found")
+        XCTAssertEqual(facts.first?.backendToken, "hermes",
+                       "builtin raw values are a closed vocabulary, safe to name")
+    }
+
+    /// The `-text`/`-voice` modality suffix is dropped: the report says WHICH
+    /// device, not how the user spoke to it.
+    func testSourceDeviceReducesToItsBaseToken() {
+        let facts = DiagnosticsRunner.redactFailedSends(
+            [failedTurn(device: "watch-voice", backend: RemoteAgentRef.builtin(.openclaw).rawString)],
+            customOrdinals: [:]
+        )
+        XCTAssertEqual(facts.first?.deviceToken, "watch")
+    }
+
+    /// The dedupe is load-bearing, not cosmetic. One broken gateway produces a run
+    /// of identical failures; without collapsing them the newest-five would be five
+    /// copies of one fact AND would hide a second gateway that is also failing —
+    /// the exact case this section exists to expose.
+    func testIdenticalRepeatsCollapseSoASecondGatewayStaysVisible() {
+        let openclaw = RemoteAgentRef.builtin(.openclaw).rawString
+        let hermes = RemoteAgentRef.builtin(.hermes).rawString
+        var summaries: [ConversationStore.FailedTurnSummary] = []
+        // Six retries against one gateway, newest first…
+        for i in 0..<6 {
+            summaries.append(failedTurn(backend: openclaw, ageSeconds: TimeInterval(i * 10)))
+        }
+        // …and one older failure on a DIFFERENT gateway, which must survive.
+        summaries.append(failedTurn(code: 29, backend: hermes, ageSeconds: 5000))
+
+        let facts = DiagnosticsRunner.redactFailedSends(summaries, customOrdinals: [:])
+        XCTAssertEqual(facts.count, 2, "identical repeats collapse to one finding per gateway")
+        XCTAssertEqual(facts.map(\.backendToken), ["openclaw", "hermes"],
+                       "newest-first order survives the dedupe")
+    }
+
+    /// Different codes on the SAME gateway are different findings — collapsing
+    /// those would hide a second, distinct fault.
+    func testDifferentCodesOnOneGatewayStayDistinct() {
+        let openclaw = RemoteAgentRef.builtin(.openclaw).rawString
+        let facts = DiagnosticsRunner.redactFailedSends(
+            [failedTurn(code: 19, backend: openclaw, ageSeconds: 10),
+             failedTurn(code: 29, backend: openclaw, ageSeconds: 20)],
+            customOrdinals: [:]
+        )
+        XCTAssertEqual(facts.count, 2)
+        XCTAssertEqual(facts.map(\.code), [19, 29])
+    }
+
+    func testEmittedFactsAreCappedAtFive() {
+        let facts = DiagnosticsRunner.redactFailedSends(
+            (0..<12).map { failedTurn(code: $0 + 1, backend: RemoteAgentRef.builtin(.openclaw).rawString, ageSeconds: TimeInterval($0)) },
+            customOrdinals: [:]
+        )
+        XCTAssertEqual(facts.count, 5, "the report stays bounded")
+        XCTAssertEqual(facts.first?.code, 1, "and keeps the NEWEST five")
+    }
+
+    /// A row whose backend is missing or unparseable still reports — an
+    /// unattributed failure is worth knowing about — but names nothing it can't
+    /// prove.
+    func testUnparseableBackendIsReportedAsUnknown() {
+        let facts = DiagnosticsRunner.redactFailedSends(
+            [failedTurn(backend: "not-a-ref"), failedTurn(code: 20, backend: nil)],
+            customOrdinals: [:]
+        )
+        XCTAssertEqual(facts.count, 2)
+        XCTAssertTrue(facts.allSatisfy { $0.backendToken == "unknown" })
+    }
+
+    /// The section header is unconditional. This runs on a device with no failed
+    /// turns, so it proves the EMPTY branch only — the populated branch is
+    /// asserted directly in `testFailedSendLinesStayPasteSafeWhenPopulated`,
+    /// because a test that merely calls `copyBlock()` can never guarantee the
+    /// store holds a row to render.
+    func testCopyBlockAlwaysCarriesTheFailedSendSection() async {
+        let runner = DiagnosticsRunner()
+        await runner.runAutoReads()
+        let block = runner.copyBlock()
+        for needle in ["http", "://", "Bearer ", "custom_"] {
+            XCTAssertFalse(block.contains(needle),
+                           "the copy block must not contain \(needle) — the failed-send section included")
+        }
+        XCTAssertTrue(block.contains("Recent failed sends:"),
+                      "the section is unconditional: 'none' is itself a useful support fact")
+    }
+
+    /// The populated branch, asserted where it can actually be forced. Facts are
+    /// redacted at capture, so this pins the FORMATTER: it may compose only from
+    /// the tokens handed to it, and a future edit that reached for a raw value
+    /// would have to fail here.
+    func testFailedSendLinesStayPasteSafeWhenPopulated() {
+        let hostile = DiagnosticsRunner.redactFailedSends(
+            [
+                failedTurn(code: 55, wire: "model_not_found", backend: "custom_\(UUID().uuidString)"),
+                failedTurn(code: 26, wire: "totally-made-up-code", backend: "openclaw"),
+            ],
+            customOrdinals: [:]
+        )
+        let lines = DiagnosticsRunner.failedSendLines(hostile, now: Date())
+
+        XCTAssertEqual(lines.count, hostile.count + 1, "one header plus one line per distinct fact")
+        XCTAssertTrue(lines[0].hasPrefix("Recent failed sends: "))
+        let rendered = lines.joined(separator: "\n")
+        for needle in ["http", "://", "Bearer ", "custom_", "totally-made-up-code"] {
+            XCTAssertFalse(rendered.contains(needle),
+                           "the rendered section leaked '\(needle)':\n\(rendered)")
+        }
+        XCTAssertTrue(rendered.contains("custom-gateway#"),
+                      "a custom gateway must still be IDENTIFIABLE by ordinal — redaction that erases which gateway failed makes the report useless")
+    }
+
+    // MARK: - Scoped per-gateway recheck
+
+    /// A recheck of a gateway that isn't configured must be a clean no-op — no
+    /// stamp, no row invented. The focused card gates on configured refs, but the
+    /// runner must not depend on the view for that.
+    func testRecheckOfAnUnconfiguredGatewayLeavesNoStamp() async {
+        let runner = DiagnosticsRunner()
+        await runner.runAutoReads()
+        await runner.recheckGateway(for: .custom(UUID()))
+        XCTAssertNil(runner.lastScopedGatewayCheck,
+                     "an unconfigured ref has no snapshot to probe, so nothing may be stamped")
+        XCTAssertFalse(runner.isBusy, "the in-flight set must be cleared on every exit path")
+    }
+
+    /// The scoped stamp must NOT masquerade as a full run: `lastChecked` is the
+    /// whole-sweep stamp and a one-gateway probe may never move it.
+    ///
+    /// COVERAGE LIMIT — read before trusting this: the ref is unconfigured, so
+    /// this (like its sibling above) exercises the EARLY RETURN, not the probe.
+    /// Reaching the apply path needs a live `GET /v1/models`, which no unit test
+    /// may fire. The apply path's own guards — sweep-generation, live-signature
+    /// re-read — are therefore founder-QA territory, not suite-covered. Do not
+    /// read a green suite as proof the scoped recheck applies correctly.
+    func testScopedRecheckOfUnconfiguredRefNeverRestampsTheFullRun() async {
+        let runner = DiagnosticsRunner()
+        await runner.runAutoReads()
+        let before = runner.lastChecked
+        await runner.recheckGateway(for: .custom(UUID()))
+        XCTAssertEqual(runner.lastChecked, before,
+                       "a single-gateway probe must not claim freshness for rows nobody re-probed")
+    }
 }

@@ -560,7 +560,7 @@ extension BackgroundSTT: URLSessionDataDelegate {
                             // accepted and the pin was never compared.
                             continuation.resume(throwing: AppError.sttCustomCertKeyUnpinnable)
                             return
-                        case .timeout, .unreachable, .cancelled:
+                        case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
                             break
                         }
                     }

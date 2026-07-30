@@ -946,6 +946,14 @@ struct RemoteAgentConfigBody: View {
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                 }
+                if let temporaryTunnelHint {
+                    // Warning-tinted rather than tertiary: the other two hints
+                    // CONFIRM what the user typed, while this one predicts a
+                    // failure they will otherwise meet as "gateway unreachable".
+                    Text(temporaryTunnelHint)
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.warning)
+                }
                 // The footer says what to DO (mirrors the file-server URL field);
                 // reachability nuance (Tailscale vs home network) lives in the ⓘ tip.
                 // The custom lane's variant adds the base-address contract — pasting
@@ -2281,6 +2289,37 @@ struct RemoteAgentConfigBody: View {
         )
         await viewModel.updateCustomGatewayBadge(updated)
     }
+
+    // MARK: - Temporary-tunnel hint
+
+    /// Warns that a Cloudflare Quick Tunnel hostname is disposable: the address
+    /// is randomly generated per `cloudflared` run, so it changes every time the
+    /// tunnel restarts and the saved gateway silently stops resolving.
+    ///
+    /// This is PREVENTION, deliberately chosen over trying to INFER a rotated
+    /// address at failure time. Inference is unreliable — a DNS failure looks
+    /// identical whether the hostname died, a VPN dropped, or a resolver
+    /// hiccuped — whereas the hostname suffix is a fact available before anything
+    /// breaks. Advisory only: it never gates saving, matching the established
+    /// pattern for the port and endpoint-suffix hints.
+    private var temporaryTunnelHint: String? {
+        let trimmed = (viewModel.remoteAgentURLStrings[ref] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let host = URLComponents(string: trimmed)?.host?.lowercased(),
+              host == Self.quickTunnelSuffix || host.hasSuffix(".\(Self.quickTunnelSuffix)")
+        else {
+            return nil
+        }
+        return String(localized: LocalizedStringResource(
+            "settings.remoteAgent.url.temporaryTunnelHint",
+            defaultValue: "This is a temporary tunnel address. It normally changes when the tunnel restarts, and this gateway then stops working until you set it up again."
+        ))
+    }
+
+    /// Matched as a full suffix on the parsed HOST, never as a substring of the
+    /// raw string — `https://trycloudflare.com.example.org/` must not trip it.
+    private static let quickTunnelSuffix = "trycloudflare.com"
 
     // MARK: - Port-hint logic
 

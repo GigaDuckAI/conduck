@@ -375,6 +375,12 @@ extension RemoteAgentClient {
                 throw AppError.remoteAgentTimeout
             case .unreachable:
                 throw AppError.remoteAgentUnreachable
+            case .notEstablished:
+                // The probe reports the same distinction the send path does, so
+                // Test Connection and a failed chat agree on what went wrong.
+                throw AppError.remoteAgentNotEstablished
+            case .offline:
+                throw AppError.noInternetConnection
             case .cancelled:
                 // No-pin task cancellation. Test Connection is a one-shot tap
                 // with no user-cancel surface → treat as a retryable transport

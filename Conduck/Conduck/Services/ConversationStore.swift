@@ -993,6 +993,85 @@ actor ConversationStore {
 
     #endif
 
+    // MARK: - Diagnostics read (forensics for the copyable report)
+
+    /// One failed user turn, reduced to the classification facts the diagnostics
+    /// report is allowed to carry. Deliberately NOT a `MessageRecord`: that type
+    /// holds the turn's TEXT, and nothing with message content may travel toward
+    /// `copyBlock()`. `backend` is the bound conversation's
+    /// `RemoteAgentRef.rawString` (`openclaw` / `hermes` / `openrouter` /
+    /// `custom_<uuid>`) — the report anonymizes customs to an ordinal, so the raw
+    /// value stops here.
+    struct FailedTurnSummary: Sendable {
+        let failureCode: Int?
+        let failureWireCode: String?
+        let sourceDevice: String?
+        let backend: String?
+        let createdAt: Date
+    }
+
+    /// The newest failed user turns, bounded. Diagnostics' answer to its worst
+    /// property: the pasteable report iterates PROBE results only, so it can read
+    /// all-green while every real chat turn is failing — which is exactly the
+    /// report a self-hoster sends when asking for help.
+    ///
+    /// Needs no new logging: `failureCode` / `failureWireCode` / `sourceDevice`
+    /// are already persisted by `failTurn`, and the bound gateway is recoverable
+    /// from the parent conversation's `backend`.
+    ///
+    /// NON-throwing by contract (`catch { return [] }`) — Diagnostics must never
+    /// fail to render a report because a fetch lost a race with a CloudKit import.
+    /// Relationship traversal stays INSIDE `perform`; the returned values are
+    /// plain `Sendable` structs, never managed objects.
+    func recentFailedTurnSummaries(limit: Int) async -> [FailedTurnSummary] {
+        guard limit > 0 else { return [] }
+        do {
+            try await ensureLoaded()
+        } catch {
+            return []
+        }
+        let context = container.newBackgroundContext()
+        do {
+            return try await context.perform { [context] in
+                let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+                // `failureCode != nil` is what separates a GATEWAY failure from a
+                // user CANCEL. Cancelling flips the turn to `failed` (so the Retry
+                // chip appears and the row can't strand at `sending`) but writes no
+                // classification, by design — a cancel is not a gateway verdict.
+                // Without this clause every cancelled turn arrived in the pasted
+                // support report as `send-failure … code=none`, manufacturing
+                // failures the gateway never had. Fail closed in the same
+                // direction as the orphan drop below: a failure nobody classified
+                // is one nobody can act on.
+                request.predicate = NSPredicate(
+                    format: "status == %@ AND role == %@ AND failureCode != nil", "failed", "user"
+                )
+                request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
+                request.fetchLimit = limit
+                // The parent is read for `backend`, so fault it in with the rows
+                // rather than one round trip per message.
+                request.relationshipKeyPathsForPrefetching = ["conversation"]
+                return try context.fetch(request).compactMap { object -> FailedTurnSummary? in
+                    // An orphaned row (no parent) can't be attributed to a
+                    // gateway, and an unattributed failure line in a support
+                    // report invites the wrong diagnosis — drop it.
+                    guard let conversation = object.value(forKey: "conversation") as? NSManagedObject else {
+                        return nil
+                    }
+                    return FailedTurnSummary(
+                        failureCode: (object.value(forKey: "failureCode") as? Int32).map(Int.init),
+                        failureWireCode: object.value(forKey: "failureWireCode") as? String,
+                        sourceDevice: object.value(forKey: "sourceDevice") as? String,
+                        backend: conversation.value(forKey: "backend") as? String,
+                        createdAt: (object.value(forKey: "createdAt") as? Date) ?? Date.distantPast
+                    )
+                }
+            }
+        } catch {
+            return []
+        }
+    }
+
     // MARK: - Message CRUD
 
     /// Append a message to an existing conversation and bump that

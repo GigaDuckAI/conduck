@@ -65,6 +65,17 @@ enum WatchConverseCompletionVerdict {
         case cancelledAcrossLaunch
         /// Completion delivered no `HTTPURLResponse`.
         case missingHTTPResponse
+        /// The response BODY carried a classifiable rejection — a frozen
+        /// adapter-contract wire code, or one of the body heuristics. Classified
+        /// BEFORE `.httpStatus`, mirroring `RemoteAgentClient.decodeReply`, so one
+        /// body means one verdict on every surface.
+        ///
+        /// Without this branch the wrist collapsed every body-derived diagnosis
+        /// into a bare status: an `image_unsupported` decline, a model-not-found
+        /// and a context overflow all rendered as the same generic status copy,
+        /// which names no cause the user can act on — and the phone lane sitting
+        /// beside it named all three.
+        case classifiedBody(ClassifiedRemoteAgentFailure)
         /// The status map flagged a non-2xx HTTP status.
         case httpStatus(Int)
         /// 2xx body did not decode to `choices[0].message.content`.
@@ -146,7 +157,11 @@ enum WatchConverseCompletionVerdict {
                     return .failure(kind: .certificatePinMismatch, conversationID: conversationID)
                 case .certKeyUnpinnable:
                     return .failure(kind: .certificateKeyUnpinnable, conversationID: conversationID)
-                case .timeout, .unreachable, .cancelled:
+                case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
+                    // Non-certificate classes fall through untouched, exactly as
+                    // before: this arm exists so a trust note left on a task that
+                    // nonetheless connected cannot mislabel an unrelated later
+                    // error as a certificate failure.
                     break
                 }
             }
@@ -160,6 +175,20 @@ enum WatchConverseCompletionVerdict {
 
         guard let httpStatus else {
             return .failure(kind: .missingHTTPResponse, conversationID: conversationID)
+        }
+        // Body-aware classification FIRST, in the same order as
+        // `RemoteAgentClient.decodeReply`: the status map sees only the code, and a
+        // 400 or 404 can mean several different things. The bytes are already in
+        // hand here, and the classifier is watch-shared, so the wrist gets the same
+        // named cause the phone does instead of a bare status.
+        //
+        // Order is the contract, not a preference — running the status map first
+        // would swallow every one of these into `.httpStatus`, which is exactly the
+        // behaviour this branch replaces. Pinned in
+        // `WatchConverseCompletionVerdictTests`.
+        if let body,
+           let classified = RemoteAgentClient.classifyBodyError(status: httpStatus, body: body) {
+            return .failure(kind: .classifiedBody(classified), conversationID: conversationID)
         }
         if backend.statusMap.map(httpStatus) != nil {
             return .failure(kind: .httpStatus(httpStatus), conversationID: conversationID)

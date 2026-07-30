@@ -430,7 +430,9 @@ final class RemoteAgentClientTests: XCTestCase {
 
     func testTestConnectionServerErrorMapsToServerError() async {
         MockURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!
+            // 500, not 503: a 503 now carries the route-outage verdict, because
+            // something answered but not the gateway's own application.
+            let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
             return (response, Data())
         }
 
@@ -441,9 +443,23 @@ final class RemoteAgentClientTests: XCTestCase {
         }
     }
 
-    func testTestConnectionUnreachableMapsToUnreachable() async {
+    func testTestConnectionRefusedConnectionMapsToNotEstablished() async {
         MockURLProtocol.requestHandler = { request in
             throw URLError(.cannotConnectToHost)
+        }
+
+        // The PROBE reports the same distinction the send path does, so Test
+        // Connection and a failed chat never disagree about what went wrong.
+        await assertThrowsAppError(.remoteAgentNotEstablished) {
+            try await RemoteAgentClient.shared.testConnectionForTesting(
+                backend: .openclaw, url: self.baseURL, token: self.token, session: self.session
+            )
+        }
+    }
+
+    func testTestConnectionDroppedConnectionStaysUncertain() async {
+        MockURLProtocol.requestHandler = { request in
+            throw URLError(.networkConnectionLost)
         }
 
         await assertThrowsAppError(.remoteAgentUnreachable) {
@@ -750,11 +766,17 @@ final class RemoteAgentClientTests: XCTestCase {
         // untrusted-certificate, never mismatch.
         let expected: [(URLError.Code, Int?)] = [
             (.timedOut, AppError.remoteAgentTimeout.errorCode),
-            (.cannotConnectToHost, AppError.remoteAgentUnreachable.errorCode),
-            (.notConnectedToInternet, AppError.remoteAgentUnreachable.errorCode),
+            // Delivery-certainty split. These three prove no connection ever
+            // opened, so their copy may tell the user a retry is unlikely to
+            // repeat gateway-side work.
+            (.cannotConnectToHost, AppError.remoteAgentNotEstablished.errorCode),
+            (.cannotFindHost, AppError.remoteAgentNotEstablished.errorCode),
+            (.dnsLookupFailed, AppError.remoteAgentNotEstablished.errorCode),
+            // THIS DEVICE has no route — must not implicate the user's server.
+            (.notConnectedToInternet, AppError.noInternetConnection.errorCode),
+            // Stay UNCERTAIN: a dropped connection may have delivered the request
+            // first, and `.resourceUnavailable` is too vague to promise anything.
             (.networkConnectionLost, AppError.remoteAgentUnreachable.errorCode),
-            (.cannotFindHost, AppError.remoteAgentUnreachable.errorCode),
-            (.dnsLookupFailed, AppError.remoteAgentUnreachable.errorCode),
             (.resourceUnavailable, AppError.remoteAgentUnreachable.errorCode),
             (.serverCertificateUntrusted, AppError.remoteAgentCertUntrusted.errorCode),
             (.serverCertificateHasBadDate, AppError.remoteAgentCertUntrusted.errorCode),
@@ -820,6 +842,36 @@ final class RemoteAgentClientTests: XCTestCase {
                            pinComparisonUnsupported: false))
         XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertUntrusted.errorCode,
                        "An untrusted certificate on the live converse hop must name the certificate, not read as 'unreachable, try again' and not as a pin mismatch.")
+    }
+
+    // MARK: - Transport taxonomy shared across the dispatch lanes
+
+    /// Every lane must classify a transport failure the SAME way, because the
+    /// distinction gates what the user is told about delivery: a refused
+    /// connection or a dead hostname never opened a connection (73), airplane
+    /// mode is the device's own fault (3), and a connection lost mid-flight may
+    /// already have been executed by the far side (19).
+    ///
+    /// Pinned here because `CarPlayConverseUploader` now routes through this same
+    /// mapper. It previously carried its own blanket `.remoteAgentUnreachable`
+    /// for every non-certificate transport error, which told a driver to go
+    /// investigate a gateway that had never been contacted.
+    func testTransportErrorsClassifyByDeliveryCertainty() {
+        let cases: [(URLError.Code, AppError)] = [
+            (.cannotConnectToHost, .remoteAgentNotEstablished),
+            (.cannotFindHost, .remoteAgentNotEstablished),
+            (.dnsLookupFailed, .remoteAgentNotEstablished),
+            (.notConnectedToInternet, .noInternetConnection),
+            (.networkConnectionLost, .remoteAgentUnreachable),
+            (.timedOut, .remoteAgentTimeout),
+        ]
+        for (code, expected) in cases {
+            XCTAssertEqual(
+                BackgroundRemoteAgent.mapURLError(URLError(code)).errorCode,
+                expected.errorCode,
+                "URLError \(code.rawValue) must classify as \(expected.errorCode) on every lane"
+            )
+        }
     }
 
     // MARK: - Stream helpers (existing)

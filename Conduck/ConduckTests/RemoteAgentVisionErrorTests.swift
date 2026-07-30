@@ -298,14 +298,21 @@ final class RemoteAgentVisionErrorTests: XCTestCase {
     /// vision/size signal must NOT be hijacked by the vision pass — it falls
     /// through to the status map's generic-400 arm, .apiFailure (code 10).
     /// Precedence fires only for the multimodal-specific bodies.
-    func testSendGeneric400FallsThroughToStatusMapApiFailure() async throws {
+    func testSendGeneric400FallsThroughToStatusMapUnexpectedStatus() async throws {
         let error = try await sendThrowingAppError(
             status: 400,
             body: Data(#"{"error":{"message":"Missing required parameter: messages."}}"#.utf8)
         )
         XCTAssertEqual(
-            error.errorCode, 10,
-            "A generic 400 (no vision signal) must fall through the vision pass to the status map's default arm → .apiFailure (code 10)."
+            error.errorCode, 71,
+            "A generic 400 (no vision signal) must fall through the vision pass to the status map's default arm → .remoteAgentUnexpectedStatus (code 71)."
+        )
+        // The precedence being pinned: the body-aware pass declined this body, so
+        // the status map owns the verdict — and it keeps the number instead of
+        // collapsing to the old generic "Something went wrong" copy.
+        XCTAssertTrue(
+            error.errorDescription?.contains("400") == true,
+            "the unmapped-status verdict must surface the status it saw"
         )
     }
 }

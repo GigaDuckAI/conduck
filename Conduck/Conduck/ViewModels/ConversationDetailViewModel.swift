@@ -819,6 +819,9 @@ final class ConversationDetailViewModel {
         userMessageID: UUID,
         dispatchRef: RemoteAgentRef,
         dispatchFileLane: SettingsManager.FileTransferSnapshot?,
+        /// The gateway config signature captured at DISPATCH. nil when the ref
+        /// wasn't configured at send time (nothing to credit).
+        dispatchChatSignature: String?,
         stampsQuickPointer: Bool,
         surfacesInPopover: Bool,
         speaksReply: Bool
@@ -855,6 +858,16 @@ final class ConversationDetailViewModel {
             // per-device pointer; explicit window/in-app turns never do.
             if stampsQuickPointer {
                 await SettingsManager.shared.recordActiveConversation(conversationID)
+            }
+            // "Chat works from this Mac, under this config." Recorded HERE —
+            // after the reply is decoded AND persisted — so the claim can never
+            // outrun the durable turn that backs it. The signature is the
+            // DISPATCH-time one; the setter drops it if the live config has moved.
+            if let dispatchChatSignature {
+                await SettingsManager.shared.recordGatewayChatSuccess(
+                    for: dispatchRef,
+                    dispatchSignature: dispatchChatSignature
+                )
             }
             self.recordPopoverReplyIfNeeded(
                 agentReply: agentRecord,
@@ -1647,6 +1660,20 @@ final class ConversationDetailViewModel {
                     pinnedFingerprintHex: RemoteAgentTrustEvaluator.storedConversePin(for: snapshot.ref)
                 )
                 defer { pinnedSession.invalidateAndCancel() }
+                // Captured HERE, at dispatch, alongside the ref and pin already
+                // read at send time — never at landing. A turn can run for
+                // minutes and the user can edit the gateway meanwhile; a
+                // landing-time read would credit the NEW configuration with the
+                // OLD one's success. Built from `snapshot`'s own values for the
+                // same reason one step earlier: the snapshot is what the request
+                // below actually carries, so a fresh settings read here could
+                // describe a gateway this turn never touched.
+                let dispatchChatSignature = await SettingsManager.shared.gatewayChatSuccessSignature(
+                    for: snapshot.ref,
+                    url: snapshot.url,
+                    authScheme: snapshot.authScheme,
+                    model: snapshot.model
+                )
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,
@@ -1674,6 +1701,7 @@ final class ConversationDetailViewModel {
                     userMessageID: userMessageID,
                     dispatchRef: snapshot.ref,
                     dispatchFileLane: dispatchFileLane,
+                    dispatchChatSignature: dispatchChatSignature,
                     stampsQuickPointer: stampsQuickPointer,
                     surfacesInPopover: surfacesInPopover,
                     speaksReply: speaksReply
@@ -2321,6 +2349,20 @@ final class ConversationDetailViewModel {
                     pinnedFingerprintHex: RemoteAgentTrustEvaluator.storedConversePin(for: snapshot.ref)
                 )
                 defer { pinnedSession.invalidateAndCancel() }
+                // Captured HERE, at dispatch, alongside the ref and pin already
+                // read at send time — never at landing. A turn can run for
+                // minutes and the user can edit the gateway meanwhile; a
+                // landing-time read would credit the NEW configuration with the
+                // OLD one's success. Built from `snapshot`'s own values for the
+                // same reason one step earlier: the snapshot is what the request
+                // below actually carries, so a fresh settings read here could
+                // describe a gateway this turn never touched.
+                let dispatchChatSignature = await SettingsManager.shared.gatewayChatSuccessSignature(
+                    for: snapshot.ref,
+                    url: snapshot.url,
+                    authScheme: snapshot.authScheme,
+                    model: snapshot.model
+                )
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,
@@ -2346,6 +2388,7 @@ final class ConversationDetailViewModel {
                     userMessageID: userMessageID,
                     dispatchRef: snapshot.ref,
                     dispatchFileLane: readyOutputLane,
+                    dispatchChatSignature: dispatchChatSignature,
                     stampsQuickPointer: stampsQuickPointer,
                     surfacesInPopover: surfacesInPopover,
                     speaksReply: speaksReply
