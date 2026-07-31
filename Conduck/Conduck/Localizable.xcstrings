@@ -1484,6 +1484,17 @@
         }
       }
     },
+    "diagnostics.action.checking" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checking…"
+          }
+        }
+      }
+    },
     "diagnostics.action.checkingWatch" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -1546,6 +1557,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Preview voice"
+          }
+        }
+      }
+    },
+    "diagnostics.action.recheckGateway" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check Again"
+          }
+        }
+      }
+    },
+    "diagnostics.action.recheckGateway.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the connection to %@ again"
           }
         }
       }
@@ -2056,6 +2089,28 @@
         }
       }
     },
+    "diagnostics.gateway.chatProven" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Last reply received %@"
+          }
+        }
+      }
+    },
+    "diagnostics.gateway.chatUnproven" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No reply received on this device yet"
+          }
+        }
+      }
+    },
     "diagnostics.gateway.custom" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2085,6 +2140,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Your gateway answered, but lists no models. Load a model on the server."
+          }
+        }
+      }
+    },
+    "diagnostics.gateway.reach.ok" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reachable and signed in. This checks the model list — sending a message is the only thing that proves chat works."
           }
         }
       }
@@ -2243,6 +2309,28 @@
         }
       }
     },
+    "diagnostics.summary.lastChecked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Full check run %@"
+          }
+        }
+      }
+    },
+    "diagnostics.summary.notCheckedYet" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Setup looks right — tap Test everything to check the connection"
+          }
+        }
+      }
+    },
     "diagnostics.summary.passed" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2250,6 +2338,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Checks passed"
+          }
+        }
+      }
+    },
+    "diagnostics.summary.scopedCheck" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ checked %2$@"
           }
         }
       }
@@ -6687,6 +6786,28 @@
         }
       }
     },
+    "remoteAgent.error.authFailed.recovery.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check this gateway's token if it has one, and check anything in front of it — a proxy or tunnel can forward the request in a form your server refuses."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The request to your personal AI was refused."
+          }
+        }
+      }
+    },
     "remoteAgent.error.certKeyUnpinnable" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6918,6 +7039,28 @@
         }
       }
     },
+    "remoteAgent.error.notEstablished" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck couldn't open a connection to your gateway."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notEstablished.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the address is still current and the gateway is running. The request most likely never reached it."
+          }
+        }
+      }
+    },
     "remoteAgent.error.outOfCredits" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -6973,6 +7116,28 @@
         }
       }
     },
+    "remoteAgent.error.serviceUnavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A server involved in this connection is temporarily unavailable."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serviceUnavailable.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your gateway, anything in front of it such as a tunnel or proxy, and the model provider it uses."
+          }
+        }
+      }
+    },
     "remoteAgent.error.timeout" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6991,6 +7156,50 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Try again — the gateway may be processing a long reply."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.timeout.recovery.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It may still be working on this one. Check the gateway before trying again, because another attempt could repeat the work and the cost."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unexpectedStatus" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway answered with HTTP %lld, which Conduck doesn't recognise."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unexpectedStatus.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That came from your server, or from something in front of it. Check both, then try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unexpectedStatus.unknown" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your gateway answered in a way Conduck doesn't recognise."
           }
         }
       }
@@ -7024,6 +7233,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Check the gateway is running and accessible from this device."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unreachable.recovery.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the gateway is reachable from this device. Conduck can't tell whether the request arrived, so if it could run tools, check the gateway before trying again."
           }
         }
       }
@@ -9821,6 +10041,17 @@
         }
       }
     },
+    "settings.remoteAgent.customHelp.api.url.portNote.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A framework's own port (Ollama's 11434, for example) is usually a private, http-only door on the machine itself — Conduck needs the https address that door is published at. Some servers, Ollama among them, also check the Host header — the name a request says it is addressed to — and refuse anything still carrying the public name, so whatever publishes it may need to rewrite that to the local one."
+          }
+        }
+      }
+    },
     "settings.remoteAgent.customHelp.button" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11170,6 +11401,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A Tailscale address — this device needs the Tailscale app, signed in to the same tailnet."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.url.temporaryTunnelHint" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This is a temporary tunnel address. It normally changes when the tunnel restarts, and this gateway then stops working until you set it up again."
           }
         }
       }

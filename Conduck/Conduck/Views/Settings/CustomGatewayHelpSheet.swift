@@ -111,9 +111,28 @@ struct CustomGatewayHelpSheet: View {
                 defaultValue: "The https:// address your server is reachable at from this device — a Tailscale name, a domain, or a LAN address. Paste just the base address; Conduck adds /v1/… itself."
             ))
             codeLine("https://my-server.tail1234.ts.net:8000")
+            // The second sentence is the difference between a working setup and
+            // a 403 nobody can read: a server that checks the `Host` header
+            // refuses every request a tunnel forwards unchanged, and the failure
+            // surfaces as an auth-shaped error with no credential in sight.
+            // Ollama is the example, not the subject, per this sheet's
+            // framework-names-are-examples-only rule.
+            //
+            // "May need", not "must" — the check is CONDITIONAL, and a flat
+            // imperative would send an operator hunting for a knob their front
+            // does not have. Ollama runs it only while bound to a loopback
+            // address (publishing on a non-loopback bind skips it outright) and
+            // accepts a `Host` that is a local IP or ends in `.local` /
+            // `.internal`; meanwhile Tailscale Serve — the very transport this
+            // card's example URL shows — forwards the inbound `Host` unchanged
+            // and offers no rewrite. Name the constraint, not a cure: which cure
+            // applies is a per-framework fact, and those drift.
+            //
+            // `.v2` because the catalog value wins over `defaultValue:`, so
+            // extending the existing key would ship the shorter string.
             bodyText(LocalizedStringResource(
-                "settings.remoteAgent.customHelp.api.url.portNote",
-                defaultValue: "A framework's own port (Ollama's 11434, for example) is usually a private, http-only door on the machine itself — Conduck needs the https address that door is published at."
+                "settings.remoteAgent.customHelp.api.url.portNote.v2",
+                defaultValue: "A framework's own port (Ollama's 11434, for example) is usually a private, http-only door on the machine itself — Conduck needs the https address that door is published at. Some servers, Ollama among them, also check the Host header — the name a request says it is addressed to — and refuse anything still carrying the public name, so whatever publishes it may need to rewrite that to the local one."
             ))
 
             subLabel(LocalizedStringResource(

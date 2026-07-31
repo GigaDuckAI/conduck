@@ -352,7 +352,17 @@ enum AppError: LocalizedError {
         case .remoteAgentUnreachable:
             return String(localized: "remoteAgent.error.unreachable", defaultValue: "Could not reach your personal AI gateway.")
         case .remoteAgentAuthFailed:
-            return String(localized: "remoteAgent.error.authFailed", defaultValue: "Could not authenticate with your personal AI.")
+            // `.v2`: 26 carries 401 AND 403, and a 403 is a refusal that can
+            // happen before any credential is looked at — an origin that
+            // rejects the `Host` its tunnel forwards (Ollama's default) never
+            // reaches the authentication step at all. "Could not authenticate"
+            // asserts an attempt that did not occur, and on a keyless gateway
+            // it also names a credential the user deliberately doesn't have.
+            // "The request … was refused" is true of both statuses and names
+            // no refuser, matching `unexpectedStatus`'s restraint.
+            // Catalog-value-wins rule: a reworded existing key ships the OLD
+            // string, so this is a new key.
+            return String(localized: "remoteAgent.error.authFailed.v2", defaultValue: "The request to your personal AI was refused.")
         case .remoteAgentTimeout:
             return String(localized: "remoteAgent.error.timeout", defaultValue: "Your personal AI took too long to respond.")
         case .remoteAgentServerError:
@@ -533,7 +543,19 @@ enum AppError: LocalizedError {
             // string, so this is a new key.
             return String(localized: "remoteAgent.error.unreachable.recovery.v2", defaultValue: "Check the gateway is reachable from this device. Conduck can't tell whether the request arrived, so if it could run tools, check the gateway before trying again.")
         case .remoteAgentAuthFailed:
-            return String(localized: "remoteAgent.error.authFailed.recovery", defaultValue: "Open Settings and verify the bearer token for your gateway.")
+            // `.v2`: 26 has two live causes and cannot tell them apart here — a
+            // credential the gateway rejected, and an origin that refuses the
+            // request as it arrives over the HTTPS route (the measured case:
+            // Ollama rejects any `Host` that isn't a local address, and tunnels
+            // forward the original one, so a tunnel pointed straight at it 403s
+            // every time). Naming only the token sends a KEYLESS gateway's owner
+            // hunting for a credential that doesn't exist. Both possibilities,
+            // neither asserted — the shape `unexpectedStatus.recovery` uses.
+            // Stays framework-neutral: 26 also fires for OpenRouter, where a
+            // proxy remedy would be noise, and per-framework facts drift.
+            // Catalog-value-wins rule: a reworded existing key ships the OLD
+            // string, so this is a new key.
+            return String(localized: "remoteAgent.error.authFailed.recovery.v2", defaultValue: "Check this gateway's token if it has one, and check anything in front of it — a proxy or tunnel can forward the request in a form your server refuses.")
         case .remoteAgentTimeout:
             // `.v2`: a timeout is the other half of the uncertain bucket — the
             // gateway may still be working, and a second attempt can repeat
