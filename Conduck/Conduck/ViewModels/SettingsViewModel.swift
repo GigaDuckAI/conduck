@@ -3060,10 +3060,11 @@ final class SettingsViewModel {
     ///
     /// These keys live under `remoteAgent.editor.*`, deliberately SEPARATE from the
     /// `remoteAgent.error.*` keys behind `AppError.recoverySuggestion`. The latter
-    /// are pinned cross-platform (Android `CanonicalErrorCopy`) and are correct in
-    /// their own surfaces (Diagnostics, CarPlay) where "Open Settings" IS the
-    /// remedy. Here the user is already standing in the editor with the field on
-    /// screen, so the remedy is to fix the value in front of them.
+    /// are correct in their own surfaces (Diagnostics, CarPlay) where "Open Settings"
+    /// IS the remedy, and are versioned rather than frozen — a rewording moves to a
+    /// new `.v2` key, because a catalogued value wins over `defaultValue:`. Here the
+    /// user is already standing in the editor with the field on screen, so the remedy
+    /// is to fix the value in front of them.
     static func friendlyGatewayMessage(
         for error: AppError,
         category: RemoteAgentCategory = .selfHostedAgent,
