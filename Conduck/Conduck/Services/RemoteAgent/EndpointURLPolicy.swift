@@ -57,6 +57,22 @@ import Foundation
 
 enum EndpointURLPolicy {
 
+    /// Cloudflare Quick Tunnel hostnames are disposable: `cloudflared tunnel
+    /// --url` assigns a new `*.trycloudflare.com` address on every restart.
+    /// Detection is shared by the manual editor and pairing review so the same
+    /// address cannot be warned about in one setup path and silently accepted in
+    /// another. Parse the HOST rather than searching the raw string — a path like
+    /// `/trycloudflare.com` or a look-alike suffix must never trip the warning.
+    static func isCloudflareQuickTunnelURLString(_ raw: String) -> Bool {
+        guard let host = URLComponents(string: raw)?.host?.lowercased() else {
+            return false
+        }
+        return host == cloudflareQuickTunnelSuffix
+            || host.hasSuffix(".\(cloudflareQuickTunnelSuffix)")
+    }
+
+    private static let cloudflareQuickTunnelSuffix = "trycloudflare.com"
+
     /// Why a URL is inadmissible. Precedence is FIXED — `noHost` before
     /// `notHTTPS` before `carriesUserinfo` — so a caller mapping these onto its
     /// own error type gets one stable answer per input. (`PairingPayload` maps

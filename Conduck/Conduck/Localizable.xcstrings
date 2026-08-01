@@ -8908,28 +8908,6 @@
         }
       }
     },
-    "settings.pairing.review.certificate" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Certificate"
-          }
-        }
-      }
-    },
-    "settings.pairing.review.certificate.standard" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Standard checks. Conduck connects only if this device already trusts the server's certificate."
-          }
-        }
-      }
-    },
     "settings.pairing.review.connect" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -8941,24 +8919,13 @@
         }
       }
     },
-    "settings.pairing.review.default" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "New chats"
-          }
-        }
-      }
-    },
     "settings.pairing.review.default.value" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Will use this gateway — it's your first one."
+            "value" : "New chats will use this gateway."
           }
         }
       }
@@ -8969,7 +8936,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Use a different code"
+            "value" : "Use another code"
           }
         }
       }
@@ -9024,18 +8991,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Where this code points"
-          }
-        }
-      }
-    },
-    "settings.pairing.review.messages" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Messages go to"
+            "value" : "Gateway"
           }
         }
       }
@@ -9095,13 +9051,57 @@
         }
       }
     },
-    "settings.pairing.review.warning.body" : {
-      "extractionState" : "extracted_with_value",
+    "settings.pairing.review.sheetTitle" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Messages and files you send through this gateway go to this server. Anyone with this code can use every capability the gateway permits — depending on its configuration that may include running tools, and reading or changing files in its shared folder. Continue only if you recognize this address and trust whoever gave you the code."
+            "state" : "translated",
+            "value" : "Review setup code"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.temporaryTunnel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Temporary address — it changes when the tunnel restarts."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.warning.access.files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anyone with this code may connect with the same access, which may include tools and shared files."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.warning.access.tools" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anyone with this code may connect with the same access, which may include tools."
+          }
+        }
+      }
+    },
+    "settings.pairing.review.warning.trust" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only continue if you trust the person who shared this code."
           }
         }
       }
@@ -9112,7 +9112,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Check this before you connect"
+            "value" : "Before you connect"
           }
         }
       }

@@ -96,10 +96,7 @@ struct PairingImportSheet: View {
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
-            .navigationTitle(Text(LocalizedStringResource(
-                "settings.pairing.sheet.title",
-                defaultValue: "Import setup code"
-            )))
+            .navigationTitle(Text(sheetTitle))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -170,6 +167,19 @@ struct PairingImportSheet: View {
             flow.invalidatePendingImport()
             flow.handleDisappear()
         }
+    }
+
+    private var sheetTitle: LocalizedStringResource {
+        if flow.phase == .review {
+            return LocalizedStringResource(
+                "settings.pairing.review.sheetTitle",
+                defaultValue: "Review setup code"
+            )
+        }
+        return LocalizedStringResource(
+            "settings.pairing.sheet.title",
+            defaultValue: "Import setup code"
+        )
     }
 
     // MARK: - Input step
@@ -286,7 +296,7 @@ struct PairingImportSheet: View {
     private var reviewSections: some View {
         if let context = flow.reviewContext {
             destinationSection(context.model)
-            consequenceSection
+            consequenceSection(context.model)
             if let notice = context.notice {
                 noticeSection(notice)
             }
@@ -298,10 +308,13 @@ struct PairingImportSheet: View {
         Section {
             VStack(alignment: .leading, spacing: 14) {
                 reviewRow(
-                    label: String(localized: "settings.pairing.review.messages",
-                                  defaultValue: "Messages go to"),
                     value: model.gatewayDestination,
-                    monospaced: true
+                    monospaced: true,
+                    caption: model.becomesDefault ? String(
+                        localized: "settings.pairing.review.default.value",
+                        defaultValue: "New chats will use this gateway."
+                    ) : nil,
+                    warning: temporaryTunnelWarning(for: model.gatewayDestination)
                 )
 
                 if let previous = model.previousGatewayDestination {
@@ -335,7 +348,8 @@ struct PairingImportSheet: View {
                                                    defaultValue: "Replacing %@"),
                                     previous
                                 )
-                            }
+                            },
+                            warning: temporaryTunnelWarning(for: destination)
                         )
                     case .keepsExisting(let destination):
                         reviewRow(
@@ -344,39 +358,27 @@ struct PairingImportSheet: View {
                             value: destination,
                             monospaced: true,
                             caption: String(localized: "settings.pairing.review.files.kept.caption",
-                                            defaultValue: "This code doesn't set up file transfer, so your current setup stays.")
+                                            defaultValue: "This code doesn't set up file transfer, so your current setup stays."),
+                            warning: temporaryTunnelWarning(for: destination)
                         )
                     }
-                }
-
-                // A CONSTANT fact about the app, not about this code — which is
-                // exactly why it belongs on the card. A setup code names no key
-                // and cannot ask for an exception, so the one thing the user
-                // needs to know about certificates here is the rule that will be
-                // applied, and that it is the same for every code.
-                reviewRow(
-                    label: String(localized: "settings.pairing.review.certificate",
-                                  defaultValue: "Certificate"),
-                    value: String(localized: "settings.pairing.review.certificate.standard",
-                                  defaultValue: "Standard checks. Conduck connects only if this device already trusts the server's certificate."),
-                    monospaced: false
-                )
-
-                if model.becomesDefault {
-                    reviewRow(
-                        label: String(localized: "settings.pairing.review.default",
-                                      defaultValue: "New chats"),
-                        value: String(localized: "settings.pairing.review.default.value",
-                                      defaultValue: "Will use this gateway — it's your first one."),
-                        monospaced: false
-                    )
                 }
             }
             .padding(.vertical, 4)
         } header: {
             Text(LocalizedStringResource("settings.pairing.review.header",
-                                         defaultValue: "Where this code points"))
+                                         defaultValue: "Gateway"))
         }
+    }
+
+    private func temporaryTunnelWarning(for destination: String) -> String? {
+        guard EndpointURLPolicy.isCloudflareQuickTunnelURLString(destination) else {
+            return nil
+        }
+        return String(localized: LocalizedStringResource(
+            "settings.pairing.review.temporaryTunnel",
+            defaultValue: "Temporary address — it changes when the tunnel restarts."
+        ))
     }
 
     /// "Replacing OpenClaw" when the target's name comes from LOCAL state, plain
@@ -395,23 +397,35 @@ struct PairingImportSheet: View {
         )
     }
 
-    /// What accepting grants. Deliberately about what the AGENT can do, not about
-    /// what the setup wizard configured: on a default install the file tools are
-    /// already on and the wizard changes nothing, so "we didn't enable it" would be
-    /// true and misleading at once. Equally deliberately hedged — a custom gateway
-    /// may be a plain model proxy with no tools at all.
-    private var consequenceSection: some View {
-        Section {
-            AmberCallout(
+    /// What accepting grants, split into two short scan-friendly facts. The access
+    /// bullet is payload-aware: a gateway-only code does not make the user parse a
+    /// file-transfer warning for a lane that is absent, while a lane that arrives
+    /// or survives an overwrite keeps the shared-files consequence visible.
+    private func consequenceSection(_ model: PairingReviewModel) -> some View {
+        let accessBullet = model.fileLane == nil
+            ? LocalizedStringResource(
+                "settings.pairing.review.warning.access.tools",
+                defaultValue: "Anyone with this code may connect with the same access, which may include tools."
+            )
+            : LocalizedStringResource(
+                "settings.pairing.review.warning.access.files",
+                defaultValue: "Anyone with this code may connect with the same access, which may include tools and shared files."
+            )
+
+        return Section {
+            PairingSafetyCallout(
                 systemImage: "exclamationmark.shield",
                 title: LocalizedStringResource(
                     "settings.pairing.review.warning.title",
-                    defaultValue: "Check this before you connect"
+                    defaultValue: "Before you connect"
                 ),
-                message: LocalizedStringResource(
-                    "settings.pairing.review.warning.body",
-                    defaultValue: "Messages and files you send through this gateway go to this server. Anyone with this code can use every capability the gateway permits — depending on its configuration that may include running tools, and reading or changing files in its shared folder. Continue only if you recognize this address and trust whoever gave you the code."
-                )
+                bullets: [
+                    LocalizedStringResource(
+                        "settings.pairing.review.warning.trust",
+                        defaultValue: "Only continue if you trust the person who shared this code."
+                    ),
+                    accessBullet
+                ]
             )
             // The callout draws its own amber container — a second Form-row
             // background behind it would read as a box inside a box.
@@ -478,22 +492,29 @@ struct PairingImportSheet: View {
                                       defaultValue: "Connect"))
                             .font(.subheadline.weight(.semibold))
                     }
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color.accentColor)
+                .controlSize(.large)
                 .disabled(flow.planning)
 
                 Button {
                     flow.useDifferentCode()
                 } label: {
                     Text(LocalizedStringResource("settings.pairing.review.different",
-                                                 defaultValue: "Use a different code"))
+                                                 defaultValue: "Use another code"))
                         .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
                 .disabled(flow.planning)
             }
-            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity)
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            .listRowBackground(Color.clear)
         }
     }
 
@@ -502,20 +523,33 @@ struct PairingImportSheet: View {
     /// path prefix — exactly the parts a look-alike destination differs in.
     @ViewBuilder
     private func reviewRow(
-        label: String,
+        label: String? = nil,
         value: String,
         monospaced: Bool,
-        caption: String? = nil
+        caption: String? = nil,
+        warning: String? = nil
     ) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(AppColors.textTertiary)
+            if let label {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+            }
             Text(value)
                 .font(monospaced ? .system(.footnote, design: .monospaced) : .footnote)
                 .foregroundStyle(AppColors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
+            if let warning {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .accessibilityHidden(true)
+                    Text(warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.caption)
+                .foregroundStyle(AppColors.warning)
+            }
             if let caption {
                 Text(caption)
                     .font(.caption2)
@@ -768,5 +802,54 @@ struct PairingImportSheet: View {
         default:
             return AppColors.textTertiary
         }
+    }
+}
+
+/// A compact, properly hanging-indented alternative to a paragraph callout.
+/// Each risk stays independently scannable and wraps under its own text rather
+/// than under the bullet glyph.
+private struct PairingSafetyCallout: View {
+    let systemImage: String
+    let title: LocalizedStringResource
+    let bullets: [LocalizedStringResource]
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.subheadline)
+                .foregroundStyle(AppColors.brandAmber)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppColors.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ForEach(bullets.indices, id: \.self) { index in
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Text(verbatim: "•")
+                            .accessibilityHidden(true)
+                        Text(bullets[index])
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .accessibilityElement(children: .combine)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(AppColors.brandAmber.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(AppColors.brandAmber.opacity(0.25), lineWidth: 1)
+        )
     }
 }

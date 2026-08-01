@@ -47,6 +47,28 @@ final class EndpointURLPolicyTests: XCTestCase {
         XCTAssertNil(EndpointURLPolicy.rejection(for: url("https://gw.example.com/agents/a@b")))
     }
 
+    // MARK: - Temporary Cloudflare addresses
+
+    func testCloudflareQuickTunnelDetectionReadsTheParsedHost() {
+        XCTAssertTrue(EndpointURLPolicy.isCloudflareQuickTunnelURLString(
+            "https://cheap-response-recordings-concern.trycloudflare.com"
+        ))
+        XCTAssertTrue(EndpointURLPolicy.isCloudflareQuickTunnelURLString(
+            "https://TRYCloudflare.com:443/path"
+        ))
+    }
+
+    func testCloudflareQuickTunnelDetectionRejectsLookAlikes() {
+        for value in [
+            "https://nottrycloudflare.com",
+            "https://trycloudflare.com.example.org",
+            "https://example.org/trycloudflare.com",
+            "not a url"
+        ] {
+            XCTAssertFalse(EndpointURLPolicy.isCloudflareQuickTunnelURLString(value), value)
+        }
+    }
+
     // MARK: - Userinfo
 
     func testUserAndPasswordIsRejected() {

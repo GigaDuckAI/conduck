@@ -2305,10 +2305,7 @@ struct RemoteAgentConfigBody: View {
     private var temporaryTunnelHint: String? {
         let trimmed = (viewModel.remoteAgentURLStrings[ref] ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              let host = URLComponents(string: trimmed)?.host?.lowercased(),
-              host == Self.quickTunnelSuffix || host.hasSuffix(".\(Self.quickTunnelSuffix)")
-        else {
+        guard EndpointURLPolicy.isCloudflareQuickTunnelURLString(trimmed) else {
             return nil
         }
         return String(localized: LocalizedStringResource(
@@ -2316,10 +2313,6 @@ struct RemoteAgentConfigBody: View {
             defaultValue: "This is a temporary tunnel address. It normally changes when the tunnel restarts, and this gateway then stops working until you set it up again."
         ))
     }
-
-    /// Matched as a full suffix on the parsed HOST, never as a substring of the
-    /// raw string — `https://trycloudflare.com.example.org/` must not trip it.
-    private static let quickTunnelSuffix = "trycloudflare.com"
 
     // MARK: - Port-hint logic
 
