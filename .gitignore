@@ -5,9 +5,8 @@ build/
 DerivedData/
 
 # Environment files. `.env*` (not `.env` + `.env.*`) so `.envrc` and friends are
-# caught too; the template is the one deliberate exception.
+# caught too. No exception: Conduck reads no env file at build, test, or runtime.
 .env*
-!.env.example
 
 # Keys, certificates, and provisioning — matched by PATTERN, not by filename, so
 # a credential dropped in the tree under any name is still ignored. This repo is

@@ -89,12 +89,26 @@ Two things that are intentional, not broken:
   machine (or a self-hosted runner). Do not read a green CI run as proof the
   trust layer still works.
 
+  The script honours `CONDUCK_DERIVED_DATA` as a shell override if you want
+  the build products somewhere other than the default location — export it
+  before running, since no script here ever reads a `.env` file.
+
 Some tests skip themselves in community builds: cases that touch the live
 Keychain skip on unsigned simulator builds, and the official-identity lock
 tests skip under the community identity. Skips there are expected — failures
 are not. Please keep the suite green. Pull requests and pushes to `main` run
 both complete simulator suites in GitHub Actions, plus the macOS compile of
 the live-TLS bundle.
+
+### Manual testing against real providers
+
+Nothing in the automated suites calls a cloud speech provider or a live
+gateway. To exercise those by hand you supply your own credentials, and there
+is no config file to edit: voice keys are entered in the app's own settings
+(Settings ▸ Voice → Providers & Keys) and stored in the Keychain, and gateway
+bearer tokens go onto the simulator launch arguments described in
+[docs/qa/qa-mode.md](docs/qa/qa-mode.md), which also says where to find each
+token on your server.
 
 ## Pull requests
 

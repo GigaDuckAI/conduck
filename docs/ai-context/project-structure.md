@@ -11,7 +11,6 @@ Top-level layout only; full annotated tree below. Keep in sync when top-level en
 ```
 ./                                    # repository root
 ├── .gitignore
-├── .env.example                      # BYO voice-key + QA gateway-token template (paste-source; never consumed at build/test/run)
 ├── .githooks/                        # prepare-commit-msg → DCO sign-off (opt in: `git config core.hooksPath .githooks`)
 ├── README.md                         # Repo intro + build/run
 ├── docs/
@@ -38,7 +37,6 @@ Top-level layout only; full annotated tree below. Keep in sync when top-level en
 ```
 ./                                                      # repository root
 ├── .gitignore
-├── .env.example                                        # BYO voice-key + QA gateway-token template — a paste-source only; Conduck has NO backend, so this is never consumed at build/test/run (keys: copy into the sim Settings ▸ API Key field per active STT preset; tokens: sourced by the maintainer QA harness per docs/qa/qa-mode.md)
 ├── .githooks/
 │   └── prepare-commit-msg                              # Appends the DCO `Signed-off-by` trailer, keyed on the commit AUTHOR (whom the DCO bot matches), skipped for merge/squash messages, idempotent so `git commit -s` still works. `core.hooksPath` is local config and cannot ship, so CONTRIBUTING.md documents the one-time `git config core.hooksPath .githooks`
 ├── .github/workflows/

@@ -77,16 +77,28 @@ xcrun simctl launch <UDID> com.example.Conduck \
 
 ## Where the tokens come from
 
-The two bearer tokens live in your gitignored `.env` (template:
-`.env.example`) as `OPENCLAW_GATEWAY_TOKEN` and `HERMES_API_SERVER_KEY`,
-pointing at your own gateway instances. The automated QA harness — maintainer
-tooling, not part of this repository; everything it does is reproducible
-manually with the launch arguments above — `source`s that file at run time and
-interpolates the values onto the launch-arg line — **the tokens are never
-bundled into the app and never echoed to logs**. The gateway URLs are
-non-secret config and are supplied to the harness as constants. If `.env` or a
-token is missing, the harness warns and continues config-unseeded: the UI is
-still testable, but sends will error.
+Both tokens belong to **your own** gateway instances. Nothing in this
+repository stores or reads them: you paste each onto the launch-arg line
+above. **They are never bundled into the app and never echoed to logs.** The
+gateway URLs are non-secret config.
+
+**OpenClaw** — use the value at `gateway.auth.token` in `~/.openclaw/openclaw.json`
+on your server. *Not* the token in the Docker compose `.env`: that one is only a
+setup seed and can drift from what the gateway actually checks, so it yields a
+plausible-looking token that silently fails auth.
+
+**Hermes** — use the value at `API_SERVER_KEY` in `~/.hermes/.env` on your
+server. Hermes does not generate one; if the key is absent, add it with a long
+random value. Hermes also ships its OpenAI API server switched **off**, so the
+same file needs `API_SERVER_ENABLED=true` — then restart Hermes.
+
+If you keep these in a local `.env` for convenience, note that it is gitignored
+and read by nothing here — it is a paste-source, not configuration.
+
+The automated QA harness is maintainer tooling and is **not part of this
+repository**; everything it does is reproducible manually with the launch
+arguments above. Launching with a token missing is supported: the UI is fully
+testable config-unseeded, but sends will error.
 
 ## Gateway reachability
 
