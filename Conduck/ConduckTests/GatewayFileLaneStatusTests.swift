@@ -157,6 +157,36 @@ final class GatewayFileLaneStatusTests: XCTestCase {
         XCTAssertEqual(vm.fileLaneStatus(for: ref), .ready)
     }
 
+    /// A passing WebDAV probe proves the server accepted a write/read cycle; it
+    /// does not prove the agent's workspace or tool policy. Keep the shared row
+    /// badge and page title honest about that narrower result.
+    func testReadyPresentationNamesTheServerTest() {
+        let status = GatewayFileLaneStatus.ready
+        XCTAssertEqual(status.shortLabel.map { String(localized: $0) }, "Server tested")
+        XCTAssertEqual(status.pageTitle.map { String(localized: $0) }, "File server tested")
+        XCTAssertEqual(
+            status.meaning.map { String(localized: $0) },
+            "Conduck uploaded and retrieved a test file."
+        )
+        XCTAssertEqual(status.systemImage, "checkmark.circle.fill")
+    }
+
+    func testEveryVisibleStatusHasACompactPagePresentation() {
+        for status in [
+            GatewayFileLaneStatus.ready,
+            .needsAttention,
+            .saved,
+            .recommended,
+            .optional
+        ] {
+            XCTAssertNotNil(status.pageTitle)
+            XCTAssertNotNil(status.meaning)
+            XCTAssertNotNil(status.systemImage)
+        }
+        XCTAssertNil(GatewayFileLaneStatus.unsupported.pageTitle)
+        XCTAssertNil(GatewayFileLaneStatus.unsupported.systemImage)
+    }
+
     /// Ready wins even if a stale `.invalid` lingers — availability is the
     /// authoritative "usable" signal (a later passing test cleared the failure).
     func testReadyOutranksStaleInvalid() {

@@ -53,7 +53,7 @@ extension GatewayFileLaneStatus {
     var shortLabel: LocalizedStringResource? {
         switch self {
         case .ready:
-            return LocalizedStringResource("fileTransfer.status.ready.short", defaultValue: "Ready")
+            return LocalizedStringResource("fileTransfer.status.ready.short", defaultValue: "Server tested")
         case .needsAttention:
             return LocalizedStringResource("fileTransfer.status.needsAttention.short", defaultValue: "Needs attention")
         case .saved:
@@ -76,30 +76,75 @@ extension GatewayFileLaneStatus {
         case .ready:
             return LocalizedStringResource(
                 "fileTransfer.status.ready.meaning",
-                defaultValue: "Tested: Conduck can upload files to this server and read them back."
+                defaultValue: "Conduck uploaded and retrieved a test file."
             )
         case .needsAttention:
             return LocalizedStringResource(
                 "fileTransfer.status.needsAttention.meaning",
-                defaultValue: "The last test failed. Files won't reach this gateway until it passes."
+                defaultValue: "The last server test failed."
             )
         case .saved:
             return LocalizedStringResource(
                 "fileTransfer.status.saved.meaning",
-                defaultValue: "An address and password are saved, but nothing has been tested yet. Run the test — a saved lane that was never tested is a lane that fails at the worst moment."
+                defaultValue: "The address and password are saved. Test the server before sending files."
             )
         case .recommended:
             return LocalizedStringResource(
                 "fileTransfer.status.recommended.meaning",
-                defaultValue: "Recommended: this gateway runs an agent with file tools, so it can actually work with the files you send it."
+                defaultValue: "Set up a file server so this agent can work with files."
             )
         case .optional:
             return LocalizedStringResource(
                 "fileTransfer.status.optional.meaning",
-                defaultValue: "Optional: this gateway chats fine without it. Set it up only if you want to send files."
+                defaultValue: "Set this up only if you want this gateway to use files."
             )
         case .unsupported:
             return nil
+        }
+    }
+
+    /// Screen-level status copy is more explicit than the compact badge used by
+    /// the parent gateway editor. In particular, a green result names the file
+    /// SERVER rather than claiming the agent can already use the uploaded file.
+    var pageTitle: LocalizedStringResource? {
+        switch self {
+        case .ready:
+            return LocalizedStringResource(
+                "fileTransfer.status.ready.title",
+                defaultValue: "File server tested"
+            )
+        case .needsAttention:
+            return LocalizedStringResource(
+                "fileTransfer.status.needsAttention.title",
+                defaultValue: "Server test failed"
+            )
+        case .saved:
+            return LocalizedStringResource(
+                "fileTransfer.status.saved.title",
+                defaultValue: "File server not tested"
+            )
+        case .recommended:
+            return LocalizedStringResource(
+                "fileTransfer.status.recommended.title",
+                defaultValue: "Set up file transfer"
+            )
+        case .optional:
+            return LocalizedStringResource(
+                "fileTransfer.status.optional.title",
+                defaultValue: "File transfer not set up"
+            )
+        case .unsupported:
+            return nil
+        }
+    }
+
+    var systemImage: String? {
+        switch self {
+        case .ready: return "checkmark.circle.fill"
+        case .needsAttention: return "xmark.circle.fill"
+        case .saved: return "clock.fill"
+        case .recommended, .optional: return "externaldrive.badge.plus"
+        case .unsupported: return nil
         }
     }
 

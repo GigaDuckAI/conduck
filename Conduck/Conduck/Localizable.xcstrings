@@ -3711,7 +3711,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Read the setup guide"
+            "value" : "Setup help"
           }
         }
       }
@@ -3777,7 +3777,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "File server ready"
+            "value" : "Server test passed"
           }
         }
       }
@@ -3848,24 +3848,13 @@
         }
       }
     },
-    "fileTransfer.manual.explanation.custom.lead" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Needs an agent with file tools."
-          }
-        }
-      }
-    },
     "fileTransfer.manual.explanation.custom.v2" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A plain model or proxy can still chat and read inline text and images, but can't open files uploaded by Conduck. Run a WebDAV server over HTTPS that serves the exact folder your agent's file tools use as their working directory, then paste its address below."
+            "value" : "Manual setup needs an agent with file tools and an HTTPS WebDAV server."
           }
         }
       }
@@ -3876,7 +3865,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quick connect usually sets this up for you. To do it by hand, run a WebDAV server over HTTPS on your gateway and make it accept the sign-in below."
+            "value" : "Quick connect usually handles this. For manual setup, run an HTTPS WebDAV server on your gateway."
           }
         }
       }
@@ -3887,7 +3876,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Your files aren't sent to the model. Conduck uploads each one to your server, then adds a line to your message naming the file and the path it was saved under — that line is what the agent opens."
+            "value" : "Files are uploaded here so the agent can open them with its tools."
           }
         }
       }
@@ -4046,6 +4035,116 @@
         }
       }
     },
+    "fileTransfer.requirements.caption" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck can't verify these from this device."
+          }
+        }
+      }
+    },
+    "fileTransfer.requirements.header" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Also required"
+          }
+        }
+      }
+    },
+    "fileTransfer.requirements.reachability.detail" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reachable anywhere you use this gateway."
+          }
+        }
+      }
+    },
+    "fileTransfer.requirements.reachability.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reachability"
+          }
+        }
+      }
+    },
+    "fileTransfer.requirements.tools.detail" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can read and write files."
+          }
+        }
+      }
+    },
+    "fileTransfer.requirements.tools.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent tools"
+          }
+        }
+      }
+    },
+    "fileTransfer.requirements.workspace.generic" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serves the agent's working folder."
+          }
+        }
+      }
+    },
+    "fileTransfer.requirements.workspace.hermes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serves the folder configured as terminal.cwd."
+          }
+        }
+      }
+    },
+    "fileTransfer.requirements.workspace.openclaw" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serves ~/.openclaw/workspace, unless you changed it."
+          }
+        }
+      }
+    },
+    "fileTransfer.requirements.workspace.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace"
+          }
+        }
+      }
+    },
     "fileTransfer.row.helper" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4130,61 +4229,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Files and outputs"
-          }
-        }
-      }
-    },
-    "fileTransfer.rule.folder.generic" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Serve the exact folder your agent's file tools work in. Serve a different one and the uploads land somewhere the agent never looks, while everything here still says Ready — Conduck cannot detect this."
-          }
-        }
-      }
-    },
-    "fileTransfer.rule.folder.hermes" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Serve the folder Hermes works in. Hermes only reads files under terminal.cwd in ~/.hermes/config.yaml — if that isn't the folder your file server serves, uploads will land, every check here will pass, and your agent still won't see a single file. Conduck cannot detect this."
-          }
-        }
-      }
-    },
-    "fileTransfer.rule.folder.openclaw" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Serve the folder OpenClaw works in — its workspace (~/.openclaw/workspace by default). Serve a different folder and the uploads land somewhere the agent never looks, while everything here still says Ready."
-          }
-        }
-      }
-    },
-    "fileTransfer.rule.reach" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your file server needs the same reach as your gateway. If the gateway is public but the file server is only on your tailnet, an Apple Watch on its own can still chat — and will silently fail to send or open files."
-          }
-        }
-      }
-    },
-    "fileTransfer.rule.toolPolicy" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A passing test proves files can be stored — not that your agent may read or write them. If attachments keep failing while everything here says Ready, your gateway's tool policy is likely denying the agent's file tools; re-run conduck-connect on the gateway host to check and fix it."
           }
         }
       }
@@ -4332,17 +4376,6 @@
         }
       }
     },
-    "fileTransfer.status.label" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Status"
-          }
-        }
-      }
-    },
     "fileTransfer.status.missing" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4360,7 +4393,18 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The last test failed. Files won't reach this gateway until it passes."
+            "value" : "The last server test failed."
+          }
+        }
+      }
+    },
+    "fileTransfer.status.needsAttention.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server test failed"
           }
         }
       }
@@ -4415,7 +4459,18 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Optional: this gateway chats fine without it. Set it up only if you want to send files."
+            "value" : "Set this up only if you want this gateway to use files."
+          }
+        }
+      }
+    },
+    "fileTransfer.status.optional.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File transfer not set up"
           }
         }
       }
@@ -4448,7 +4503,18 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tested: Conduck can upload files to this server and read them back."
+            "value" : "Conduck uploaded and retrieved a test file."
+          }
+        }
+      }
+    },
+    "fileTransfer.status.ready.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File server tested"
           }
         }
       }
@@ -4459,7 +4525,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ready"
+            "value" : "Server tested"
           }
         }
       }
@@ -4470,7 +4536,18 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recommended: this gateway runs an agent with file tools, so it can actually work with the files you send it."
+            "value" : "Set up a file server so this agent can work with files."
+          }
+        }
+      }
+    },
+    "fileTransfer.status.recommended.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set up file transfer"
           }
         }
       }
@@ -4492,7 +4569,18 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "An address and password are saved, but nothing has been tested yet. Run the test — a saved lane that was never tested is a lane that fails at the worst moment."
+            "value" : "The address and password are saved. Test the server before sending files."
+          }
+        }
+      }
+    },
+    "fileTransfer.status.saved.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File server not tested"
           }
         }
       }

@@ -64,13 +64,13 @@ struct AccentGlyphActionLabelStyle: LabelStyle {
 // MARK: - Shared setup content (the pushed page AND the composer sheet)
 
 /// The file-transfer editor: a grouped `Form` of sections (status → explanation →
-/// lane rules → sign-in → connection → forget) under the shared
+/// sign-in → connection → compact agent requirements → forget) under the shared
 /// `bufferedEditorChrome` (Cancel · title · Save). Owns the credential
-/// reveal/copy state, the certificate-trust sheet, the Forget confirm alert, and
-/// the URL/pin dirty detection against the VM's persisted mirrors. The
+/// reveal/copy state, the advanced certificate-trust sheet, the Forget confirm
+/// alert, and the URL/pin dirty detection against the VM's persisted mirrors. The
 /// `.missing/.savedNeedsTest/.ready` machine drives only small touches (hide the
-/// guidance once Ready; hide Forget when there's nothing to forget) — NOT a
-/// branched visual structure.
+/// setup explanation once tested; change Test Connection to Test again; hide
+/// Forget when there's nothing to forget) — NOT a branched visual structure.
 struct FileTransferSetupContent: View {
     @Bindable var viewModel: SettingsViewModel
 
@@ -95,6 +95,10 @@ struct FileTransferSetupContent: View {
     @State private var showingForgetConfirm: Bool = false
     /// The certificate-trust sheet (the "Server certificate" row).
     @State private var showingCertSheet: Bool = false
+    /// Certificate pinning is exceptional configuration. Keep it collapsed for
+    /// the ordinary system-trust path, but reveal it when a pin exists or the
+    /// latest probe reports a certificate-specific failure.
+    @State private var showingAdvanced: Bool = false
 
     /// One-shot buffer hydration guard — `.onAppear` re-fires on the way back
     /// from a child presentation, and re-hydrating then would wipe live edits.
@@ -129,6 +133,20 @@ struct FileTransferSetupContent: View {
     /// diverges from the tuple the test actually probed.
     private var displayedTest: FileTransferTestResult? {
         viewModel.displayedFileTransferTestResult(for: ref)
+    }
+
+    private var certificateNeedsAttention: Bool {
+        let pin = Self.pinComparisonForm(viewModel.fileServerCertFingerprints[ref] ?? "")
+        if !pin.isEmpty { return true }
+        guard let failure = displayedTest?.failure else { return false }
+        switch failure {
+        case .fileTransferCertMismatch,
+             .fileTransferCertUntrusted,
+             .fileTransferCertKeyUnpinnable:
+            return true
+        default:
+            return false
+        }
     }
 
     private var trimmedURL: String {
@@ -170,10 +188,6 @@ struct FileTransferSetupContent: View {
             if state != .ready {
                 explanationSection
             }
-            // The failures NO test can catch stay on screen even at .ready —
-            // a green lane with the wrong served folder is exactly the state that
-            // needs the warning most.
-            laneRulesSection
             // At .ready the password is saved and PROVEN by the passing test;
             // showing generation/rotation there invites a casual rotation that
             // instantly overwrites the working Keychain credential before the
@@ -183,6 +197,10 @@ struct FileTransferSetupContent: View {
                 credentialSection
             }
             connectionSection
+            // The WebDAV probe cannot verify these agent-side requirements. Keep
+            // them visible, but as short labeled facts rather than troubleshooting
+            // paragraphs that obscure the actual controls.
+            agentRequirementsSection
             if state != .missing {
                 forgetSection
             }
@@ -204,6 +222,7 @@ struct FileTransferSetupContent: View {
             if !didInitialize {
                 didInitialize = true
                 viewModel.cancelFileTransferEdit(for: ref)
+                showingAdvanced = certificateNeedsAttention
             }
         }
         // Privacy hygiene: drop the in-memory minted credential when the editor
@@ -217,6 +236,9 @@ struct FileTransferSetupContent: View {
             // host's `onDismiss` promotes the staged tile. Never fires on a
             // dirty editor (external readiness must not eat unsaved edits).
             if eligible { dismiss() }
+        }
+        .onChange(of: certificateNeedsAttention) { _, needsAttention in
+            if needsAttention { showingAdvanced = true }
         }
         .interactiveDismissDisabled(context == .composer && isDirty)
         // The ONE title site for both hosts (iOS nav bar; the macOS chrome
@@ -278,27 +300,34 @@ struct FileTransferSetupContent: View {
 
     // MARK: - Status
 
-    /// At-a-glance lane status (the same label the editor's nav row shows), with
-    /// its plain-English meaning as the section footer — a one-word status
-    /// ("Recommended", "Not tested yet") is a label, not an explanation, and this
-    /// is the one place the meaning prints. Hidden for `.unsupported` (no label).
+    /// One compact, honest status block. A passing probe is deliberately called
+    /// "File server tested", never the broader "Ready": it proves WebDAV byte
+    /// transport, while the agent-side requirements below remain unverified.
     @ViewBuilder
     private var statusSection: some View {
-        if let label = status.shortLabel {
+        if let title = status.pageTitle, let systemImage = status.systemImage {
             Section {
-                HStack {
-                    Text(LocalizedStringResource("fileTransfer.status.label", defaultValue: "Status"))
-                        .font(.subheadline)
-                        .foregroundStyle(AppColors.textPrimary)
-                    Spacer()
-                    Text(label)
-                        .font(.subheadline.weight(.semibold))
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: systemImage)
+                        .font(.title3)
                         .foregroundStyle(status.tint)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppColors.textPrimary)
+                        if let meaning = status.meaning {
+                            Text(meaning)
+                                .font(.caption)
+                                .foregroundStyle(AppColors.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    Spacer(minLength: 0)
                 }
-            } footer: {
-                if let meaning = status.meaning {
-                    Text(meaning)
-                }
+                .padding(.vertical, 3)
             }
         }
     }
@@ -336,12 +365,12 @@ struct FileTransferSetupContent: View {
         if ref.isBuiltin {
             return LocalizedStringResource(
                 "fileTransfer.manual.explanation.managed",
-                defaultValue: "Quick connect usually sets this up for you. To do it by hand, run a WebDAV server over HTTPS on your gateway and make it accept the sign-in below."
+                defaultValue: "Quick connect usually handles this. For manual setup, run an HTTPS WebDAV server on your gateway."
             )
         } else {
             return LocalizedStringResource(
                 "fileTransfer.manual.explanation.custom.v2",
-                defaultValue: "A plain model or proxy can still chat and read inline text and images, but can't open files uploaded by Conduck. Run a WebDAV server over HTTPS that serves the exact folder your agent's file tools use as their working directory, then paste its address below."
+                defaultValue: "Manual setup needs an agent with file tools and an HTTPS WebDAV server."
             )
         }
     }
@@ -364,31 +393,13 @@ struct FileTransferSetupContent: View {
     private var mechanismText: LocalizedStringResource {
         LocalizedStringResource(
             "fileTransfer.manual.mechanism",
-            defaultValue: "Your files aren't sent to the model. Conduck uploads each one to your server, then adds a line to your message naming the file and the path it was saved under — that line is what the agent opens."
-        )
-    }
-
-    /// Custom-only scannable lead above the body — states the eligibility rule
-    /// (the gateway must be a real agent with file tools) in one glance. nil for
-    /// built-ins (`conduck-connect` couples the working dir for them).
-    private var explanationLead: LocalizedStringResource? {
-        guard ref.isBuiltin == false else { return nil }
-        return LocalizedStringResource(
-            "fileTransfer.manual.explanation.custom.lead",
-            defaultValue: "Needs an agent with file tools."
+            defaultValue: "Files are uploaded here so the agent can open them with its tools."
         )
     }
 
     private var explanationSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 12) {
-                if let lead = explanationLead {
-                    Text(lead)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppColors.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, 2)
-                }
+            VStack(alignment: .leading, spacing: 8) {
                 Text(explanationText)
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
@@ -397,118 +408,123 @@ struct FileTransferSetupContent: View {
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    // MARK: - Agent requirements the server test cannot verify
+
+    /// A passing WebDAV test does not prove that the agent can use the files.
+    /// Keep the three remaining requirements visible, but make them independently
+    /// scannable; remediation and protocol detail live in Setup help or appear
+    /// with an actual failed test.
+    private var agentRequirementsSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(LocalizedStringResource(
+                    "fileTransfer.requirements.caption",
+                    defaultValue: "Conduck can't verify these from this device."
+                ))
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+
+                requirementRow(
+                    title: LocalizedStringResource(
+                        "fileTransfer.requirements.workspace.title",
+                        defaultValue: "Workspace"
+                    ),
+                    detail: workingFolderRequirement
+                )
+                requirementRow(
+                    title: LocalizedStringResource(
+                        "fileTransfer.requirements.reachability.title",
+                        defaultValue: "Reachability"
+                    ),
+                    detail: LocalizedStringResource(
+                        "fileTransfer.requirements.reachability.detail",
+                        defaultValue: "Reachable anywhere you use this gateway."
+                    )
+                )
+                requirementRow(
+                    title: LocalizedStringResource(
+                        "fileTransfer.requirements.tools.title",
+                        defaultValue: "Agent tools"
+                    ),
+                    detail: LocalizedStringResource(
+                        "fileTransfer.requirements.tools.detail",
+                        defaultValue: "Can read and write files."
+                    )
+                )
+
                 Link(destination: Constants.conduckConnectRepoURL) {
                     HStack(spacing: 4) {
-                        Text(LocalizedStringResource("fileTransfer.guide.docsLink", defaultValue: "Read the setup guide"))
-                        Image(systemName: "arrow.up.right").font(.caption)
+                        Text(LocalizedStringResource(
+                            "fileTransfer.guide.docsLink",
+                            defaultValue: "Setup help"
+                        ))
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
                     }
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tint)
                 }
             }
             .padding(.vertical, 2)
+        } header: {
+            Text(LocalizedStringResource(
+                "fileTransfer.requirements.header",
+                defaultValue: "Also required"
+            ))
         }
     }
 
-    // MARK: - The three rules no test can check
-
-    /// Conduck's probe validates the WebDAV SERVER (reachable, signs in, stores
-    /// and returns the exact bytes). It cannot validate the three things that
-    /// decide whether the files are actually USABLE:
-    ///
-    ///   1. that the served folder is the folder the AGENT works in — a Hermes
-    ///      `terminal.cwd` pointing elsewhere yields a fully green lane, uploads
-    ///      that land on disk, and an agent that sees nothing;
-    ///   2. that the file server is reachable from everywhere the GATEWAY is —
-    ///      the pairing payload carries one gateway-oriented transport, so a
-    ///      public gateway + a tailnet-only file server leaves a standalone Watch
-    ///      chatting happily while silently unable to fetch attachments;
-    ///   3. that the AGENT itself is allowed to touch its own workspace — a
-    ///      gateway tool policy denying its read/write tools (verified live on
-    ///      OpenClaw: `tools.deny: ["group:fs"]`, a common hardening move)
-    ///      leaves every byte-transport check green while the agent can neither
-    ///      open uploads nor produce output files.
-    ///
-    /// None is detectable from the device (the spec's no-capability-probe ruling
-    /// — a passing test proves byte transport only), so all three must be SAID.
-    /// Shown in every state, including `.ready`. Renders as its own card row
-    /// (the amber treatment IS the row — the grouped-form cell chrome is
-    /// cleared).
-    private var laneRulesSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 10) {
-                laneRule(icon: "folder", text: workingFolderRule)
-                laneRule(icon: "antenna.radiowaves.left.and.right", text: reachRule)
-                laneRule(icon: "wrench.and.screwdriver", text: toolPolicyRule)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(AppColors.cardBackgroundElevated)
-            )
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
-        }
-    }
-
-    private func laneRule(icon: String, text: LocalizedStringResource) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: icon)
-                .font(.caption)
+    private func requirementRow(
+        title: LocalizedStringResource,
+        detail: LocalizedStringResource
+    ) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Text(verbatim: "•")
+                .font(.subheadline.weight(.bold))
                 .foregroundStyle(AppColors.brandAmber)
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(AppColors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppColors.textPrimary)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .accessibilityElement(children: .combine)
     }
 
-    /// Per-agent phrasing of "serve the folder your agent works in". Hermes gets
-    /// the config key by name (`terminal.cwd`) — it is the single most damaging
-    /// silent misconfiguration in this lane, and naming the key is the difference
-    /// between a two-minute fix and a bug report.
-    private var workingFolderRule: LocalizedStringResource {
+    /// The only backend-specific requirement: the served directory must match
+    /// the agent's own workspace. Preserve the actionable config name/path while
+    /// dropping the repeated failure narrative.
+    private var workingFolderRequirement: LocalizedStringResource {
         if case .builtin(let backend) = ref {
             switch backend {
             case .hermes:
                 return LocalizedStringResource(
-                    "fileTransfer.rule.folder.hermes",
-                    defaultValue: "Serve the folder Hermes works in. Hermes only reads files under terminal.cwd in ~/.hermes/config.yaml — if that isn't the folder your file server serves, uploads will land, every check here will pass, and your agent still won't see a single file. Conduck cannot detect this."
+                    "fileTransfer.requirements.workspace.hermes",
+                    defaultValue: "Serves the folder configured as terminal.cwd."
                 )
             case .openclaw:
                 return LocalizedStringResource(
-                    "fileTransfer.rule.folder.openclaw",
-                    defaultValue: "Serve the folder OpenClaw works in — its workspace (~/.openclaw/workspace by default). Serve a different folder and the uploads land somewhere the agent never looks, while everything here still says Ready."
+                    "fileTransfer.requirements.workspace.openclaw",
+                    defaultValue: "Serves ~/.openclaw/workspace, unless you changed it."
                 )
             case .openrouter:
                 break
             }
         }
-        // openrouter + every custom gateway: no OpenClaw/Hermes-specific folder.
         return LocalizedStringResource(
-            "fileTransfer.rule.folder.generic",
-            defaultValue: "Serve the exact folder your agent's file tools work in. Serve a different one and the uploads land somewhere the agent never looks, while everything here still says Ready — Conduck cannot detect this."
-        )
-    }
-
-    private var reachRule: LocalizedStringResource {
-        LocalizedStringResource(
-            "fileTransfer.rule.reach",
-            defaultValue: "Your file server needs the same reach as your gateway. If the gateway is public but the file server is only on your tailnet, an Apple Watch on its own can still chat — and will silently fail to send or open files."
-        )
-    }
-
-    /// Rule 3 — the gateway's own tool policy. A passing test proves Conduck
-    /// can move bytes, never that the AGENT may read or write them: a tool
-    /// policy denying the agent's file tools fails every attachment turn while
-    /// this screen says Ready. Points at the wizard (which checks and offers
-    /// the fix) rather than naming config keys — those are gateway-specific
-    /// and drift.
-    private var toolPolicyRule: LocalizedStringResource {
-        LocalizedStringResource(
-            "fileTransfer.rule.toolPolicy",
-            defaultValue: "A passing test proves files can be stored — not that your agent may read or write them. If attachments keep failing while everything here says Ready, your gateway's tool policy is likely denying the agent's file tools; re-run conduck-connect on the gateway host to check and fix it."
+            "fileTransfer.requirements.workspace.generic",
+            defaultValue: "Serves the agent's working folder."
         )
     }
 
@@ -700,9 +716,30 @@ struct FileTransferSetupContent: View {
     private var connectionSection: some View {
         Section {
             urlGroup
-            certificateRow
             actionGroup
+            advancedDisclosure
         }
+    }
+
+    private var advancedDisclosure: some View {
+        DisclosureGroup(isExpanded: $showingAdvanced) {
+            certificateRow
+                .padding(.top, 10)
+        } label: {
+            HStack(spacing: 8) {
+                Text(LocalizedStringResource(
+                    "fileTransfer.advanced.label",
+                    defaultValue: "Advanced"
+                ))
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.textPrimary)
+                Spacer(minLength: 8)
+                Text(certRowValue)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+            }
+        }
+        .tint(AppColors.textTertiary)
     }
 
     private var urlGroup: some View {
@@ -715,13 +752,15 @@ struct FileTransferSetupContent: View {
             urlInvalidRow
             // The footer says what to DO; WHY the file server has its own address
             // (a second service beside the gateway) lives in the field tip.
-            Text(LocalizedStringResource(
-                "fileTransfer.url.footer.manual.v3",
-                defaultValue: "Paste the https:// address your file server is reachable at."
-            ))
-                .font(.caption)
-                .foregroundStyle(AppColors.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            if state != .ready {
+                Text(LocalizedStringResource(
+                    "fileTransfer.url.footer.manual.v3",
+                    defaultValue: "Paste the https:// address your file server is reachable at."
+                ))
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -875,7 +914,7 @@ struct FileTransferSetupContent: View {
         return VStack(alignment: .leading, spacing: 8) {
             actionRow(test: test)
             // The staged checklist is diagnostic detail — surfaced only after a FAILED
-            // test (a passing lane stays a single "File server ready" line).
+            // test (a passing lane stays a single "Server test passed" line).
             if test?.success == false {
                 FileTransferStageChecklist(result: test)
                 // "Get help" affordance under the failure — shown only when the
@@ -892,26 +931,14 @@ struct FileTransferSetupContent: View {
         .padding(.vertical, 2)
     }
 
-    /// Neutral `.bordered` Test Connection + the spinner/✓/✗ feedback inline-trailing
-    /// where it fits, falling back to a row-below on a narrow width or a long error.
+    /// One easy-to-find full-width secondary action. Feedback sits below it so a
+    /// long localized failure cannot squeeze the button into a narrow pill.
     private func actionRow(test: FileTransferTestResult?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    testButton
-                    Spacer(minLength: 12)
-                    statusFeedback(test: test)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 12) {
-                        testButton
-                        Spacer()
-                    }
-                    statusFeedback(test: test)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            testButton
+            if testRunning || test?.success == false || (test?.success == true && state != .ready) {
+                statusFeedback(test: test)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if !hasCredential {
                 Text(LocalizedStringResource(
@@ -932,18 +959,33 @@ struct FileTransferSetupContent: View {
             Task { await viewModel.runFileTransferTest(for: ref) }
         } label: {
             Label(
-                LocalizedStringResource("settings.remoteAgent.testConnection.button", defaultValue: "Test Connection"),
+                testButtonTitle,
                 systemImage: "checkmark.shield"
             )
             .font(.subheadline.weight(.semibold))
             .labelStyle(AccentGlyphActionLabelStyle())
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.bordered)
+        .controlSize(.large)
         // `saving` keeps Test and Save mutually exclusive — see `canSave`.
         .disabled(testRunning || saving || trimmedURL.isEmpty || !hasCredential)
     }
 
-    /// Spinner while running, green "File server ready" on a full pass, or a red
+    private var testButtonTitle: LocalizedStringResource {
+        if state == .ready {
+            return LocalizedStringResource(
+                "fileTransfer.connected.retest",
+                defaultValue: "Test again"
+            )
+        }
+        return LocalizedStringResource(
+            "settings.remoteAgent.testConnection.button",
+            defaultValue: "Test Connection"
+        )
+    }
+
+    /// Spinner while running, green "Server test passed" on a full pass, or a red
     /// error summary on failure (the staged breakdown shows below on failure).
     /// Takes the already-derived signature-gated verdict — editing the URL or
     /// pin makes the feedback go dark instead of describing a config the probe
@@ -962,7 +1004,7 @@ struct FileTransferSetupContent: View {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(AppColors.success)
-                    Text(LocalizedStringResource("fileTransfer.inline.fileServerReady", defaultValue: "File server ready"))
+                    Text(LocalizedStringResource("fileTransfer.inline.fileServerReady", defaultValue: "Server test passed"))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textSecondary)
                 }

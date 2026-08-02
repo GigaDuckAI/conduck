@@ -72,7 +72,8 @@ struct FileTransferTestSignature: Equatable, Sendable {
 /// failure comes from `fileServerValidationStates`. Computed by
 /// `SettingsViewModel.fileLaneStatus(for:)`.
 enum GatewayFileLaneStatus: Equatable {
-    /// Staged test passed — agents can open attachments and return files.
+    /// Staged test passed — the file server accepted a write/read cycle. The
+    /// client cannot prove the agent workspace or tool-policy requirements.
     case ready
     /// Saved but the last staged test FAILED (write/read/delete) — surfaces red.
     case needsAttention
