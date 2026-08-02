@@ -242,6 +242,18 @@ private struct BufferedEditorChrome: ViewModifier {
     }
 
     #if os(macOS)
+    /// Side breathing room for the exit control's hover wash. A WORD ("Cancel")
+    /// needs it or the wash hugs the letters and reads as a cramped pill; the
+    /// `.back` CHEVRON must not have it — it is aligned pixel-for-pixel with
+    /// `MacSettingsSubScreenChrome`'s unpadded chevron so the sub-screens and the
+    /// editors share one leading edge, and 10pt would visibly break that.
+    private var exitWashPadding: CGFloat {
+        switch exitStyle {
+        case .back: return 0
+        case .cancel: return 10
+        }
+    }
+
     /// The macOS pinned top header — Cancel (left) · title (centered) · Save
     /// (right). Deterministic layout (a `ZStack` centers the title regardless of
     /// the two buttons' differing widths); a bottom hairline separates it from the
@@ -255,7 +267,12 @@ private struct BufferedEditorChrome: ViewModifier {
                     .lineLimit(1)
                 HStack {
                     exitButton
-                        .buttonStyle(.plain)
+                        // Applied HERE, not inside `exitButton`: that view is shared
+                        // with the iOS toolbar path, which must keep its native
+                        // treatment. The mac pointer style stays on the macOS side.
+                        // Padding only in the word-labelled `.cancel` form — see
+                        // `exitWashPadding`.
+                        .pointerIconButton(horizontalPadding: exitWashPadding)
                         .foregroundStyle(AppColors.textSecondary)
                         // Esc exits the INNERMOST editor. Bound only on the top of
                         // the stack: SwiftUI documents no precedence between two live
@@ -278,7 +295,13 @@ private struct BufferedEditorChrome: ViewModifier {
                         )
                     Spacer()
                     Button(saveTitle) { onSave() }
-                        .buttonStyle(.plain)
+                        // Same live band + hover wash as the exit control, so the
+                        // header's two peer actions read as one family. NOT the
+                        // inline-link style: that carries the pointing-hand cursor,
+                        // which macOS reserves for links, and Save is a commit.
+                        // The label is a WORD, so the wash gets side padding or it
+                        // hugs the letters.
+                        .pointerIconButton(horizontalPadding: 10)
                         .fontWeight(.semibold)
                         .foregroundStyle(canSave() ? AppColors.brandAmber : AppColors.textTertiary)
                         .disabled(!canSave())

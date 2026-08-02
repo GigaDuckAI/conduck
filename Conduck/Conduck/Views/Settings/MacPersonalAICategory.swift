@@ -145,7 +145,7 @@ struct MacPersonalAICategory: View {
             } label: {
                 DefaultGatewaySelectorRow(defaultName: viewModel.defaultSelectorDisplayName)
             }
-            .buttonStyle(.plain)
+            .settingsRowButton()
         } header: {
             zoneHeader(Text(LocalizedStringResource(
                 "settings.personalAI.newChats.header",
@@ -236,9 +236,8 @@ struct MacPersonalAICategory: View {
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .settingsRowButton()
         .accessibilityIdentifier("settings.personalAI.row.\(row.ref.rawString)")
     }
 
@@ -264,7 +263,7 @@ struct MacPersonalAICategory: View {
                 .font(.body)
                 .foregroundStyle(canAdd ? AppColors.textPrimary : AppColors.textTertiary)
             }
-            .buttonStyle(.plain)
+            .settingsRowButton()
             .disabled(!canAdd)
             .accessibilityIdentifier("settings.personalAI.addCustomGateway")
             if !canAdd {

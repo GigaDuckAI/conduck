@@ -64,7 +64,7 @@ struct ICloudUnavailableBanner: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.textTertiary)
             }
-            .buttonStyle(.plain)
+            .pointerIconButton()
             .accessibilityLabel(Text(LocalizedStringResource("sync.icloud.banner.dismiss", defaultValue: "Dismiss")))
         }
         .padding(16)

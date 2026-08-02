@@ -349,7 +349,7 @@ struct ConversationListView: View {
                         } label: {
                             conversationRow(convo)
                         }
-                        .buttonStyle(.plain)
+                        .settingsRowButton(horizontalPadding: 0)
                         // Active-conversation highlight (persistent-sidebar hosts
                         // only; nil on the iPhone sheet → Color.clear). A subtle
                         // amber row fill — the app's accent reads as "selected" on
@@ -569,6 +569,9 @@ private struct NativeSearchableModifier: ViewModifier {
 struct SidebarSearchField: View {
     @Binding var text: String
 
+    /// Drives the macOS click-anywhere-on-the-capsule focus assist below.
+    @FocusState private var fieldFocused: Bool
+
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
@@ -583,13 +586,41 @@ struct SidebarSearchField: View {
                         .font(.body)
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                // 22, not the 28 default: the clear button shares an HStack with
+                // the search field, so the frame is also the capsule's height.
+                // Circular wash: the glyph is a filled circle nearly as wide as
+                // that square, so a rounded one would halo its corners.
+                .pointerIconButton(size: 22, shape: .circle)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Self.fill, in: Capsule(style: .continuous))
         .overlay(Capsule(style: .continuous).strokeBorder(Self.stroke, lineWidth: 0.5))
+        #if os(macOS)
+        // The drawn capsule is the padded frame, but padding and a `.background`
+        // shape add no live area — only the field's own text line placed a caret,
+        // leaving the magnifier, the 12pt side bands and the 8pt top/bottom bands
+        // dead. Route a click anywhere on the capsule to the field so it behaves
+        // like the system search field it imitates.
+        //
+        // A BEHIND-CONTENT `.background` layer, never `.contentShape` on the
+        // wrapper and never `.overlay`: this is the same fix as
+        // `MessageComposerBar.macOS` (see its comment), which records that making
+        // the WRAPPER itself hittable surfaces an unlabeled phantom tappable
+        // element in the accessibility tree — and this wrapper carries
+        // `.accessibilityIdentifier("sidebar.search")`, so that phantom would
+        // absorb the identifier and hand AX clients a button where the text field
+        // should be. The layer is hidden from AX; VoiceOver focuses the field
+        // directly. Being behind the content, it also cannot steal clicks from
+        // the field or the clear button.
+        .background(
+            Color.clear
+                .contentShape(Capsule(style: .continuous))
+                .onTapGesture { fieldFocused = true }
+                .accessibilityHidden(true)
+        )
+        #endif
         .accessibilityIdentifier("sidebar.search")
     }
 
@@ -611,7 +642,10 @@ struct SidebarSearchField: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
         #else
+        // Bound only off iOS — it exists for the capsule-wide click-to-focus
+        // assist in `body`, which is macOS-only.
         base
+            .focused($fieldFocused)
         #endif
     }
 }

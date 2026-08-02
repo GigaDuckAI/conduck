@@ -85,7 +85,7 @@ struct CompletionStepView: View {
                         .background(Color.accentColor)
                         .cornerRadius(14)
                 }
-                .buttonStyle(.plain)
+                .primaryCTAButton()
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, Constants.Layout.horizontalPadding)
             }

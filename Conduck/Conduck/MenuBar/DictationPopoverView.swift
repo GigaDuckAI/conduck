@@ -246,7 +246,7 @@ struct DictationPopoverView: View {
                         .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .pointerIconButton()
                 .help(String(localized: LocalizedStringResource(
                     "popover.header.newChat",
                     defaultValue: "New chat"
@@ -262,7 +262,7 @@ struct DictationPopoverView: View {
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
+            .pointerIconButton()
             .help(String(localized: LocalizedStringResource(
                 "conversations.openInWindow",
                 defaultValue: "Open in Window"
@@ -457,6 +457,18 @@ struct DictationPopoverView: View {
                             .stroke(AppColors.border, lineWidth: 1)
                     )
             )
+            // The whole card is a focus target — the editable `TextField` is only
+            // as tall as its text, so the card's 12pt side and 9pt top/bottom
+            // padding were dead: a click there placed no caret. Same behind-content
+            // hit layer the window composer uses (`MessageComposerBar`): a
+            // `.background`, never an `.overlay` (which would steal clicks from the
+            // field), and hidden from accessibility so it adds no phantom element.
+            .background(
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { composeFocused = true }
+                    .accessibilityHidden(true)
+            )
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
@@ -495,7 +507,11 @@ struct DictationPopoverView: View {
                         .frame(width: 22, height: 22)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                // Circular wash, like `cancelButton`: the chrome is a filled
+                // circle, so a rounded square tints only the corners around it.
+                // Size stays at the 28pt floor — shrinking the wash to the 14pt
+                // glyph would also shrink the live square below `minTarget`.
+                .pointerIconButton(shape: .circle)
                 .opacity(thumbnailHovering ? 1 : 0)
                 .padding(2)
                 .accessibilityLabel(Text(String(localized: LocalizedStringResource(
@@ -775,7 +791,7 @@ struct DictationPopoverView: View {
                     .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .pointerIconButton()
             .accessibilityLabel(Text(String(localized: LocalizedStringResource(
                 "popover.tip.dismiss",
                 defaultValue: "Dismiss tip"
@@ -908,7 +924,9 @@ struct DictationPopoverView: View {
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // The 24pt filled circle fills most of the 32pt live square, so the wash
+        // follows it — a rounded square would tint the corners around it.
+        .pointerIconButton(size: 32, shape: .circle)
         .accessibilityLabel(Text(String(localized: LocalizedStringResource(
             "popover.cancel",
             defaultValue: "Cancel"

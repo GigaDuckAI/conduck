@@ -84,7 +84,7 @@ struct AttachmentMenu: View {
                 .contentShape(Rectangle())
         }
         .menuStyle(.button)
-        .buttonStyle(.plain)
+        .pointerIconButton()
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.menu",
             defaultValue: "Add attachment"

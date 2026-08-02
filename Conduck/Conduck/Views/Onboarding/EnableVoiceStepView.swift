@@ -86,7 +86,7 @@ struct EnableVoiceStepView: View {
                         .background(Color.accentColor)
                         .cornerRadius(14)
                 }
-                .buttonStyle(.plain)
+                .primaryCTAButton()
                 .frame(maxWidth: .infinity)
                 .disabled(isRequesting)
 
@@ -99,7 +99,16 @@ struct EnableVoiceStepView: View {
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                // Centred call-to-action: live area + hover wash (the label's own
+                // frame/contentShape stay — off macOS this style IS `.plain`, so
+                // they still carry the touch target).
+                .settingsRowButton(alignment: .center)
+                // Cap the LIVE width to the drawn button. The style stretches to
+                // `.infinity`, so without this the entire footer band activates
+                // "skip voice setup" — including a click 200pt clear of the words,
+                // where no hover wash appears to warn that it would. `.infinity`
+                // on iOS/watchOS, so touch layout is unchanged.
+                .frame(maxWidth: Constants.Layout.buttonMaxWidth)
                 .frame(maxWidth: .infinity)
                 .disabled(isRequesting)
             }

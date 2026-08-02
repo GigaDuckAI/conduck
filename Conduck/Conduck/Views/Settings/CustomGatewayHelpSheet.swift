@@ -229,6 +229,7 @@ struct CustomGatewayHelpSheet: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tint)
                 }
+                .pointerLink()
             }
         }
     }

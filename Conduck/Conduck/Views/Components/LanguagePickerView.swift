@@ -86,7 +86,7 @@ struct LanguagePickerView: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .settingsRowButton()
     }
 
     @ViewBuilder
@@ -118,7 +118,7 @@ struct LanguagePickerView: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .settingsRowButton()
     }
 
     private var filteredLanguages: [Language] {

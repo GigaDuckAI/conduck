@@ -402,7 +402,9 @@ struct CustomSTTConfigBody: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            // `horizontalPadding: 0` keeps "API key" flush with the Name / URL /
+            // auth field labels stacked above it in the same Connection section.
+            .settingsRowButton(horizontalPadding: 0)
         }
     }
 
@@ -706,7 +708,7 @@ struct CustomSTTConfigBody: View {
                     #endif
                 }
                 #if os(macOS)
-                .buttonStyle(.plain)
+                .settingsRowButton(horizontalPadding: 0)
                 #endif
                 .foregroundStyle(AppColors.error)
             }

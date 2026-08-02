@@ -261,7 +261,9 @@ struct GuidedGatewaySetupView: View {
                             .frame(width: 44, height: 44)
                             .background(Circle().fill(AppColors.backgroundSecondary))
                     }
-                    .buttonStyle(.plain)
+                    // Circular wash to match the drawn circle: a rounded-square
+                    // one would tint only the corner slivers outside it.
+                    .pointerIconButton(size: 44, shape: .circle)
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "settings.guidedSetup.back",
                         defaultValue: "Go Back"
@@ -284,7 +286,8 @@ struct GuidedGatewaySetupView: View {
                         .frame(width: 44, height: 44)
                         .background(Circle().fill(AppColors.backgroundSecondary))
                 }
-                .buttonStyle(.plain)
+                // Circular wash — same reason as the Back circle above.
+                .pointerIconButton(size: 44, shape: .circle)
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "settings.guidedSetup.close",
                     defaultValue: "Close"

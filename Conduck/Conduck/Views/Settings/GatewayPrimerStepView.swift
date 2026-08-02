@@ -113,7 +113,7 @@ struct GatewayPrimerStepView: View {
                     .background(Color.accentColor)
                     .cornerRadius(14)
             }
-            .buttonStyle(.plain)
+            .primaryCTAButton()
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("guidedSetup.primer.choose")
 
@@ -130,7 +130,7 @@ struct GatewayPrimerStepView: View {
                             .stroke(AppColors.border, lineWidth: 1)
                     )
             }
-            .buttonStyle(.plain)
+            .choiceCardButton(cornerRadius: 14)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("guidedSetup.primer.manual")
 
@@ -143,6 +143,7 @@ struct GatewayPrimerStepView: View {
             }
             .tint(AppColors.textSecondary)
             .foregroundStyle(AppColors.textSecondary)
+            .pointerLink()
             .padding(.top, 2)
             .accessibilityIdentifier("guidedSetup.primer.docs")
         }

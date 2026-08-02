@@ -56,7 +56,7 @@ struct ShortcutStepView: View {
                     .background(Color.accentColor)
                     .cornerRadius(14)
                 }
-                .buttonStyle(.plain)
+                .primaryCTAButton()
                 .frame(maxWidth: .infinity)
 
                 Button(action: onContinue) {

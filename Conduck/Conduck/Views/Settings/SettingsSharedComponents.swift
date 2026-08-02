@@ -35,6 +35,10 @@ extension View {
         #if os(macOS)
         self
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The row is live edge to edge but looks inert under the pointer, so
+            // the wash is the only thing announcing it. Painted BEFORE the tap
+            // scaffolding below, which stays exactly as it was.
+            .pointerHoverWash()
             .contentShape(Rectangle())
             .onTapGesture { withAnimation { isExpanded.wrappedValue.toggle() } }
         #else

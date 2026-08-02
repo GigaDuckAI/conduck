@@ -346,7 +346,7 @@ struct HostedModelEditStepView: View {
             .background(enabled ? Color.accentColor : AppColors.disabled)
             .cornerRadius(14)
         }
-        .buttonStyle(.plain)
+        .primaryCTAButton()
         .disabled(!enabled)
         .frame(maxWidth: .infinity)
     }

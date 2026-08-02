@@ -85,7 +85,9 @@ struct OnboardingChoiceCard: View {
             .glassCardBackground(borderColor: emphasis ? Color.accentColor.opacity(0.6) : nil,
                                  borderWidth: emphasis ? 1.5 : 1)
         }
-        .buttonStyle(.plain)
+        // 16 matches `glassCardBackground`'s own corner radius, so the pointer
+        // hover/pressed wash lines up with the card's edge.
+        .choiceCardButton(cornerRadius: 16)
     }
 }
 

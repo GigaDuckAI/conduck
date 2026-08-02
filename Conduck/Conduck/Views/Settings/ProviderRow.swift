@@ -404,7 +404,9 @@ struct ProviderConfigBody: View {
                   systemImage: "trash")
                 .font(.subheadline)
         }
-        .buttonStyle(.plain)
+        // `horizontalPadding: 0` keeps the label flush with the masked-tail line
+        // stacked directly above it, which is not a Button and gets no style.
+        .settingsRowButton(horizontalPadding: 0)
         .foregroundStyle(AppColors.error)
         .confirmationDialog(
             LocalizedStringResource("settings.voice.access.clearKey.title", defaultValue: "Clear this key?"),
@@ -514,7 +516,8 @@ struct ProviderConfigBody: View {
                     Label(appleManageLabel, systemImage: "gear")
                         .font(.subheadline)
                 }
-                .buttonStyle(.plain)
+                // Flush with the "On-device · Ready" line stacked above it.
+                .settingsRowButton(horizontalPadding: 0)
                 .foregroundStyle(AppColors.textSecondary)
             }
         case .failed(let message, let retryable):
@@ -637,6 +640,7 @@ struct ProviderConfigBody: View {
                 }
                 .font(.subheadline)
             }
+            .pointerLink()
         }
     }
 

@@ -508,7 +508,7 @@ struct PairingImportSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                 }
-                .buttonStyle(.plain)
+                .settingsRowButton(alignment: .center)
                 .foregroundStyle(Color.accentColor)
                 .disabled(flow.planning)
             }
@@ -727,6 +727,7 @@ struct PairingImportSheet: View {
                     ))
                         .font(.subheadline.weight(.semibold))
                 }
+                .pointerLink()
             }
             .padding(.vertical, 4)
         }

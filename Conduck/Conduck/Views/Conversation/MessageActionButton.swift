@@ -8,10 +8,15 @@
 //   1. A generous, platform-correct INVISIBLE hit region around a small visible
 //      glyph (the old 12pt glyph had a sub-minimum tap target with zero slop).
 //      iOS gets a full 44×44pt touch target (Apple HIG minimum is 44pt); macOS —
-//      a precise-pointer surface — gets a tighter 28×24pt. `.contentShape` makes
-//      the whole (otherwise transparent) frame tappable, not just the glyph.
-//   2. A shared `PressableFooterButtonStyle` giving a subtle press-scale so the
-//      controls feel tactile, Reduce-Motion aware (static under Reduce Motion).
+//      a precise-pointer surface — gets a tighter 28×24pt label frame, which
+//      `.pointerIconButton()` then grows to the 28pt pointer floor in both axes.
+//      `.contentShape` makes the whole (otherwise transparent) frame tappable,
+//      not just the glyph.
+//   2. Platform-correct feedback: macOS takes the shared `.pointerIconButton()`
+//      treatment (hover wash + pressed wash), because a mouse needs hover to
+//      learn a bare glyph is a control at all; touch surfaces have no hover to
+//      feed and keep `PressableFooterButtonStyle`'s subtle press-scale, which is
+//      Reduce-Motion aware (static under Reduce Motion).
 //
 // The control is content-agnostic: callers pass either a system-symbol name
 // (Copy) or arbitrary label content (Speak, whose glyph is state-driven —
@@ -57,7 +62,13 @@ struct MessageActionButton<Label: View>: View {
                 .frame(width: FooterHitRegion.width, height: FooterHitRegion.height)
                 .contentShape(Rectangle())
         }
+        // See header note 2: the pointer surface trades the press-scale for the
+        // shared hover/pressed wash and the `MacPointer.minTarget` live square.
+        #if os(macOS)
+        .pointerIconButton()
+        #else
         .buttonStyle(PressableFooterButtonStyle())
+        #endif
         .accessibilityLabel(accessibilityLabel)
     }
 }
@@ -89,7 +100,8 @@ extension MessageActionButton where Label == AnyView {
 /// Subtle press feedback for the footer action buttons: scales the glyph down
 /// while pressed so the control feels tactile. Reduce-Motion aware — under
 /// Reduce Motion the scale is pinned to 1.0 (no movement), so the state change
-/// is instant + static. Shared by Speak + Copy for a consistent feel.
+/// is instant + static. Shared by Speak + Copy for a consistent feel on the
+/// touch surfaces; macOS uses the shared pointer treatment instead.
 struct PressableFooterButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

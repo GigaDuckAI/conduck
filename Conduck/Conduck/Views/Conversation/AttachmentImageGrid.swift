@@ -109,6 +109,12 @@ struct AttachmentImageGrid: View {
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
+        // The tile is a real target (it opens the gallery) but `.plain` gives the
+        // pointer nothing, so a clickable photo looks exactly like a decorative
+        // one. The wash radius matches the tile's own `clipShape`; a
+        // `.choiceCardButton` would stretch the live area past the fixed-size
+        // tile into the grid gutters.
+        .pointerHoverWash(cornerRadius: 10)
         .accessibilityLabel(Text(String(
             format: String(localized: LocalizedStringResource(
                 "attachment.image.accessibility", defaultValue: "Image %lld of %lld")),

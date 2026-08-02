@@ -191,6 +191,7 @@ struct GatewayCredentialHelpSheet: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.tint)
             }
+            .pointerLink()
         }
     }
 
