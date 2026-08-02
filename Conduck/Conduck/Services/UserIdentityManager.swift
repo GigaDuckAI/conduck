@@ -34,14 +34,14 @@ actor UserIdentityManager {
         self.iCloudStore = dependencies.ubiquitous
         self.cloudAvailability = dependencies.cloudAvailability
 
-        // Register for external KVS changes only while iCloud is available.
-        let isAvailable = dependencies.cloudAvailability.isAvailable
-        guard isAvailable else {
-            #if DEBUG
-            print("🔑 iCloud unavailable — skipping KVS observer registration")
-            #endif
-            return
-        }
+        // Registration is UNCONDITIONAL — the same rule `SettingsManager.init`
+        // and `KVSChangeSource` document, and for the same reason: iCloud
+        // availability is a snapshot taken once, at launch, but a user who signs
+        // in mid-session must not need a relaunch before sync resumes. Gating
+        // here meant the identity UUID never adopted a peer's value for the rest
+        // of the process, so the phone and Watch correlated against different
+        // UUIDs while settings sync looked healthy. An observer on a dormant
+        // store costs nothing — no notifications fire while signed out.
         dependencies.changes.observe { [weak self] change in
             guard let self else { return }
             Task { await self.handleICloudChange(change) }

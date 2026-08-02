@@ -504,15 +504,22 @@ struct DiagnosticsContent: View {
                 // The amber glyph never stands alone — one short gloss says what
                 // it means (and gives VoiceOver the warning the icon can't).
                 //
-                // An UNREADABLE key is not missing setup: the Keychain refused
-                // the read, almost always because the device is locked. Sending
-                // that user to Voice settings to "finish" a provider they
-                // already finished is a dead end — the remedy is to unlock.
+                // An UNREADABLE key is not missing setup — but it is also NOT,
+                // in practice, a locked device. Secrets are
+                // `kSecAttrAccessibleAfterFirstUnlock` and this screen requires
+                // an unlocked device to reach, so the locked-Keychain producer
+                // is effectively unreachable here. The producer that DOES fire
+                // is a slot that read back empty or undecodable — a key that is
+                // stored but unusable. "Unlock and try again" is useless advice
+                // for that (the device is already unlocked), and "run the tests
+                // again" names the wrong control: the run-all sweep never
+                // recomputes this row, only Refresh does. Say what is true and
+                // point at the one action that fixes it.
                 if status == .warning {
                     Text(keyState == .unreadable
                          ? LocalizedStringResource(
                             "diagnostics.voice.setup.keyUnreadable",
-                            defaultValue: "Key saved but unreadable right now — unlock this device, then run the tests again."
+                            defaultValue: "A key is saved for this provider but can't be read back — re-enter it in Voice settings."
                          )
                          : LocalizedStringResource(
                             "diagnostics.voice.setup.needsSetup",

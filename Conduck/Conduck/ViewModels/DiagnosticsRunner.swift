@@ -1107,9 +1107,17 @@ final class DiagnosticsRunner {
                 category: .connection,
                 tier: .autoRead,
                 status: .warning,
+                // SAME VOCABULARY AND SAME REMEDY as the folded copy in the
+                // `.none` row above. These two rows describe the identical
+                // predicate (`partiallyConfiguredRemoteAgentRefs`), so naming it
+                // "a leftover gateway" here and "a gateway synced to this
+                // device" there — and prescribing "finish or forget" against
+                // "re-enter, or re-pair" — describes one state two ways. A user
+                // who forgets a healthy sibling watches the same gateway get
+                // re-described mid-session.
                 detail: partialGatewayCount == 1
-                    ? String(localized: "diagnostics.connection.gateway.partial.one", defaultValue: "A gateway synced to this device is missing its key or model here — open Settings and re-enter it, or re-pair.")
-                    : String(localized: "diagnostics.connection.gateway.partial.many", defaultValue: "\(partialGatewayCount) gateways synced to this device are missing their key or model here — open Settings and re-enter them, or re-pair."),
+                    ? String(localized: "diagnostics.connection.gateway.partial.one", defaultValue: "A leftover gateway is stored here without its key or model — open it in Settings to finish or forget it.")
+                    : String(localized: "diagnostics.connection.gateway.partial.many", defaultValue: "\(partialGatewayCount) leftover gateways are stored here without their key or model — open them in Settings to finish or forget them."),
                 role: nil, reportLabel: nil
             ))
         }

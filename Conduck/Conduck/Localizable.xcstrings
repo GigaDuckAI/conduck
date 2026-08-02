@@ -1814,6 +1814,28 @@
         }
       }
     },
+    "diagnostics.connection.gateway.none.detail.partialMany" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add your Personal AI gateway in Settings — every request needs one on this device. %lld leftover gateways are still stored here without their key or model; open them in Settings to finish or forget them."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.none.detail.partialOne" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add your Personal AI gateway in Settings — every request needs one on this device. A leftover gateway is still stored here without its key or model; open it in Settings to finish or forget it."
+          }
+        }
+      }
+    },
     "diagnostics.connection.gateway.partial" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -1831,7 +1853,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%lld gateways synced to this device are missing their key or model here — open Settings and re-enter them, or re-pair."
+            "value" : "%lld leftover gateways are stored here without their key or model — open them in Settings to finish or forget them."
           }
         }
       }
@@ -1842,7 +1864,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "A gateway synced to this device is missing its key or model here — open Settings and re-enter it, or re-pair."
+            "value" : "A leftover gateway is stored here without its key or model — open it in Settings to finish or forget it."
           }
         }
       }
@@ -2668,6 +2690,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Needs setup — finish this provider in Voice settings."
+          }
+        }
+      }
+    },
+    "diagnostics.voice.setup.keyUnreadable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A key is saved for this provider but can't be read back — re-enter it in Voice settings."
           }
         }
       }

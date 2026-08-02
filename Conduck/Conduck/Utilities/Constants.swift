@@ -1078,18 +1078,6 @@ enum Constants {
     /// index for clearing dropped per-ref slots).
     static let customGatewaysRegistryKey = "remoteAgent.customGateways"
 
-    /// App-Group key recording which revision of the orphan sweep has run on
-    /// this device (`SettingsManager.reconcileOrphanedPerUUIDSlots`).
-    /// Device-local: the sweep removes keys from BOTH stores, so a peer's run
-    /// already benefits this device — re-running it here is only about
-    /// collecting anything this device's own delete paths left behind.
-    static let orphanSweepVersionKey = "storage.orphanSweepVersion"
-
-    /// Current orphan-sweep revision. BUMP when a new per-uuid key family is
-    /// added to the sweep's prefix lists, so devices that already ran the
-    /// previous revision collect the newly-covered keys.
-    static let orphanSweepVersion = 1
-
     /// UserDefaults key for the DEFAULT backend pointer — which gateway a
     /// freshly-minted conversation binds to, and the sole router for the
     /// picker-less surfaces (Watch headless / CarPlay / Action Button).

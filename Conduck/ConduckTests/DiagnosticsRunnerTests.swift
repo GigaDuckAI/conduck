@@ -469,17 +469,53 @@ final class DiagnosticsRunnerTests: XCTestCase {
         }
     }
 
-    /// The partial-config row appears EXACTLY when the fail-closed configured
-    /// set dropped a URL-bearing ref (no focus in play here, so the row's count
-    /// and the settings query agree 1:1). Invariant-based like the gateway-none
-    /// test — robust to whatever gateway state the sim carries.
+    /// The standalone partial-config row appears exactly when the fail-closed
+    /// configured set dropped a URL-bearing ref AND a send-able gateway still
+    /// exists to contrast it with. With NO configured gateway the count folds
+    /// into the red `connection.gateway.none` row instead — two rows about the
+    /// same nothing contradict each other, which is the bug this suite guards.
+    ///
+    /// The `!refs.isEmpty` half is not optional decoration: without it this
+    /// assertion encodes the PRE-FIX rule, and stays green only for as long as
+    /// nothing seeds a gateway (both sides empty, `false == false`). Seed a
+    /// leftover built-in URL — the founder's reported state — and it fails while
+    /// production is correct.
     func testPartialGatewayRowMatchesSettingsQuery() async {
         let runner = DiagnosticsRunner()
         await runner.runAutoReads()
         let partial = await SettingsManager.shared.partiallyConfiguredRemoteAgentRefs()
+        let configured = await SettingsManager.shared.configuredRemoteAgentRefs()
         let hasRow = runner.checks.contains { $0.id == "connection.gateway.partial" }
-        XCTAssertEqual(hasRow, !partial.isEmpty,
-                       "the partial-gateway row appears exactly when a URL-without-key ref exists")
+        XCTAssertEqual(hasRow, !partial.isEmpty && !configured.isEmpty,
+                       "the standalone partial row appears exactly when a URL-without-key ref exists "
+                       + "alongside at least one send-able gateway")
+    }
+
+    /// THE REPORTED BUG, as a test. Diagnostics showed a red "No Personal AI
+    /// configured" AND an amber "2 gateways … missing their key or model" for
+    /// gateways the user had already removed — two rows disagreeing about the
+    /// same nothing, neither actionable. With nothing configured there must be
+    /// exactly ONE connection-status row, and it must still account for whatever
+    /// is left over rather than pretending the device is clean.
+    func testLeftoverGatewayFoldsIntoTheSingleNoneRowInsteadOfContradictingIt() async throws {
+        defaults.set("https://gateway.example.test",
+                     forKey: Constants.remoteAgentURLKey(for: .openclaw))
+        defer { defaults.removeObject(forKey: Constants.remoteAgentURLKey(for: .openclaw)) }
+
+        let runner = DiagnosticsRunner()
+        await runner.runAutoReads()
+
+        let configured = await SettingsManager.shared.configuredRemoteAgentRefs()
+        try XCTSkipIf(!configured.isEmpty,
+                      "another suite left a fully-configured gateway behind; the fold only applies at zero")
+
+        let none = runner.checks.first { $0.id == "connection.gateway.none" }
+        XCTAssertNotNil(none, "a URL with no token is not configured — the red row must render")
+        XCTAssertFalse(runner.checks.contains { $0.id == "connection.gateway.partial" },
+                       "the amber row must NOT also render — that is the contradiction being fixed")
+        XCTAssertTrue((none?.detail ?? "").contains("leftover"),
+                      "the surviving row must still account for the leftover, not silently drop it:\n"
+                      + (none?.detail ?? "<no detail>"))
     }
 
     /// Code-review HIGH catch: a fixed-endpoint (hosted-model) built-in's URL

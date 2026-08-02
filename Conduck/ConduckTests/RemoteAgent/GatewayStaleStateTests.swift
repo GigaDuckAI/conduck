@@ -151,11 +151,13 @@ final class GatewayStaleStateTests: XCTestCase {
 
     // MARK: - 4. The default pointer self-heals
 
-    func testDefaultRefDropsDanglingPointer() async {
+    /// ONLY A CUSTOM REF CAN DANGLE. The self-heal exists for a pointer at a
+    /// gateway that stopped existing — which only a custom can do.
+    func testDefaultRefDropsDanglingCustomPointer() async {
         let defaults = InMemoryDefaultsStore()
-        // A pointer at a gateway with no config behind it — what a Forget on
-        // another device (or a half-completed one here) leaves.
-        defaults.set("hermes", forKey: defaultBackendKey)
+        // A pointer at a custom with no roster entry and no config behind it —
+        // what a Forget on another device leaves.
+        defaults.set(RemoteAgentRef.custom(UUID()).rawString, forKey: defaultBackendKey)
         let manager = makeManager(defaults: defaults)
 
         let resolved = await manager.defaultRemoteAgentRef()
@@ -164,6 +166,26 @@ final class GatewayStaleStateTests: XCTestCase {
                      "The dangling pointer must be dropped, not just ignored on this read.")
         XCTAssertEqual(resolved, .builtin(Constants.remoteAgentDefaultBackendDefault),
                        "With nothing configured, resolution falls through to the built-in default.")
+    }
+
+    /// A BUILT-IN pointer is never dangling, so it survives with no config
+    /// behind it. This is a deliberate contract, not an oversight: built-ins
+    /// cannot be deleted, so an unconfigured one means "set this up", and
+    /// `deleteCustomGateway` RELIES on it — it re-points at a built-in precisely
+    /// so the user picks their next gateway. Healing that fresh pointer sent the
+    /// adopt-first bootstrap to the surviving custom instead, silently moving
+    /// every subsequent message to a different server.
+    func testDefaultRefKeepsAnUnconfiguredBuiltInPointer() async {
+        let defaults = InMemoryDefaultsStore()
+        defaults.set("hermes", forKey: defaultBackendKey)
+        let manager = makeManager(defaults: defaults)
+
+        let resolved = await manager.defaultRemoteAgentRef()
+
+        XCTAssertEqual(resolved, .builtin(.hermes),
+                       "An explicitly chosen built-in must not be silently swapped for another.")
+        XCTAssertEqual(defaults.string(forKey: defaultBackendKey), "hermes",
+                       "…and the pointer stays put; nothing about it is stale.")
     }
 
     func testDefaultRefKeepsPointerAtAConfiguredGateway() async {
@@ -183,29 +205,32 @@ final class GatewayStaleStateTests: XCTestCase {
                        "…and the stored pointer must be left alone.")
     }
 
-    // MARK: - 5. The orphan sweep
+    // MARK: - 5. Per-uuid slots are NEVER deleted by a roster comparison
 
-    func testInitialSyncPrunesOffRosterUUIDSlotsAndSparesOnRosterOnes() async throws {
+    /// THE CONTRACT: `performInitialSync` hydrates, it does not collect.
+    ///
+    /// An earlier revision swept every per-uuid key whose uuid was absent from
+    /// the roster, out of BOTH stores. Both roster readers are FAIL-OPEN — a
+    /// `try?` decode failure and "nothing stored anywhere yet" each surface as
+    /// `[]`, indistinguishable from "this user has no gateways" — so that sweep
+    /// could delete a user's entire gateway configuration off every device on
+    /// evidence it never had, with no journal and no undo. Losing the roster
+    /// alone is RECOVERABLE: the slots outlive it and come back with it. These
+    /// two tests exist to keep deletion out of the launch path entirely.
+    func testInitialSyncNeverDeletesOffRosterSlots() async throws {
         let live = UUID()
-        let dead = UUID()
+        let orphan = UUID()
         let defaults = InMemoryDefaultsStore()
         let kvs = InMemoryUbiquitousStore()
 
-        let roster = [CustomGateway(id: live, name: "Live")]
-        let rosterData = try JSONEncoder().encode(roster)
+        let rosterData = try JSONEncoder().encode([CustomGateway(id: live, name: "Live")])
         defaults.set(rosterData, forKey: gatewayRosterKey)
         kvs.set(rosterData, forKey: gatewayRosterKey)
 
-        // Slots for BOTH uuids, across the families that actually accumulated
-        // on the founder's device.
-        //
-        // The suffix is LOWERCASED because that is the only form production
-        // writes (`RemoteAgentRef.rawString` and the `Constants.custom*Key(for:)`
-        // family all call `.lowercased()`), while `UUID.uuidString` is uppercase.
-        // Seeding the uppercase form here made this test agree with a sweep that
-        // compared cases raw — and therefore classified every LIVE gateway as an
-        // orphan. Assert against the bytes on disk, not against a convenience.
-        for uuid in [live, dead] {
+        // `orphan` is absent from the roster — the exact input the old sweep
+        // deleted on. It must survive: an absent roster entry is not proof the
+        // slot is garbage, only that this device cannot currently see its owner.
+        for uuid in [live, orphan] {
             let suffix = uuid.uuidString.lowercased()
             defaults.set("https://\(suffix).example.test", forKey: "remoteAgent.url.custom_\(suffix)")
             defaults.set(true, forKey: "fileServer.available.custom_\(suffix)")
@@ -216,92 +241,88 @@ final class GatewayStaleStateTests: XCTestCase {
         XCTAssertEqual(Constants.remoteAgentURLKey(for: .custom(live)),
                        "remoteAgent.url.custom_\(live.uuidString.lowercased())",
                        "Key literal drifted from the production builder — the rest of this test would prove nothing.")
-        // A built-in slot must never be in scope for the sweep.
         defaults.set("https://gateway.example.test", forKey: openclawURLKey)
-        kvs.set("https://gateway.example.test", forKey: openclawURLKey)
 
         let manager = makeManager(defaults: defaults, kvs: kvs)
         await manager.performInitialSync()
 
-        let deadSuffix = dead.uuidString.lowercased()
-        let liveSuffix = live.uuidString.lowercased()
-        for key in [
-            "remoteAgent.url.custom_\(deadSuffix)",
-            "fileServer.available.custom_\(deadSuffix)",
-            "imageHistory.policy.custom_\(deadSuffix)"
-        ] {
-            XCTAssertNil(defaults.object(forKey: key), "Off-roster slot \(key) must be pruned from defaults.")
-            XCTAssertNil(kvs.object(forKey: key), "…and from KVS, or the next sync re-hydrates it.")
+        for uuid in [live, orphan] {
+            let suffix = uuid.uuidString.lowercased()
+            XCTAssertEqual(defaults.string(forKey: "remoteAgent.url.custom_\(suffix)"),
+                           "https://\(suffix).example.test",
+                           "Launch must never delete a per-uuid slot — on-roster or not.")
+            XCTAssertEqual(defaults.object(forKey: "fileServer.available.custom_\(suffix)") as? Bool, true)
+            XCTAssertEqual(defaults.string(forKey: "imageHistory.policy.custom_\(suffix)"), "recent")
+            XCTAssertEqual(kvs.object(forKey: "fileServer.available.custom_\(suffix)") as? Bool, true,
+                           "…and must never delete from KVS, where it would propagate to every device.")
         }
-
-        XCTAssertEqual(defaults.string(forKey: "remoteAgent.url.custom_\(liveSuffix)"),
-                       "https://\(liveSuffix).example.test",
-                       "An ON-ROSTER gateway's slots must survive — a sweep that eats live config is worse than the orphans.")
-        XCTAssertEqual(defaults.object(forKey: "fileServer.available.custom_\(liveSuffix)") as? Bool, true)
-        XCTAssertEqual(defaults.string(forKey: "imageHistory.policy.custom_\(liveSuffix)"), "recent",
-                       "Every family of the live gateway survives, not just the URL.")
-        XCTAssertEqual(defaults.string(forKey: openclawURLKey), "https://gateway.example.test",
-                       "Built-in suffixes carry no uuid and are never swept.")
+        XCTAssertEqual(defaults.string(forKey: openclawURLKey), "https://gateway.example.test")
     }
 
-    func testOrphanSweepRunsOnceThenLatches() async {
-        let dead = UUID()
+    /// The fail-open case, stated on its own because it is the one that fires
+    /// without any user or sync mistake: one malformed record, or a roster
+    /// written by a newer build, and every reader returns `[]`.
+    func testInitialSyncNeverDeletesSlotsWhenRosterIsUndecodable() async {
+        let gateway = UUID()
         let defaults = InMemoryDefaultsStore()
         let kvs = InMemoryUbiquitousStore()
-        let orphanKey = "remoteAgent.url.custom_\(dead.uuidString.lowercased())"
-        defaults.set("https://dead.example.test", forKey: orphanKey)
+
+        let garbage = Data("{not json at all".utf8)
+        defaults.set(garbage, forKey: gatewayRosterKey)
+        kvs.set(garbage, forKey: gatewayRosterKey)
+
+        let suffix = gateway.uuidString.lowercased()
+        let urlKey = "remoteAgent.url.custom_\(suffix)"
+        defaults.set("https://live.example.test", forKey: urlKey)
+        kvs.set("https://live.example.test", forKey: urlKey)
 
         let manager = makeManager(defaults: defaults, kvs: kvs)
         await manager.performInitialSync()
-        XCTAssertNil(defaults.object(forKey: orphanKey), "First run prunes.")
-        XCTAssertEqual(defaults.integer(forKey: Constants.orphanSweepVersionKey),
-                       Constants.orphanSweepVersion,
-                       "…and records the revision it ran.")
 
-        // A slot written AFTER the sweep latched is left alone — the sweep is a
-        // one-time reconciliation, not a garbage collector running every launch.
-        defaults.set("https://written-later.example.test", forKey: orphanKey)
-        await manager.performInitialSync()
-        XCTAssertEqual(defaults.string(forKey: orphanKey), "https://written-later.example.test",
-                       "The version latch must hold — re-sweeping every launch would race live writes.")
+        XCTAssertEqual(defaults.string(forKey: urlKey), "https://live.example.test",
+                       "An undecodable roster means UNKNOWN, never zero gateways.")
+        XCTAssertEqual(kvs.string(forKey: urlKey), "https://live.example.test",
+                       "…and above all must not delete from the store that syncs.")
     }
 
-    /// Regression: the sweep once built its roster from `UUID.uuidString`
-    /// (uppercase) and compared it against key suffixes production writes
-    /// LOWERCASED, so `!roster.contains(suffix)` was true for every gateway —
-    /// the sweep deleted the user's entire live configuration off every device
-    /// and left the roster JSON pointing at nothing. Keys here are built by the
-    /// PRODUCTION helpers, so a case regression cannot hide behind a fixture.
-    func testSweepSparesLiveGatewayKeysBuiltByProductionHelpers() async throws {
-        let live = UUID()
+    /// Regression: `deleteCustomGateway` promises the default falls back to a
+    /// BUILT-IN, "never silently to another custom". The pointer self-heal made
+    /// that dead code — every clear in the delete strips this ref's evidence, so
+    /// asking `defaultRemoteAgentRef()` afterwards already returned some other
+    /// gateway and the `== ref` test could never fire.
+    func testDeletingTheDefaultCustomFallsBackToABuiltInNotAnotherCustom() async throws {
+        let doomed = UUID()
+        let sibling = UUID()
         let defaults = InMemoryDefaultsStore()
         let kvs = InMemoryUbiquitousStore()
 
-        let rosterData = try JSONEncoder().encode([CustomGateway(id: live, name: "Live")])
+        let rosterData = try JSONEncoder().encode([
+            CustomGateway(id: doomed, name: "Doomed"),
+            CustomGateway(id: sibling, name: "Sibling")
+        ])
         defaults.set(rosterData, forKey: gatewayRosterKey)
-        kvs.set(rosterData, forKey: gatewayRosterKey)
 
-        let ref = RemoteAgentRef.custom(live)
-        let productionKeys = [
-            Constants.remoteAgentURLKey(for: ref),
-            Constants.remoteAgentAuthSchemeKey(for: ref),
-            Constants.remoteAgentModelKey(for: ref),
-            Constants.remoteAgentTransportHintKey(for: ref),
-            Constants.imageHistoryPolicyKey(for: ref),
-            Constants.fileServerURLKey(for: ref),
-            Constants.fileTransferAvailableKey(for: ref),
-            Constants.fileServerFolderCapableKey(for: ref)
-        ]
-        for key in productionKeys { defaults.set("live-value", forKey: key) }
+        // Both keyless, so both are CONFIGURED without a Keychain token — the
+        // sibling has to be genuinely configured or the bug cannot reproduce.
+        for uuid in [doomed, sibling] {
+            let ref = RemoteAgentRef.custom(uuid)
+            defaults.set("https://\(uuid.uuidString.lowercased()).example.test",
+                         forKey: Constants.remoteAgentURLKey(for: ref))
+            defaults.set("none", forKey: Constants.remoteAgentAuthSchemeKey(for: ref))
+        }
+        defaults.set(RemoteAgentRef.custom(doomed).rawString,
+                     forKey: Constants.remoteAgentDefaultBackendKVSKey)
 
         let manager = makeManager(defaults: defaults, kvs: kvs)
-        await manager.performInitialSync()
+        await manager.deleteCustomGateway(id: doomed)
 
-        for key in productionKeys {
-            XCTAssertEqual(defaults.string(forKey: key), "live-value",
-                           "\(key) belongs to an ON-ROSTER gateway and must survive the sweep.")
-        }
+        let resolved = await manager.defaultRemoteAgentRef()
+        XCTAssertNotEqual(resolved, .custom(sibling),
+                          "Forgetting the default gateway must not silently re-point at another custom.")
+        XCTAssertTrue(resolved.isBuiltin,
+                      "The documented fallback is the first configured BUILT-IN, else the built-in default.")
     }
+
 
     /// Regression: the default-pointer self-heal once tested
     /// `configuredRemoteAgentRefs()`, which fails CLOSED on a nil token — and
@@ -359,10 +380,8 @@ final class GatewayStaleStateTests: XCTestCase {
             kvs.set("value", forKey: key)
         }
 
-        // Latch the sweep first, so this proves the DELETE collects the litter
-        // rather than a sweep quietly covering for it.
-        defaults.set(Constants.orphanSweepVersion, forKey: Constants.orphanSweepVersionKey)
-
+        // The delete is the ONLY collector — nothing sweeps for orphans — so
+        // every family it misses leaks forever.
         let manager = makeManager(defaults: defaults, kvs: kvs)
         await manager.deleteCustomGateway(id: doomed)
 
@@ -372,20 +391,4 @@ final class GatewayStaleStateTests: XCTestCase {
         }
     }
 
-    func testOrphanSweepSkippedWhileICloudUnavailable() async {
-        let dead = UUID()
-        let defaults = InMemoryDefaultsStore()
-        let orphanKey = "remoteAgent.url.custom_\(dead.uuidString.lowercased())"
-        defaults.set("https://dead.example.test", forKey: orphanKey)
-
-        // Signed out: this device cannot see the cloud roster, so it must not
-        // prune against a partial view.
-        let manager = makeManager(defaults: defaults, cloudAvailable: false)
-        await manager.performInitialSync()
-
-        XCTAssertEqual(defaults.string(forKey: orphanKey), "https://dead.example.test",
-                       "A device that can't read the cloud roster must not decide what is an orphan.")
-        XCTAssertEqual(defaults.integer(forKey: Constants.orphanSweepVersionKey), 0,
-                       "…and must not latch, so the sweep still runs once iCloud returns.")
-    }
 }

@@ -292,9 +292,9 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchec
     /// routable addresses are ATS-exempt, so App Transport Security is not a
     /// backstop behind it. The fence means a Release or Archive build cannot
     /// COMPILE a call that supplies the closure, while tests keep it: the
-    /// Conduck scheme's TestAction builds Debug (so `xcodebuild test` and
-    /// `build-for-testing` both do), its ArchiveAction and ProfileAction build
-    /// Release, and no CI job passes `-configuration`.
+    /// Conduck scheme's TestAction builds Debug-Testing, which defines DEBUG (so
+    /// `xcodebuild test` and `build-for-testing` both do), its ArchiveAction and
+    /// ProfileAction build Release, and no CI job passes `-configuration`.
     init(
         pinnedFingerprintHex: String?,
         evaluateSystemTrust: @escaping @Sendable (SecTrust) -> Bool

@@ -2076,6 +2076,23 @@ actor ConversationStore {
     /// the lists refresh. Safe to define cross-target (only the iOS launch seam
     /// calls it).
     func backfillTitleSnippetsIfNeeded() async {
+        // NEVER AGAINST THE REAL STORE FROM A TEST HOST. This is the one place
+        // the storage seam cuts a pair in half: the "already done" flag is
+        // seamed, the Core Data store it guards is NOT (the real App-Group
+        // sqlite, with the CloudKit mirror attached on every non-simulator
+        // build). Under `CONDUCK_TESTING` the flag reads false from a fresh
+        // in-memory store on EVERY run, so a signed macOS or on-device test run
+        // would rewrite every title snippet in the developer's real conversation
+        // database and export the change to their private CloudKit zone — then,
+        // the flag having been written to the in-memory store, do it again next
+        // invocation. Seaming the flag back to the real App Group would restore
+        // the old no-op but put a live-container write back into the suite.
+        //
+        // Gated on the STORE, not on the test host, so a suite driving an
+        // ephemeral `ConversationStore(inMemory:)` still exercises the migration.
+        #if CONDUCK_TESTING
+        guard container.persistentStoreDescriptions.first?.type == NSInMemoryStoreType else { return }
+        #endif
         let flagKey = "conversationTitleSnippetBackfillDone"
         let defaults = SettingsDependencies.processDefault.defaults
         guard !defaults.bool(forKey: flagKey) else { return }

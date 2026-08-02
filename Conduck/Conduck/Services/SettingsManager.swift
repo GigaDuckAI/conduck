@@ -3002,7 +3002,16 @@ actor SettingsManager {
         // absent by a locked Keychain.
         if let local = defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey),
            let ref = RemoteAgentRef(rawString: local) {
-            if hasStoredRemoteAgentEvidence(ref) { return ref }
+            // A BUILT-IN pointer is ALWAYS honoured, evidence or not. Built-ins
+            // cannot be deleted, so an unconfigured one is a legitimate "set this
+            // up" state, not a dangling reference — and healing it is actively
+            // harmful: `deleteCustomGateway` deliberately re-points at a built-in
+            // so the user CHOOSES their next gateway rather than inheriting one.
+            // Treating that fresh pointer as dangling sent the adopt-first
+            // bootstrap below straight to the surviving custom, silently moving
+            // every subsequent message to a different server. Only a CUSTOM ref
+            // can dangle, because only a custom can stop existing.
+            if ref.isBuiltin || hasStoredRemoteAgentEvidence(ref) { return ref }
             defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
         }
         // Config-sync bootstrap: gateway CONFIGS still sync, but the default does
@@ -3187,6 +3196,13 @@ actor SettingsManager {
     /// another custom), else the built-in default.
     func deleteCustomGateway(id: UUID) {
         let ref = RemoteAgentRef.custom(id)
+        // CAPTURE THE POINTER FIRST. Every clear below strips this ref's stored
+        // evidence, and `defaultRemoteAgentRef()` self-heals a pointer whose ref
+        // has no evidence left — so asking it AFTER the purge always returns
+        // some other gateway, the `== ref` test below never fires, and the
+        // built-in-only fallback (plus its `clearActiveConversation()`) is dead
+        // code. Reading it here is the only way the contract above holds.
+        let wasDefault = defaultRemoteAgentRef() == ref
         setRemoteAgentURL(nil, for: ref)
         try? clearRemoteAgentToken(for: ref)
         setRemoteAgentCertFingerprint(nil, for: ref)
@@ -3213,13 +3229,13 @@ actor SettingsManager {
         // has already reached KVS; the peers see the revocation, then the key
         // removal, and land on the same verdict either way.
         //
-        // This is why the orphan sweep is not the collector: it is a ONE-TIME
-        // historical cleanup and latches on `orphanSweepVersion`, so a gateway
-        // deleted after it runs would leak the same family forever — which is
-        // exactly how 135 `fileServer.available.custom_*` keys accumulated.
+        // This is the ONLY collector for a gateway's key family, which is why it
+        // must be complete: a family missed here leaks forever, and nothing
+        // sweeps for orphans (see the note above `gatewayOwnedKeyPrefixes` for
+        // why a roster-driven sweep is unsafe).
         purgeGatewayOwnedSlots(for: id)
 
-        if defaultRemoteAgentRef() == ref {
+        if wasDefault {
             let fallback = configuredRemoteAgentRefs().first(where: { $0.isBuiltin })
                 ?? .builtin(Constants.remoteAgentDefaultBackendDefault)
             setDefaultRemoteAgentRef(fallback)
@@ -4350,7 +4366,13 @@ actor SettingsManager {
             let ref = RemoteAgentRef.builtin(backend)
             for key in [
                 Constants.remoteAgentURLKey(for: backend),
-                Constants.remoteAgentModelKey(for: ref)
+                Constants.remoteAgentModelKey(for: ref),
+                // Auth scheme rides along for the SAME reason the custom loop
+                // below carries it: `.bearer`/`.none` is explicit per-ref state
+                // (fail-closed auth — a missing token never implies keyless), so
+                // a restored built-in without it demands a token that may not
+                // exist, or sends none where one is required.
+                Constants.remoteAgentAuthSchemeKey(for: ref)
             ] {
                 if let iCloudValue = iCloudStore.string(forKey: key), !iCloudValue.isEmpty {
                     defaults.set(iCloudValue, forKey: key)
@@ -4424,10 +4446,15 @@ actor SettingsManager {
         // synced separately); cert = per-device (App Groups, no KVS) — not synced;
         // model/colour/monogram ride INSIDE the roster JSON. The built-in URL loop
         // above (`RemoteAgentBackend.allCases`) never reaches customs.
+        // HYDRATE-ONLY, exactly like the per-uuid slots below. A push-up here is
+        // the SAME resurrection bug one level up: the roster is the index of
+        // which gateways exist, so a device whose KVS cache is empty (never
+        // downloaded, or reset by an iCloud account change) would re-publish its
+        // stale roster and bring back every gateway a peer had forgotten —
+        // listed in the picker, with no URL behind them, because the slots
+        // themselves correctly refuse to push up.
         if let iCloudGatewayRoster = iCloudStore.data(forKey: Constants.customGatewaysRegistryKey) {
             defaults.set(iCloudGatewayRoster, forKey: Constants.customGatewaysRegistryKey)
-        } else if let localGatewayRoster = defaults.data(forKey: Constants.customGatewaysRegistryKey) {
-            iCloudStore.set(localGatewayRoster, forKey: Constants.customGatewaysRegistryKey)
         }
         let gatewayUUIDs = ((try? JSONDecoder().decode(
             [CustomGateway].self,
@@ -4489,30 +4516,29 @@ actor SettingsManager {
         if iCloudStore.object(forKey: Constants.kvsSchemaVersionKey) == nil {
             iCloudStore.set(Constants.kvsSchemaVersion, forKey: Constants.kvsSchemaVersionKey)
         }
-
-        // LAST: prune per-uuid slots whose owner is gone. Deliberately after
-        // every roster + slot hydration above, so a mid-sync device can never
-        // prune config that was still arriving.
-        reconcileOrphanedPerUUIDSlots()
     }
 
-    // MARK: - Orphan reconciliation
+    // MARK: - Per-uuid key families
 
-    /// One-time sweep removing per-uuid keys whose uuid is absent from its
-    /// roster, from BOTH stores.
+    /// NO ROSTER-DRIVEN ORPHAN SWEEP EXISTS, DELIBERATELY. A sweep that deletes
+    /// every per-uuid key whose uuid is absent from the roster reads the roster
+    /// through `persistedCustomGateways()` / `customVoiceEndpoints()`, and both
+    /// are FAIL-OPEN: a `try?` decode failure and "no roster stored anywhere"
+    /// both surface as `[]`, indistinguishable from "this user has no gateways".
+    /// Feeding that into an irreversible both-stores deletion means one
+    /// malformed record — or a roster clobbered by an `upsertCustomGateway` that
+    /// itself read `[]` before iCloud delivered — erases every gateway's URL,
+    /// model, auth scheme and file-server config from every one of the user's
+    /// devices, with no journal and no undo.
     ///
-    /// Every custom gateway and custom voice endpoint fans out into a family of
-    /// suffixed keys, and the roster is the only index of which uuids exist. A
-    /// delete path that missed one key family — or a roster that was replaced
-    /// wholesale by a sync — leaves those keys with no owner and no reader, and
-    /// nothing ever collects them: they are invisible to the settings UI and
-    /// immortal in both stores.
-    ///
-    /// Gated on `iCloudAvailable` by its caller (`performInitialSync`), so a
-    /// device that cannot see the cloud roster never prunes against a partial
-    /// view. Versioned, so it runs once per schema revision rather than on every
-    /// launch. Built-in suffixes (`openclaw`/`hermes`/`openrouter`) are never
-    /// touched — only `custom_<uuid>` and bare-uuid suffixes.
+    /// Losing the ROSTER alone is recoverable (the per-uuid config survives in
+    /// both stores and returns with the roster); a sweep converts that into
+    /// permanent loss. The collector is `purgeGatewayOwnedSlots(for:)` below,
+    /// called from the delete path where the uuid is known for certain and the
+    /// user asked for it. Historical litter from before that existed is cleaned
+    /// out-of-band by `scripts/cleanup-orphan-slots.sh`, which prints what it
+    /// would remove and requires confirmation.
+
     /// Key-family prefixes owned by the CUSTOM-GATEWAY roster
     /// (`remoteAgent.customGateways`). Suffix form is
     /// `RemoteAgentRef.storageKeySuffix` = `custom_<uuid-lowercased>`.
@@ -4574,59 +4600,13 @@ actor SettingsManager {
 
     /// Remove every per-uuid key belonging to a deleted custom gateway, from
     /// BOTH stores. Called by `deleteCustomGateway` so a delete collects its own
-    /// litter — the orphan sweep is a ONE-TIME historical cleanup and cannot be
-    /// the collector for gateways deleted after it latches.
+    /// litter at the one moment the uuid is known for certain and the user has
+    /// asked for the removal — the only safe place to delete a key family.
     private func purgeGatewayOwnedSlots(for uuid: UUID) {
         for key in perUUIDKeys(for: uuid, prefixes: Self.gatewayOwnedKeyPrefixes, customPrefixed: true) {
             defaults.removeObject(forKey: key)
             iCloudStore.removeObject(forKey: key)
         }
-    }
-
-    private func reconcileOrphanedPerUUIDSlots() {
-        guard defaults.integer(forKey: Constants.orphanSweepVersionKey)
-                < Constants.orphanSweepVersion else { return }
-
-        // LOWERCASED — production writes every per-uuid suffix lowercased, and a
-        // case-sensitive compare against `UUID.uuidString` (uppercase) marks
-        // every live gateway as an orphan. See `perUUIDKeys(for:…)`.
-        let gatewayUUIDs = Set(persistedCustomGateways().map { $0.id.uuidString.lowercased() })
-        let endpointUUIDs = Set(customVoiceEndpoints().map { $0.id.uuidString.lowercased() })
-
-        /// Whether `key` is an orphan: it starts with one of `prefixes`, its
-        /// suffix looks like a uuid slot, and that uuid is not in `roster`.
-        func orphanUUID(_ key: String, prefixes: [String], custom: Bool, roster: Set<String>) -> Bool {
-            guard let prefix = prefixes.first(where: { key.hasPrefix($0) }) else { return false }
-            var suffix = String(key.dropFirst(prefix.count))
-            if custom {
-                // Built-in suffix (`openclaw`/`hermes`/`openrouter`) — never touch.
-                guard suffix.hasPrefix(RemoteAgentRef.customPrefix) else { return false }
-                suffix = String(suffix.dropFirst(RemoteAgentRef.customPrefix.count))
-            }
-            // A malformed suffix is left alone: only something that parses as a
-            // uuid can be matched against a roster, and guessing is how a sweep
-            // deletes live config.
-            guard UUID(uuidString: suffix) != nil else { return false }
-            return !roster.contains(suffix.lowercased())
-        }
-
-        var doomed: Set<String> = []
-        let allKeys = Set(defaults.dictionaryRepresentation().keys)
-            .union(iCloudStore.dictionaryRepresentation().keys)
-        for key in allKeys {
-            if orphanUUID(key, prefixes: Self.gatewayOwnedKeyPrefixes, custom: true, roster: gatewayUUIDs)
-                || orphanUUID(key, prefixes: Self.voiceEndpointOwnedKeyPrefixes, custom: false, roster: endpointUUIDs) {
-                doomed.insert(key)
-            }
-        }
-
-        for key in doomed {
-            defaults.removeObject(forKey: key)
-            iCloudStore.removeObject(forKey: key)
-        }
-
-        defaults.set(Constants.orphanSweepVersion, forKey: Constants.orphanSweepVersionKey)
-        if !doomed.isEmpty { postSettingsDidChangeRemotely() }
     }
 
     // MARK: - KVS Observation
@@ -4787,13 +4767,23 @@ actor SettingsManager {
         // Mirror remote per-backend URL changes into App Groups `defaults` so
         // the durable read in `getRemoteAgentURL(for:)` (and the Watch cold
         // launch) reflects the cloud value.
+        // Auth scheme is mirrored alongside the URL: the custom-gateway scan
+        // below is prefix-based on `custom_`, so built-in suffixes provably
+        // never match it and would otherwise have NO inbound path at all. That
+        // gap is user-visible — flip OpenClaw to keyless on one device and every
+        // peer keeps demanding a token that no longer exists, while the URL
+        // change that accompanied it syncs fine, so the gateway looks correct on
+        // both devices and works on one.
         for backend in RemoteAgentBackend.allCases {
-            let urlKey = Constants.remoteAgentURLKey(for: backend)
-            if changedKeys.contains(urlKey) {
-                if let value = iCloudStore.string(forKey: urlKey), !value.isEmpty {
-                    defaults.set(value, forKey: urlKey)
+            let ref = RemoteAgentRef.builtin(backend)
+            for key in [
+                Constants.remoteAgentURLKey(for: backend),
+                Constants.remoteAgentAuthSchemeKey(for: ref)
+            ] where changedKeys.contains(key) {
+                if let value = iCloudStore.string(forKey: key), !value.isEmpty {
+                    defaults.set(value, forKey: key)
                 } else {
-                    defaults.removeObject(forKey: urlKey)
+                    defaults.removeObject(forKey: key)
                 }
                 didChange = true
             }

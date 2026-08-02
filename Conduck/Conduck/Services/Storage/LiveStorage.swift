@@ -104,11 +104,21 @@ final class LiveKVSChangeSource: KVSChangeSource, @unchecked Sendable {
             object: NSUbiquitousKeyValueStore.default,
             queue: .main
         ) { notification in
-            guard let userInfo = notification.userInfo,
-                  let rawReason = userInfo[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int,
-                  let changedKeys = userInfo[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String]
-            else { return }
-            handler(KVSChange(reason: .init(rawValue: rawReason), changedKeys: changedKeys))
+            // NEITHER userInfo VALUE MAY BE REQUIRED. Foundation supplies
+            // `NSUbiquitousKeyValueStoreChangedKeysKey` ONLY for a server change
+            // and an initial-sync change — it is absent for account change and
+            // quota violation. Guarding on it drops those two notifications
+            // entirely, one layer below the `deliversRemoteValues` policy, which
+            // then reads as if account changes were considered and declined when
+            // in fact they never arrived. Observers that deliberately reload on
+            // ANY notification (the Watch settings reader) go stale on an iCloud
+            // account switch and keep serving the previous account's values for
+            // the rest of the process.
+            let userInfo = notification.userInfo
+            let changedKeys = userInfo?[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String] ?? []
+            let reason = (userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int)
+                .map(KVSChangeReason.init(rawValue:)) ?? .unknown(NSNotFound)
+            handler(KVSChange(reason: reason, changedKeys: changedKeys))
         }
         NSUbiquitousKeyValueStore.default.synchronize()
     }

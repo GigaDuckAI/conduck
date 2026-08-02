@@ -210,8 +210,17 @@ actor WatchIdentityResolver {
     /// Per-preset slots use `Constants.sttApiKeyKeychainAccount(for: presetID)`
     /// (account format `"stt.apiKey.<presetID>"`); the legacy literal
     /// `"stt.apiKey.mistral-voxtral"` is exactly subsumed for back-compat.
-    nonisolated static func getSTTAPIKey(forPresetID presetID: String) -> String? {
-        readKeychainString(account: Constants.sttApiKeyKeychainAccount(for: presetID))
+    /// - Parameter secrets: defaults to the process store. Present so an
+    ///   injected resolver's store can be READ, not just written — the writers
+    ///   below all take `secrets:`, and a reader that ignores it makes a
+    ///   round-trip against an isolated store return nil while a "token was
+    ///   cleared" assertion passes without ever looking at the store the clear
+    ///   touched.
+    nonisolated static func getSTTAPIKey(
+        forPresetID presetID: String,
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
+    ) -> String? {
+        readKeychainString(account: Constants.sttApiKeyKeychainAccount(for: presetID), secrets: secrets)
     }
 
     /// Persist a preset's STT API key to the Watch Keychain. Called by the
@@ -232,8 +241,11 @@ actor WatchIdentityResolver {
     // Privacy invariant: never log the returned value.
 
     /// Read the Personal AI gateway bearer token from Watch Keychain.
-    nonisolated static func getRemoteAgentToken() -> String? {
-        readKeychainString(account: Constants.remoteAgentTokenKeychainAccount)
+    /// - Parameter secrets: see `getSTTAPIKey(forPresetID:secrets:)`.
+    nonisolated static func getRemoteAgentToken(
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
+    ) -> String? {
+        readKeychainString(account: Constants.remoteAgentTokenKeychainAccount, secrets: secrets)
     }
 
     /// Persist the Personal AI gateway bearer token to Watch Keychain.
@@ -271,9 +283,13 @@ actor WatchIdentityResolver {
     }
 
     /// Read a SPECIFIC ref's gateway bearer token from Watch Keychain.
-    nonisolated static func getRemoteAgentToken(for ref: String) -> String? {
+    /// - Parameter secrets: see `getSTTAPIKey(forPresetID:secrets:)`.
+    nonisolated static func getRemoteAgentToken(
+        for ref: String,
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
+    ) -> String? {
         guard let account = tokenAccount(forRef: ref) else { return nil }
-        return readKeychainString(account: account)
+        return readKeychainString(account: account, secrets: secrets)
     }
 
     /// Persist a SPECIFIC ref's gateway bearer token to Watch Keychain.
