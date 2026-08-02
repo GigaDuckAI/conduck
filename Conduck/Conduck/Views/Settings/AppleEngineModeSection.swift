@@ -86,7 +86,7 @@ struct AppleEngineModeSection: View {
                 state: standardStateLine
             )
         }
-        .buttonStyle(.plain)
+        .settingsRowButton()
         .disabled(testerBusy)
     }
 
@@ -120,7 +120,7 @@ struct AppleEngineModeSection: View {
                 state: higherAccuracyStateLine
             )
         }
-        .buttonStyle(.plain)
+        .settingsRowButton()
         .disabled(testerBusy)
     }
 

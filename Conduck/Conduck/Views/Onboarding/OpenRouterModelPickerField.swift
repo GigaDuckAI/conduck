@@ -128,7 +128,12 @@ struct OpenRouterModelPickerField: View {
                                         .background(Capsule().fill(AppColors.backgroundSecondary))
                                         .foregroundStyle(AppColors.textSecondary)
                                 }
-                                .buttonStyle(.plain)
+                                // The capsule itself is only ~19pt tall — under the
+                                // pointer floor for the strip that IS the model
+                                // picker. Raises the live square to 28pt, and
+                                // washes a capsule so the highlight follows the
+                                // chip's own outline instead of boxing it.
+                                .pointerIconButton(shape: .capsule)
                             }
                         }
                     }

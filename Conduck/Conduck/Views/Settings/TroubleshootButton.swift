@@ -43,7 +43,11 @@ struct TroubleshootButton: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(AppColors.brandAmber)
         }
-        .buttonStyle(.plain)
+        // A help link inside error prose, rendered in five different containers
+        // (banner, retry card, failed-turn row, setup test) — so it takes the
+        // inline treatment, which widens the live band without stretching or
+        // re-heighting any host layout.
+        .inlineLinkButton()
         .sheet(isPresented: $showingDiagnostics) {
             NavigationStack {
                 DiagnosticsView(

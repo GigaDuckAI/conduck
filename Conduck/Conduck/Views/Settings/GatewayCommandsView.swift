@@ -97,7 +97,7 @@ struct GatewayCommandsView: View {
             ))
             #endif
         }
-        .buttonStyle(.plain)
+        .primaryCTAButton()
         .frame(maxWidth: .infinity)
         .padding(.horizontal, Constants.Layout.horizontalPadding)
     }

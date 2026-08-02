@@ -408,7 +408,7 @@ struct ConversationThreadView: View {
             .clipShape(Capsule())
             .shadow(color: AppColors.shadow.opacity(0.4), radius: 6, y: 3)
         }
-        .buttonStyle(.plain)
+        .primaryCTAButton()
     }
 
     // MARK: - Empty / error
@@ -451,7 +451,7 @@ struct ConversationThreadView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.brandAmber)
             }
-            .buttonStyle(.plain)
+            .inlineLinkButton()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -490,7 +490,7 @@ struct ConversationThreadView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.brandAmber)
             }
-            .buttonStyle(.plain)
+            .inlineLinkButton()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -673,7 +673,7 @@ struct ConversationThreadView: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .choiceCardButton(cornerRadius: 10)
     }
 
     private func cloneButton(_ ref: RemoteAgentRef) -> some View {
@@ -701,7 +701,7 @@ struct ConversationThreadView: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .choiceCardButton(cornerRadius: 10)
         .accessibilityLabel(String(
             format: String(localized: "thread.gatewayLock.cloneAction",
                            defaultValue: "Clone & continue on %@"),
@@ -736,7 +736,7 @@ struct ConversationThreadView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.brandAmber)
                 }
-                .buttonStyle(.plain)
+                .inlineLinkButton()
             }
         }
         .padding(12)
@@ -1091,7 +1091,7 @@ private struct MessageBubble: View, Equatable {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.error)
                     }
-                    .buttonStyle(.plain)
+                    .inlineLinkButton()
                 }
                 if presentation.offersResendWithoutPhoto {
                     Button(action: onResendWithoutPhoto) {
@@ -1099,7 +1099,7 @@ private struct MessageBubble: View, Equatable {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.brandAmber)
                     }
-                    .buttonStyle(.plain)
+                    .inlineLinkButton()
                 }
                 if presentation.offersKeepChattingWithoutPhotos {
                     Button(action: onKeepChattingWithoutPhotos) {
@@ -1107,7 +1107,7 @@ private struct MessageBubble: View, Equatable {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.brandAmber)
                     }
-                    .buttonStyle(.plain)
+                    .inlineLinkButton()
                 }
                 // Diagnostics deep-link for troubleshootable generic failures —
                 // the row supersedes the transient banner, so the affordance
@@ -1370,6 +1370,11 @@ private struct InlineTextFileChip: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                // Radius matches `chipLabel`'s own rounded-rect fill. Plain
+                // `.choiceCardButton` is wrong here: `chipLabel` caps itself at
+                // 220pt INSIDE the label, so the style's `maxWidth: .infinity`
+                // would paint the wash across the whole bubble column.
+                .pointerHoverWash(cornerRadius: 10)
             } else {
                 // Passive full-opacity label, NOT a disabled Button — the
                 // system's disabled dimming + "dimmed" VoiceOver trait would
@@ -1564,7 +1569,11 @@ private struct ServerFileDownloadChip: View {
                 // whole label (Spacer included) tappable.
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            // The chip's own fill + padding ring live on the OUTER HStack (it
+            // also holds the macOS Save As… button), so the wash is drawn on the
+            // label box inset inside that ring — hence the tighter radius rather
+            // than the card's own 10.
+            .choiceCardButton(cornerRadius: 8)
             .disabled(!acceptsTap)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(([
@@ -1652,7 +1661,7 @@ private struct ServerFileDownloadChip: View {
                 .font(.system(size: 15))
                 .foregroundStyle(secondaryTint)
         }
-        .buttonStyle(.plain)
+        .pointerIconButton()
         .disabled(!acceptsTap)
         .help(saveAsTitle)
         .accessibilityLabel(Text(String(

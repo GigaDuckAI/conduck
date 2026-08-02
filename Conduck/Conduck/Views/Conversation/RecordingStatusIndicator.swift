@@ -225,7 +225,9 @@ struct VoiceRecoveryButton: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppColors.brandAmber)
         }
-        .buttonStyle(.plain)
+        .settingsRowButton(alignment: .center)
+        // Kept: off macOS the style IS `.buttonStyle(.plain)`, so this outer frame
+        // is what still centers the label across the host's width there.
         .frame(maxWidth: .infinity)
         .accessibilityLabel(option.buttonTitle)
     }

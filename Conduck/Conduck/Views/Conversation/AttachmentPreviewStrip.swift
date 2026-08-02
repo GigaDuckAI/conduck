@@ -377,7 +377,7 @@ struct AttachmentPreviewStrip: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(AppColors.error)
             }
-            .buttonStyle(.plain)
+            .inlineLinkButton()
             .accessibilityLabel(Text(LocalizedStringResource(
                 "fileTransfer.attach.retry",
                 defaultValue: "Retry"
@@ -452,7 +452,7 @@ struct AttachmentPreviewStrip: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(AppColors.brandAmber)
                 }
-                .buttonStyle(.plain)
+                .inlineLinkButton()
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "fileTransfer.needsSetup.setUp.a11y",
                     defaultValue: "Set up file transfer"
@@ -492,7 +492,9 @@ struct AttachmentPreviewStrip: View {
                 .background(Circle().fill(AppColors.background.opacity(0.001)))
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        // The badge is drawn as a circle, so the hover wash is one too — a
+        // rounded square would halo its corners against the thumbnail.
+        .pointerIconButton(shape: .circle)
         .offset(x: 6, y: -6)
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.remove",

@@ -106,7 +106,23 @@ struct TTSKeyReadinessBanner: View {
                         ))
                     }
                 }
+                // `.borderless` on macOS draws bare tinted text with no bezel, so
+                // the live area is the ~17pt glyph run itself. The icon primitive
+                // gives a padded band plus a hover wash without adding a bezel;
+                // the explicit amber reproduces exactly what `.borderless` drew
+                // from the row's `.tint`, which a custom ButtonStyle's label does
+                // not inherit. Safe to hard-code because the tint is this view's
+                // OWN (`.tint(AppColors.brandAmber)` on the body below) rather
+                // than something a host supplies — no caller can set a different
+                // one. Disabled dimming comes from the style. iOS keeps
+                // `.borderless` — there the style is the only thing tinting the
+                // label and touch already hits the row.
+                #if os(macOS)
+                .pointerIconButton(horizontalPadding: 8)
+                .foregroundStyle(AppColors.brandAmber)
+                #else
                 .buttonStyle(.borderless)
+                #endif
                 .disabled(isRechecking)
 
                 if let onOpenVendor {
@@ -121,7 +137,13 @@ struct TTSKeyReadinessBanner: View {
                                 "settings.voice.keyReadiness.manageKey",
                                 defaultValue: "Manage Key"))
                     }
+                    // Same treatment as Check Again above.
+                    #if os(macOS)
+                    .pointerIconButton(horizontalPadding: 8)
+                    .foregroundStyle(AppColors.brandAmber)
+                    #else
                     .buttonStyle(.borderless)
+                    #endif
                 }
             }
             .font(.subheadline)

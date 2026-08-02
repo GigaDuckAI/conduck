@@ -279,6 +279,7 @@ struct HostedModelGatewayStepView: View {
                 .foregroundStyle(AppColors.textSecondary)
             }
             .tint(AppColors.textSecondary)
+            .pointerLink()
             .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -372,7 +373,11 @@ struct HostedModelGatewayStepView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // Full-width disclosure row: the whole band is live and washes on hover.
+        // The label keeps its own frame/contentShape — off macOS this style IS
+        // `.plain`, and this row is a free-standing VStack child, not a `List`
+        // row, so nothing else would make the `Spacer()` gap hittable there.
+        .settingsRowButton()
         .padding(.horizontal, 32)
         .accessibilityIdentifier("settings.remoteAgent.hosted.change")
     }
@@ -458,7 +463,9 @@ struct HostedModelGatewayStepView: View {
                     .foregroundStyle(AppColors.textSecondary)
                 Button("Retry") { runQuietProbe() } // xcstrings: hosted-model
                     .onboardingScaledFont(.caption, weight: .semibold)
-                    .buttonStyle(.plain)
+                    // Tinted inline text inside a status line — a caption glyph
+                    // run is far under the pointer floor on its own.
+                    .inlineLinkButton()
                     .foregroundStyle(.tint)
             }
         }
@@ -491,7 +498,9 @@ struct HostedModelGatewayStepView: View {
                 ))
                     .onboardingScaledFont(.subheadline, weight: .semibold)
             }
-            .buttonStyle(.plain)
+            // Tinted inline text trailing a row — a row style would stretch it
+            // to full width and shove the staged-key label aside.
+            .inlineLinkButton()
             .foregroundStyle(.tint)
             .disabled(connecting || validatingKey)
         }
@@ -581,7 +590,7 @@ struct HostedModelGatewayStepView: View {
                     .background(Color.accentColor)
                     .cornerRadius(14)
             }
-            .buttonStyle(.plain)
+            .primaryCTAButton()
             .frame(maxWidth: .infinity)
             .padding(.horizontal, Constants.Layout.horizontalPadding)
         case .setup:
@@ -626,7 +635,10 @@ struct HostedModelGatewayStepView: View {
             )
             .opacity(validateKeyEnabled ? 1 : 0.5)
         }
-        .buttonStyle(.plain)
+        // The pill's background is a STROKE with no fill, so without this the
+        // interior never hit-tests — only the 1pt border and the glyphs do. 14
+        // matches the stroke's own radius so the wash lines up with it.
+        .choiceCardButton(cornerRadius: 14)
         .disabled(!validateKeyEnabled)
         .frame(maxWidth: .infinity)
     }
@@ -655,7 +667,7 @@ struct HostedModelGatewayStepView: View {
             .background(enabled ? Color.accentColor : AppColors.disabled)
             .cornerRadius(14)
         }
-        .buttonStyle(.plain)
+        .primaryCTAButton()
         .disabled(!enabled)
         .frame(maxWidth: .infinity)
     }

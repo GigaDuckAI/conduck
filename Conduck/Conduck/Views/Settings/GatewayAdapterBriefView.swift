@@ -160,7 +160,11 @@ struct GatewayAdapterBriefView: View {
                     .stroke(AppColors.border, lineWidth: 1)
             )
         }
-        .buttonStyle(.plain)
+        .choiceCardButton(cornerRadius: 14)
+        // The card style makes the button itself greedy, so re-apply the pill's
+        // own width cap OUTSIDE it — otherwise the capped pill would sit flush
+        // left in the wider content rail instead of centered under the cards.
+        .frame(maxWidth: Constants.Layout.buttonMaxWidth)
         .frame(maxWidth: .infinity)
         // 32 — the CONTENT rail, matching the cards above. The footer's
         // `Layout.horizontalPadding` (16 on iOS) is the FOOTER's rail; using it
@@ -187,7 +191,7 @@ struct GatewayAdapterBriefView: View {
                 .background(Color.accentColor)
                 .cornerRadius(14)
         }
-        .buttonStyle(.plain)
+        .primaryCTAButton()
         .frame(maxWidth: .infinity)
         .padding(.horizontal, Constants.Layout.horizontalPadding)
         .accessibilityIdentifier("guidedSetup.adapter.continue")

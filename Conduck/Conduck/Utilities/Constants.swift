@@ -1627,6 +1627,19 @@ enum AppColors {
     /// Shadow color — warm brown, not pure black
     static let shadow = Color(red: 0.165, green: 0.129, blue: 0.094)
 
+    // MARK: - Pointer Feedback (macOS hover / press)
+
+    /// Wash behind a control the mouse is hovering. Derived from `textPrimary`
+    /// rather than plain white so the highlight stays in the warm family — a
+    /// neutral white overlay reads cold and grey against these browns.
+    /// Applied by the styles in `MacPointerTargets.swift`.
+    static let pointerHoverFill = textPrimary.opacity(0.07)
+
+    /// Wash behind a control while the mouse button is down — the same tone,
+    /// deepened, so press is legible as "more of the same" rather than a
+    /// different color appearing under the cursor.
+    static let pointerPressedFill = textPrimary.opacity(0.13)
+
     // MARK: - Accent Colors
 
     /// Primary accent — matches brandAmber

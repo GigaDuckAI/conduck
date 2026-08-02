@@ -118,6 +118,7 @@ struct ConduckConnectCommandBlock: View {
             .onboardingScaledFont(.subheadline, weight: .semibold)
             .foregroundStyle(.tint)
         }
+        .pointerLink()
     }
 
     /// Copy to the system clipboard through the shared helper — the setup command

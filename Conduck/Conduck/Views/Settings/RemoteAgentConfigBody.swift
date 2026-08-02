@@ -594,7 +594,7 @@ struct RemoteAgentConfigBody: View {
                         }
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .settingsRowButton(horizontalPadding: 0)
                     .disabled(isDirty)
                     .accessibilityIdentifier("settings.remoteAgent.editor.quickConnect")
                     // A disabled row must say why — the gate subtitle doubles as
@@ -729,9 +729,9 @@ struct RemoteAgentConfigBody: View {
             .font(.footnote.weight(.semibold))
             .labelStyle(AccentGlyphActionLabelStyle())
         }
-        // Explicit `.plain` — an automatic style on a button hosted inside a
-        // Form footer picks up the row-wide activation treatment.
-        .buttonStyle(.plain)
+        // Explicit style, never automatic — an automatic style on a button hosted
+        // inside a Form footer picks up the row-wide activation treatment.
+        .inlineLinkButton()
     }
 
     /// The custom lane's counterpart — same chrome as `selfHostedFooterView`,
@@ -754,7 +754,7 @@ struct RemoteAgentConfigBody: View {
             .font(.footnote.weight(.semibold))
             .labelStyle(AccentGlyphActionLabelStyle())
         }
-        .buttonStyle(.plain)
+        .inlineLinkButton()
     }
 
     /// The endpoint-off remedy: fires on `.remoteAgentEndpointUnexpectedResponse`
@@ -1208,7 +1208,13 @@ struct RemoteAgentConfigBody: View {
                                         .background(Capsule().fill(AppColors.backgroundSecondary))
                                         .foregroundStyle(AppColors.textSecondary)
                                 }
-                                .buttonStyle(.plain)
+                                // A caption2 chip with 4pt of vertical padding is
+                                // a ~21pt target — under the pointer floor. The
+                                // chip IS a capsule, so the wash takes that
+                                // outline; no `horizontalPadding`, since the 8pt
+                                // side inset already lives INSIDE the drawn pill
+                                // and more would widen the wash past its edge.
+                                .pointerIconButton(shape: .capsule)
                             }
                         }
                     }
@@ -1369,7 +1375,11 @@ struct RemoteAgentConfigBody: View {
                         .foregroundStyle(AppColors.textPrimary)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                // Icon primitive, not `.settingsRowButton` — the row is SPLIT, so
+                // a full-width style here would stretch this half and halve the
+                // trailing one. This gives the label the 28pt live band the rest
+                // of the row already has, plus a wash pill hugging the word.
+                .pointerIconButton(horizontalPadding: 6)
                 .accessibilityValue(secretStatusAccessibilityValue)
 
                 InfoTipButton(tip: secretTip)
@@ -1386,7 +1396,7 @@ struct RemoteAgentConfigBody: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .settingsRowButton(horizontalPadding: 0)
                 .accessibilityHidden(true)
 
                 if stagedVoiceKeyReuse {
@@ -1401,7 +1411,7 @@ struct RemoteAgentConfigBody: View {
                             .font(.subheadline)
                             .foregroundStyle(AppColors.textTertiary)
                     }
-                    .buttonStyle(.plain)
+                    .pointerIconButton()
                     .padding(.leading, 8)
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "settings.remoteAgent.token.stagedVoiceKey.change",
@@ -1608,7 +1618,7 @@ struct RemoteAgentConfigBody: View {
                     #endif
                 }
                 #if os(macOS)
-                .buttonStyle(.plain)
+                .settingsRowButton(horizontalPadding: 0)
                 #endif
                 .foregroundStyle(AppColors.error)
             } header: {
@@ -1927,7 +1937,9 @@ struct RemoteAgentConfigBody: View {
                         .foregroundStyle(AppColors.textPrimary)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                // Icon primitive, not `.settingsRowButton` — see `secretRow`: a
+                // full-width style would stretch this half of the split row.
+                .pointerIconButton(horizontalPadding: 6)
                 .accessibilityIdentifier("settings.remoteAgent.editor.serverCertificate")
                 .accessibilityValue(Text(certRowValue))
 
@@ -1947,7 +1959,7 @@ struct RemoteAgentConfigBody: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .settingsRowButton(horizontalPadding: 0)
                 .accessibilityHidden(true)
             }
         }
@@ -2034,6 +2046,9 @@ struct RemoteAgentConfigBody: View {
                                 .foregroundStyle(status.tint)
                         }
                     }
+                    // Claims the `Spacer()` gap between label and badge, the same
+                    // way every other full-width row in this file does.
+                    .contentShape(Rectangle())
                 }
                 .disabled(gateReason != nil)
                 .accessibilityIdentifier("settings.remoteAgent.editor.fileTransfer")
@@ -2276,7 +2291,7 @@ struct RemoteAgentConfigBody: View {
             .font(.subheadline.weight(.semibold))
             .labelStyle(AccentGlyphActionLabelStyle())
         }
-        .buttonStyle(.plain)
+        .settingsRowButton(horizontalPadding: 0)
         .accessibilityIdentifier("settings.remoteAgent.editor.setupOtherDevice")
     }
 
@@ -2320,7 +2335,9 @@ struct RemoteAgentConfigBody: View {
                                 .stroke(AppColors.textPrimary, lineWidth: selected == entry.id ? 2 : 0)
                         )
                 }
-                .buttonStyle(.plain)
+                // The swatch IS a circle — a rounded-square wash would tint only
+                // the corners of the 28pt pointer square around it.
+                .pointerIconButton(shape: .circle)
                 .accessibilityLabel(Text(entry.id))
             }
         }

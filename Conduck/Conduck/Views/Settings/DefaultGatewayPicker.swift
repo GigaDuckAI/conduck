@@ -122,7 +122,7 @@ struct DefaultGatewayPicker: View {
                         }
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .settingsRowButton(horizontalPadding: 0)
                 }
             }
 
@@ -185,7 +185,10 @@ struct DefaultGatewayPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            // `horizontalPadding: 0` throughout this picker: the fixed 18pt check
+            // slot is what aligns the names, and it must line up with the twin
+            // voice chooser (`VoiceActiveProviderPicker`), which sits flush.
+            .settingsRowButton(horizontalPadding: 0)
         } else {
             Button {
                 onSetUp(row.ref)
@@ -204,7 +207,7 @@ struct DefaultGatewayPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .settingsRowButton(horizontalPadding: 0)
         }
     }
 
@@ -233,7 +236,7 @@ struct DefaultGatewayPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .settingsRowButton(horizontalPadding: 0)
         } else {
             Button {
                 onSetUp(row.ref)
@@ -260,7 +263,7 @@ struct DefaultGatewayPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .settingsRowButton(horizontalPadding: 0)
         }
     }
 

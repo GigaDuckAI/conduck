@@ -92,7 +92,7 @@ struct ActionButtonStepView: View {
                     .background(Color.accentColor)
                     .cornerRadius(14)
             }
-            .buttonStyle(.plain)
+            .primaryCTAButton()
             .frame(maxWidth: .infinity)
             .disabled(isFinishing)
             .padding(.horizontal, Constants.Layout.horizontalPadding)

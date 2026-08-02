@@ -85,7 +85,11 @@ struct AttachmentFullScreenView: View {
                         .padding(16)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                // Circular wash: the control is drawn as a filled circle, and a
+                // rounded-square wash would tint only the corner slivers outside
+                // it. The label's own 16pt padding already carries the frame well
+                // past the 28pt floor, so `size` never binds here.
+                .pointerIconButton(shape: .circle)
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "attachment.fullscreen.done",
                     defaultValue: "Done"

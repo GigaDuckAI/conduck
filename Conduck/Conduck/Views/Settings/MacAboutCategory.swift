@@ -71,22 +71,32 @@ struct MacAboutCategory: View {
             } label: {
                 rowLabel("Send Feedback", systemImage: "envelope", trailing: "arrow.up.right") // xcstrings
             }
-            .buttonStyle(.plain)
+            .settingsRowButton()
 
+            // `Link`, not `Button` — no `ButtonStyle` reaches it, so these rows
+            // take `.settingsRowLink()`: the same full-width live area and wash
+            // `.settingsRowButton()` gives the `Button` rows above and below, and
+            // deliberately the same ARROW cursor. These are rows, not inline
+            // prose links, and the pointing hand here would make one card answer
+            // the pointer three different ways. `.plain` stays for the link
+            // chrome it already suppressed.
             Link(destination: URL(string: Constants.websiteURL)!) {
                 rowLabel("Visit conduck.com", systemImage: "globe", trailing: "arrow.up.right") // xcstrings
             }
             .buttonStyle(.plain)
+            .settingsRowLink()
 
             Link(destination: URL(string: Constants.privacyPolicyURL)!) {
                 rowLabel("Privacy Policy", systemImage: "hand.raised", trailing: "arrow.up.right") // xcstrings
             }
             .buttonStyle(.plain)
+            .settingsRowLink()
 
             Link(destination: URL(string: Constants.termsOfServiceURL)!) {
                 rowLabel("Terms of Service", systemImage: "doc.text", trailing: "arrow.up.right") // xcstrings
             }
             .buttonStyle(.plain)
+            .settingsRowLink()
 
             // Internal sheet (not an external link) — trailing chevron signals
             // in-app content. Apache-2.0 §4 / MIT notice preservation.
@@ -99,7 +109,7 @@ struct MacAboutCategory: View {
                     trailing: "chevron.forward"
                 )
             }
-            .buttonStyle(.plain)
+            .settingsRowButton()
         }
     }
 
@@ -127,6 +137,7 @@ struct MacAboutCategory: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .settingsRowLink()
         } header: {
             Text("Community") // xcstrings
         }
@@ -141,6 +152,9 @@ struct MacAboutCategory: View {
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
         }
+        // Load-bearing for the `Link` rows: they get no `ButtonStyle`, so this
+        // is what makes the `Spacer()` gap hittable there. The `Button` rows
+        // get the same guarantee from `.settingsRowButton()`.
         .contentShape(Rectangle())
     }
 }

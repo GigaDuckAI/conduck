@@ -103,7 +103,11 @@ struct OnboardingContainerView: View {
                                     .fill(AppColors.backgroundSecondary)
                             )
                     }
-                    .buttonStyle(.plain)
+                    // Icon-only chrome control: the full 44pt square hit-tests
+                    // (the filled circle alone leaves the corners dead), while
+                    // the hover wash follows the DRAWN circle — a rounded-square
+                    // wash would tint only the corner slivers outside it.
+                    .pointerIconButton(size: 44, shape: .circle)
                     .accessibilityLabel(Text("Go Back")) // xcstrings
                     #if os(macOS)
                     .padding(.top, 16)

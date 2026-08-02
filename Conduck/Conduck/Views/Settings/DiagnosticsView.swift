@@ -1056,21 +1056,48 @@ struct DiagnosticsContent: View {
 /// button. It sets NO foreground — the label keeps its own colors (accent glyph
 /// + light title) untouched; only the button SHAPE changes.
 struct MacDiagnosticsActionButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
     func makeBody(configuration: Configuration) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
-        return configuration.label
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(
-                shape.fill(AppColors.cardBackgroundElevated
-                    .opacity(configuration.isPressed ? 0.7 : 1))
-            )
-            .overlay(shape.stroke(AppColors.border, lineWidth: 1))
-            .contentShape(shape)
-            .opacity(isEnabled ? 1 : 0.5)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+        Surface(configuration: configuration)
+    }
+
+    /// A `ButtonStyle` is not a `View`, so `@State` and `@Environment` get no
+    /// storage on the style itself (see `MacPointerTargets`) — hover tracking and
+    /// the enabled read therefore live in this nested view, which IS one.
+    private struct Surface: View {
+        let configuration: Configuration
+
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+            return configuration.label
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background {
+                    ZStack {
+                        shape.fill(AppColors.cardBackgroundElevated
+                            .opacity(configuration.isPressed ? 0.7 : 1))
+                        // The card fill is opaque, so the pointer wash layers ON
+                        // TOP of it (still behind the label) — painted behind the
+                        // card it would never be visible.
+                        shape.fill(highlightFill)
+                    }
+                }
+                .overlay(shape.stroke(AppColors.border, lineWidth: 1))
+                .contentShape(shape)
+                .opacity(isEnabled ? 1 : 0.5)
+                .onHover { hovering = $0 }
+                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+                .animation(MacPointer.highlightAnimation, value: hovering)
+        }
+
+        /// Nothing while disabled — a highlight on an inert control is a lie
+        /// about what a click would do.
+        private var highlightFill: Color {
+            guard isEnabled, hovering, !configuration.isPressed else { return .clear }
+            return AppColors.pointerHoverFill
+        }
     }
 }
 #endif

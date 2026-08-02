@@ -68,7 +68,7 @@ private struct MacSettingsSubScreenChrome: ViewModifier {
                         Image(systemName: "chevron.backward")
                             .font(.body.weight(.semibold))
                     }
-                    .buttonStyle(.plain)
+                    .pointerIconButton()
                     .foregroundStyle(AppColors.textSecondary)
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "settings.mac.back",

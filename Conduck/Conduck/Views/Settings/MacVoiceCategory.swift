@@ -127,14 +127,14 @@ struct MacVoiceCategory: View {
             } label: {
                 VoiceDirectionSelectorRow(direction: .stt, activeVendorName: viewModel.activeSTTVendorShortName)
             }
-            .buttonStyle(.plain)
+            .settingsRowButton()
 
             Button {
                 route = .chooser(.tts)
             } label: {
                 VoiceDirectionSelectorRow(direction: .tts, activeVendorName: viewModel.activeTTSVendorShortName)
             }
-            .buttonStyle(.plain)
+            .settingsRowButton()
 
             Button {
                 route = .providers
@@ -152,9 +152,8 @@ struct MacVoiceCategory: View {
                         .font(.caption)
                         .foregroundStyle(AppColors.textTertiary)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .settingsRowButton()
         } header: {
             Text(LocalizedStringResource("settings.voice.setup.header", defaultValue: "Voice Setup"))
         }
@@ -326,7 +325,7 @@ private struct MacVoiceProvidersList: View {
                 .font(.body)
                 .foregroundStyle(canAdd ? AppColors.textPrimary : AppColors.textTertiary)
             }
-            .buttonStyle(.plain)
+            .settingsRowButton()
             .disabled(!canAdd)
             .accessibilityIdentifier("settings.voice.addCustomEndpoint")
             if !canAdd {
@@ -359,9 +358,8 @@ private struct MacVoiceProvidersList: View {
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .settingsRowButton()
     }
 }
 

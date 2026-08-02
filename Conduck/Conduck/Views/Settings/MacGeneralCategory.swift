@@ -224,9 +224,8 @@ struct MacGeneralCategory: View {
                 )
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.tint)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .settingsRowButton()
         } header: {
             Text(LocalizedStringResource("settings.quickCapture.header.mac", defaultValue: "Menu Bar"))
         } footer: {

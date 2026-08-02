@@ -187,7 +187,7 @@ struct GatewayReadinessView: View {
                     .background(Color.accentColor)
                     .cornerRadius(14)
             }
-            .buttonStyle(.plain)
+            .primaryCTAButton()
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("guidedSetup.readiness.proceed")
 
@@ -210,7 +210,7 @@ struct GatewayReadinessView: View {
                                 .stroke(AppColors.border, lineWidth: 1)
                         )
                 }
-                .buttonStyle(.plain)
+                .choiceCardButton(cornerRadius: 14)
                 .frame(maxWidth: .infinity)
                 .accessibilityIdentifier("guidedSetup.readiness.adapterEscape")
             }

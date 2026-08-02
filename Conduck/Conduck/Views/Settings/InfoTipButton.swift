@@ -56,11 +56,15 @@ struct GatewayFieldTip {
 
 struct InfoTipButton: View {
     let tip: GatewayFieldTip
-    /// Where the glyph sits inside its 44×44 tap target. The tap target is a fixed
-    /// HIG minimum, so a centered glyph strands ~14pt of dead space on BOTH sides
-    /// and the ⓘ visually drifts away from whatever it annotates. Pushing the glyph
-    /// to one edge moves all the slack to the far side: `.leading` when the tip
-    /// follows a label, `.trailing` when it is a row's trailing accessory.
+    /// Where the glyph sits inside its 44×44 TOUCH tap target. That target is a
+    /// fixed HIG minimum, so a centered glyph strands ~14pt of dead space on BOTH
+    /// sides and the ⓘ visually drifts away from whatever it annotates. Pushing the
+    /// glyph to one edge moves all the slack to the far side: `.leading` when the
+    /// tip follows a label, `.trailing` when it is a row's trailing accessory.
+    ///
+    /// Unread on macOS, where the target is a CENTERED 28pt square instead: the
+    /// pointer floor is 28, not 44, so there is barely any slack to push around —
+    /// and an edge-aligned glyph would park the ⓘ at the rim of its own hover wash.
     var glyphAlignment: Alignment = .leading
 
     @State private var isPresented: Bool = false
@@ -77,14 +81,23 @@ struct InfoTipButton: View {
             Image(systemName: "info.circle")
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
-                // 44×44 minimum tap target (HIG), claimed via `contentShape` so the
-                // glyph's own bounds don't shrink it.
+                // The target, claimed via `contentShape` so the glyph's own bounds
+                // don't shrink it. Two different floors: 44×44 is the HIG TOUCH
+                // minimum (edge-aligned, see `glyphAlignment`), while the macOS
+                // POINTER floor is 28 — at 44 the wash would light a square with a
+                // small ⓘ parked at its edge, so the Mac gets a centered 28pt square.
+                #if os(macOS)
+                .frame(width: MacPointer.minTarget, height: MacPointer.minTarget)
+                #else
                 .frame(width: 44, height: 44, alignment: glyphAlignment)
+                #endif
                 .contentShape(Rectangle())
         }
-        // Explicit `.plain`: an automatic style on a sibling button inside a Form
-        // row makes the WHOLE row activate ambiguously.
-        .buttonStyle(.plain)
+        // Explicit style, never automatic: an automatic style on a sibling button
+        // inside a Form row makes the WHOLE row activate ambiguously. The pointer
+        // variant keeps that explicitness and adds the hover wash the bare target
+        // otherwise lacks — the glyph alone gave no sign it was a control.
+        .pointerIconButton()
         .accessibilityLabel(Text(tip.accessibilityLabel))
         #if os(macOS)
         .help(Text(tip.message))

@@ -461,6 +461,7 @@ struct FileTransferSetupContent: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tint)
                 }
+                .pointerLink()
             }
             .padding(.vertical, 2)
         } header: {
@@ -631,7 +632,7 @@ struct FileTransferSetupContent: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.brandAmber)
                 }
-                .buttonStyle(.plain)
+                .inlineLinkButton()
                 Button {
                     // SENSITIVE copy — the 32-hex WebDAV Basic-auth password.
                     // `Pasteboard.copy` (and the plain open-coded write this
@@ -657,7 +658,7 @@ struct FileTransferSetupContent: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.brandAmber)
                 }
-                .buttonStyle(.plain)
+                .inlineLinkButton()
                 Spacer()
             }
         }
@@ -849,6 +850,12 @@ struct FileTransferSetupContent: View {
                 ))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
+                    // The sibling ⓘ lays the row out at the 28pt pointer floor, so
+                    // without this the label is live for its ~17pt line box only
+                    // and the row washes over strips that don't click.
+                    #if os(macOS)
+                    .frame(minHeight: MacPointer.minTarget)
+                    #endif
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -868,6 +875,11 @@ struct FileTransferSetupContent: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(AppColors.textTertiary)
                 }
+                // Same 28pt floor as the label half, so the whole washed band is
+                // live rather than just the value + chevron glyph runs.
+                #if os(macOS)
+                .frame(minHeight: MacPointer.minTarget)
+                #endif
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -876,6 +888,10 @@ struct FileTransferSetupContent: View {
         // Matches the vertical rhythm of its section siblings `urlGroup` and
         // `actionGroup`.
         .padding(.vertical, 2)
+        // The row's three sibling Buttons already cover its full width, but a
+        // per-button wash would light only the half under the pointer. One wash
+        // on the container makes the whole push row react as a unit.
+        .pointerHoverWash()
         .sheet(isPresented: $showingCertSheet) {
             CertificateTrustSheet(fingerprint: certPinBinding)
         }
@@ -1046,7 +1062,7 @@ struct FileTransferSetupContent: View {
             #endif
         }
         #if os(macOS)
-        .buttonStyle(.plain)
+        .settingsRowButton(horizontalPadding: 0)
         #endif
         .foregroundStyle(AppColors.error)
         .alert(

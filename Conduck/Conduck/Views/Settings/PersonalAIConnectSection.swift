@@ -94,11 +94,15 @@ struct PersonalAIConnectRows: View {
             // width — without this, a tap on the right (empty) half of the row
             // misses the button entirely.
             .frame(maxWidth: .infinity, alignment: .leading)
+            // INSIDE the label, so it grows the button's own frame instead of
+            // insetting the button within the row. `listRowBackground` paints the
+            // full row rect, so padding applied outside the buttonStyle would
+            // leave 8pt of visible-but-dead card at the top and bottom edges.
+            .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .choiceCardButton(cornerRadius: 10)
         .accessibilityIdentifier("settings.personalAI.guidedSetup")
-        .padding(.vertical, 4)
         // `nil` restores the platform's default row card — the calm state. The
         // sheen lives in the row BACKGROUND rather than masked over the label, so
         // it cannot touch hit-testing or VoiceOver: the whole card catches the

@@ -136,7 +136,9 @@ struct VoiceActiveProviderPicker: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // `horizontalPadding: 0` keeps the row's text flush with the inert
+        // "Soon" rows in the list above, which are not Buttons and get no style.
+        .settingsRowButton(horizontalPadding: 0)
     }
 
     // MARK: - Option row (shared markup)
@@ -169,7 +171,7 @@ struct VoiceActiveProviderPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .settingsRowButton(horizontalPadding: 0)
         } else {
             // Not configured → deep-link to setup; never silently activates.
             Button {
@@ -189,7 +191,7 @@ struct VoiceActiveProviderPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .settingsRowButton(horizontalPadding: 0)
         }
     }
 

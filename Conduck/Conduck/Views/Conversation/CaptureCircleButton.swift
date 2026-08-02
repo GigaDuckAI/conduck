@@ -118,9 +118,49 @@ struct CaptureButtonStyle: ButtonStyle {
     let reduceMotion: Bool
 
     func makeBody(configuration: Configuration) -> some View {
+        #if os(macOS)
+        HoverBody(configuration: configuration, reduceMotion: reduceMotion)
+        #else
         configuration.label
             .scaleEffect((configuration.isPressed && !reduceMotion) ? 0.92 : 1.0)
             .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.6),
                        value: configuration.isPressed)
+        #endif
     }
+
+    #if os(macOS)
+    /// macOS adds POINTER feedback on top of the press scale: without it the two
+    /// most-used controls in the app look identical whether the cursor is on the
+    /// disc or 3pt off it. The disc paints an opaque, saturated fill, so it takes
+    /// the brightness lift `PrimaryCTAButtonStyle` uses rather than a tint wash —
+    /// a 7% overlay is invisible over that fill.
+    ///
+    /// A `ButtonStyle` is not a `View`, so `@State` cannot live on the style
+    /// itself; hover tracking goes in this nested view, which is one.
+    private struct HoverBody: View {
+        let configuration: Configuration
+        let reduceMotion: Bool
+
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .scaleEffect((configuration.isPressed && !reduceMotion) ? 0.92 : 1.0)
+                .brightness(brightness)
+                .onHover { hovering = $0 }
+                .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.6),
+                           value: configuration.isPressed)
+                .animation(MacPointer.highlightAnimation, value: hovering)
+        }
+
+        /// `.clear`-equivalent when disabled: a highlight on an inert control is
+        /// a lie about what a click would do.
+        private var brightness: Double {
+            guard isEnabled else { return 0 }
+            if configuration.isPressed { return -0.07 }
+            return hovering ? 0.10 : 0
+        }
+    }
+    #endif
 }

@@ -408,7 +408,12 @@ struct MainWindowView: View {
                             .foregroundStyle(AppColors.textSecondary)
                         )
                     }
-                    .buttonStyle(.plain)
+                    // The clone-eligible pill is the one INTERACTIVE thing in the
+                    // title bar and looks identical to the read-only label next to
+                    // it — so it needs the hover wash to tell them apart. Capsule,
+                    // because `gatewayPillBackground` draws one; no
+                    // `horizontalPadding`, its 10pt inset is inside that pill.
+                    .pointerIconButton(shape: .capsule)
                     .help(String(localized: LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway")))
                     .accessibilityIdentifier("toolbar.cloneGateway")
                     .fixedSize()
@@ -474,9 +479,8 @@ struct MainWindowView: View {
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .settingsRowButton(horizontalPadding: 0)
             .keyboardShortcut(",", modifiers: .command)
             .padding(12)
         }
