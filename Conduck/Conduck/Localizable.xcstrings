@@ -3001,17 +3001,6 @@
         }
       }
     },
-    "fileTransfer.advanced.label" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Advanced"
-          }
-        }
-      }
-    },
     "fileTransfer.attach.retry" : {
       "extractionState" : "manual",
       "localizations" : {

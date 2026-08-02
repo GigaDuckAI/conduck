@@ -3361,12 +3361,12 @@ final class SettingsViewModel {
     /// credential — the credential is minted separately
     /// (`regenerateFileServerCredential`) and the connection is proven by the
     /// staged `runFileTransferTest(for:)`. It DOES persist the optional manual pin
-    /// the user typed in the setup guide's Advanced disclosure (normalized here the
-    /// same way the gateway pin is). Nothing else can ever write a pin: a
+    /// the user typed in the setup guide's Server certificate sheet (normalized here
+    /// the same way the gateway pin is). Nothing else can ever write a pin: a
     /// fingerprint reaches storage only because the user typed it, and it only
     /// narrows a chain the system already accepted.
     /// File-server editor cert-pin field writes the buffered fingerprint for a ref
-    /// (setup guide's Advanced disclosure). Change-guarded, mirroring
+    /// (setup guide's Server certificate row). Change-guarded, mirroring
     /// `setRemoteAgentCertFingerprintBuffer`. Persisted by
     /// `validateAndSaveFileTransferConfig` alongside the URL. A pin edit needs no
     /// explicit verdict retraction — the staged verdict is signature-keyed, so a
@@ -3518,7 +3518,7 @@ final class SettingsViewModel {
             return
         }
 
-        // Normalize the optional manual pin (Advanced) to the canonical manual-pin
+        // Normalize the optional manual pin to the canonical manual-pin
         // form — trim/lowercase/strip ':' → require 64 hex. Reject garbage BEFORE
         // persisting the URL so a bad pin can never leave a saved URL paired with an
         // unmatchable fingerprint. Empty stays "no pin" (system trust).

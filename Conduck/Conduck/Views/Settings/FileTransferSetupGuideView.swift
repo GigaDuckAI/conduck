@@ -66,7 +66,7 @@ struct AccentGlyphActionLabelStyle: LabelStyle {
 /// The file-transfer editor: a grouped `Form` of sections (status → explanation →
 /// sign-in → connection → compact agent requirements → forget) under the shared
 /// `bufferedEditorChrome` (Cancel · title · Save). Owns the credential
-/// reveal/copy state, the advanced certificate-trust sheet, the Forget confirm
+/// reveal/copy state, the certificate-trust sheet, the Forget confirm
 /// alert, and the URL/pin dirty detection against the VM's persisted mirrors. The
 /// `.missing/.savedNeedsTest/.ready` machine drives only small touches (hide the
 /// setup explanation once tested; change Test Connection to Test again; hide
@@ -95,10 +95,6 @@ struct FileTransferSetupContent: View {
     @State private var showingForgetConfirm: Bool = false
     /// The certificate-trust sheet (the "Server certificate" row).
     @State private var showingCertSheet: Bool = false
-    /// Certificate pinning is exceptional configuration. Keep it collapsed for
-    /// the ordinary system-trust path, but reveal it when a pin exists or the
-    /// latest probe reports a certificate-specific failure.
-    @State private var showingAdvanced: Bool = false
 
     /// One-shot buffer hydration guard — `.onAppear` re-fires on the way back
     /// from a child presentation, and re-hydrating then would wipe live edits.
@@ -133,20 +129,6 @@ struct FileTransferSetupContent: View {
     /// diverges from the tuple the test actually probed.
     private var displayedTest: FileTransferTestResult? {
         viewModel.displayedFileTransferTestResult(for: ref)
-    }
-
-    private var certificateNeedsAttention: Bool {
-        let pin = Self.pinComparisonForm(viewModel.fileServerCertFingerprints[ref] ?? "")
-        if !pin.isEmpty { return true }
-        guard let failure = displayedTest?.failure else { return false }
-        switch failure {
-        case .fileTransferCertMismatch,
-             .fileTransferCertUntrusted,
-             .fileTransferCertKeyUnpinnable:
-            return true
-        default:
-            return false
-        }
     }
 
     private var trimmedURL: String {
@@ -229,7 +211,6 @@ struct FileTransferSetupContent: View {
             if !didInitialize {
                 didInitialize = true
                 viewModel.cancelFileTransferEdit(for: ref)
-                showingAdvanced = certificateNeedsAttention
             }
         }
         // Privacy hygiene: drop the in-memory minted credential when the editor
@@ -243,9 +224,6 @@ struct FileTransferSetupContent: View {
             // host's `onDismiss` promotes the staged tile. Never fires on a
             // dirty editor (external readiness must not eat unsaved edits).
             if eligible { dismiss() }
-        }
-        .onChange(of: certificateNeedsAttention) { _, needsAttention in
-            if needsAttention { showingAdvanced = true }
         }
         .interactiveDismissDisabled(context == .composer && isDirty)
         // The ONE title site for both hosts (iOS nav bar; the macOS chrome
@@ -727,33 +705,17 @@ struct FileTransferSetupContent: View {
 
     // MARK: - File-server connection (URL + certificate + Test Connection)
 
+    /// The certificate row is a flat sibling of the URL and the test action, not a
+    /// disclosure: it is ONE plain-language row whose value ("Automatic") a
+    /// collapsed label could only repeat, and the gateway editor one level up
+    /// already places its identical row this way (`RemoteAgentConfigBody`'s flat
+    /// Connection section).
     private var connectionSection: some View {
         Section {
             urlGroup
             actionGroup
-            advancedDisclosure
-        }
-    }
-
-    private var advancedDisclosure: some View {
-        DisclosureGroup(isExpanded: $showingAdvanced) {
             certificateRow
-                .padding(.top, 10)
-        } label: {
-            HStack(spacing: 8) {
-                Text(LocalizedStringResource(
-                    "fileTransfer.advanced.label",
-                    defaultValue: "Advanced"
-                ))
-                    .font(.subheadline)
-                    .foregroundStyle(AppColors.textPrimary)
-                Spacer(minLength: 8)
-                Text(certRowValue)
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textTertiary)
-            }
         }
-        .tint(AppColors.textTertiary)
     }
 
     private var urlGroup: some View {
@@ -911,6 +873,9 @@ struct FileTransferSetupContent: View {
             .buttonStyle(.plain)
             .accessibilityHidden(true)
         }
+        // Matches the vertical rhythm of its section siblings `urlGroup` and
+        // `actionGroup`.
+        .padding(.vertical, 2)
         .sheet(isPresented: $showingCertSheet) {
             CertificateTrustSheet(fingerprint: certPinBinding)
         }
