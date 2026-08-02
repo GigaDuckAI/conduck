@@ -29,9 +29,7 @@ final class SettingsViewModelCustomSTTURLTests: XCTestCase {
                                            defaultValue: "Enter the full endpoint URL including https://.")
 
     /// App Groups UserDefaults — same suite `SettingsManager` uses internally.
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     /// A stable uuid for the named endpoint these tests configure. The
     /// VM keys all custom-STT state by uuid; a seeded in-memory roster record +

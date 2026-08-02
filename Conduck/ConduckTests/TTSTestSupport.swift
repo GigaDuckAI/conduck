@@ -13,17 +13,17 @@
 import Foundation
 @testable import Conduck
 
-/// A `TTSOutcomeLog` backed by a fresh, uniquely-named UserDefaults suite so the
-/// real device-local ring is never touched and each test owns an isolated ring.
-/// Capacity defaults to the production 16 (override for pruning tests).
+/// A `TTSOutcomeLog` backed by a fresh in-memory store so the real device-local
+/// ring is never touched and each test owns an isolated ring. Capacity defaults
+/// to the production 16 (override for pruning tests).
 @MainActor
 func makeThrowawayOutcomeLog(
     _ id: String = UUID().uuidString,
     capacity: Int = 16,
     now: @escaping () -> Date = { Date() }
 ) -> TTSOutcomeLog {
-    let suite = UserDefaults(suiteName: "test.ring.\(id)")!
-    suite.removePersistentDomain(forName: "test.ring.\(id)")
-    return TTSOutcomeLog(defaults: suite, capacity: capacity, now: now)
+    // A throwaway in-memory store — nothing is written to disk, so parallel
+    // hosts cannot collide and a crashed run leaves no residue plist behind.
+    return TTSOutcomeLog(defaults: InMemoryDefaultsStore(), capacity: capacity, now: now)
 }
 #endif

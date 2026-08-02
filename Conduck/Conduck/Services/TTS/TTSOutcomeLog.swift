@@ -108,7 +108,7 @@ final class TTSOutcomeLog {
     /// setters; this key is never handed to `NSUbiquitousKeyValueStore`).
     static let defaultsKey = "diag.tts.outcomes.v1"
 
-    private let defaults: UserDefaults
+    private let defaults: any DefaultsStore
     private let capacity: Int
     private let now: () -> Date
 
@@ -119,11 +119,11 @@ final class TTSOutcomeLog {
     ///     incident without becoming a usage journal).
     ///   - now: injectable clock for deterministic tests.
     init(
-        defaults: UserDefaults? = nil,
+        defaults: (any DefaultsStore)? = nil,
         capacity: Int = 16,
         now: @escaping () -> Date = { Date() }
     ) {
-        self.defaults = defaults ?? UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        self.defaults = defaults ?? SettingsDependencies.processDefault.defaults
         self.capacity = capacity
         self.now = now
     }

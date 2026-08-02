@@ -20,9 +20,7 @@ import XCTest
 @MainActor
 final class DiagnosticsRunnerTests: XCTestCase {
 
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     override func setUp() async throws {
         try await super.setUp()
@@ -41,7 +39,7 @@ final class DiagnosticsRunnerTests: XCTestCase {
     private func wipeVoiceSettings() {
         for key in [Constants.sttActivePresetIDKVSKey, Constants.ttsActiveProviderIDKVSKey] {
             defaults.removeObject(forKey: key)
-            NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+            TestStores.kvs.removeObject(forKey: key)
         }
     }
 

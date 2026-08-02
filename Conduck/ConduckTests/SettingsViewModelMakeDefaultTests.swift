@@ -25,9 +25,7 @@ import XCTest
 @MainActor
 final class SettingsViewModelMakeDefaultTests: XCTestCase {
 
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     private let openclaw: RemoteAgentRef = .builtin(.openclaw)
     private let hermes: RemoteAgentRef = .builtin(.hermes)
@@ -48,10 +46,10 @@ final class SettingsViewModelMakeDefaultTests: XCTestCase {
             await SettingsManager.shared.deleteCustomGateway(id: gateway.id)
         }
         defaults.removeObject(forKey: Constants.customGatewaysRegistryKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.customGatewaysRegistryKey)
+        TestStores.kvs.removeObject(forKey: Constants.customGatewaysRegistryKey)
 
         defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+        TestStores.kvs.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
         defaults.removeObject(forKey: Constants.remoteAgentActiveSessionKey)
 
         defaults.removeObject(forKey: Constants.remoteAgentBackendKey)
@@ -68,7 +66,7 @@ final class SettingsViewModelMakeDefaultTests: XCTestCase {
                 Constants.remoteAgentModelKey(for: ref)
             ] {
                 defaults.removeObject(forKey: key)
-                NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+                TestStores.kvs.removeObject(forKey: key)
             }
             try? await SettingsManager.shared.clearRemoteAgentToken(for: ref)
         }

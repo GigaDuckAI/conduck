@@ -4,9 +4,9 @@
 // MascotShuffleBagTests.swift
 //
 // Deterministic unit tests over `MascotShuffleBag` — the device-local
-// shuffle-bag empty-state mascot picker. Uses an isolated `UserDefaults`
-// suite via the `next(pool:defaults:)` test seam (removed in tearDown). No
-// SwiftUI, no asset-catalog dependency — pure-data over a small fixed pool.
+// shuffle-bag empty-state mascot picker. Uses an isolated in-memory store via
+// the `next(pool:defaults:)` test seam. No SwiftUI, no asset-catalog
+// dependency — pure-data over a small fixed pool.
 
 import XCTest
 @testable import Conduck
@@ -14,18 +14,15 @@ import XCTest
 final class MascotShuffleBagTests: XCTestCase {
 
     private let pool = ["a", "b", "c", "d"]
-    private let suiteName = "MascotShuffleBagTests"
-    private var defaults: UserDefaults!
+    private var defaults: InMemoryDefaultsStore!
 
     override func setUp() {
         super.setUp()
-        // Fresh, isolated suite per test (the previous test's tearDown removed it).
-        defaults = UserDefaults(suiteName: suiteName)
-        defaults.removePersistentDomain(forName: suiteName)
+        // Fresh, isolated store per test — nothing to clean up afterwards.
+        defaults = InMemoryDefaultsStore()
     }
 
     override func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
         defaults = nil
         super.tearDown()
     }

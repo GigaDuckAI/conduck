@@ -93,14 +93,20 @@ actor SettingsManager {
 
     /// App Groups UserDefaults — shared between main app, Widget, and Watch
     /// targets so any reader sees the latest values without a round-trip.
-    private let defaults: UserDefaults
+    private let defaults: any DefaultsStore
 
     /// iCloud Key-Value Store for cross-device sync.
-    private let iCloudStore = NSUbiquitousKeyValueStore.default
+    private let iCloudStore: any UbiquitousStore
+
+    /// Keychain. Every secret read/write/delete goes through here.
+    private let secrets: any SecretStore
+
+    /// iCloud account presence (`ubiquityIdentityToken` in production).
+    private let cloudAvailability: any CloudAvailability
 
     #if DEBUG
     /// Test-only: suspend ALL iCloud KVS participation — the read-fallback
-    /// (`iCloudAvailable`) AND the inbound `handleiCloudChange` mirror — so a suite
+    /// (`iCloudAvailable`) AND the inbound `handleICloudChange` mirror — so a suite
     /// driving the live `.shared` singleton is immune to cross-suite KVS residue and
     /// real-iCloud ServerChange echoes when the sim is signed into iCloud. Defaults
     /// off; non-suspending suites + production are unaffected. Mirrors the existing
@@ -128,7 +134,7 @@ actor SettingsManager {
         #if DEBUG
         if iCloudSyncSuspendedForTesting { return false }
         #endif
-        return FileManager.default.ubiquityIdentityToken != nil
+        return cloudAvailability.isAvailable
     }
 
     /// In-process latch so the iCloud-Keychain migration is attempted at most
@@ -161,8 +167,15 @@ actor SettingsManager {
     /// `remoteAgentDefaultBackendDeviceLocalMigratedKey` flag inside it.
     private var didAttemptDefaultBackendDeviceLocalMigration = false
 
-    private init() {
-        self.defaults = UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
+    /// - Parameter dependencies: the three stores plus cloud availability and
+    ///   the KVS change feed. Production passes `.processDefault`; a test builds
+    ///   an isolated `.inMemory()` bundle so nothing it writes can reach the
+    ///   real App Group, iCloud KVS, or Keychain.
+    init(dependencies: SettingsDependencies = .processDefault) {
+        self.defaults = dependencies.defaults
+        self.iCloudStore = dependencies.ubiquitous
+        self.secrets = dependencies.secrets
+        self.cloudAvailability = dependencies.cloudAvailability
 
         // Register for iCloud KVS external change notifications
         // UNCONDITIONALLY — no `ubiquityIdentityToken` gate. The token is nil
@@ -170,15 +183,12 @@ actor SettingsManager {
         // later must not need an app relaunch before sync resumes; an observer
         // on a dormant KVS costs nothing (no notifications fire while signed
         // out, and `synchronize()` is a harmless no-op there).
-        Task { @MainActor in
-            NotificationCenter.default.addObserver(
-                forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-                object: NSUbiquitousKeyValueStore.default,
-                queue: .main
-            ) { notification in
-                Task { await SettingsManager.shared.handleiCloudChange(notification) }
-            }
-            NSUbiquitousKeyValueStore.default.synchronize()
+        //
+        // The handler routes back through `self`, not `.shared`, so an injected
+        // instance mirrors its OWN store rather than the singleton's.
+        dependencies.changes.observe { [weak self] change in
+            guard let self else { return }
+            Task { await self.handleICloudChange(change) }
         }
     }
 
@@ -253,15 +263,19 @@ actor SettingsManager {
     /// write and re-show the screen. Reads the App-Group suite directly (mirrors
     /// `RootView`'s synchronous onboarding read). A missing/unavailable suite is
     /// treated as UNSEEN — never silently skip the primer.
-    static func hasSeenGatewayPrimer() -> Bool {
-        UserDefaults(suiteName: Constants.appGroupID)?.bool(forKey: Constants.gatewayPrimerSeenKey) ?? false
+    static func hasSeenGatewayPrimer(
+        defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults
+    ) -> Bool {
+        defaults.bool(forKey: Constants.gatewayPrimerSeenKey)
     }
 
     /// Mark the gateway primer acknowledged (synchronous App-Group write). Called
     /// from the primer's "Choose how to connect" / "Set up manually" taps — NEVER
     /// on Close, so a Close-without-choosing re-shows it next time.
-    static func markGatewayPrimerSeen() {
-        UserDefaults(suiteName: Constants.appGroupID)?.set(true, forKey: Constants.gatewayPrimerSeenKey)
+    static func markGatewayPrimerSeen(
+        defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults
+    ) {
+        defaults.set(true, forKey: Constants.gatewayPrimerSeenKey)
     }
 
     // MARK: - Show in Dock (macOS, device-local)
@@ -294,9 +308,10 @@ actor SettingsManager {
     /// before the policy switches to `.accessory`). Defaults to `true` when
     /// unset. Suite name is single-sourced from `Constants.appGroupID` — never
     /// hardcoded.
-    static func showDockIconAtLaunch() -> Bool {
-        (UserDefaults(suiteName: Constants.appGroupID)?
-            .object(forKey: Constants.showDockIconKey) as? Bool) ?? true
+    static func showDockIconAtLaunch(
+        defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults
+    ) -> Bool {
+        (defaults.object(forKey: Constants.showDockIconKey) as? Bool) ?? true
     }
 
     // MARK: - iCloud-unavailable banner dismissal (device-local)
@@ -308,15 +323,18 @@ actor SettingsManager {
     /// `showDockIconAtLaunch()`. Sticky across launches while iCloud stays down;
     /// `CloudSyncMonitor` resets it to false when the account returns. See
     /// `Constants.iCloudBannerDismissedKey`.
-    static func iCloudBannerDismissed() -> Bool {
-        UserDefaults(suiteName: Constants.appGroupID)?
-            .bool(forKey: Constants.iCloudBannerDismissedKey) ?? false
+    static func iCloudBannerDismissed(
+        defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults
+    ) -> Bool {
+        defaults.bool(forKey: Constants.iCloudBannerDismissedKey)
     }
 
     /// Persist the iCloud-banner dismissal flag (App-Group, device-local).
-    static func setICloudBannerDismissed(_ dismissed: Bool) {
-        UserDefaults(suiteName: Constants.appGroupID)?
-            .set(dismissed, forKey: Constants.iCloudBannerDismissedKey)
+    static func setICloudBannerDismissed(
+        _ dismissed: Bool,
+        defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults
+    ) {
+        defaults.set(dismissed, forKey: Constants.iCloudBannerDismissedKey)
     }
 
     // MARK: - Read replies aloud (per-surface, device-local)
@@ -344,9 +362,10 @@ actor SettingsManager {
     /// `NotificationDelegate.didReceive` can compute the auto-speak verdict
     /// without an async actor hop (mirrors `showDockIconAtLaunch`). Defaults
     /// to `false` when unset.
-    static func speakReplyOnNotificationOpenAtTap() -> Bool {
-        (UserDefaults(suiteName: Constants.appGroupID)?
-            .object(forKey: Constants.speakReplyOnNotificationOpenKey) as? Bool) ?? false
+    static func speakReplyOnNotificationOpenAtTap(
+        defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults
+    ) -> Bool {
+        (defaults.object(forKey: Constants.speakReplyOnNotificationOpenKey) as? Bool) ?? false
     }
 
     /// macOS "speak quick-lane replies on arrival" preference (menu-bar
@@ -395,9 +414,10 @@ actor SettingsManager {
     /// `MenuBarCoordinator.init` can seed its observable mirror without an
     /// async hop (an async seed would let the popover render the wrong input
     /// surface on a fast first summon). Mirrors `showDockIconAtLaunch()`.
-    static func menuBarInputModeAtLaunch() -> MenuBarInputMode {
-        guard let raw = UserDefaults(suiteName: Constants.appGroupID)?
-                .string(forKey: Constants.menuBarInputModeKey),
+    static func menuBarInputModeAtLaunch(
+        defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults
+    ) -> MenuBarInputMode {
+        guard let raw = defaults.string(forKey: Constants.menuBarInputModeKey),
               let value = MenuBarInputMode(rawValue: raw) else {
             return MenuBarInputMode.default
         }
@@ -453,8 +473,7 @@ actor SettingsManager {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = secrets.copyMatching(query)
         return APIKeyReadResult.classify(status: status, data: result as? Data)
     }
 
@@ -481,7 +500,7 @@ actor SettingsManager {
             kSecValueData as String: data
         ]
 
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let updateStatus = secrets.update(query, attributes: attributes)
 
         if updateStatus == errSecSuccess {
             // Post on every successful write (add OR update) so observers
@@ -498,7 +517,7 @@ actor SettingsManager {
             // Accessibility must be set at add time — immutable thereafter.
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
 
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            let addStatus = secrets.add(addQuery)
             guard addStatus == errSecSuccess else {
                 throw AppError.settingsLoadFailed
             }
@@ -521,7 +540,7 @@ actor SettingsManager {
             kSecAttrSynchronizable as String: true
         ]
 
-        let status = SecItemDelete(query as CFDictionary)
+        let status = secrets.delete(query)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw AppError.settingsLoadFailed
         }
@@ -556,8 +575,7 @@ actor SettingsManager {
             kSecMatchLimit as String: kSecMatchLimitAll
         ]
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = secrets.copyMatching(query)
 
         // errSecItemNotFound is a normal empty result — no keys stored yet.
         var presetIDs: Set<String> = []
@@ -615,7 +633,7 @@ actor SettingsManager {
     /// Read the user's preferred STT language hint (ISO 639-1). Nil = auto-detect.
     /// Synced cross-device via iCloud KVS using `Constants.sttPreferredLanguageKVSKey`.
     /// Reads from App Groups UserDefaults (hydrated by `performInitialSync` +
-    /// `handleiCloudChange`) for synchronous, cheap access.
+    /// `handleICloudChange`) for synchronous, cheap access.
     func getPreferredLanguage() -> String? {
         let value = defaults.string(forKey: Constants.preferredLanguageKey)
         // Treat empty string as "no preference" so a stale empty write doesn't
@@ -1649,8 +1667,7 @@ actor SettingsManager {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var result: AnyObject?
-        let readStatus = SecItemCopyMatching(readQuery as CFDictionary, &result)
+        let (readStatus, result) = secrets.copyMatching(readQuery)
 
         if readStatus == errSecItemNotFound {
             return true   // keyless / no legacy key — nothing to wait on.
@@ -1667,7 +1684,7 @@ actor SettingsManager {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
             kSecValueData as String: data
         ]
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        let addStatus = secrets.add(addQuery)
         return addStatus == errSecSuccess || addStatus == errSecDuplicateItem
     }
 
@@ -1821,8 +1838,7 @@ actor SettingsManager {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = secrets.copyMatching(query)
 
         guard status == errSecSuccess,
               let data = result as? Data,
@@ -1855,7 +1871,7 @@ actor SettingsManager {
             kSecValueData as String: data
         ]
 
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let updateStatus = secrets.update(query, attributes: attributes)
 
         if updateStatus == errSecSuccess {
             postSettingsDidChangeRemotely()
@@ -1868,7 +1884,7 @@ actor SettingsManager {
             // Accessibility immutable after add — set at add time.
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
 
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            let addStatus = secrets.add(addQuery)
             guard addStatus == errSecSuccess else {
                 throw AppError.settingsLoadFailed
             }
@@ -1891,7 +1907,7 @@ actor SettingsManager {
             kSecAttrSynchronizable as String: true
         ]
 
-        let status = SecItemDelete(query as CFDictionary)
+        let status = secrets.delete(query)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw AppError.settingsLoadFailed
         }
@@ -2107,8 +2123,7 @@ actor SettingsManager {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = secrets.copyMatching(query)
 
         guard status == errSecSuccess,
               let data = result as? Data,
@@ -2142,7 +2157,7 @@ actor SettingsManager {
             kSecValueData as String: data
         ]
 
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let updateStatus = secrets.update(query, attributes: attributes)
 
         if updateStatus == errSecSuccess {
             postSettingsDidChangeRemotely()
@@ -2154,7 +2169,7 @@ actor SettingsManager {
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
 
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            let addStatus = secrets.add(addQuery)
             guard addStatus == errSecSuccess else {
                 throw AppError.settingsLoadFailed
             }
@@ -2180,7 +2195,7 @@ actor SettingsManager {
             kSecAttrSynchronizable as String: true
         ]
 
-        let status = SecItemDelete(query as CFDictionary)
+        let status = secrets.delete(query)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw AppError.settingsLoadFailed
         }
@@ -2473,8 +2488,7 @@ actor SettingsManager {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = secrets.copyMatching(query)
 
         guard status == errSecSuccess,
               let data = result as? Data,
@@ -2506,7 +2520,7 @@ actor SettingsManager {
             kSecValueData as String: data
         ]
 
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let updateStatus = secrets.update(query, attributes: attributes)
 
         if updateStatus == errSecSuccess {
             postSettingsDidChangeRemotely()
@@ -2519,7 +2533,7 @@ actor SettingsManager {
             // Accessibility immutable after add — set at add time.
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
 
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            let addStatus = secrets.add(addQuery)
             guard addStatus == errSecSuccess else {
                 throw AppError.settingsLoadFailed
             }
@@ -2543,7 +2557,7 @@ actor SettingsManager {
             kSecAttrSynchronizable as String: true
         ]
 
-        let status = SecItemDelete(query as CFDictionary)
+        let status = secrets.delete(query)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw AppError.settingsLoadFailed
         }
@@ -2663,7 +2677,7 @@ actor SettingsManager {
 
     /// The SINGLE source of truth for which file-server key families the
     /// inbound KVS mirror + cold-launch hydration sync. Shared by
-    /// `handleiCloudChange` and `performInitialSync` so the two passes can
+    /// `handleICloudChange` and `performInitialSync` so the two passes can
     /// never drift (a key added to one list but not the other would sync on
     /// live changes yet be missing on a fresh install, or vice versa).
     /// NEVER widen to a blanket `fileServer.` scan: `certFingerprint.` is a
@@ -2711,7 +2725,7 @@ actor SettingsManager {
     /// `fileServer.available.<suffix> == true` could ONLY have been written by
     /// a passing staged Test Connection on THIS device — so mark those refs
     /// locally tested. MUST run before the mirror's first `fileServer.available`
-    /// write into defaults (callers: `handleiCloudChange`, `performInitialSync`,
+    /// write into defaults (callers: `handleICloudChange`, `performInitialSync`,
     /// the `testedLocally` accessors), or a synced-only peer would be
     /// misclassified as locally tested. Scans the raw defaults dictionary
     /// rather than enumerating refs so stale suffixes (deleted customs) seed
@@ -2752,7 +2766,7 @@ actor SettingsManager {
     /// legacy-bool migration above (removing the key would let a stale legacy
     /// `true` resurrect `.all`). Dual-writes App Groups + iCloud KVS so the
     /// policy is consistent across the user's devices (inbound mirror:
-    /// `handleiCloudChange` prefix-scan) and posts `.settingsDidChangeRemotely`.
+    /// `handleICloudChange` prefix-scan) and posts `.settingsDidChangeRemotely`.
     func setImageHistoryPolicy(_ policy: ImageHistoryPolicy, for ref: RemoteAgentRef) {
         let key = Constants.imageHistoryPolicyKey(for: ref)
         defaults.set(policy.rawValue, forKey: key)
@@ -2967,9 +2981,29 @@ actor SettingsManager {
         ensureDefaultBackendDeviceLocalMigrated()
         // DEVICE-LOCAL: App-Group only. No iCloud-KVS read fallback (a late KVS
         // write from another device must NOT re-globalize this device's default).
+        //
+        // SELF-HEALS: a pointer at a gateway with NOTHING stored behind it (the
+        // user forgot it here, or a peer's Forget synced in) is dropped, and the
+        // bootstrap below picks a gateway that actually exists. Returning the
+        // dangling ref instead left every headless capture minting onto a
+        // gateway that throws `remoteAgentNotConfigured`, with nothing on screen
+        // explaining why.
+        //
+        // The test is `hasStoredRemoteAgentEvidence`, NOT
+        // `configuredRemoteAgentRefs().contains` — deliberately weaker. The
+        // configured predicate fails CLOSED on a nil token, and nil means "no
+        // token OR the Keychain read failed". Secrets are
+        // `kSecAttrAccessibleAfterFirstUnlock`, so a headless capture after a
+        // reboot and before the first unlock reads every gateway as
+        // unconfigured; healing on that verdict would DELETE the user's default
+        // pointer during a transient failure and silently re-point them at some
+        // other gateway once the device unlocks. Evidence is App-Group-backed
+        // (URL, or model for a fixed-endpoint built-in) and cannot be faked
+        // absent by a locked Keychain.
         if let local = defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey),
            let ref = RemoteAgentRef(rawString: local) {
-            return ref
+            if hasStoredRemoteAgentEvidence(ref) { return ref }
+            defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
         }
         // Config-sync bootstrap: gateway CONFIGS still sync, but the default does
         // not. A device that received configs via sync (and never ran the
@@ -3157,6 +3191,8 @@ actor SettingsManager {
         try? clearRemoteAgentToken(for: ref)
         setRemoteAgentCertFingerprint(nil, for: ref)
         clearRemoteAgentAuthScheme(for: ref)
+        setRemoteAgentModel(nil, for: ref)
+        clearAuxiliaryRemoteAgentSlots(for: ref)
 
         // Drop a Watch override that pointed at the deleted gateway so the next
         // broadcast couriers a valid Watch-effective default (self-heal in
@@ -3171,10 +3207,54 @@ actor SettingsManager {
         list.removeAll { $0.id == id }
         persistCustomGateways(list)
 
+        // Collect this gateway's whole per-uuid key family — the file-server
+        // slots in particular, which no setter above owns. Runs AFTER the roster
+        // write so `clearFileTransferConfig`'s invalidate-first `available=false`
+        // has already reached KVS; the peers see the revocation, then the key
+        // removal, and land on the same verdict either way.
+        //
+        // This is why the orphan sweep is not the collector: it is a ONE-TIME
+        // historical cleanup and latches on `orphanSweepVersion`, so a gateway
+        // deleted after it runs would leak the same family forever — which is
+        // exactly how 135 `fileServer.available.custom_*` keys accumulated.
+        purgeGatewayOwnedSlots(for: id)
+
         if defaultRemoteAgentRef() == ref {
             let fallback = configuredRemoteAgentRefs().first(where: { $0.isBuiltin })
                 ?? .builtin(Constants.remoteAgentDefaultBackendDefault)
             setDefaultRemoteAgentRef(fallback)
+        }
+    }
+
+    /// Remove the per-ref slots that no dedicated setter owns — the gateway's
+    /// image-history policy, its transport hint, and this device's last-success
+    /// record. Called from BOTH Forget paths (built-in and custom).
+    ///
+    /// They are removed, not defaulted: a written-back default value is
+    /// indistinguishable from a user choice on the next read, and the orphan
+    /// sweep can only recognise a slot as dead if the key is gone. The policy
+    /// key is dual-written, so its removal must reach BOTH stores or the next
+    /// inbound mirror re-hydrates it — the shape `deleteCustomVoiceEndpoint(id:)`
+    /// already uses. The other two are App-Group-only by design (see their
+    /// `Constants` docs), so removing them from KVS would be meaningless.
+    func clearAuxiliaryRemoteAgentSlots(for ref: RemoteAgentRef) {
+        let policyKey = Constants.imageHistoryPolicyKey(for: ref)
+        defaults.removeObject(forKey: policyKey)
+        iCloudStore.removeObject(forKey: policyKey)
+
+        defaults.removeObject(forKey: Constants.remoteAgentTransportHintKey(for: ref))
+        defaults.removeObject(forKey: Constants.remoteAgentLastChatSuccessKey(for: ref))
+
+        // The retired single-config slot. A built-in Forget that leaves it
+        // behind lets `migrateRemoteAgentToPerBackend` (or the legacy read
+        // fallback) re-seed the gateway the user just removed.
+        if case .builtin(let backend) = ref,
+           defaults.string(forKey: Constants.remoteAgentBackendKey) == backend.rawValue {
+            defaults.removeObject(forKey: Constants.remoteAgentURLKey)
+            iCloudStore.removeObject(forKey: Constants.remoteAgentURLKey)
+            defaults.removeObject(forKey: Constants.remoteAgentBackendKey)
+            iCloudStore.removeObject(forKey: Constants.remoteAgentBackendKey)
+            defaults.removeObject(forKey: Constants.remoteAgentCertFingerprintKey)
         }
     }
 
@@ -3240,25 +3320,53 @@ actor SettingsManager {
         #endif
         ensureKeychainMigrated()
         ensureRemoteAgentMigrated()
-        func hasUserEvidence(_ ref: RemoteAgentRef) -> Bool {
-            if case .builtin(let backend) = ref,
-               RemoteAgentBackendRegistry.lookup(id: backend).fixedURL != nil {
-                let token = getRemoteAgentToken(for: ref)
-                let model = getRemoteAgentModel(for: ref)
-                return (token?.isEmpty == false) || ((model ?? "").isEmpty == false)
-            }
-            return getRemoteAgentURL(for: ref) != nil
-        }
         var partial: [RemoteAgentRef] = RemoteAgentBackend.allCases
             .map(RemoteAgentRef.builtin)
-            .filter { hasUserEvidence($0) && !isRemoteAgentConfigured($0) }
+            .filter { hasStoredRemoteAgentEvidence($0) && !isRemoteAgentConfigured($0) }
         for gateway in customGateways() {
             let ref = RemoteAgentRef.custom(gateway.id)
-            if hasUserEvidence(ref), !isRemoteAgentConfigured(ref) {
+            if hasStoredRemoteAgentEvidence(ref), !isRemoteAgentConfigured(ref) {
                 partial.append(ref)
             }
         }
         return partial
+    }
+
+    /// Every ref this device holds stored state for — the configured ones plus
+    /// the half-configured. What the Settings UI needs to decide whether to
+    /// offer Forget; computed here so it shares
+    /// `hasStoredRemoteAgentEvidence` with the Diagnostics count.
+    func storedRemoteAgentRefs() -> Set<RemoteAgentRef> {
+        ensureKeychainMigrated()
+        ensureRemoteAgentMigrated()
+        var refs = Set(
+            RemoteAgentBackend.allCases
+                .map(RemoteAgentRef.builtin)
+                .filter(hasStoredRemoteAgentEvidence)
+        )
+        for gateway in customGateways() where hasStoredRemoteAgentEvidence(.custom(gateway.id)) {
+            refs.insert(.custom(gateway.id))
+        }
+        return refs
+    }
+
+    /// Whether this device holds any USER-STORED state for a gateway — the
+    /// predicate behind both the Diagnostics partial count and the Settings
+    /// Forget affordance, so the two can never disagree about whether there is
+    /// something to remove.
+    ///
+    /// For a fixed-endpoint (hosted-model) built-in, `getRemoteAgentURL` returns
+    /// the app-fixed descriptor URL unconditionally, so URL presence proves
+    /// nothing — a stored token or model is the evidence there; else every fresh
+    /// install would read "OpenRouter partial" forever.
+    func hasStoredRemoteAgentEvidence(_ ref: RemoteAgentRef) -> Bool {
+        if case .builtin(let backend) = ref,
+           RemoteAgentBackendRegistry.lookup(id: backend).fixedURL != nil {
+            let token = getRemoteAgentToken(for: ref)
+            let model = getRemoteAgentModel(for: ref)
+            return (token?.isEmpty == false) || ((model ?? "").isEmpty == false)
+        }
+        return getRemoteAgentURL(for: ref) != nil
     }
 
     /// The single "is this gateway usable" predicate (keyless-aware):
@@ -3410,7 +3518,7 @@ actor SettingsManager {
 
     /// Persist the session-continuation policy. Writes App Groups locally —
     /// the policy is **genuinely PER-DEVICE**: each device (iPhone / iPad / Mac)
-    /// reads its OWN App-Group value (`handleiCloudChange` never mirrored this
+    /// reads its OWN App-Group value (`handleICloudChange` never mirrored this
     /// key inbound, so iPhone and iPad were already independent). No iCloud-KVS
     /// write: the Watch follows the iPhone via the multi-gateway broadcast
     /// envelope's `sessionPolicy` slot (`watchEffectiveSessionContinuationPolicy`),
@@ -3426,7 +3534,7 @@ actor SettingsManager {
     /// the Watch consumes it via `WatchSettingsReader.readRepliesAloud()`).
     /// Default OFF when unset (`object(forKey:) as? Bool ?? false` — never the
     /// bare `bool(forKey:)`). App-Group-local read; hydrated by the setter's
-    /// dual-write + the `handleiCloudChange` KVS mirror.
+    /// dual-write + the `handleICloudChange` KVS mirror.
     func getWatchReadRepliesAloud() -> Bool {
         (defaults.object(forKey: Constants.watchReadRepliesAloudKey) as? Bool) ?? false
     }
@@ -3916,8 +4024,7 @@ actor SettingsManager {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var result: AnyObject?
-        let readStatus = SecItemCopyMatching(readQuery as CFDictionary, &result)
+        let (readStatus, result) = secrets.copyMatching(readQuery)
 
         if readStatus == errSecItemNotFound {
             // No legacy token — nothing keychain-gated to wait on.
@@ -3937,7 +4044,7 @@ actor SettingsManager {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
             kSecValueData as String: data
         ]
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        let addStatus = secrets.add(addQuery)
 
         // errSecDuplicateItem → the per-backend item already arrived from another
         // device; treat as success. Legacy item is NOT deleted.
@@ -4050,8 +4157,7 @@ actor SettingsManager {
             kSecMatchLimit as String: kSecMatchLimitAll
         ]
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = secrets.copyMatching(query)
 
         if status == errSecItemNotFound { return [] }
         guard status == errSecSuccess, let items = result as? [[String: Any]] else {
@@ -4086,8 +4192,7 @@ actor SettingsManager {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var result: AnyObject?
-        let readStatus = SecItemCopyMatching(readQuery as CFDictionary, &result)
+        let (readStatus, result) = secrets.copyMatching(readQuery)
         // Confirmed absent — nothing to migrate for this account.
         if readStatus == errSecItemNotFound { return true }
         // Locked Keychain / IPC error / undecodable payload — NOT settled.
@@ -4104,7 +4209,7 @@ actor SettingsManager {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
             kSecValueData as String: data
         ]
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        let addStatus = secrets.add(addQuery)
 
         // errSecDuplicateItem → the sync item already arrived from another
         // device; treat as success so we still delete the local non-sync copy.
@@ -4122,7 +4227,7 @@ actor SettingsManager {
             kSecAttrAccount as String: account,
             kSecAttrSynchronizable as String: false
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
+        _ = secrets.delete(deleteQuery)
         return true
     }
 
@@ -4180,7 +4285,7 @@ actor SettingsManager {
         // block above. Per-provider voice (`tts.voice.*`) + model
         // (`tts.customModel.*`) overrides ride iCloud via the same dual-write
         // setters; their cold-launch hydration is handled in
-        // `handleiCloudChange` (prefix scans).
+        // `handleICloudChange` (prefix scans).
         if let iCloudTTS = iCloudStore.string(forKey: Constants.ttsActiveProviderIDKVSKey),
            !iCloudTTS.isEmpty {
             defaults.set(iCloudTTS, forKey: Constants.ttsActiveProviderIDKVSKey)
@@ -4201,15 +4306,13 @@ actor SettingsManager {
            !localBackend.isEmpty {
             iCloudStore.set(localBackend, forKey: Constants.remoteAgentBackendKey)
         }
-        // URL is iCloud-wins-then-push (NOT push-only like backend/read-replies):
-        // it must hydrate back into local `defaults` on a reinstall / fresh
-        // device, since `configuredRemoteAgentBackends()` gates on it.
+        // Legacy single-slot URL is iCloud-wins, INBOUND ONLY: it must hydrate
+        // back into local `defaults` on a reinstall / fresh device, since
+        // `configuredRemoteAgentBackends()` gates on it. No push-up — see the
+        // gateway-URL rationale below.
         if let iCloudURL = iCloudStore.string(forKey: Constants.remoteAgentURLKey),
            !iCloudURL.isEmpty {
             defaults.set(iCloudURL, forKey: Constants.remoteAgentURLKey)
-        } else if let localURL = defaults.string(forKey: Constants.remoteAgentURLKey),
-                  !localURL.isEmpty {
-            iCloudStore.set(localURL, forKey: Constants.remoteAgentURLKey)
         }
 
         // The default-backend pointer is now DEVICE-LOCAL (App Groups only) —
@@ -4218,19 +4321,40 @@ actor SettingsManager {
         // after that, each device owns its own default and a late KVS write is
         // ignored.
 
-        // Per-backend URL: iCloud-wins-then-push. iCloud value hydrates local
-        // `defaults` (restores the gateway on a reinstall / fresh device, where
-        // the App Group container was wiped but KVS still holds the URL); else a
-        // local-only value is pushed up so the Watch's cold ControlWidget launch
-        // resolves the gateway with no live envelope. Per-backend token =
-        // Keychain (iCloud-Keychain-synced separately), cert = per-device App
-        // Groups — neither goes to KVS.
+        // Per-backend URL + model: iCloud-wins, HYDRATE-ONLY. A present KVS value
+        // lands in local `defaults` (restoring the gateway on a reinstall or a
+        // fresh device, where the App Group container was wiped but KVS still
+        // holds the config).
+        //
+        // DELIBERATELY NO local→KVS push-up — same rule the file-server block
+        // below states: a push-up cannot distinguish "configured while signed
+        // out (push it)" from "deleted remotely while this device was offline
+        // (must NOT push)". A device that was offline when a peer hit Forget
+        // would resurrect the forgotten gateway into KVS on its next launch and
+        // ping-pong it back to every device — the gateway the user removed
+        // reappears everywhere. A signed-out-configured gateway simply stays
+        // device-local until any config re-save dual-writes it.
+        //
+        // And DELIBERATELY NO delete-on-absence either. Silence at launch is not
+        // evidence of a remote delete: KVS is empty on a device that has never
+        // completed a first download (`synchronize()` does not wait for one), and
+        // its local cache is reset by an iCloud account change — so treating
+        // "absent" as "deleted" would wipe a gateway the user configured while
+        // signed out the moment they sign in. A REMOTE DELETE arrives as a change
+        // notification naming the key, which `handleICloudChange` acts on; that
+        // notification is the evidence, and this pass has none.
+        //
+        // Per-backend token = Keychain (iCloud-Keychain-synced separately),
+        // cert = per-device App Groups — neither goes to KVS.
         for backend in RemoteAgentBackend.allCases {
-            let urlKey = Constants.remoteAgentURLKey(for: backend)
-            if let iCloudURL = iCloudStore.string(forKey: urlKey), !iCloudURL.isEmpty {
-                defaults.set(iCloudURL, forKey: urlKey)
-            } else if let localURL = defaults.string(forKey: urlKey), !localURL.isEmpty {
-                iCloudStore.set(localURL, forKey: urlKey)
+            let ref = RemoteAgentRef.builtin(backend)
+            for key in [
+                Constants.remoteAgentURLKey(for: backend),
+                Constants.remoteAgentModelKey(for: ref)
+            ] {
+                if let iCloudValue = iCloudStore.string(forKey: key), !iCloudValue.isEmpty {
+                    defaults.set(iCloudValue, forKey: key)
+                }
             }
         }
 
@@ -4309,16 +4433,18 @@ actor SettingsManager {
             [CustomGateway].self,
             from: defaults.data(forKey: Constants.customGatewaysRegistryKey) ?? Data()
         )) ?? []).map { $0.id }
+        // HYDRATE-ONLY, for the same two reasons as the built-in loop above: a
+        // push-up would resurrect a gateway a peer device forgot, and an absent
+        // KVS key at launch is not evidence that anything was deleted.
         for uuid in gatewayUUIDs {
             let ref = RemoteAgentRef.custom(uuid)
             for key in [
                 Constants.remoteAgentURLKey(for: ref),
-                Constants.remoteAgentAuthSchemeKey(for: ref)
+                Constants.remoteAgentAuthSchemeKey(for: ref),
+                Constants.remoteAgentModelKey(for: ref)
             ] {
                 if let iCloudValue = iCloudStore.string(forKey: key), !iCloudValue.isEmpty {
                     defaults.set(iCloudValue, forKey: key)
-                } else if let localValue = defaults.string(forKey: key), !localValue.isEmpty {
-                    iCloudStore.set(localValue, forKey: key)
                 }
             }
         }
@@ -4327,7 +4453,7 @@ actor SettingsManager {
         // `fileServer.folderCapable.*`): iCloud-wins INBOUND hydration only,
         // prefix-scanned (suffixes are dynamic — see the shared
         // `Self.fileServerMirrored*Prefix` constants). Cold-launch counterpart
-        // of the `handleiCloudChange` mirror — a fresh/reinstalled device
+        // of the `handleICloudChange` mirror — a fresh/reinstalled device
         // hydrates the lane before any composer read, instead of waiting for
         // the first KVS change notification. DELIBERATELY NO local→KVS
         // push-up, unlike the remoteAgent URL blocks above: a push-up cannot
@@ -4345,7 +4471,7 @@ actor SettingsManager {
         // + the local-only probe bookkeeping keys (`testedLocally.` /
         // `folderProbeRevision.` / `folderProbeAttempt.` — never in KVS).
         ensureFileServerTestedLocallySeeded()
-        let iCloudSnapshot = iCloudStore.dictionaryRepresentation
+        let iCloudSnapshot = iCloudStore.dictionaryRepresentation()
         for (key, value) in iCloudSnapshot where key.hasPrefix(Self.fileServerMirroredURLPrefix) {
             if let url = value as? String, !url.isEmpty {
                 defaults.set(url, forKey: key)
@@ -4363,33 +4489,170 @@ actor SettingsManager {
         if iCloudStore.object(forKey: Constants.kvsSchemaVersionKey) == nil {
             iCloudStore.set(Constants.kvsSchemaVersion, forKey: Constants.kvsSchemaVersionKey)
         }
+
+        // LAST: prune per-uuid slots whose owner is gone. Deliberately after
+        // every roster + slot hydration above, so a mid-sync device can never
+        // prune config that was still arriving.
+        reconcileOrphanedPerUUIDSlots()
+    }
+
+    // MARK: - Orphan reconciliation
+
+    /// One-time sweep removing per-uuid keys whose uuid is absent from its
+    /// roster, from BOTH stores.
+    ///
+    /// Every custom gateway and custom voice endpoint fans out into a family of
+    /// suffixed keys, and the roster is the only index of which uuids exist. A
+    /// delete path that missed one key family — or a roster that was replaced
+    /// wholesale by a sync — leaves those keys with no owner and no reader, and
+    /// nothing ever collects them: they are invisible to the settings UI and
+    /// immortal in both stores.
+    ///
+    /// Gated on `iCloudAvailable` by its caller (`performInitialSync`), so a
+    /// device that cannot see the cloud roster never prunes against a partial
+    /// view. Versioned, so it runs once per schema revision rather than on every
+    /// launch. Built-in suffixes (`openclaw`/`hermes`/`openrouter`) are never
+    /// touched — only `custom_<uuid>` and bare-uuid suffixes.
+    /// Key-family prefixes owned by the CUSTOM-GATEWAY roster
+    /// (`remoteAgent.customGateways`). Suffix form is
+    /// `RemoteAgentRef.storageKeySuffix` = `custom_<uuid-lowercased>`.
+    ///
+    /// Every prefix ends in a DOT on purpose: it is what keeps a family prefix
+    /// from matching the legacy single-slot key it was derived from
+    /// (`remoteAgent.url` is not `remoteAgent.url.`). Dropping a trailing dot
+    /// here would put the migration-read slots in scope for deletion.
+    private static let gatewayOwnedKeyPrefixes = [
+        "remoteAgent.url.", "remoteAgent.authScheme.", "remoteAgent.model.",
+        "remoteAgent.certFingerprint.", "remoteAgent.transportHint.",
+        "remoteAgent.lastChatSuccess.",
+        "fileServer.url.", "fileServer.available.", "fileServer.folderCapable.",
+        "fileServer.certFingerprint.", "fileServer.testedLocally.",
+        "fileServer.folderProbeRevision.", "fileServer.folderProbeAttempt.",
+        "fileServer.keepImagesInline.",
+        Constants.imageHistoryPolicyKeyPrefix
+    ]
+
+    /// Key-family prefixes owned by the CUSTOM-VOICE-ENDPOINT roster
+    /// (`stt.customVoiceEndpoints`). Suffix form is the BARE lowercased uuid —
+    /// no `custom_` prefix. Same trailing-dot rule as above: `stt.custom.url`
+    /// (no dot) is the legacy singleton and must stay out of scope.
+    /// `tts.customModel.<providerID>` is a DIFFERENT literal keyed by provider
+    /// ID, not a uuid — correctly absent.
+    private static let voiceEndpointOwnedKeyPrefixes = [
+        "stt.custom.url.", "stt.custom.model.", "stt.custom.authScheme.",
+        "stt.custom.certFingerprint.", "tts.custom.model."
+    ]
+
+    /// Every key in either store belonging to `uuid`'s per-uuid families.
+    ///
+    /// - Parameter customPrefixed: gateway families suffix as `custom_<uuid>`;
+    ///   voice-endpoint families suffix as the bare `<uuid>`.
+    ///
+    /// The uuid is matched CASE-INSENSITIVELY. Production writes it lowercased
+    /// (`RemoteAgentRef.rawString`, `Constants.customSTTURLKey(for:)` and
+    /// siblings all call `.lowercased()`), while `UUID.uuidString` is uppercase
+    /// — comparing the two raw is how a sweep decides that every LIVE gateway is
+    /// an orphan and deletes the user's whole configuration off every device.
+    private func perUUIDKeys(
+        for uuid: UUID,
+        prefixes: [String],
+        customPrefixed: Bool
+    ) -> Set<String> {
+        let target = uuid.uuidString.lowercased()
+        let allKeys = Set(defaults.dictionaryRepresentation().keys)
+            .union(iCloudStore.dictionaryRepresentation().keys)
+        return allKeys.filter { key in
+            guard let prefix = prefixes.first(where: { key.hasPrefix($0) }) else { return false }
+            var suffix = String(key.dropFirst(prefix.count))
+            if customPrefixed {
+                guard suffix.hasPrefix(RemoteAgentRef.customPrefix) else { return false }
+                suffix = String(suffix.dropFirst(RemoteAgentRef.customPrefix.count))
+            }
+            return suffix.lowercased() == target
+        }
+    }
+
+    /// Remove every per-uuid key belonging to a deleted custom gateway, from
+    /// BOTH stores. Called by `deleteCustomGateway` so a delete collects its own
+    /// litter — the orphan sweep is a ONE-TIME historical cleanup and cannot be
+    /// the collector for gateways deleted after it latches.
+    private func purgeGatewayOwnedSlots(for uuid: UUID) {
+        for key in perUUIDKeys(for: uuid, prefixes: Self.gatewayOwnedKeyPrefixes, customPrefixed: true) {
+            defaults.removeObject(forKey: key)
+            iCloudStore.removeObject(forKey: key)
+        }
+    }
+
+    private func reconcileOrphanedPerUUIDSlots() {
+        guard defaults.integer(forKey: Constants.orphanSweepVersionKey)
+                < Constants.orphanSweepVersion else { return }
+
+        // LOWERCASED — production writes every per-uuid suffix lowercased, and a
+        // case-sensitive compare against `UUID.uuidString` (uppercase) marks
+        // every live gateway as an orphan. See `perUUIDKeys(for:…)`.
+        let gatewayUUIDs = Set(persistedCustomGateways().map { $0.id.uuidString.lowercased() })
+        let endpointUUIDs = Set(customVoiceEndpoints().map { $0.id.uuidString.lowercased() })
+
+        /// Whether `key` is an orphan: it starts with one of `prefixes`, its
+        /// suffix looks like a uuid slot, and that uuid is not in `roster`.
+        func orphanUUID(_ key: String, prefixes: [String], custom: Bool, roster: Set<String>) -> Bool {
+            guard let prefix = prefixes.first(where: { key.hasPrefix($0) }) else { return false }
+            var suffix = String(key.dropFirst(prefix.count))
+            if custom {
+                // Built-in suffix (`openclaw`/`hermes`/`openrouter`) — never touch.
+                guard suffix.hasPrefix(RemoteAgentRef.customPrefix) else { return false }
+                suffix = String(suffix.dropFirst(RemoteAgentRef.customPrefix.count))
+            }
+            // A malformed suffix is left alone: only something that parses as a
+            // uuid can be matched against a roster, and guessing is how a sweep
+            // deletes live config.
+            guard UUID(uuidString: suffix) != nil else { return false }
+            return !roster.contains(suffix.lowercased())
+        }
+
+        var doomed: Set<String> = []
+        let allKeys = Set(defaults.dictionaryRepresentation().keys)
+            .union(iCloudStore.dictionaryRepresentation().keys)
+        for key in allKeys {
+            if orphanUUID(key, prefixes: Self.gatewayOwnedKeyPrefixes, custom: true, roster: gatewayUUIDs)
+                || orphanUUID(key, prefixes: Self.voiceEndpointOwnedKeyPrefixes, custom: false, roster: endpointUUIDs) {
+                doomed.insert(key)
+            }
+        }
+
+        for key in doomed {
+            defaults.removeObject(forKey: key)
+            iCloudStore.removeObject(forKey: key)
+        }
+
+        defaults.set(Constants.orphanSweepVersion, forKey: Constants.orphanSweepVersionKey)
+        if !doomed.isEmpty { postSettingsDidChangeRemotely() }
     }
 
     // MARK: - KVS Observation
 
-    /// Handle `NSUbiquitousKeyValueStore.didChangeExternallyNotification`.
-    /// Wired by `ConduckApp` at launch. Mirrors changed values into App
-    /// Groups UserDefaults and posts `.settingsDidChangeRemotely` for view
-    /// models to react.
-    func handleiCloudChange(_ note: Notification) {
+    /// Handle an external change to the ubiquitous store. Wired in `init` via
+    /// the injected `KVSChangeSource`. Mirrors changed values into App Groups
+    /// UserDefaults and posts `.settingsDidChangeRemotely` for view models to
+    /// react.
+    ///
+    /// Takes a `KVSChange` VALUE rather than a `Notification`: production
+    /// translates Apple's notification in `LiveKVSChangeSource`, and a test
+    /// emits the event directly through `InMemoryUbiquitousStore
+    /// .simulateRemoteChange(values:)` — so the inbound mirror is exercised
+    /// deterministically, without signing or Apple sync timing.
+    func handleICloudChange(_ change: KVSChange) {
         #if DEBUG
         // Suites that suspend iCloud (e.g. CustomVoiceEndpointMigrationTests) must
         // not have stale KVS ServerChange echoes mirrored into their controlled
         // App-Group `defaults` mid-run. No-op for non-suspending suites + production.
         if iCloudSyncSuspendedForTesting { return }
         #endif
-        guard let userInfo = note.userInfo,
-              let changeReason = userInfo[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int,
-              let changedKeys = userInfo[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String] else {
-            return
-        }
 
         // Only process server changes or initial sync — quota-violation /
         // account-change notifications would re-fire all keys spuriously.
-        guard changeReason == NSUbiquitousKeyValueStoreServerChange ||
-              changeReason == NSUbiquitousKeyValueStoreInitialSyncChange else {
-            return
-        }
+        guard change.reason.deliversRemoteValues else { return }
+        let changedKeys = change.changedKeys
 
         // The `testedLocally` seed must land BEFORE the fileServer mirror below
         // can write a remote `available=true` into defaults — after that write,
@@ -4534,6 +4797,24 @@ actor SettingsManager {
                 }
                 didChange = true
             }
+        }
+
+        // Mirror remote per-ref MODEL changes (`remoteAgent.model.*`) into App
+        // Groups `defaults` so the durable read in `getRemoteAgentModel(for:)`
+        // reflects the cloud value. Prefix-scanned because the suffix is the
+        // ref's storage-key suffix (a custom gateway carries a uuid), matching
+        // the `imageHistory.policy.*` block above.
+        //
+        // Without this, a REMOVAL never landed: OpenRouter's URL is app-fixed,
+        // so a stale model alone keeps `hasStoredRemoteAgentEvidence` true and
+        // the gateway reads half-configured forever on every peer device.
+        for key in changedKeys where key.hasPrefix(Constants.remoteAgentModelKeyPrefix) {
+            if let value = iCloudStore.string(forKey: key), !value.isEmpty {
+                defaults.set(value, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+            didChange = true
         }
 
         // Mirror remote custom STT endpoint URL / model / auth-scheme changes

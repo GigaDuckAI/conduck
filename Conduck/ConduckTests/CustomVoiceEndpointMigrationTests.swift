@@ -26,15 +26,13 @@ import XCTest
 
 final class CustomVoiceEndpointMigrationTests: XCTestCase {
 
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     override func setUp() async throws {
         try await super.setUp()
         // Suspend iCloud for THIS suite first: it drives the live `.shared`
         // singleton, and when the sim is signed into iCloud the read-fallback +
-        // the async `handleiCloudChange` mirror leak cross-suite KVS state in,
+        // the async `handleICloudChange` mirror leak cross-suite KVS state in,
         // making the empty-list fresh-install assertions flaky. Suspending makes
         // the suite exercise migration purely against App-Group `defaults`.
         await SettingsManager.shared.setICloudSyncSuspendedForTesting(true)
@@ -54,13 +52,13 @@ final class CustomVoiceEndpointMigrationTests: XCTestCase {
         // Clear BOTH stores. Production setters (e.g. setCustomSTTURL) dual-write
         // App-Group defaults AND iCloud KVS. With iCloud now SUSPENDED for this
         // suite (setUp → setICloudSyncSuspendedForTesting(true)), reads resolve
-        // App-Group-only and the async handleiCloudChange mirror is inert, so the
+        // App-Group-only and the async handleICloudChange mirror is inert, so the
         // KVS leg of this wipe is belt-and-suspenders — the App-Group wipe is what
         // makes the suite deterministic. (Pre-suspension, a defaults-only wipe let
         // a prior suite's KVS residue short-circuit the migration → "0 endpoints
         // minted" when the sim was signed into iCloud — the documented flake
         // (spec.md Testing Seams & Isolation).)
-        let kvs = NSUbiquitousKeyValueStore.default
+        let kvs = TestStores.kvs
         for key in [
             Constants.customVoiceEndpointMigratedKey,
             Constants.customVoiceEndpointsRegistryKey,

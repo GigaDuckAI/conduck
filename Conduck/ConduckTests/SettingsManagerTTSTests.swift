@@ -21,9 +21,7 @@ import XCTest
 
 final class SettingsManagerTTSTests: XCTestCase {
 
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     /// The shared STT slot the OpenAI vendor's TTS reads its key from.
     private let openAIPresetID = "openai-gpt4o-transcribe"

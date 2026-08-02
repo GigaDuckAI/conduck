@@ -1824,8 +1824,8 @@ final class WatchRecordingService {
     private static let inFlightConversationKey = "watch.inFlight.conversationID"
     private static let inFlightStartedAtKey = "watch.inFlight.startedAt"
     private static let inFlightTurnKey = "watch.inFlight.turnID"
-    private var appGroupDefaults: UserDefaults {
-        UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+    private var appGroupDefaults: any DefaultsStore {
+        SettingsDependencies.processDefault.defaults
     }
 
     private func persistInFlight(conversationID: UUID, startedAt: Date) {

@@ -346,8 +346,8 @@ struct WatchSettingsView: View {
 
     /// Read the last-success stamp from the App-Group suite. 0 when absent.
     private func readLastTransferStamp() -> Double {
-        UserDefaults(suiteName: Constants.appGroupID)?
-            .double(forKey: Constants.watchBroadcastLastSuccessAtKey) ?? 0
+        SettingsDependencies.processDefault.defaults
+            .double(forKey: Constants.watchBroadcastLastSuccessAtKey)
     }
 
     /// Kick off a re-send: disable the button, run the async request, then show

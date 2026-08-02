@@ -36,9 +36,7 @@ import XCTest
 @MainActor
 final class MenuBarCoordinatorQuickTypedTests: XCTestCase {
 
-    private let modeDefaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let modeDefaults = TestStores.defaults
 
     override func setUp() async throws {
         try await super.setUp()

@@ -268,7 +268,7 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
             // freshness read (compared to the Watch's persisted high-water
             // returned by the diagnostics pull). This is the single composition
             // site (broadcast AND pull reply), so the stamp holds by construction.
-            UserDefaults(suiteName: Constants.appGroupID)?
+            SettingsDependencies.processDefault.defaults
                 .set(multiEnvelope.timestamp, forKey: Constants.watchBroadcastLastAgentEnvelopeTsKey)
         }
 
@@ -338,10 +338,9 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
         // re-seeds it AUTHORITATIVELY from the new session's received context
         // (a deactivate-side clear task would race that re-seed on the main
         // actor and could nil a just-seeded value).
-        if let defaults = UserDefaults(suiteName: Constants.appGroupID) {
-            defaults.removeObject(forKey: Constants.watchBroadcastLastSuccessAtKey)
-            defaults.removeObject(forKey: Constants.watchBroadcastLastFailureAtKey)
-        }
+        let defaults = SettingsDependencies.processDefault.defaults
+        defaults.removeObject(forKey: Constants.watchBroadcastLastSuccessAtKey)
+        defaults.removeObject(forKey: Constants.watchBroadcastLastFailureAtKey)
         WCSession.default.activate()
     }
 
@@ -363,7 +362,8 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     func session(_ session: WCSession, didFinish userInfoTransfer: WCSessionUserInfoTransfer, error: Error?) {
         let isSettingsCourier = (userInfoTransfer.userInfo[Constants.watchBroadcastKindKey] as? String)
             == Constants.watchBroadcastKindSettings
-        guard isSettingsCourier, let defaults = UserDefaults(suiteName: Constants.appGroupID) else { return }
+        guard isSettingsCourier else { return }
+        let defaults = SettingsDependencies.processDefault.defaults
         let key = (error == nil)
             ? Constants.watchBroadcastLastSuccessAtKey
             : Constants.watchBroadcastLastFailureAtKey
@@ -520,7 +520,7 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     /// iCloud KVS under `Constants.watchEnabledKey` (matches the Watch read site
     /// in `WatchSettingsReader.isWatchEnabled()`).
     var isWatchEnabled: Bool {
-        let kvs = NSUbiquitousKeyValueStore.default
+        let kvs = SettingsDependencies.processDefault.ubiquitous
         if kvs.object(forKey: Constants.watchEnabledKey) == nil { return true }
         return kvs.bool(forKey: Constants.watchEnabledKey)
     }
@@ -530,7 +530,7 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     /// for low latency). Suppresses the Watch ControlWidget/record action when
     /// off.
     func setWatchEnabled(_ enabled: Bool) {
-        let kvs = NSUbiquitousKeyValueStore.default
+        let kvs = SettingsDependencies.processDefault.ubiquitous
         kvs.set(enabled, forKey: Constants.watchEnabledKey)
         kvs.synchronize()
 

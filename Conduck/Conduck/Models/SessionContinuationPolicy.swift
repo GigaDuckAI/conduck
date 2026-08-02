@@ -9,7 +9,7 @@
 // one. A pure-data enum persisted via `SettingsManager` (App Groups key
 // `Constants.sessionContinuationPolicyKey`). GENUINELY PER-DEVICE: iPhone,
 // iPad, and macOS each read+write their OWN App-Group value (no iCloud-KVS
-// write — `handleiCloudChange` never mirrored this key inbound, so the devices
+// write — `handleICloudChange` never mirrored this key inbound, so the devices
 // were always independent). The Watch has NO settings UI of its own: it
 // follows the iPhone via the multi-gateway broadcast envelope's `sessionPolicy`
 // slot (the iPhone's Watch-specific override if set — see

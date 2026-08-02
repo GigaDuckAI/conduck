@@ -286,10 +286,7 @@ final class CloudSyncMonitor {
     private nonisolated static func flushRingBuffer(key: String, cap: Int) {
         ringBufferFlushScheduled = false
         guard !ringBufferPending.isEmpty else { return }
-        guard let defaults = UserDefaults(suiteName: Constants.appGroupID) else {
-            ringBufferPending.removeAll()  // can't persist → drop (diagnostics-only)
-            return
-        }
+        let defaults = SettingsDependencies.processDefault.defaults
         var entries = defaults.stringArray(forKey: key) ?? []
         entries.append(contentsOf: ringBufferPending)
         ringBufferPending.removeAll()
@@ -306,8 +303,7 @@ final class CloudSyncMonitor {
     /// only, never URLs / tokens / localized error text), so it is safe to surface
     /// directly in a Diagnostics screen.
     nonisolated static func recentSyncEventLines() -> [String] {
-        guard let defaults = UserDefaults(suiteName: Constants.appGroupID) else { return [] }
-        return defaults.stringArray(forKey: ringBufferKey) ?? []
+        SettingsDependencies.processDefault.defaults.stringArray(forKey: ringBufferKey) ?? []
     }
 
     // MARK: - State transitions

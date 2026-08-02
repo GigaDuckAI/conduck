@@ -40,11 +40,11 @@ enum MascotShuffleBag {
     private static let lastKey = "mascot.emptyState.last"
 
     static func next() -> String {
-        next(pool: MascotCatalog.emptyStatePoses, defaults: .standard)
+        next(pool: MascotCatalog.emptyStatePoses, defaults: LiveDefaultsStore.standard)
     }
 
     /// Test seam — inject a pool + an isolated UserDefaults suite.
-    static func next(pool: [String], defaults: UserDefaults) -> String {
+    static func next(pool: [String], defaults: any DefaultsStore) -> String {
         guard let fallback = pool.first else { return "conduck-wrestling-bear" }
         var deck = (defaults.stringArray(forKey: deckKey) ?? []).filter { pool.contains($0) }
         if deck.isEmpty {

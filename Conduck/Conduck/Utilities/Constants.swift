@@ -111,7 +111,7 @@ enum Constants {
     static let notificationsDeferredKey = "notifications_deferred_in_onboarding"
 
     /// Identity-stability flag (NOT feature-usage): intended to gate whether
-    /// `UserIdentityManager.handleiCloudChange` adopts an incoming iCloud UUID, so
+    /// `UserIdentityManager.handleICloudChange` adopts an incoming iCloud UUID, so
     /// two devices launched in parallel can't ping-pong UUIDs forever. **Read-only
     /// in practice** — nothing writes this key, so the gate always reads false and
     /// adoption is unconditional; the read also targets `UserDefaults.standard`
@@ -960,8 +960,13 @@ enum Constants {
     /// here; OpenClaw/Hermes never write it (`model == .unsupported`), and
     /// custom gateways keep their model on the `CustomGateway` roster entry.
     static func remoteAgentModelKey(for ref: RemoteAgentRef) -> String {
-        "remoteAgent.model." + ref.storageKeySuffix
+        remoteAgentModelKeyPrefix + ref.storageKeySuffix
     }
+
+    /// Shared prefix for `remoteAgentModelKey(for:)`. The inbound
+    /// `handleICloudChange` mirror prefix-scans on this (suffixes are dynamic —
+    /// custom gateways carry a uuid), so the two cannot drift.
+    static let remoteAgentModelKeyPrefix = "remoteAgent.model."
 
     /// Per-BACKEND auth-scheme key overload (built-in suffix == raw value),
     /// mirroring `remoteAgentURLKey(for backend:)` for the Watch cold-launch
@@ -1072,6 +1077,18 @@ enum Constants {
     /// the multi-broadcast envelope (cold-launch durability + the known-customs
     /// index for clearing dropped per-ref slots).
     static let customGatewaysRegistryKey = "remoteAgent.customGateways"
+
+    /// App-Group key recording which revision of the orphan sweep has run on
+    /// this device (`SettingsManager.reconcileOrphanedPerUUIDSlots`).
+    /// Device-local: the sweep removes keys from BOTH stores, so a peer's run
+    /// already benefits this device — re-running it here is only about
+    /// collecting anything this device's own delete paths left behind.
+    static let orphanSweepVersionKey = "storage.orphanSweepVersion"
+
+    /// Current orphan-sweep revision. BUMP when a new per-uuid key family is
+    /// added to the sweep's prefix lists, so devices that already ran the
+    /// previous revision collect the newly-covered keys.
+    static let orphanSweepVersion = 1
 
     /// UserDefaults key for the DEFAULT backend pointer — which gateway a
     /// freshly-minted conversation binds to, and the sole router for the
@@ -1419,7 +1436,7 @@ enum Constants {
 
     /// App Groups UserDefaults **and** iCloud KVS key prefix for a SPECIFIC
     /// ref's `ImageHistoryPolicy` raw value. Single-sourced so the
-    /// `handleiCloudChange` prefix-scan and `imageHistoryPolicyKey(for:)`
+    /// `handleICloudChange` prefix-scan and `imageHistoryPolicyKey(for:)`
     /// never drift. NOT `fileServer.`-prefixed: the policy is gateway-scoped,
     /// not file-server-scoped (a server-less custom endpoint needs it too).
     static let imageHistoryPolicyKeyPrefix = "imageHistory.policy."
@@ -1428,7 +1445,7 @@ enum Constants {
     /// `ImageHistoryPolicy` (raw string `recent`/`extended`/`all`, default
     /// `.recent` when unset — after the legacy-bool migration check above).
     /// Format `imageHistory.policy.<suffix>`. Dual-stored + KVS-mirrored
-    /// inbound (`handleiCloudChange` prefix-scan) so the policy is consistent
+    /// inbound (`handleICloudChange` prefix-scan) so the policy is consistent
     /// across the user's devices; the legacy bool never had an inbound mirror.
     static func imageHistoryPolicyKey(for ref: RemoteAgentRef) -> String {
         imageHistoryPolicyKeyPrefix + ref.storageKeySuffix

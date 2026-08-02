@@ -31,6 +31,11 @@ jobs:
       - name: Check SPDX license headers
         run: scripts/add-spdx-headers.sh --check
 
+      # Same reasoning as the header check — a second, and the failure it catches
+      # is a test suite writing into a real, iCloud-syncing store.
+      - name: Check storage seam
+        run: scripts/check-storage-seam.sh
+
       - name: Show Xcode version
         run: xcodebuild -version
 

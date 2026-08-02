@@ -21,9 +21,7 @@ import XCTest
 final class SettingsManagerReadAloudTests: XCTestCase {
 
     /// App Groups UserDefaults — same suite the actor uses internally.
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     override func setUp() async throws {
         try await super.setUp()

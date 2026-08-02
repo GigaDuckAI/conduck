@@ -20,9 +20,7 @@ import XCTest
 
 final class CustomGatewayRegistryTests: XCTestCase {
 
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     override func setUp() async throws {
         try await super.setUp()
@@ -35,7 +33,7 @@ final class CustomGatewayRegistryTests: XCTestCase {
     }
 
     private func wipe() {
-        let kvs = NSUbiquitousKeyValueStore.default
+        let kvs = TestStores.kvs
         for key in [
             Constants.customGatewaysRegistryKey,
             Constants.remoteAgentDefaultBackendKVSKey,

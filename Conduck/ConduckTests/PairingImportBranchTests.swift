@@ -34,9 +34,7 @@ import XCTest
 final class PairingImportBranchTests: XCTestCase {
 
     /// App Groups UserDefaults — same suite the actor uses internally.
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     private let openclaw: RemoteAgentRef = .builtin(.openclaw)
 
@@ -57,10 +55,10 @@ final class PairingImportBranchTests: XCTestCase {
             await SettingsManager.shared.deleteCustomGateway(id: gateway.id)
         }
         defaults.removeObject(forKey: Constants.customGatewaysRegistryKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.customGatewaysRegistryKey)
+        TestStores.kvs.removeObject(forKey: Constants.customGatewaysRegistryKey)
 
         defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+        TestStores.kvs.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
         defaults.removeObject(forKey: Constants.remoteAgentActiveSessionKey)
 
         defaults.removeObject(forKey: Constants.remoteAgentBackendKey)
@@ -80,7 +78,7 @@ final class PairingImportBranchTests: XCTestCase {
                 Constants.fileTransferAvailableKey(for: ref)
             ] {
                 defaults.removeObject(forKey: key)
-                NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+                TestStores.kvs.removeObject(forKey: key)
             }
             try? await SettingsManager.shared.clearRemoteAgentToken(for: ref)
             try? await SettingsManager.shared.clearFileServerCredential(for: ref)
@@ -228,7 +226,7 @@ final class PairingImportBranchTests: XCTestCase {
         XCTAssertEqual(Constants.remoteAgentTransportHintKey(for: openclaw), hintKey,
                        "The transport-hint key format is LOCKED (Keychain/UserDefaults suffix depends on it).")
         XCTAssertEqual(defaults.string(forKey: hintKey), "tailscale")
-        XCTAssertNil(NSUbiquitousKeyValueStore.default.object(forKey: hintKey),
+        XCTAssertNil(TestStores.kvs.object(forKey: hintKey),
                      "The transport hint must NEVER be dual-written to iCloud KVS.")
 
         // Re-import the SAME gateway with NO transport hint → must clear it.

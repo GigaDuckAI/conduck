@@ -34,9 +34,7 @@ import XCTest
 final class SettingsViewModelCommitHonestyTests: XCTestCase {
 
     /// App Groups UserDefaults — same suite the actor uses internally.
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     private let openclaw: RemoteAgentRef = .builtin(.openclaw)
 
@@ -58,10 +56,10 @@ final class SettingsViewModelCommitHonestyTests: XCTestCase {
             await SettingsManager.shared.deleteCustomGateway(id: gateway.id)
         }
         defaults.removeObject(forKey: Constants.customGatewaysRegistryKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.customGatewaysRegistryKey)
+        TestStores.kvs.removeObject(forKey: Constants.customGatewaysRegistryKey)
 
         defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+        TestStores.kvs.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
         defaults.removeObject(forKey: Constants.remoteAgentActiveSessionKey)
 
         defaults.removeObject(forKey: Constants.remoteAgentBackendKey)
@@ -78,7 +76,7 @@ final class SettingsViewModelCommitHonestyTests: XCTestCase {
                 Constants.remoteAgentTransportHintKey(for: ref)
             ] {
                 defaults.removeObject(forKey: key)
-                NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+                TestStores.kvs.removeObject(forKey: key)
             }
             try? await SettingsManager.shared.clearRemoteAgentToken(for: ref)
         }

@@ -21,6 +21,7 @@
 		630432F32FB75BB000994EC0 /* ConduckWatchExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 630432E12FB75BAE00994EC0 /* ConduckWatchExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		631B3F2B2FD060FC00E01924 /* ConduckShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 631B3F212FD060FC00E01924 /* ConduckShareExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		63A29F842F7D7570001E7E52 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = 63CC00022F6A1B0A00A00002 /* KeyboardShortcuts */; };
+		63C0DE110000000000000012 /* WatchConversePinResolutionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000011 /* WatchConversePinResolutionTests.swift */; };
 		63FA00032F6A1B0A00A00003 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 63FA00022F6A1B0A00A00002 /* FluidAudio */; };
 		63ST00032F6A1B0A00ST0003 /* ShareTargetFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */; };
 		63TX00032F6A1B0A00TX0003 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 63TX00022F6A1B0A00TX0002 /* Textual */; };
@@ -28,7 +29,6 @@
 		75BE4967C913D2388127BA4A /* WatchCaptureGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2102331634B096D3857E8A4E /* WatchCaptureGuardTests.swift */; };
 		76D89192A7CC71C5BB1165A3 /* WatchHeadlessDrainDecisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2EE5C9F3DEA04EE0F93679 /* WatchHeadlessDrainDecisionTests.swift */; };
 		770C2F6AF15A5192868D3750 /* WatchTempScratchSweeperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C977508A9E53ACCD66520ABE /* WatchTempScratchSweeperTests.swift */; };
-		63C0DE110000000000000012 /* WatchConversePinResolutionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000011 /* WatchConversePinResolutionTests.swift */; };
 		81BC91FF3F9DF8A6B54931C6 /* WatchDraftMintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD013915D6DC49FEF67B48F1 /* WatchDraftMintTests.swift */; };
 		8718AFBC91AC4556CE661DD7 /* WatchArmActivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A317365301218A5EE4D2D9B /* WatchArmActivationTests.swift */; };
 		88896A7728AF0FEA2853BEDB /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 50484C38EFB50AF68146AA9B /* Foundation.framework */; };
@@ -36,6 +36,7 @@
 		BACA6CA80A16CA4946FA2799 /* WatchDiagnosticsReporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7962D7C5DB078A44B543DBC8 /* WatchDiagnosticsReporterTests.swift */; };
 		C03497D936DB6031248B40CE /* WatchConverseCompletionVerdictTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AD4C033BF02CCA1CBEDBFAD /* WatchConverseCompletionVerdictTests.swift */; };
 		C6486202BB44DA8DF866B51B /* WatchObservabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8036F5A26DD045BFB31148B6 /* WatchObservabilityTests.swift */; };
+		CA74F9FE545A829EE9461748 /* StorageTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36E62931BCA561FF7562C5E2 /* StorageTestSupport.swift */; };
 		F931ABD9E6AEA0D93CFD338D /* WatchConversationViewModelRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E411F3AF5A7364E4CCE5578D /* WatchConversationViewModelRefreshTests.swift */; };
 		FE2BBA31EA6030DB1561E93B /* WatchTTSClientGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2694DF31E04092B32E20C0 /* WatchTTSClientGuardTests.swift */; };
 /* End PBXBuildFile section */
@@ -129,6 +130,7 @@
 		279EE628C4491511540B6F33 /* ConduckShareExtensionMac.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConduckShareExtensionMac.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		28B3F3EB66D5E3FB9A523616 /* WatchAudioSessionOwnershipTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchAudioSessionOwnershipTests.swift; sourceTree = "<group>"; };
 		346CBAB7BF95F11E04B690E2 /* TaskDeadlineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskDeadlineTests.swift; sourceTree = "<group>"; };
+		36E62931BCA561FF7562C5E2 /* StorageTestSupport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = StorageTestSupport.swift; sourceTree = "<group>"; };
 		393448D4A01EF6FDF81A1E05 /* ConduckWatchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConduckWatchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A801C634B327CE22742C2AB /* WatchSettingsApplyAndQueueTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchSettingsApplyAndQueueTests.swift; sourceTree = "<group>"; };
 		50484C38EFB50AF68146AA9B /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
@@ -141,6 +143,7 @@
 		630432E52FB75BAE00994EC0 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		630434022FCC000000000002 /* ConduckTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ConduckTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		631B3F212FD060FC00E01924 /* ConduckShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConduckShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		63C0DE110000000000000011 /* WatchConversePinResolutionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConversePinResolutionTests.swift; sourceTree = "<group>"; };
 		63C0F1D12F6A1B0A00C0F1D1 /* Identity.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Identity.xcconfig; sourceTree = "<group>"; };
 		63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareTargetFilter.swift; path = ConduckShareExtensionMac/ShareTargetFilter.swift; sourceTree = SOURCE_ROOT; };
 		63WC00012F6A1B0A00WC0001 /* WebPageCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WebPageCapture.swift; path = ConduckShareExtensionMac/WebPageCapture.swift; sourceTree = SOURCE_ROOT; };
@@ -151,7 +154,6 @@
 		AD013915D6DC49FEF67B48F1 /* WatchDraftMintTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchDraftMintTests.swift; sourceTree = "<group>"; };
 		AEFC36B01C1F38EA15DA7611 /* WatchReplySpeakerFallbackTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchReplySpeakerFallbackTests.swift; sourceTree = "<group>"; };
 		C977508A9E53ACCD66520ABE /* WatchTempScratchSweeperTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchTempScratchSweeperTests.swift; sourceTree = "<group>"; };
-		63C0DE110000000000000011 /* WatchConversePinResolutionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConversePinResolutionTests.swift; sourceTree = "<group>"; };
 		CE5777E15559EA6B1951DE08 /* WatchRecordingLifecycleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchRecordingLifecycleTests.swift; sourceTree = "<group>"; };
 		E411F3AF5A7364E4CCE5578D /* WatchConversationViewModelRefreshTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConversationViewModelRefreshTests.swift; sourceTree = "<group>"; };
 		E87595BE862314620EF226B1 /* ConduckWatchSmokeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConduckWatchSmokeTests.swift; sourceTree = "<group>"; };
@@ -225,6 +227,9 @@
 				Services/RemoteAgent/RemoteAgentStatusMap.swift,
 				Services/RemoteAgent/RemoteAgentTrustEvaluator.swift,
 				Services/ReplySanitizer.swift,
+				Services/Storage/ConduckStorage.swift,
+				Services/Storage/InMemoryStorage.swift,
+				Services/Storage/LiveStorage.swift,
 				Services/STT/AppleSpeechRunner.swift,
 				Services/STT/CustomVoiceEndpoint.swift,
 				Services/STT/Providers/ElevenLabsSTTProvider.swift,
@@ -445,6 +450,7 @@
 				6B93B045C08A26D6489E3498 /* WatchNotificationPrivacyTests.swift */,
 				C977508A9E53ACCD66520ABE /* WatchTempScratchSweeperTests.swift */,
 				63C0DE110000000000000011 /* WatchConversePinResolutionTests.swift */,
+				36E62931BCA561FF7562C5E2 /* StorageTestSupport.swift */,
 			);
 			path = ConduckWatchTests;
 			sourceTree = "<group>";
@@ -777,6 +783,7 @@
 				05B2153A756F4FC80B13778C /* WatchNotificationPrivacyTests.swift in Sources */,
 				770C2F6AF15A5192868D3750 /* WatchTempScratchSweeperTests.swift in Sources */,
 				63C0DE110000000000000012 /* WatchConversePinResolutionTests.swift in Sources */,
+				CA74F9FE545A829EE9461748 /* StorageTestSupport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -860,6 +867,39 @@
 			};
 			name = Release;
 		};
+		31F98680416AF17A2ECEB91A /* Debug-Testing */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "ConduckWatch Watch App/ConduckWatch.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "ConduckWatch Watch App/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(CONDUCK_BUNDLE_ID_BASE)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = "Debug-Testing";
+		};
 		33E74E2A0E17792183049420 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -890,6 +930,39 @@
 			};
 			name = Debug;
 		};
+		4A3222B516968A4317CEB45D /* Debug-Testing */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Conduck.app/$(BUNDLE_LOADER_DIR)Conduck";
+				"TEST_HOST[sdk=iphoneos*]" = "$(BUILT_PRODUCTS_DIR)/Conduck.app/Conduck";
+				"TEST_HOST[sdk=iphonesimulator*]" = "$(BUILT_PRODUCTS_DIR)/Conduck.app/Conduck";
+				"TEST_HOST[sdk=macosx*]" = "$(BUILT_PRODUCTS_DIR)/Conduck.app/Contents/MacOS/Conduck";
+			};
+			name = "Debug-Testing";
+		};
 		4D6B465F01567807C4862263 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -909,6 +982,66 @@
 				WATCHOS_DEPLOYMENT_TARGET = 26.5;
 			};
 			name = Release;
+		};
+		59CD2F87B9E40D695CEC9D45 /* Debug-Testing */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ConduckShareExtensionMac/ConduckShareExtensionMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ConduckShareExtensionMac/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).ConduckShareExtensionMac";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = "Debug-Testing";
+		};
+		62B18891E34CB047FB5591E9 /* Debug-Testing */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ConduckShareExtension/ConduckShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ConduckShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).ConduckShareExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = "Debug-Testing";
 		};
 		630432C52FB7593800994EC0 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1362,6 +1495,102 @@
 			};
 			name = Release;
 		};
+		717DA55CFFD6EBBBA84C2387 /* Debug-Testing */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ConduckWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(CONDUCK_DISPLAY_NAME)";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).watchkitapp.AgentRelayWatch";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = "Debug-Testing";
+		};
+		75E1AFF472AF2484B1AC8FD9 /* Debug-Testing */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Conduck/Conduck-$(CONDUCK_ENTITLEMENTS_VARIANT).entitlements";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Conduck/Info.plist;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = NO;
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = NO;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
+				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE)";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = "Debug-Testing";
+		};
+		8B95FD221129DB731EC1D9A1 /* Debug-Testing */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CONDUCK_BUNDLE_ID_BASE).watchkitapp.ConduckWatchTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ConduckWatch Watch App.app/ConduckWatch Watch App";
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = "Debug-Testing";
+		};
 		9CD3E90AE6F8EE36E93EE712 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1381,6 +1610,69 @@
 			};
 			name = Debug;
 		};
+		BD756DD2218279EBA01681C0 /* Debug-Testing */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 63C0F1D12F6A1B0A00C0F1D1 /* Identity.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				"ARCHS[sdk=macosx*]" = arm64;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited) CONDUCK_TESTING";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = "Debug-Testing";
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1389,6 +1681,7 @@
 			buildConfigurations = (
 				630432C52FB7593800994EC0 /* Debug */,
 				630432C62FB7593800994EC0 /* Release */,
+				BD756DD2218279EBA01681C0 /* Debug-Testing */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1398,6 +1691,7 @@
 			buildConfigurations = (
 				630432C82FB7593800994EC0 /* Debug */,
 				630432C92FB7593800994EC0 /* Release */,
+				75E1AFF472AF2484B1AC8FD9 /* Debug-Testing */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1407,6 +1701,7 @@
 			buildConfigurations = (
 				630432DA2FB759DC00994EC0 /* Debug */,
 				630432DB2FB759DC00994EC0 /* Release */,
+				31F98680416AF17A2ECEB91A /* Debug-Testing */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1416,6 +1711,7 @@
 			buildConfigurations = (
 				630432F62FB75BB000994EC0 /* Debug */,
 				630432F72FB75BB000994EC0 /* Release */,
+				717DA55CFFD6EBBBA84C2387 /* Debug-Testing */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1425,6 +1721,7 @@
 			buildConfigurations = (
 				6304340A2FCC00000000000A /* Debug */,
 				6304340B2FCC00000000000B /* Release */,
+				4A3222B516968A4317CEB45D /* Debug-Testing */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1434,6 +1731,7 @@
 			buildConfigurations = (
 				631B3F2D2FD060FC00E01924 /* Debug */,
 				631B3F2E2FD060FC00E01924 /* Release */,
+				62B18891E34CB047FB5591E9 /* Debug-Testing */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1443,6 +1741,7 @@
 			buildConfigurations = (
 				33E74E2A0E17792183049420 /* Debug */,
 				2B4D357FF5A876F6A053805D /* Release */,
+				59CD2F87B9E40D695CEC9D45 /* Debug-Testing */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1452,6 +1751,7 @@
 			buildConfigurations = (
 				4D6B465F01567807C4862263 /* Release */,
 				9CD3E90AE6F8EE36E93EE712 /* Debug */,
+				8B95FD221129DB731EC1D9A1 /* Debug-Testing */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

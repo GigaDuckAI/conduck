@@ -247,7 +247,7 @@ final class LockedKeychainKVSLiteralsTests: XCTestCase {
 
     func testImageHistoryPolicyKeyLiterals() {
         XCTAssertEqual(Constants.imageHistoryPolicyKeyPrefix, "imageHistory.policy.",
-                       "Image-history-policy key PREFIX changed — the handleiCloudChange prefix-scan and per-ref key would drift.")
+                       "Image-history-policy key PREFIX changed — the handleICloudChange prefix-scan and per-ref key would drift.")
         // Per-ref key for a built-in: prefix + raw value.
         XCTAssertEqual(Constants.imageHistoryPolicyKey(for: .builtin(.openclaw)),
                        "imageHistory.policy.openclaw",

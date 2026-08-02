@@ -20,23 +20,31 @@ actor UserIdentityManager {
 
     private var cachedUserID: String?
 
-    private init() {
-        // Register for iCloud KVS external change notifications (only if iCloud is available)
-        Task { @MainActor in
-            guard FileManager.default.ubiquityIdentityToken != nil else {
-                #if DEBUG
-                print("🔑 iCloud unavailable — skipping KVS observer registration")
-                #endif
-                return
-            }
-            NotificationCenter.default.addObserver(
-                forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-                object: NSUbiquitousKeyValueStore.default,
-                queue: .main
-            ) { notification in
-                Task { await UserIdentityManager.shared.handleiCloudChange(notification) }
-            }
-            NSUbiquitousKeyValueStore.default.synchronize()
+    /// Keychain (identity item) — via the storage seam, so a test host cannot
+    /// write a UUID into the developer's real Keychain.
+    private let secrets: any SecretStore
+
+    /// iCloud KVS (identity mirror).
+    private let iCloudStore: any UbiquitousStore
+
+    private let cloudAvailability: any CloudAvailability
+
+    init(dependencies: SettingsDependencies = .processDefault) {
+        self.secrets = dependencies.secrets
+        self.iCloudStore = dependencies.ubiquitous
+        self.cloudAvailability = dependencies.cloudAvailability
+
+        // Register for external KVS changes only while iCloud is available.
+        let isAvailable = dependencies.cloudAvailability.isAvailable
+        guard isAvailable else {
+            #if DEBUG
+            print("🔑 iCloud unavailable — skipping KVS observer registration")
+            #endif
+            return
+        }
+        dependencies.changes.observe { [weak self] change in
+            guard let self else { return }
+            Task { await self.handleICloudChange(change) }
         }
     }
 
@@ -55,11 +63,11 @@ actor UserIdentityManager {
 
     /// Priority: iCloud KVS → Keychain → generate new UUID
     private func resolveUserID() -> String {
-        let iCloudAvailable = FileManager.default.ubiquityIdentityToken != nil
+        let iCloudAvailable = cloudAvailability.isAvailable
 
         // 1. Check iCloud KVS (only if iCloud is available)
         if iCloudAvailable,
-           let iCloudID = NSUbiquitousKeyValueStore.default.string(forKey: Constants.iCloudKVSUserIDKey),
+           let iCloudID = iCloudStore.string(forKey: Constants.iCloudKVSUserIDKey),
            !iCloudID.isEmpty {
             // Adopt iCloud value and ensure Keychain matches
             saveToKeychain(iCloudID)
@@ -82,21 +90,13 @@ actor UserIdentityManager {
 
     // MARK: - iCloud Change Handler
 
-    private func handleiCloudChange(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let changeReason = userInfo[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int,
-              let changedKeys = userInfo[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String],
-              changedKeys.contains(Constants.iCloudKVSUserIDKey) else {
-            return
-        }
+    private func handleICloudChange(_ change: KVSChange) {
+        guard change.changedKeys.contains(Constants.iCloudKVSUserIDKey) else { return }
 
         // Only process server changes or initial sync
-        guard changeReason == NSUbiquitousKeyValueStoreServerChange ||
-              changeReason == NSUbiquitousKeyValueStoreInitialSyncChange else {
-            return
-        }
+        guard change.reason.deliversRemoteValues else { return }
 
-        guard let incomingID = NSUbiquitousKeyValueStore.default.string(forKey: Constants.iCloudKVSUserIDKey),
+        guard let incomingID = iCloudStore.string(forKey: Constants.iCloudKVSUserIDKey),
               !incomingID.isEmpty else {
             return
         }
@@ -135,8 +135,7 @@ actor UserIdentityManager {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = secrets.copyMatching(query)
 
         guard status == errSecSuccess,
               let data = result as? Data,
@@ -161,7 +160,7 @@ actor UserIdentityManager {
             kSecValueData as String: data
         ]
 
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let updateStatus = secrets.update(query, attributes: attributes)
 
         if updateStatus == errSecItemNotFound {
             // Item doesn't exist, add it
@@ -169,7 +168,7 @@ actor UserIdentityManager {
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
 
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            let addStatus = secrets.add(addQuery)
             #if DEBUG
             if addStatus != errSecSuccess {
                 print("⚠️ Keychain add failed: \(addStatus)")
@@ -181,7 +180,7 @@ actor UserIdentityManager {
     // MARK: - iCloud KVS Operations
 
     private func saveToiCloudKVS(_ id: String) {
-        NSUbiquitousKeyValueStore.default.set(id, forKey: Constants.iCloudKVSUserIDKey)
-        NSUbiquitousKeyValueStore.default.synchronize()
+        iCloudStore.set(id, forKey: Constants.iCloudKVSUserIDKey)
+        iCloudStore.synchronize()
     }
 }

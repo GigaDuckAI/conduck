@@ -457,6 +457,19 @@ final class SettingsViewModel {
     /// blocking on `SettingsManager` actor hops mid-render.
     var configuredRemoteAgentRefSet: Set<RemoteAgentRef> = []
 
+    /// Snapshot of refs this device holds SOME stored state for, whether or not
+    /// that state is complete enough to send with
+    /// (`SettingsManager.hasStoredRemoteAgentEvidence`). Refreshed in lockstep
+    /// with `configuredRemoteAgentRefSet`.
+    ///
+    /// It is what the editor's Forget affordance keys on: a gateway can be
+    /// half-configured — a URL that synced in while its token did not, or a
+    /// leftover slot from a since-removed gateway — and Diagnostics tells the
+    /// user to go remove it. Gating Forget on CONFIGURED alone left exactly that
+    /// state unreachable: the row said "fix this in Settings" and Settings
+    /// offered no way to.
+    var storedRemoteAgentRefSet: Set<RemoteAgentRef> = []
+
     /// Whether the first `loadRemoteAgentState()` has completed. The Personal AI
     /// screen's empty-state hero is gated on this: `configuredRemoteAgentRefSet`
     /// starts empty and hydrates asynchronously, so a returning user with a
@@ -1711,6 +1724,7 @@ final class SettingsViewModel {
         configuredRemoteAgentRefSet = Set(
             await SettingsManager.shared.configuredRemoteAgentRefs()
         )
+        storedRemoteAgentRefSet = await SettingsManager.shared.storedRemoteAgentRefs()
 
         // Cache the custom roster. A reload drops any unsaved in-memory draft
         // (the persisted roster is the source of truth) — backing out of an
@@ -1859,6 +1873,13 @@ final class SettingsViewModel {
     /// "Set as Default" affordance. Reads the cached snapshot — no actor hop.
     func isRemoteAgentConfigured(_ ref: RemoteAgentRef) -> Bool {
         configuredRemoteAgentRefSet.contains(ref)
+    }
+
+    /// Whether `ref` holds ANY stored state on this device — i.e. whether there
+    /// is something for Forget to remove. True for every configured ref, plus
+    /// the half-configured ones Diagnostics reports.
+    func hasStoredRemoteAgentState(_ ref: RemoteAgentRef) -> Bool {
+        configuredRemoteAgentRefSet.contains(ref) || storedRemoteAgentRefSet.contains(ref)
     }
 
     /// Whether ANY gateway is currently configured (cached set; no actor hop).
@@ -2868,6 +2889,7 @@ final class SettingsViewModel {
         configuredRemoteAgentRefSet = Set(
             await SettingsManager.shared.configuredRemoteAgentRefs()
         )
+        storedRemoteAgentRefSet = await SettingsManager.shared.storedRemoteAgentRefs()
 
         // First gateway ever configured becomes the default (parity with the
         // pairing-import bootstrap). Without it the default pointer stays unset
@@ -2972,6 +2994,7 @@ final class SettingsViewModel {
         configuredRemoteAgentRefSet = Set(
             await SettingsManager.shared.configuredRemoteAgentRefs()
         )
+        storedRemoteAgentRefSet = await SettingsManager.shared.storedRemoteAgentRefs()
     }
 
     /// The tuple a live verdict is a claim ABOUT: change any of it and a previous
@@ -3291,6 +3314,10 @@ final class SettingsViewModel {
             // so a reconfigured backend never inherits a stale model. No-op for
             // self-hosted built-ins — they never write the slot.
             await SettingsManager.shared.setRemoteAgentModel(nil, for: ref)
+            // Image-history policy, transport hint, last-success record, and the
+            // retired single-config slot. Without these, Forget leaves per-ref
+            // keys behind that read as evidence the gateway still exists.
+            await SettingsManager.shared.clearAuxiliaryRemoteAgentSlots(for: ref)
             // Recompute the configured set, then re-point the default if needed
             // (built-in branch — the custom branch's repoint is inside
             // `deleteCustomGateway`).
@@ -3334,6 +3361,7 @@ final class SettingsViewModel {
         configuredRemoteAgentRefSet = Set(
             await SettingsManager.shared.configuredRemoteAgentRefs()
         )
+        storedRemoteAgentRefSet = await SettingsManager.shared.storedRemoteAgentRefs()
         defaultRemoteAgentRef = await SettingsManager.shared.defaultRemoteAgentRef()
     }
 

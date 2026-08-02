@@ -21,7 +21,7 @@ import XCTest
 @MainActor
 final class WatchRecordingLifecycleTests: XCTestCase {
 
-    private var appGroup: UserDefaults { UserDefaults(suiteName: Constants.appGroupID)! }
+    private var appGroup: InMemoryDefaultsStore { TestStores.defaults }
 
     private func wipeSharedState() {
         appGroup.removeObject(forKey: "watch.inFlight.conversationID")

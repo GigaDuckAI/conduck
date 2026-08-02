@@ -2077,7 +2077,7 @@ actor ConversationStore {
     /// calls it).
     func backfillTitleSnippetsIfNeeded() async {
         let flagKey = "conversationTitleSnippetBackfillDone"
-        let defaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        let defaults = SettingsDependencies.processDefault.defaults
         guard !defaults.bool(forKey: flagKey) else { return }
 
         do { try await ensureLoaded() } catch { return }

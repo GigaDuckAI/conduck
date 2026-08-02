@@ -790,8 +790,8 @@ final class DiagnosticsRunner {
         // signature). `CGPreflightScreenCaptureAccess()` is a clean local read.
         var screenRecordingRow: DiagnosticCheck?
         #if os(macOS)
-        let screenAttempted = (UserDefaults(suiteName: Constants.appGroupID)?
-            .bool(forKey: Constants.screenRecordingCaptureAttemptedKey)) ?? false
+        let screenAttempted = SettingsDependencies.processDefault.defaults
+            .bool(forKey: Constants.screenRecordingCaptureAttemptedKey)
         if screenAttempted {
             let granted = CGPreflightScreenCaptureAccess()
             screenRecordingPermissionState = granted ? .allowed : .denied
@@ -888,9 +888,9 @@ final class DiagnosticsRunner {
                 // traffic never moves them; see PhoneSessionManager). A failure
                 // NEWER than the last success appends a plain-English line;
                 // status stays informational (spec: INFO not red).
-                let groupDefaults = UserDefaults(suiteName: Constants.appGroupID)
-                let courierSuccessAt = groupDefaults?.double(forKey: Constants.watchBroadcastLastSuccessAtKey) ?? 0
-                let courierFailureAt = groupDefaults?.double(forKey: Constants.watchBroadcastLastFailureAtKey) ?? 0
+                let groupDefaults = SettingsDependencies.processDefault.defaults
+                let courierSuccessAt = groupDefaults.double(forKey: Constants.watchBroadcastLastSuccessAtKey)
+                let courierFailureAt = groupDefaults.double(forKey: Constants.watchBroadcastLastFailureAtKey)
                 let outstandingCouriers = Self.outstandingSettingsCourierCount()
                 watchStatus = watchState.status
                 watchDetail = installed && Self.courierFailureIsCurrent(successAt: courierSuccessAt, failureAt: courierFailureAt)
@@ -926,7 +926,7 @@ final class DiagnosticsRunner {
         // so they never hold the checklist empty on first open. Otherwise the
         // amber Copy button renders high (empty sections above it), then jumps to
         // the bottom when the probes land — the "first-open flicker".
-        let ubiquityPresent = FileManager.default.ubiquityIdentityToken != nil
+        let ubiquityPresent = SettingsDependencies.processDefault.cloudAvailability.isAvailable
         let syncLines = CloudSyncMonitor.recentSyncEventLines()
         let syncErrorCount = syncLines.filter { $0.contains("FAIL") }.count
 
@@ -1052,13 +1052,27 @@ final class DiagnosticsRunner {
         // set ALSO catches cross-device token skew (a ref with a synced URL but no
         // bearer token in the synced Keychain is dropped).
         if refs.isEmpty {
+            // With NO send-able gateway, a half-configured leftover is absorbed
+            // into this row rather than emitted as its own amber one below. The
+            // standalone partial row exists because a healthy sibling gateway
+            // would otherwise mask the drop; with no sibling there is nothing to
+            // mask, and two rows describing the same nothing — a red "none" and
+            // an amber "2 gateways" — read as a contradiction.
+            let detail: String
+            if partialGatewayCount == 1 {
+                detail = String(localized: "diagnostics.connection.gateway.none.detail.partialOne", defaultValue: "Add your Personal AI gateway in Settings — every request needs one on this device. A leftover gateway is still stored here without its key or model; open it in Settings to finish or forget it.")
+            } else if partialGatewayCount > 1 {
+                detail = String(localized: "diagnostics.connection.gateway.none.detail.partialMany", defaultValue: "Add your Personal AI gateway in Settings — every request needs one on this device. \(partialGatewayCount) leftover gateways are still stored here without their key or model; open them in Settings to finish or forget them.")
+            } else {
+                detail = String(localized: "diagnostics.connection.gateway.none.detail", defaultValue: "Add your Personal AI gateway in Settings — every request needs one on this device.")
+            }
             built.append(DiagnosticCheck(
                 id: "connection.gateway.none",
                 title: String(localized: "diagnostics.connection.gateway.none", defaultValue: "No Personal AI configured"),
                 category: .connection,
                 tier: .autoRead,
                 status: .failed(code: AppError.remoteAgentNotConfigured.errorCode),
-                detail: String(localized: "diagnostics.connection.gateway.none.detail", defaultValue: "Add your Personal AI gateway in Settings — every request needs one on this device."),
+                detail: detail,
                 role: nil, reportLabel: nil
             ))
         } else if let focusedRef, !refs.contains(focusedRef) {
@@ -1083,8 +1097,10 @@ final class DiagnosticsRunner {
 
         // Partial-config row — a URL synced here without its key/model. Shown
         // EVEN beside healthy gateways (the masking is the point); anonymous
-        // count only, never a name/URL.
-        if partialGatewayCount > 0 {
+        // count only, never a name/URL. Suppressed when there is no send-able
+        // gateway at all: the red row above already carries the count, and two
+        // rows about the same nothing contradict each other.
+        if partialGatewayCount > 0, !refs.isEmpty {
             built.append(DiagnosticCheck(
                 id: "connection.gateway.partial",
                 title: String(localized: "diagnostics.connection.gateway.partial", defaultValue: "Gateway missing its key or model"),
@@ -1338,7 +1354,13 @@ final class DiagnosticsRunner {
         notificationPermissionState = notifPermissionState
         notificationAlertsAreSuppressed = notifAlertsSuppressed
         activeVoiceSetup = voiceConfigured
-            ? VoiceSetupState(sttName: sttName, sttStatus: sttSetupStatus, ttsName: ttsName, ttsStatus: ttsSetupStatus)
+            ? VoiceSetupState(
+                sttName: sttName,
+                sttStatus: sttSetupStatus,
+                ttsName: ttsName,
+                ttsStatus: ttsSetupStatus,
+                ttsKeyState: ttsSnapshot.keyState
+            )
             : nil
         showsVoiceSection = voiceConfigured
         showsSyncSection = newShowsSync
@@ -1883,8 +1905,8 @@ final class DiagnosticsRunner {
             return .noResponse(reason)
         case .reply(let wire):
             guard wire.version != nil else { return .unsupported }
-            let phoneTs = UserDefaults(suiteName: Constants.appGroupID)?
-                .double(forKey: Constants.watchBroadcastLastAgentEnvelopeTsKey) ?? 0
+            let phoneTs = SettingsDependencies.processDefault.defaults
+                .double(forKey: Constants.watchBroadcastLastAgentEnvelopeTsKey)
             let agentTs = wire.agentEnvelopeTs ?? 0
             let freshness: WatchSettingsFreshness = wire.agentEnvelopeTs == nil
                 ? .unknown

@@ -26,7 +26,7 @@ struct RootView: View {
     @State private var showOnboarding: Bool
 
     init() {
-        let defaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        let defaults = SettingsDependencies.processDefault.defaults
         let completed = defaults.bool(forKey: Constants.onboardingCompletedKey)
         #if DEBUG
         // Explicit "skip onboarding" intents win over the ambient dev flag, so an

@@ -320,7 +320,7 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchec
     /// than caching it means a re-pin between compose and send is honored, and a
     /// cross-launch background resume re-reads the durable value.
     static func storedConversePin(for ref: RemoteAgentRef) -> String? {
-        let defaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        let defaults = SettingsDependencies.processDefault.defaults
         guard let pin = defaults.string(forKey: Constants.remoteAgentCertFingerprintKey(for: ref)),
               !pin.isEmpty
         else { return nil }

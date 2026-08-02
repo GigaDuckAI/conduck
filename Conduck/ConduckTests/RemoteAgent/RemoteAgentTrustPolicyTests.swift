@@ -25,9 +25,7 @@ import XCTest
 
 final class RemoteAgentTrustPolicyTests: XCTestCase {
 
-    private var defaults: UserDefaults {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }
+    private var defaults: InMemoryDefaultsStore { TestStores.defaults }
 
     private let gatewayHost = "gateway.example.test"
     private let pin = String(repeating: "ab", count: 32)   // 64-hex

@@ -18,9 +18,7 @@ import XCTest
 
 final class MenuBarInputModeTests: XCTestCase {
 
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     override func setUp() async throws {
         try await super.setUp()
@@ -90,9 +88,9 @@ final class MenuBarInputModeTests: XCTestCase {
     func testSetterDoesNotWriteICloudKVS() async {
         // DEVICE-LOCAL contract: the choice must never ride iCloud to another
         // machine (an office Mac and a laptop are legitimately different modes).
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.menuBarInputModeKey)
+        TestStores.kvs.removeObject(forKey: Constants.menuBarInputModeKey)
         await SettingsManager.shared.setMenuBarInputMode(.text)
-        XCTAssertNil(NSUbiquitousKeyValueStore.default.string(forKey: Constants.menuBarInputModeKey),
+        XCTAssertNil(TestStores.kvs.string(forKey: Constants.menuBarInputModeKey),
                      "Setter must be App-Groups-only — no iCloud KVS write.")
     }
 

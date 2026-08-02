@@ -13,13 +13,29 @@ actor WatchIdentityResolver {
     private var cachedUserID: String?
     private var isObserving = false
 
-    private init() {}
+    /// iCloud KVS + its change feed, via the storage seam.
+    private let iCloudStore: any UbiquitousStore
+    private let changes: any KVSChangeSource
+
+    /// Keychain, via the storage seam.
+    private let secrets: any SecretStore
+
+    init(dependencies: SettingsDependencies = .processDefault) {
+        self.iCloudStore = dependencies.ubiquitous
+        self.changes = dependencies.changes
+        self.secrets = dependencies.secrets
+    }
 
     // MARK: - Public API
 
     /// Synchronous Keychain-only check for initial UI state.
     /// NOT actor-isolated — safe to call from App.init().
-    static func hasKeychainIdentity() -> Bool {
+    /// - Note: reads the PROCESS-DEFAULT secret store. It runs from
+    ///   `App.init()`, before any resolver instance exists, so there is no
+    ///   injected bundle to consult.
+    static func hasKeychainIdentity(
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
+    ) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Constants.keychainServiceName,
@@ -27,8 +43,7 @@ actor WatchIdentityResolver {
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = secrets.copyMatching(query)
         guard status == errSecSuccess,
               let data = result as? Data,
               let id = String(data: data, encoding: .utf8),
@@ -107,25 +122,21 @@ actor WatchIdentityResolver {
         guard !isObserving else { return }
         isObserving = true
 
-        Task { @MainActor in
-            // Deliberately NOT gated on `FileManager.default.ubiquityIdentityToken`:
-            // that token tracks iCloud DRIVE availability, and iCloud Drive
-            // doesn't exist on watchOS — so it is ALWAYS nil there, which
-            // made the old guard permanently dead code on every Watch.
-            // NSUbiquitousKeyValueStore itself is supported on watchOS 9+;
-            // observing on a device without iCloud is harmless (the
-            // notifications simply never fire).
-            NotificationCenter.default.addObserver(
-                forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-                object: NSUbiquitousKeyValueStore.default,
-                queue: .main
-            ) { notification in
-                Task { await WatchIdentityResolver.shared.handleiCloudChange(notification) }
-            }
+        // Deliberately NOT gated on `FileManager.default.ubiquityIdentityToken`:
+        // that token tracks iCloud DRIVE availability, and iCloud Drive
+        // doesn't exist on watchOS — so it is ALWAYS nil there, which
+        // made the old guard permanently dead code on every Watch.
+        // NSUbiquitousKeyValueStore itself is supported on watchOS 9+;
+        // observing on a device without iCloud is harmless (the
+        // notifications simply never fire).
+        changes.observe { [weak self] change in
+            guard let self else { return }
+            Task { await self.handleICloudChange(change) }
+        }
 
-            Task.detached {
-                NSUbiquitousKeyValueStore.default.synchronize()
-            }
+        let store = iCloudStore
+        Task.detached {
+            store.synchronize()
         }
     }
 
@@ -151,7 +162,7 @@ actor WatchIdentityResolver {
         // ALWAYS nil there, which made the old gate skip this tier on every
         // Watch. NSUbiquitousKeyValueStore itself is supported on watchOS 9+
         // and the read is harmless without iCloud (it just returns nil).
-        if let iCloudID = NSUbiquitousKeyValueStore.default.string(forKey: Constants.iCloudKVSUserIDKey),
+        if let iCloudID = iCloudStore.string(forKey: Constants.iCloudKVSUserIDKey),
            !iCloudID.isEmpty {
             saveToKeychain(iCloudID)
             return iCloudID
@@ -164,20 +175,11 @@ actor WatchIdentityResolver {
 
     // MARK: - iCloud Change Handler
 
-    private func handleiCloudChange(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let changeReason = userInfo[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int,
-              let changedKeys = userInfo[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String],
-              changedKeys.contains(Constants.iCloudKVSUserIDKey) else {
-            return
-        }
+    private func handleICloudChange(_ change: KVSChange) {
+        guard change.changedKeys.contains(Constants.iCloudKVSUserIDKey) else { return }
+        guard change.reason.deliversRemoteValues else { return }
 
-        guard changeReason == NSUbiquitousKeyValueStoreServerChange ||
-              changeReason == NSUbiquitousKeyValueStoreInitialSyncChange else {
-            return
-        }
-
-        guard let incomingID = NSUbiquitousKeyValueStore.default.string(forKey: Constants.iCloudKVSUserIDKey),
+        guard let incomingID = iCloudStore.string(forKey: Constants.iCloudKVSUserIDKey),
               !incomingID.isEmpty else {
             return
         }
@@ -216,7 +218,7 @@ actor WatchIdentityResolver {
     /// WCSession envelope dispatch when iPhone broadcasts the active preset's
     /// key (`WatchSessionManager.session(_:didReceiveUserInfo:)`).
     func setSTTAPIKey(_ key: String, forPresetID presetID: String) {
-        Self.writeKeychainString(key, account: Constants.sttApiKeyKeychainAccount(for: presetID))
+        Self.writeKeychainString(key, account: Constants.sttApiKeyKeychainAccount(for: presetID), secrets: secrets)
     }
 
     // MARK: - Remote Agent (Personal AI) bearer token (Keychain slot)
@@ -238,14 +240,14 @@ actor WatchIdentityResolver {
     /// Called by the WCSession envelope dispatch when iPhone broadcasts
     /// the configured gateway (`WatchSessionManager.session(_:didReceiveUserInfo:)`).
     func setRemoteAgentToken(_ token: String) {
-        Self.writeKeychainString(token, account: Constants.remoteAgentTokenKeychainAccount)
+        Self.writeKeychainString(token, account: Constants.remoteAgentTokenKeychainAccount, secrets: secrets)
     }
 
     /// Remove the Personal AI gateway bearer token from Watch Keychain.
     /// Called when iPhone broadcasts an envelope with `token == nil`
     /// (user cleared the gateway in Settings).
     func clearRemoteAgentToken() {
-        Self.deleteKeychainItem(account: Constants.remoteAgentTokenKeychainAccount)
+        Self.deleteKeychainItem(account: Constants.remoteAgentTokenKeychainAccount, secrets: secrets)
     }
 
     // MARK: - Remote Agent — Per-REF bearer token (custom-gateways, ref-string keyed)
@@ -278,27 +280,30 @@ actor WatchIdentityResolver {
     /// Called by the WCSession multi-envelope dispatch for each configured ref.
     func setRemoteAgentToken(_ token: String, for ref: String) {
         guard let account = Self.tokenAccount(forRef: ref) else { return }
-        Self.writeKeychainString(token, account: account)
+        Self.writeKeychainString(token, account: account, secrets: secrets)
     }
 
     /// Remove a SPECIFIC ref's gateway bearer token from Watch Keychain.
     func clearRemoteAgentToken(for ref: String) {
         guard let account = Self.tokenAccount(forRef: ref) else { return }
-        Self.deleteKeychainItem(account: account)
+        Self.deleteKeychainItem(account: account, secrets: secrets)
     }
 
     // MARK: - Keychain Operations (generic, account-keyed)
 
     private func readFromKeychain() -> String? {
-        Self.readKeychainString(account: Constants.keychainAccountName)
+        Self.readKeychainString(account: Constants.keychainAccountName, secrets: secrets)
     }
 
     private func saveToKeychain(_ id: String) {
-        Self.writeKeychainString(id, account: Constants.keychainAccountName)
+        Self.writeKeychainString(id, account: Constants.keychainAccountName, secrets: secrets)
     }
 
     /// Shared Keychain read; nonisolated so static accessors + the actor both use it.
-    nonisolated private static func readKeychainString(account: String) -> String? {
+    nonisolated private static func readKeychainString(
+        account: String,
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
+    ) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Constants.keychainServiceName,
@@ -307,8 +312,7 @@ actor WatchIdentityResolver {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = secrets.copyMatching(query)
 
         guard status == errSecSuccess,
               let data = result as? Data,
@@ -319,7 +323,11 @@ actor WatchIdentityResolver {
         return value
     }
 
-    nonisolated private static func writeKeychainString(_ value: String, account: String) {
+    nonisolated private static func writeKeychainString(
+        _ value: String,
+        account: String,
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
+    ) {
         guard let data = value.data(using: .utf8) else { return }
 
         let query: [String: Any] = [
@@ -332,23 +340,26 @@ actor WatchIdentityResolver {
             kSecValueData as String: data
         ]
 
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let updateStatus = secrets.update(query, attributes: attributes)
 
         if updateStatus == errSecItemNotFound {
             var addQuery = query
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            SecItemAdd(addQuery as CFDictionary, nil)
+            _ = secrets.add(addQuery)
         }
     }
 
-    nonisolated private static func deleteKeychainItem(account: String) {
+    nonisolated private static func deleteKeychainItem(
+        account: String,
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
+    ) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Constants.keychainServiceName,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(query as CFDictionary)
+        _ = secrets.delete(query)
     }
 }
 

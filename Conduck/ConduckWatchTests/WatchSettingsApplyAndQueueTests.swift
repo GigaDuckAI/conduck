@@ -65,7 +65,7 @@ final class WatchSettingsApplyAndQueueTests: XCTestCase {
 
     func testOnboardingSeenFlagDefaultsFalseThenLatchesTrue() {
         let reader = WatchSettingsReader.shared
-        let appGroup = UserDefaults(suiteName: Constants.appGroupID)!
+        let appGroup = TestStores.defaults
         // The reader is a process singleton and the flag is App-Group-backed, so
         // isolate from any prior run: start clean and restore clean at the end.
         appGroup.removeObject(forKey: Constants.watchOnboardingSeenKey)

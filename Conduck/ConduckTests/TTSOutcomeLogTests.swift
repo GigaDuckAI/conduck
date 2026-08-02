@@ -36,7 +36,7 @@ final class TTSOutcomeLogTests: XCTestCase {
     /// A garbage blob under the ring key decodes to NOTHING (never a crash), and
     /// the next `record` silently supersedes it with a clean single-event ring.
     func testCorruptBlobDecodesToEmptyThenIsSuperseded() {
-        let suite = UserDefaults(suiteName: "test.ring.corrupt.\(UUID().uuidString)")!
+        let suite = InMemoryDefaultsStore()
         suite.set(Data("this is not valid json".utf8), forKey: TTSOutcomeLog.defaultsKey)
         let log = TTSOutcomeLog(defaults: suite)
 

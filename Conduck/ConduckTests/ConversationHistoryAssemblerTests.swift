@@ -51,7 +51,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             // key just rewritten and the LEGACY bool the migration test seeds
             // directly (the manager has no writer for the retired key).
             await SettingsManager.shared.setImageHistoryPolicy(.default, for: ref)
-            let suite = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+            let suite = TestStores.defaults
             suite.removeObject(forKey: Constants.imageHistoryPolicyKey(for: ref))
             suite.removeObject(forKey: Constants.fileServerKeepImagesInlineKey(for: ref))
             imagePolicyRef = nil
@@ -410,7 +410,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
         imagePolicyRef = ref
         // Seed ONLY the legacy bool — the new key stays absent (the migration
         // path under test). Same suite-resolution fallback the manager uses.
-        let suite = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        let suite = TestStores.defaults
         suite.set(true, forKey: Constants.fileServerKeepImagesInlineKey(for: ref))
 
         let seeded = try await seedKeyedImageTurns(store: store, conversationID: convo.id, count: 4)
@@ -441,7 +441,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
     func testExplicitPolicyShadowsLegacyKeepInlineBool() async {
         let ref = RemoteAgentRef.custom(UUID())
         imagePolicyRef = ref
-        let suite = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        let suite = TestStores.defaults
         suite.set(true, forKey: Constants.fileServerKeepImagesInlineKey(for: ref))
         await SettingsManager.shared.setImageHistoryPolicy(.recent, for: ref)
 

@@ -177,7 +177,7 @@ final class WatchSettingsPullTests: XCTestCase {
         defer {
             // Restore the default-ON state for sibling tests — App-Group
             // mirror included (the refresh path reads it first).
-            UserDefaults(suiteName: Constants.appGroupID)?
+            TestStores.defaults
                 .removeObject(forKey: Constants.watchEnabledKey)
             reader.refreshWatchEnabledCache()
         }

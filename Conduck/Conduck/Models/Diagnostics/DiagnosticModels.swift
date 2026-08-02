@@ -156,6 +156,13 @@ struct VoiceSetupState: Equatable, Sendable {
     let sttStatus: DiagnosticStatus
     let ttsName: String
     let ttsStatus: DiagnosticStatus
+    /// Typed reason behind a `.warning` TTS status, so the row can say which
+    /// problem it is. `.missing` = the provider has no key here (finish setup);
+    /// `.unreadable` = the Keychain refused the read, usually a locked device —
+    /// telling that user to "finish setup" sends them to re-enter a key that is
+    /// already there. Nil when the status is not a warning, or when the caller
+    /// has no typed state.
+    let ttsKeyState: APIKeyState?
 }
 
 /// Display state for ONE gateway's file-server lane in the Diagnostics "Files"

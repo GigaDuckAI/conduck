@@ -116,7 +116,7 @@ final class RegionCaptureController {
         if CGPreflightScreenCaptureAccess() {
             // Diagnostics relevance gate: the feature is live on this Mac —
             // surface the (green) Screen Recording capability row.
-            UserDefaults(suiteName: Constants.appGroupID)?
+            SettingsDependencies.processDefault.defaults
                 .set(true, forKey: Constants.screenRecordingCaptureAttemptedKey)
             return true
         }
@@ -132,7 +132,7 @@ final class RegionCaptureController {
         // pane with no Conduck entry). Cancelling the rationale above
         // deliberately leaves the row hidden.
         let granted = CGRequestScreenCaptureAccess()
-        UserDefaults(suiteName: Constants.appGroupID)?
+        SettingsDependencies.processDefault.defaults
             .set(true, forKey: Constants.screenRecordingCaptureAttemptedKey)
 
         if granted {

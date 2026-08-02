@@ -13,12 +13,24 @@ import Foundation
 final class WatchSettingsReader {
     static let shared = WatchSettingsReader()
 
-    private let kvs = NSUbiquitousKeyValueStore.default
+    private let kvs: any UbiquitousStore
 
     /// Watch-local App Group UserDefaults — durable across cold launch. Holds
     /// the cert fingerprint (which iOS keeps per-device, NOT in KVS), so
     /// a cold ControlWidget launch can pin without a live envelope.
-    private let appGroupDefaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+    private let appGroupDefaults: any DefaultsStore
+
+    /// External-change feed for the ubiquitous store.
+    private let changes: any KVSChangeSource
+
+    init(dependencies: SettingsDependencies = .processDefault) {
+        self.kvs = dependencies.ubiquitous
+        self.appGroupDefaults = dependencies.defaults
+        self.changes = dependencies.changes
+
+        loadFromiCloudKVS()
+        observeChanges()
+    }
 
     // MARK: - Cached settings
 
@@ -271,10 +283,6 @@ final class WatchSettingsReader {
         appGroupDefaults.removeObject(forKey: Constants.remoteAgentPendingInAppNewConversationBackendKey)
     }
 
-    private init() {
-        loadFromiCloudKVS()
-        observeChanges()
-    }
 
     // MARK: - Public API
 
@@ -1062,8 +1070,9 @@ final class WatchSettingsReader {
         }
 
         // Trigger sync in background — observer reloads when new data arrives
+        let store = kvs
         Task.detached {
-            NSUbiquitousKeyValueStore.default.synchronize()
+            store.synchronize()
         }
     }
 
@@ -1202,12 +1211,8 @@ final class WatchSettingsReader {
         // triggered a reload). NSUbiquitousKeyValueStore itself is supported
         // on watchOS 9+; observing on a device without iCloud is harmless
         // (the notifications simply never fire).
-        NotificationCenter.default.addObserver(
-            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-            object: kvs,
-            queue: .main
-        ) { [weak self] _ in
-            self?.loadFromiCloudKVS()
+        changes.observe { [weak self] _ in
+            Task { @MainActor in self?.loadFromiCloudKVS() }
         }
     }
 }

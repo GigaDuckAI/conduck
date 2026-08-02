@@ -26,9 +26,7 @@ import XCTest
 
 final class BackgroundFileTransferPinDurabilityTests: XCTestCase {
 
-    private var defaults: UserDefaults {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }
+    private var defaults: InMemoryDefaultsStore { TestStores.defaults }
 
     private let host = "files.example.test"
     private let pin = String(repeating: "9f", count: 32)   // 64-hex

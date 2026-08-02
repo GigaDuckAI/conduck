@@ -46,9 +46,7 @@ import XCTest
 final class SettingsViewModelCredentialPurgeTests: XCTestCase {
 
     /// App Groups UserDefaults — same suite the actor uses internally.
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     private let openclaw: RemoteAgentRef = .builtin(.openclaw)
 
@@ -82,10 +80,10 @@ final class SettingsViewModelCredentialPurgeTests: XCTestCase {
             await SettingsManager.shared.deleteCustomGateway(id: gateway.id)
         }
         defaults.removeObject(forKey: Constants.customGatewaysRegistryKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.customGatewaysRegistryKey)
+        TestStores.kvs.removeObject(forKey: Constants.customGatewaysRegistryKey)
 
         defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+        TestStores.kvs.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
         defaults.removeObject(forKey: Constants.remoteAgentActiveSessionKey)
 
         for backend in RemoteAgentBackend.allCases {
@@ -96,24 +94,35 @@ final class SettingsViewModelCredentialPurgeTests: XCTestCase {
         // Active STT / TTS pointers back to their defaults (both dual-written).
         for key in [Constants.sttActivePresetIDKVSKey, Constants.ttsActiveProviderIDKVSKey] {
             defaults.removeObject(forKey: key)
-            NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+            TestStores.kvs.removeObject(forKey: key)
         }
     }
 
     /// Remove every per-ref slot the gateway + file lane own, in BOTH stores.
     private func wipeRefSlots(_ ref: RemoteAgentRef) async {
+        // EVERY per-ref key family, not just the ones a Forget used to touch.
+        // The short list is what let `remoteAgent.model.*`, the transport hint,
+        // the last-success record, the image-history policy and the two
+        // folder-probe markers accumulate as orphans: a slot absent from this
+        // wipe is a slot no purge test can notice being left behind.
         for key in [
             Constants.remoteAgentURLKey(for: ref),
             Constants.remoteAgentCertFingerprintKey(for: ref),
             Constants.remoteAgentAuthSchemeKey(for: ref),
+            Constants.remoteAgentModelKey(for: ref),
+            Constants.remoteAgentTransportHintKey(for: ref),
+            Constants.remoteAgentLastChatSuccessKey(for: ref),
+            Constants.imageHistoryPolicyKey(for: ref),
             Constants.fileServerURLKey(for: ref),
             Constants.fileServerCertFingerprintKey(for: ref),
             Constants.fileTransferAvailableKey(for: ref),
             Constants.fileServerFolderCapableKey(for: ref),
-            Constants.fileServerTestedLocallyKey(for: ref)
+            Constants.fileServerTestedLocallyKey(for: ref),
+            Constants.fileServerFolderProbeRevisionKey(for: ref),
+            Constants.fileServerFolderProbeAttemptKey(for: ref)
         ] {
             defaults.removeObject(forKey: key)
-            NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+            TestStores.kvs.removeObject(forKey: key)
         }
         try? await SettingsManager.shared.clearRemoteAgentToken(for: ref)
         try? await SettingsManager.shared.clearFileServerCredential(for: ref)
@@ -242,8 +251,8 @@ final class SettingsViewModelCredentialPurgeTests: XCTestCase {
                 Constants.fileTransferAvailableKey(for: customRef),
                 Constants.fileServerTestedLocallyKey(for: customRef)
             ] {
-                UserDefaults(suiteName: Constants.appGroupID)?.removeObject(forKey: key)
-                NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+                TestStores.defaults.removeObject(forKey: key)
+                TestStores.kvs.removeObject(forKey: key)
             }
             try? await SettingsManager.shared.clearFileServerCredential(for: customRef)
         }

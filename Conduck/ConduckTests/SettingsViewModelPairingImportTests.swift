@@ -28,9 +28,7 @@ import XCTest
 final class SettingsViewModelPairingImportTests: XCTestCase {
 
     /// App Groups UserDefaults — same suite the actor uses internally.
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     private let openclaw: RemoteAgentRef = .builtin(.openclaw)
     private let hermes: RemoteAgentRef = .builtin(.hermes)
@@ -54,11 +52,11 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
             await SettingsManager.shared.deleteCustomGateway(id: gateway.id)
         }
         defaults.removeObject(forKey: Constants.customGatewaysRegistryKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.customGatewaysRegistryKey)
+        TestStores.kvs.removeObject(forKey: Constants.customGatewaysRegistryKey)
 
         // Default pointer + active session.
         defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
-        NSUbiquitousKeyValueStore.default.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+        TestStores.kvs.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
         defaults.removeObject(forKey: Constants.remoteAgentActiveSessionKey)
 
         // Legacy single-slot keys — the migration reads them; left-over values
@@ -84,7 +82,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
                 Constants.fileTransferAvailableKey(for: ref)
             ] {
                 defaults.removeObject(forKey: key)
-                NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+                TestStores.kvs.removeObject(forKey: key)
             }
             try? await SettingsManager.shared.clearRemoteAgentToken(for: ref)
             try? await SettingsManager.shared.clearFileServerCredential(for: ref)
@@ -296,7 +294,7 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let hintKey = Constants.remoteAgentTransportHintKey(for: openclaw)
         XCTAssertEqual(defaults.string(forKey: hintKey), "tailscale",
                        "The hint lives in the App-Group defaults.")
-        XCTAssertNil(NSUbiquitousKeyValueStore.default.object(forKey: hintKey),
+        XCTAssertNil(TestStores.kvs.object(forKey: hintKey),
                      "The transport hint must NEVER be dual-written to iCloud KVS (per-device only).")
     }
 

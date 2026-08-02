@@ -49,13 +49,13 @@ enum NotificationPermissions {
     /// share-drain) still ask — there a notification is the only feedback channel.
     /// App-Group bool so the value is visible to every process.
     static var isNotificationsDeferred: Bool {
-        UserDefaults(suiteName: Constants.appGroupID)?
-            .bool(forKey: Constants.notificationsDeferredKey) ?? false
+        SettingsDependencies.processDefault.defaults
+            .bool(forKey: Constants.notificationsDeferredKey)
     }
 
     /// Record that the user deferred notifications ("Not now") in the Setup Guide.
     static func markNotificationsDeferred() {
-        UserDefaults(suiteName: Constants.appGroupID)?
+        SettingsDependencies.processDefault.defaults
             .set(true, forKey: Constants.notificationsDeferredKey)
     }
 }

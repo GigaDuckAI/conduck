@@ -19,9 +19,7 @@ import XCTest
 
 final class CustomVoiceEndpointRegistryTests: XCTestCase {
 
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     override func setUp() async throws {
         try await super.setUp()
@@ -37,7 +35,7 @@ final class CustomVoiceEndpointRegistryTests: XCTestCase {
         // Production setters dual-write App-Group defaults AND iCloud KVS, so the
         // KVS leg must be cleared too or a signed run's read-fallback resurrects a
         // prior test's roster.
-        let kvs = NSUbiquitousKeyValueStore.default
+        let kvs = TestStores.kvs
         for key in [
             Constants.customVoiceEndpointsRegistryKey,
             Constants.sttActivePresetIDKVSKey,

@@ -79,8 +79,8 @@ actor PendingRetryStore {
 
     /// App Groups UserDefaults handle (shared with Widget / Watch — though
     /// only the main iOS app currently writes to this key).
-    private var defaults: UserDefaults? {
-        UserDefaults(suiteName: Constants.appGroupID)
+    private var defaults: any DefaultsStore {
+        SettingsDependencies.processDefault.defaults
     }
 
     // MARK: - Public API
@@ -90,9 +90,10 @@ actor PendingRetryStore {
     /// out of scope).
     /// - Throws: file-system errors writing to App Groups container.
     func save(audioData: Data, metadata: PendingRetryMetadata) async throws {
-        guard let url = audioFileURL, let defaults = defaults else {
+        guard let url = audioFileURL else {
             throw AppError.settingsLoadFailed
         }
+        let defaults = defaults
 
         // `.complete` file protection: file is unreadable while device locked.
         // Tighter than `.completeUntilFirstUserAuthentication` because
@@ -108,7 +109,8 @@ actor PendingRetryStore {
     /// no retry is pending, the metadata is expired, or the audio/metadata
     /// are out of sync.
     func load() async -> (audioData: Data, metadata: PendingRetryMetadata)? {
-        guard let url = audioFileURL, let defaults = defaults else { return nil }
+        guard let url = audioFileURL else { return nil }
+        let defaults = defaults
 
         guard let metadataData = defaults.data(forKey: Self.metadataKey),
               let metadata = try? JSONDecoder().decode(PendingRetryMetadata.self, from: metadataData) else {
@@ -132,8 +134,7 @@ actor PendingRetryStore {
     /// Cheap pre-check for UI (avoids loading the full audio just to test
     /// for presence of a retry). Mirrors `load()`'s expiry behavior.
     func hasPending() async -> Bool {
-        guard let defaults = defaults,
-              let metadataData = defaults.data(forKey: Self.metadataKey),
+        guard let metadataData = defaults.data(forKey: Self.metadataKey),
               let metadata = try? JSONDecoder().decode(PendingRetryMetadata.self, from: metadataData) else {
             return false
         }
@@ -152,8 +153,7 @@ actor PendingRetryStore {
     /// card and its Troubleshoot button never disagree; nil when nothing is
     /// pending, the entry is expired, or the original failure carried no code.
     func pendingErrorCode() async -> Int? {
-        guard let defaults = defaults,
-              let metadataData = defaults.data(forKey: Self.metadataKey),
+        guard let metadataData = defaults.data(forKey: Self.metadataKey),
               let metadata = try? JSONDecoder().decode(PendingRetryMetadata.self, from: metadataData) else {
             return nil
         }
@@ -172,8 +172,7 @@ actor PendingRetryStore {
     /// must not promise a retry that would immediately fail). No audio load.
     /// Mirrors `hasPending()`'s lazy-expiry purge; nil = nothing pending.
     func diagnosticSnapshot() async -> (createdAt: Date, lastErrorCode: Int?, audioFileExists: Bool)? {
-        guard let defaults = defaults,
-              let metadataData = defaults.data(forKey: Self.metadataKey),
+        guard let metadataData = defaults.data(forKey: Self.metadataKey),
               let metadata = try? JSONDecoder().decode(PendingRetryMetadata.self, from: metadataData) else {
             return nil
         }
@@ -189,8 +188,7 @@ actor PendingRetryStore {
     /// from `ConduckApp` on launch (privacy: don't leave stale audio
     /// sitting in App Groups storage indefinitely).
     func cleanupExpired() async {
-        guard let defaults = defaults,
-              let metadataData = defaults.data(forKey: Self.metadataKey),
+        guard let metadataData = defaults.data(forKey: Self.metadataKey),
               let metadata = try? JSONDecoder().decode(PendingRetryMetadata.self, from: metadataData) else {
             return
         }
@@ -206,6 +204,6 @@ actor PendingRetryStore {
         if let url = audioFileURL {
             try? FileManager.default.removeItem(at: url)
         }
-        defaults?.removeObject(forKey: Self.metadataKey)
+        defaults.removeObject(forKey: Self.metadataKey)
     }
 }

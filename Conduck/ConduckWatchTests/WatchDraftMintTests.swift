@@ -37,10 +37,10 @@ final class WatchDraftMintTests: XCTestCase {
     }
 
     private func wipeSharedState() {
-        let appGroup = UserDefaults(suiteName: Constants.appGroupID)
-        appGroup?.removeObject(forKey: "watch.inFlight.conversationID")
-        appGroup?.removeObject(forKey: "watch.inFlight.startedAt")
-        appGroup?.removeObject(forKey: "watch.inFlight.turnID")
+        let appGroup = TestStores.defaults
+        appGroup.removeObject(forKey: "watch.inFlight.conversationID")
+        appGroup.removeObject(forKey: "watch.inFlight.startedAt")
+        appGroup.removeObject(forKey: "watch.inFlight.turnID")
         WatchSettingsReader.shared.clearPendingInAppNewConversationBackend()
         WatchSettingsReader.shared.clearActiveConversation()
         AutoSpeakMailbox.shared.clear()

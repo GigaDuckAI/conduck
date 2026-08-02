@@ -1184,7 +1184,7 @@ extension BackgroundFileTransfer: URLSessionDelegate {
     /// resolution — the relaunch path itself needs a device, but the lookup is
     /// pure over App-Group defaults and must not silently regress.
     nonisolated static func durableFileServerPin(forHost host: String) -> String? {
-        let defaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        let defaults = SettingsDependencies.processDefault.defaults
         var refs: [RemoteAgentRef] = RemoteAgentBackend.allCases.map { .builtin($0) }
         if let data = defaults.data(forKey: Constants.customGatewaysRegistryKey),
            let roster = try? JSONDecoder().decode([CustomGateway].self, from: data) {

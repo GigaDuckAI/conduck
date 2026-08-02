@@ -5,34 +5,20 @@
 //
 // Locks the INBOUND iCloud-KVS mirror — the untested third leg of the
 // "synced in THREE places" contract (App Groups `defaults` / iCloud KVS /
-// `handleiCloudChange`). The dual-write setters and the durable reads have
+// `handleICloudChange`). The dual-write setters and the durable reads have
 // sibling coverage (SettingsManagerTTSTests, SettingsManagerRemoteAgentTests,
-// STTCustomModelTests); what was NEVER exercised is `handleiCloudChange(_:)`,
+// STTCustomModelTests); what was NEVER exercised is `handleICloudChange(_:)`,
 // which mirrors a REMOTE KVS push from a second device into this device's App
 // Groups `defaults` so the synchronous durable reads reflect the cloud value.
 //
-// How the mirror is driven headlessly: `handleiCloudChange` reads
-// `NSUbiquitousKeyValueStore.default` and writes App Groups `defaults`. In
-// process, `NSUbiquitousKeyValueStore.set(_:forKey:)` round-trips its local
-// cache regardless of iCloud SIGN-IN (no account needed), so a test can stage
-// the "remote" value in KVS, then hand the actor a SYNTHESIZED
-// `NSUbiquitousKeyValueStore.didChangeExternallyNotification` carrying the
-// server-change reason + changed-keys list. No real network, no real iCloud
-// account, no Keychain — pure UserDefaults + in-process KVS. The downstream
-// reads (`getActivePresetID` / `getActiveTTSProviderID` / `getTTSVoice`) all
-// consult `defaults` FIRST, so the mirror's effect is observable even when the
-// headless sim is signed out of iCloud (`iCloudAvailable == false`).
-//
-// ⚠️ MUST RUN SIGNED — do NOT pass `CODE_SIGNING_ALLOWED=NO` to `xcodebuild
-// test`. The KVS local-cache round-trip above requires the app to carry the
-// `com.apple.developer.ubiquity-kvstore-identifier` entitlement; an unsigned
-// build embeds no entitlement, so `NSUbiquitousKeyValueStore` goes inert
-// (`set` then `string` returns nil) and EVERY inbound-mirror assertion here
-// fails with a phantom nil — looks like a real regression, isn't one. The
-// default ad-hoc "Sign to Run Locally" identity needs no cert on a simulator
-// and supplies the entitlement. (`/review-work`'s compile check may stay
-// unsigned; the test GATE may not.) iCloud SIGN-IN is still not required —
-// only code SIGNING is.
+// How the mirror is driven headlessly: the test host runs on the in-memory
+// storage doubles (`TestStores`), so a test stages the "remote" value in
+// `TestStores.kvs` and hands the actor a `KVSChange` carrying the server-change
+// reason + changed-keys list. No network, no iCloud account, no entitlement,
+// and no signing requirement — the ubiquitous store here is a dictionary. The
+// downstream reads (`getActivePresetID` / `getActiveTTSProviderID` /
+// `getTTSVoice`) all consult `defaults` FIRST, so the mirror's effect is
+// directly observable.
 //
 // Contracts locked here:
 //   1. A server-change push for a synced key mirrors into `defaults` and the
@@ -48,9 +34,9 @@
 //      `hasSTTKey || hasTTSKey` guard returns nil when neither key is present.
 //   5. `setActivePresetID` / `setActiveTTSProviderID` round-trip + defaults.
 //
-// Test isolation: drives the live `SettingsManager.shared` singleton, so every
-// test wipes the touched keys in BOTH stores in setUp + tearDown (the
-// SettingsManagerReadAloudTests / RemoteAgentMigrationTests pattern).
+// Test isolation: drives the `SettingsManager.shared` singleton, whose stores
+// are the process's in-memory doubles. Each test still wipes the touched keys in
+// setUp + tearDown so suites sharing the singleton can't see each other's state.
 
 import XCTest
 @testable import Conduck
@@ -58,13 +44,11 @@ import XCTest
 final class SettingsManagerICloudSyncTests: XCTestCase {
 
     /// App Groups UserDefaults — same suite the actor uses internally.
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
-    /// The live iCloud KVS — the actor reads `NSUbiquitousKeyValueStore.default`,
+    /// The live iCloud KVS — the actor reads `TestStores.kvs`,
     /// so the test must stage "remote" values into the SAME instance.
-    private let kvs = NSUbiquitousKeyValueStore.default
+    private let kvs = TestStores.kvs
 
     // The pinned literals this file asserts against — independently grepped from
     // production source so a rename of the constant breaks the test.
@@ -125,22 +109,15 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         }
     }
 
-    /// Synthesize the `NSUbiquitousKeyValueStore.didChangeExternallyNotification`
-    /// the actor's launch observer normally forwards, then feed it directly to
-    /// `handleiCloudChange`. `reason` defaults to a server change (the only
-    /// reason — alongside initial-sync — the handler acts on).
+    /// Build the external-change event the injected `KVSChangeSource` normally
+    /// delivers, to feed directly to `handleICloudChange`. `reason` defaults to
+    /// a server change (the only reason — alongside initial-sync — the handler
+    /// acts on).
     private func makeKVSNotification(
         changedKeys: [String],
-        reason: Int = Int(NSUbiquitousKeyValueStoreServerChange)
-    ) -> Notification {
-        Notification(
-            name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-            object: kvs,
-            userInfo: [
-                NSUbiquitousKeyValueStoreChangeReasonKey: reason,
-                NSUbiquitousKeyValueStoreChangedKeysKey: changedKeys,
-            ]
-        )
+        reason: KVSChangeReason = .serverChange
+    ) -> KVSChange {
+        KVSChange(reason: reason, changedKeys: changedKeys)
     }
 
     // MARK: - Inbound mirror: synced-key value lands in the durable read
@@ -149,7 +126,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         // A second device picked a cloud STT preset → a remote KVS push arrives.
         kvs.set("openrouter-stt", forKey: activePresetKey)
 
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [activePresetKey])
         )
 
@@ -166,7 +143,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
     func testInboundActiveTTSProviderMirrorsIntoDurableRead() async {
         kvs.set("elevenlabs-tts", forKey: activeTTSKey)
 
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [activeTTSKey])
         )
 
@@ -179,7 +156,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         // Remote sets a language hint under the KVS key; it mirrors to the
         // DIFFERENT local key (`preferred_language`) the durable read uses.
         kvs.set("de", forKey: preferredLanguageKVSKey)
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [preferredLanguageKVSKey])
         )
         let read = await SettingsManager.shared.getPreferredLanguage()
@@ -189,7 +166,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         // Remote clears the hint → the handler removes the local mirror, so the
         // durable read falls back to nil (auto-detect).
         kvs.removeObject(forKey: preferredLanguageKVSKey)
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [preferredLanguageKVSKey])
         )
         let cleared = await SettingsManager.shared.getPreferredLanguage()
@@ -203,7 +180,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         let voiceKey = Constants.ttsVoiceKey(for: "openai-tts")
         kvs.set("nova", forKey: voiceKey)
 
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [voiceKey])
         )
 
@@ -219,10 +196,10 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
 
         // A quota-violation reason must NOT trigger the mirror — those re-fire
         // all keys spuriously and the handler guards against them.
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(
                 changedKeys: [activePresetKey],
-                reason: Int(NSUbiquitousKeyValueStoreQuotaViolationChange)
+                reason: .quotaViolationChange
             )
         )
 
@@ -242,7 +219,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         // A second device re-points its OWN default to hermes → remote push. The
         // default is DEVICE-LOCAL now, so this device must IGNORE it entirely.
         kvs.set(RemoteAgentBackend.hermes.rawValue, forKey: defaultBackendKey)
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [defaultBackendKey])
         )
 
@@ -420,7 +397,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         try XCTSkipUnless(kvs.string(forKey: fileServerURLKeyCustom) != nil,
                           "Sim kvsd store is full (1024-record cap incl. tombstones) — reset it, see comment.")
 
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [fileServerURLKeyOpenclaw, fileServerURLKeyCustom])
         )
 
@@ -435,7 +412,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         // mirror must not keep resurrecting the dead URL.
         defaults.set("https://stale.example.ts.net", forKey: fileServerURLKeyOpenclaw)
 
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [fileServerURLKeyOpenclaw])
         )
 
@@ -451,7 +428,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         kvs.set(true, forKey: fileServerAvailableKeyOpenclaw)
         kvs.set(false, forKey: fileServerFolderCapableKeyOpenclaw)
 
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [fileServerAvailableKeyOpenclaw,
                                               fileServerFolderCapableKeyOpenclaw])
         )
@@ -473,7 +450,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         kvs.set("ab12", forKey: fileServerCertKeyOpenclaw)
         kvs.set(true, forKey: fileServerKeepInlineKeyOpenclaw)
 
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [fileServerCertKeyOpenclaw,
                                               fileServerKeepInlineKeyOpenclaw])
         )
@@ -490,9 +467,9 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         // fresh-install hydration path).
         kvs.set(true, forKey: fileServerAvailableKeyOpenclaw)
 
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [fileServerAvailableKeyOpenclaw],
-                                reason: Int(NSUbiquitousKeyValueStoreInitialSyncChange))
+                                reason: .initialSyncChange)
         )
 
         XCTAssertEqual(defaults.object(forKey: fileServerAvailableKeyOpenclaw) as? Bool, true,
@@ -516,14 +493,14 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
     }
 
     func testMirroredAvailableDoesNotMarkTestedLocally() async {
-        // The seed runs BEFORE the mirror writes inside handleiCloudChange, so
+        // The seed runs BEFORE the mirror writes inside handleICloudChange, so
         // an available=true that arrives FROM A PEER must not be mistaken for
         // local proof — testedLocally gates automated probes at the peer's
         // server, and adoption is not proof.
         await SettingsManager.shared.resetTestedLocallySeedForTesting()
         kvs.set(true, forKey: fileServerAvailableKeyOpenclaw)
 
-        await SettingsManager.shared.handleiCloudChange(
+        await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [fileServerAvailableKeyOpenclaw])
         )
 

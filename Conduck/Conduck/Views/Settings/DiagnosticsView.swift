@@ -464,6 +464,7 @@ struct DiagnosticsContent: View {
                     title: LocalizedStringResource("diagnostics.voice.setup.tts", defaultValue: "Text-to-Speech"),
                     providerName: setup.ttsName,
                     status: setup.ttsStatus,
+                    keyState: setup.ttsKeyState,
                     systemImage: "speaker.wave.2"
                 )
             }
@@ -491,6 +492,7 @@ struct DiagnosticsContent: View {
         title: LocalizedStringResource,
         providerName: String,
         status: DiagnosticStatus,
+        keyState: APIKeyState? = nil,
         systemImage: String
     ) -> some View {
         HStack(alignment: .center, spacing: 10) {
@@ -501,11 +503,21 @@ struct DiagnosticsContent: View {
                     .foregroundStyle(AppColors.textPrimary)
                 // The amber glyph never stands alone — one short gloss says what
                 // it means (and gives VoiceOver the warning the icon can't).
+                //
+                // An UNREADABLE key is not missing setup: the Keychain refused
+                // the read, almost always because the device is locked. Sending
+                // that user to Voice settings to "finish" a provider they
+                // already finished is a dead end — the remedy is to unlock.
                 if status == .warning {
-                    Text(LocalizedStringResource(
-                        "diagnostics.voice.setup.needsSetup",
-                        defaultValue: "Needs setup — finish this provider in Voice settings."
-                    ))
+                    Text(keyState == .unreadable
+                         ? LocalizedStringResource(
+                            "diagnostics.voice.setup.keyUnreadable",
+                            defaultValue: "Key saved but unreadable right now — unlock this device, then run the tests again."
+                         )
+                         : LocalizedStringResource(
+                            "diagnostics.voice.setup.needsSetup",
+                            defaultValue: "Needs setup — finish this provider in Voice settings."
+                         ))
                     .font(.caption)
                     .foregroundStyle(AppColors.warning)
                 }

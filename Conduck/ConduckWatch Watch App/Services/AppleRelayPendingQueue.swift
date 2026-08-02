@@ -121,11 +121,10 @@ final class AppleRelayPendingQueue {
     /// SAME requestID.
     private static let staleTransferRefireAge: TimeInterval = 10 * 60
 
-    /// App-Group-scoped UserDefaults so the queue is co-located with the
-    /// other Watch persistence (Settings, identity, retry store). Falls
-    /// back to `.standard` only if the suite is somehow unavailable.
-    private var defaults: UserDefaults {
-        UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+    /// App-Group-scoped store so the queue is co-located with the other Watch
+    /// persistence (Settings, identity, retry store).
+    private var defaults: any DefaultsStore {
+        SettingsDependencies.processDefault.defaults
     }
 
     // MARK: - Queue-owned audio storage

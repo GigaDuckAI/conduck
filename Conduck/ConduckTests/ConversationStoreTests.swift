@@ -630,7 +630,7 @@ final class ConversationStoreTests: XCTestCase {
         // The backfill flag lives in the shared App Group UserDefaults; reset it
         // so this test controls the one-shot guard deterministically.
         let flagKey = "conversationTitleSnippetBackfillDone"
-        let defaults = UserDefaults(suiteName: Constants.appGroupID) ?? .standard
+        let defaults = TestStores.defaults
         defaults.removeObject(forKey: flagKey)
         defer { defaults.removeObject(forKey: flagKey) }
 

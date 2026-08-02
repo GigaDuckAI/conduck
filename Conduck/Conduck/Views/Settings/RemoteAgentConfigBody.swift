@@ -1581,13 +1581,16 @@ struct RemoteAgentConfigBody: View {
     /// large/accessible). macOS: a quiet LEFT-aligned `.plain` red text button
     /// (a centered+`Spacer` row renders as a heavy filled red slab in a macOS
     /// grouped Form), plus a clear-header spacer that pushes the extra
-    /// destructive-isolation gap. Shown for a custom always; for a built-in only
-    /// once it's CONFIGURED — keyed on configured state, not on a stored token
-    /// tail: a keyless (`.none`) OpenClaw/Hermes has no token by definition and
-    /// still needs its Forget.
+    /// destructive-isolation gap. Shown for a custom always; for a built-in
+    /// whenever this device holds ANY stored state for it — keyed on stored
+    /// state, not on a stored token tail (a keyless `.none` OpenClaw/Hermes has
+    /// no token by definition and still needs its Forget), and deliberately
+    /// wider than CONFIGURED: a half-configured built-in (a URL that synced in
+    /// without its token, or a leftover slot) is precisely what Diagnostics
+    /// tells the user to come here and remove.
     @ViewBuilder
     private var destructiveSection: some View {
-        if viewModel.isRemoteAgentConfigured(ref) || isCustom {
+        if viewModel.hasStoredRemoteAgentState(ref) || isCustom {
             Section {
                 Button(role: .destructive) {
                     showingForgetConfirm = true

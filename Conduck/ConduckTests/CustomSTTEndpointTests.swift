@@ -30,9 +30,7 @@ import XCTest
 final class CustomSTTEndpointTests: XCTestCase {
 
     /// App Groups UserDefaults — same suite `SettingsManager` uses internally.
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     override func setUp() async throws {
         try await super.setUp()
@@ -51,7 +49,7 @@ final class CustomSTTEndpointTests: XCTestCase {
     /// order-sensitive migration suite (spec.md Testing Seams & Isolation). Clear BOTH stores.
     /// (The Keychain key slot is never written here — see the file header.)
     private func wipeCustomSTTState() async {
-        let kvs = NSUbiquitousKeyValueStore.default
+        let kvs = TestStores.kvs
         for key in [
             Constants.customSTTURLKey,
             Constants.customSTTModelKey,

@@ -26,9 +26,7 @@ import XCTest
 @MainActor
 final class SettingsViewModelStagedTokenTests: XCTestCase {
 
-    private let defaults: UserDefaults = {
-        UserDefaults(suiteName: Constants.appGroupID) ?? UserDefaults.standard
-    }()
+    private let defaults = TestStores.defaults
 
     private let openclaw: RemoteAgentRef = .builtin(.openclaw)
     private let openrouter: RemoteAgentRef = .builtin(.openrouter)
@@ -63,7 +61,7 @@ final class SettingsViewModelStagedTokenTests: XCTestCase {
                 Constants.remoteAgentModelKey(for: ref)
             ] {
                 defaults.removeObject(forKey: key)
-                NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+                TestStores.kvs.removeObject(forKey: key)
             }
             try? await SettingsManager.shared.clearRemoteAgentToken(for: ref)
         }
