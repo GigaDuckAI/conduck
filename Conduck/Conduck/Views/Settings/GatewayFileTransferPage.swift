@@ -11,10 +11,12 @@
 //
 // The composer's mid-attach `.needsSetup` path presents the SAME content as a
 // sheet (`FileTransferSetupGuideView`); this page is the Settings-side home.
-// The content is a buffered EDITOR and brings its own Cancel/title/Save chrome
-// (`bufferedEditorChrome` — which also hides the macOS window-toolbar back
-// chevron, exactly like the gateway editor one level up); this host adds only
-// the macOS content rail / iOS title.
+// The content is a buffered EDITOR and brings its own Back/title/Save chrome
+// (`bufferedEditorChrome` with `exit: .back` — which also hides the macOS
+// window-toolbar back chevron and supplies its own, exactly like the gateway
+// editor one level up); this host adds only the macOS content rail / iOS title.
+// The composer's sheet presentation of the same content renders Cancel instead,
+// being the root of its own stack rather than a push.
 
 import SwiftUI
 

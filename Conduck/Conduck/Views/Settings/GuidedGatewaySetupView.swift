@@ -300,9 +300,17 @@ struct GuidedGatewaySetupView: View {
         }
         // Pairing import is a CONTAINER-level sheet, not a Step — it is reachable
         // from both the fork ("I already have a code") and the commands step
-        // ("scan / paste"). On a successful import `onImported` stores the ref;
-        // when the sheet dismisses with a ref set, advance to the shared
-        // success step. A dismiss with no import leaves the user where they were.
+        // ("scan / paste"). A VERIFIED connection stores the ref via
+        // `onConnected`; when the sheet dismisses with a ref set, advance to the
+        // shared success step. A dismiss with no verified connection leaves the
+        // user where they were.
+        //
+        // `onImported` is deliberately NOT wired: a bare commit is not enough to
+        // show a success screen that claims the gateway works, and the editor
+        // behind this cover learns about the commit from
+        // `SettingsViewModel.remoteAgentCommitEpoch` (bumped inside
+        // `saveRemoteAgent`, so it covers this sheet AND the hosted-model step),
+        // not from a callback this view would have to relay.
         .sheet(isPresented: $showingPairingImport, onDismiss: {
             // Advance to success ONLY on a verified connection (`connectedRef`),
             // carrying the ref so the success screen names the gateway + its

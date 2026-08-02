@@ -69,14 +69,15 @@ struct CustomSTTConfigBody: View {
 
     /// Set true right before a Save- or Delete-driven `dismiss()` so the
     /// `.onAppear`/`.onDisappear` cancel safety-net DOESN'T also run (Save already
-    /// committed; Delete already wiped). For every OTHER exit — the Cancel button,
-    /// a swipe-back, the macOS native back chevron (which `navigationBarBackButtonHidden`
-    /// can't hide), or the whole Settings sheet closing — `.onDisappear` runs the
-    /// cancel cleanup, so unsaved buffers/drafts never linger. The VM's cancel
-    /// uses the store as the sole authority, so this is robust on both platforms.
+    /// committed; Delete already wiped). For every OTHER exit — the chrome's Back
+    /// chevron, a swipe-back, the macOS native back chevron (which
+    /// `navigationBarBackButtonHidden` can't hide), or the whole Settings sheet
+    /// closing — `.onDisappear` runs the cancel cleanup, so unsaved buffers/drafts
+    /// never linger. The VM's cancel uses the store as the sole authority, so this
+    /// is robust on both platforms.
     @State private var suppressCancelOnExit: Bool = false
 
-    /// Snapshot of the editable buffers on appear, for dirty-detection (Cancel
+    /// Snapshot of the editable buffers on appear, for dirty-detection (the exit
     /// confirms only when something changed). A typed key also marks dirty.
     @State private var originalName: String = ""
     @State private var originalURL: String = ""
@@ -90,6 +91,10 @@ struct CustomSTTConfigBody: View {
     /// child-push round-trip would re-baseline `original*` to edited values and
     /// make unsaved edits read as pristine. Mirrors `RemoteAgentConfigBody`.
     @State private var didInitialize: Bool = false
+
+    /// True while a Save commit is in flight — feeds `canSave` so the button
+    /// greys for the duration of its own multi-await chain.
+    @State private var saving: Bool = false
 
     private var presetID: String { STTProvider.customEndpointID(for: uuid) }
     private var ttsProviderID: String { TTSProvider.customEndpointID(for: uuid) }
@@ -166,6 +171,8 @@ struct CustomSTTConfigBody: View {
             suppressCancelOnExit: $suppressCancelOnExit,
             title: editorTitle,
             saveTitle: LocalizedStringResource("settings.editor.save", defaultValue: "Save"),
+            // Always a PUSH from the voice-provider list — never a modal root.
+            exit: .back,
             canSave: { canSave },
             onSave: { saveTapped() }
         )
@@ -577,9 +584,15 @@ struct CustomSTTConfigBody: View {
 
     // MARK: - Save endpoint (the single commit point — surfaced in the chrome)
 
+    /// Whether Save may fire: VALID *and* something changed, with no commit
+    /// already in flight. Validity alone would leave Save armed on an untouched
+    /// endpoint, inviting a pointless re-commit — see `RemoteAgentConfigBody`'s
+    /// `canSave` for the full argument; the two editors gate identically.
+    private var canSave: Bool { isValidForSave && isDirty && !saving }
+
     /// Name + URL both non-empty — the minimum to persist a usable endpoint.
-    /// Drives the chrome's top-trailing Save button enablement.
-    private var canSave: Bool {
+    /// Validity ONLY; `canSave` adds the dirty + in-flight gates.
+    private var isValidForSave: Bool {
         let nameOK = !viewModel.customVoiceEndpointName(for: uuid)
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let urlOK = !(viewModel.customSTTURLStrings[uuid] ?? "")
@@ -590,9 +603,14 @@ struct CustomSTTConfigBody: View {
     /// Persist all buffers; dismiss on success. Stashes the @State voice buffer
     /// first so the VM can persist it (the VM can't read the View's @State).
     private func saveTapped() {
+        // Re-entrancy gate — the commit spans awaits with the button still on
+        // screen; `canSave` reads `saving` so it greys rather than double-firing.
+        guard !saving else { return }
+        saving = true
         let key = pendingKey
         let voice = pendingTTSVoice
         Task {
+            defer { saving = false }
             viewModel.stagePendingTTSVoice(voice, for: uuid)
             let ok = await viewModel.saveCustomVoiceEndpoint(for: uuid, pendingKey: key)
             viewModel.clearStagedCustomTTSVoice(for: uuid)
@@ -608,9 +626,16 @@ struct CustomSTTConfigBody: View {
     // MARK: - Cancel (discard draft / revert edits)
 
     /// Whether any editable buffer diverged from its appear-time snapshot (or the
-    /// user typed a key). Drives the Cancel confirm (via `bufferedEditorChrome`).
-    /// A draft with NOTHING typed is pristine → Cancel dismisses without a prompt.
+    /// user typed a key). Drives the discard confirm (via `bufferedEditorChrome`).
+    /// A draft with NOTHING typed is pristine → Back leaves without a prompt.
+    ///
+    /// Pristine until seeded, ALWAYS — `body` evaluates before `.onAppear`, so
+    /// until then the `original*` baselines are `""` against already-populated
+    /// buffers and every comparison below reports an edit the user never made.
+    /// Safe by construction (no edit can precede seeding), and load-bearing:
+    /// without it `canSave` flashes enabled on every pristine open.
     private var isDirty: Bool {
+        guard didInitialize else { return false }
         if !pendingKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         if viewModel.customVoiceEndpointName(for: uuid) != originalName { return true }
         if (viewModel.customSTTURLStrings[uuid] ?? "") != originalURL { return true }

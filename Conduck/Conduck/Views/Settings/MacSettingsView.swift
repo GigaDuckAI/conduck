@@ -195,7 +195,7 @@ struct MacSettingsView: View {
     // The two branches of this confirm do very different things, so they say
     // different things. `pendingSelection == nil` means Done — Settings CLOSES and
     // the user lands back in the conversation; non-nil means a sidebar switch,
-    // which stays inside Settings. The editor's own Cancel confirm
+    // which stays inside Settings. The editor's own discard confirm
     // (`BufferedEditorChrome`) owns the plain "Discard changes?" wording, and this
     // one must never borrow it: an outer alert wearing the inner alert's strings is
     // indistinguishable from "discard this screen's edits", so a Discard tapped

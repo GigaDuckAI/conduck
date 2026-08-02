@@ -158,7 +158,14 @@ struct FileTransferSetupContent: View {
     /// Regenerate commits to Keychain instantly (the user must hand the password
     /// to their server before any test can pass; a Cancel that "un-generated" it
     /// would strand the server holding a password Conduck forgot).
+    ///
+    /// Pristine until seeded, ALWAYS — `body` evaluates before `.onAppear`, so
+    /// until then the URL/pin buffers are still empty while the persisted
+    /// mirrors already hold values, and both comparisons below report an edit
+    /// the user never made. No edit can precede seeding, so the guard costs
+    /// nothing and keeps Save from flashing enabled on a pristine open.
     private var isDirty: Bool {
+        guard didInitialize else { return false }
         if trimmedURL != (viewModel.fileServerPersistedURLStrings[ref] ?? "") { return true }
         let bufferPin = Self.pinComparisonForm(viewModel.fileServerCertFingerprints[ref] ?? "")
         let persistedPin = Self.pinComparisonForm(viewModel.fileServerPersistedPins[ref] ?? "")
@@ -256,6 +263,13 @@ struct FileTransferSetupContent: View {
             suppressCancelOnExit: $suppressCancelOnExit,
             title: resolvedTitle,
             saveTitle: LocalizedStringResource("settings.editor.save", defaultValue: "Save"),
+            // The only editor whose exit control varies, because it is the only
+            // one with two presentations. From SETTINGS it is pushed under the
+            // gateway editor → a chevron back to it. From the COMPOSER it is the
+            // ROOT of its own sheet, where there is no screen behind it to point
+            // at and this control is the sole exit (the sheet also disables
+            // interactive dismissal while dirty) → "Cancel".
+            exit: context == .composer ? .cancel : .back,
             // Save and Test stay mutually exclusive: a Save while a probe runs
             // (or vice versa) would interleave the commit chain with the
             // probe's verdict landing over the same shared state.

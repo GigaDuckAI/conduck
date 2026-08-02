@@ -23,8 +23,12 @@
 // list → editor jump keeps the title centered): a `ZStack` centers the title
 // regardless of the leading button's width, a bottom hairline separates it from
 // the scrolling content, opaque `gradientStart` fill so content can't ghost
-// through. The buffered EDITORS keep their own (Cancel/title/Save) chrome — this
-// is for the non-editor sub-screens, whose only top control is Back.
+// through. The buffered EDITORS keep their own (exit/title/Save) chrome — this
+// is for the non-editor sub-screens, whose only top control is Back. Both lead
+// with the SAME back chevron, deliberately: `BufferedEditorChrome` renders this
+// exact `Image(systemName: "chevron.backward")` for its `.back` exit style and
+// reuses the `settings.mac.back` label, so a settings screen and an editor never
+// present two different-looking ways to go back.
 //
 // Back navigation uses `@Environment(\.dismiss)`, which pops the stack and
 // resets the parent's `navigationDestination(item:)` binding to nil — identical

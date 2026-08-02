@@ -8,10 +8,10 @@
 // AI gateway (`RemoteAgentConfigBody`). One interaction model, one code path, so
 // the behavior is identical across both.
 //
-// It owns the WHOLE commit/cancel chrome, in a STABLE top position that never
+// It owns the WHOLE commit/exit chrome, in a STABLE top position that never
 // shifts and never bottom-docks:
-//   - a leading "Cancel" (discard-if-dirty; owns Esc on macOS when it is the
-//     innermost mounted editor),
+//   - a leading EXIT control (discard-if-dirty; owns Esc on macOS when it is the
+//     innermost mounted editor) — see `BufferedEditorExit` for its two forms,
 //   - a trailing "Save" (disabled until the editor reports it can save) — present
 //     from the moment the editor mounts,
 //   - the "Discard changes?" confirmation alert (dirty-gated),
@@ -20,40 +20,64 @@
 //
 // PLATFORM SPLIT (deliberate — the founder's "weird Cancel that makes the UI
 // switch and swap" was a macOS-sheet artifact):
-//   - iOS: the NATIVE navigation bar — `.topBarLeading` Cancel + `.topBarTrailing`
+//   - iOS: the NATIVE navigation bar — `.topBarLeading` exit + `.topBarTrailing`
 //     Save, with the native back button hidden. Looks native + premium; verified.
 //   - macOS: a fully-CONTROLLED custom top header via `.safeAreaInset(.top)`
-//     ([Cancel] · title · [Save]), with the nested-stack nav bar hidden. WHY not
+//     ([exit] · title · [Save]), with the nested-stack nav bar hidden. WHY not
 //     toolbar placements on macOS: `.cancellationAction`/`.confirmationAction`
 //     BOTTOM-dock inside a sheet (the original shift bug), and `.primaryAction`
 //     docks on the LEADING edge on macOS (Apple's documented behavior) — so Save
-//     would cluster on the left with Cancel + the back chevron. A custom header
-//     is deterministic SwiftUI layout (no placement semantics), so Cancel always
-//     sits left and Save always sits right, present-from-mount, no bottom bar.
+//     would cluster on the left with the exit control + the back chevron. A custom
+//     header is deterministic SwiftUI layout (no placement semantics), so the exit
+//     always sits left and Save always sits right, present-from-mount, no bottom bar.
+//
+// WHY the native back button stays hidden on iOS even for a `.back` exit: that
+// modifier also suppresses the interactive swipe-back gesture. Restoring the
+// native button would make every edge-swipe a SILENT discard — the `.onDisappear`
+// net reverts without asking — and SwiftUI still offers no supported "should this
+// pop?" veto. So the chevron is ours, and the gesture stays off.
 //
 // The Delete/Forget destructive action stays INLINE in each editor (a quiet red
 // row in its own bottom Section). Each editor flips `suppressCancelOnExit = true`
 // right before a Save- or Delete-driven `dismiss()`, so the safety net skips.
 //
 // The `.onDisappear` cleanup guarantees an unsaved draft/edit can't survive a
-// swipe-back, the macOS Cancel, or the Settings sheet closing. The VM's
+// swipe-back, the macOS exit control, or the Settings sheet closing. The VM's
 // `onDiscard` uses the store as the sole authority — robust on both platforms.
 
 import SwiftUI
 
+/// How a buffered editor's leading control presents itself — a navigational
+/// Back, or a modal Cancel. The two differ only in appearance and wording; both
+/// run the identical discard-if-dirty exit.
+///
+/// REQUIRED at every call site, with no default. The right answer depends on how
+/// the HOST presented the editor, which the chrome cannot see, and getting it
+/// wrong is the kind of mistake that reads as correct in review — so a new
+/// editor is forced to state its own presentation rather than inherit one.
+enum BufferedEditorExit {
+    /// Pushed onto a navigation stack. Renders a back chevron matching
+    /// `MacSettingsSubScreenChrome`, so the settings sub-screens and the editors
+    /// share one leading edge.
+    case back
+    /// Presented modally as the ROOT of its own stack, where there is nothing to
+    /// go "back" to and a chevron would point at nothing. Renders "Cancel".
+    case cancel
+}
+
 private struct BufferedEditorChrome: ViewModifier {
     @Environment(\.dismiss) private var dismiss
 
-    /// True when the editor holds unsaved edits — Cancel confirms only then. A
-    /// value (not a closure) so `.onChange(of:)` has explicit observation deps;
-    /// the editor recomputes it on every render, so the modifier always sees the
-    /// current truth.
+    /// True when the editor holds unsaved edits — the exit control confirms only
+    /// then. A value (not a closure) so `.onChange(of:)` has explicit observation
+    /// deps; the editor recomputes it on every render, so the modifier always sees
+    /// the current truth.
     let isDirty: Bool
 
     /// The shared settings VM. This modifier registers the editor in its
     /// `bufferedEditors` stack so the OUTER settings exits (macOS Done/Esc/sidebar,
     /// iOS swipe) can consult `editorHasUnsavedChanges` and never discard an
-    /// unsaved edit without the same confirmation Cancel shows — and so macOS knows
+    /// unsaved edit without the same confirmation the exit shows — and so macOS knows
     /// which editor owns Escape. Driven here so the editors stay dumb and the
     /// wiring lives in one place.
     let viewModel: SettingsViewModel
@@ -85,13 +109,61 @@ private struct BufferedEditorChrome: ViewModifier {
     /// The editor's commit action. Runs the buffered save + dismisses on success.
     let onSave: () -> Void
 
+    /// How the leading control presents itself — see `BufferedEditorExit`.
+    let exitStyle: BufferedEditorExit
+
     @State private var showingDiscardConfirm = false
 
-    private func handleCancel() {
+    /// Leave the editor: confirm first if there is anything to lose, otherwise
+    /// go. Identical for both `exitStyle` cases — the style is presentation only,
+    /// never behavior.
+    private func handleExit() {
         if isDirty {
             showingDiscardConfirm = true
         } else {
             dismiss()
+        }
+    }
+
+    /// Why Save is inert, for VoiceOver only. A disabled control announces
+    /// "dimmed" but not the reason, and "nothing has changed yet" is the one
+    /// reason that is invisible on screen — an empty required field is at least
+    /// visibly empty, and each editor captions that case itself.
+    ///
+    /// Deliberately NOT a visible caption: it would render on the most ordinary
+    /// screen in the flow (opening a working gateway to look at it) and read as
+    /// a warning about something that is fine. Empty string when Save is live,
+    /// so the value clears the moment an edit lands.
+    private var saveAccessibilityValue: Text {
+        (!isDirty && !canSave())
+            ? Text(LocalizedStringResource(
+                "settings.editor.save.noChanges",
+                defaultValue: "No changes to save."
+            ))
+            : Text("")
+    }
+
+    /// The leading control, shared by both platforms so the two never drift.
+    @ViewBuilder
+    private var exitButton: some View {
+        switch exitStyle {
+        case .back:
+            Button { handleExit() } label: {
+                Image(systemName: "chevron.backward")
+                    .font(.body.weight(.semibold))
+            }
+            // Reuses `MacSettingsSubScreenChrome`'s key — the same word for the
+            // same control. The `mac.` in the name is legacy (it now labels the
+            // iOS chevron too) and is left alone: renaming a translated key
+            // costs a re-translation to say nothing new.
+            .accessibilityLabel(Text(LocalizedStringResource(
+                "settings.mac.back",
+                defaultValue: "Back"
+            )))
+        case .cancel:
+            Button(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel")) {
+                handleExit()
+            }
         }
     }
 
@@ -150,16 +222,13 @@ private struct BufferedEditorChrome: ViewModifier {
         content
             .navigationBarBackButtonHidden(true)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel")) {
-                        handleCancel()
-                    }
-                }
+                ToolbarItem(placement: .topBarLeading) { exitButton }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(saveTitle) { onSave() }
                         .fontWeight(.semibold)
                         .disabled(!canSave())
                         .accessibilityIdentifier("settings.editor.save")
+                        .accessibilityValue(saveAccessibilityValue)
                 }
             }
         #else
@@ -185,21 +254,28 @@ private struct BufferedEditorChrome: ViewModifier {
                     .foregroundStyle(AppColors.textEmphasis)
                     .lineLimit(1)
                 HStack {
-                    Button(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel")) {
-                        handleCancel()
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(AppColors.textSecondary)
-                    // Esc cancels the INNERMOST editor. Bound only on the top of
-                    // the stack: SwiftUI documents no precedence between two live
-                    // `.cancelAction` buttons, and on macOS a pushed-away parent
-                    // stays in the hierarchy, so its header would otherwise be a
-                    // competing target. `MacSettingsView`'s Done drops its own
-                    // `.cancelAction` whenever any editor is mounted, so exactly
-                    // one Esc target exists at a time.
-                    .keyboardShortcut(
-                        viewModel.topBufferedEditorID == editorID ? KeyboardShortcut.cancelAction : nil
-                    )
+                    exitButton
+                        .buttonStyle(.plain)
+                        .foregroundStyle(AppColors.textSecondary)
+                        // Esc exits the INNERMOST editor. Bound only on the top of
+                        // the stack: SwiftUI documents no precedence between two live
+                        // `.cancelAction` buttons, and on macOS a pushed-away parent
+                        // stays in the hierarchy, so its header would otherwise be a
+                        // competing target. `MacSettingsView`'s Done drops its own
+                        // `.cancelAction` whenever any editor is mounted, so exactly
+                        // one Esc target exists at a time.
+                        //
+                        // Also dropped while the discard alert is up. The alert's
+                        // own "Keep Editing" carries `role: .cancel` and so answers
+                        // Esc; leaving this button bound would put two live
+                        // `.cancelAction` targets on screen with no documented
+                        // precedence — one keystroke could dismiss the alert AND
+                        // pop the editor, discarding the very edits the alert was
+                        // asking about.
+                        .keyboardShortcut(
+                            (viewModel.topBufferedEditorID == editorID && !showingDiscardConfirm)
+                                ? KeyboardShortcut.cancelAction : nil
+                        )
                     Spacer()
                     Button(saveTitle) { onSave() }
                         .buttonStyle(.plain)
@@ -207,6 +283,7 @@ private struct BufferedEditorChrome: ViewModifier {
                         .foregroundStyle(canSave() ? AppColors.brandAmber : AppColors.textTertiary)
                         .disabled(!canSave())
                         .accessibilityIdentifier("settings.editor.save")
+                        .accessibilityValue(saveAccessibilityValue)
                 }
             }
             .padding(.horizontal, 20)
@@ -224,11 +301,14 @@ private struct BufferedEditorChrome: ViewModifier {
 }
 
 extension View {
-    /// Applies the shared buffered-editor chrome: a stable top Cancel (leading,
-    /// discard-if-dirty, and Esc on macOS when innermost) + Save (trailing,
-    /// disabled-until-valid) — native bar on iOS, custom header on macOS — plus the
-    /// discard alert, the VM editor-stack registration, and the `.onDisappear`
-    /// safety net. Delete/Forget stays inline. See `BufferedEditorChrome`.
+    /// Applies the shared buffered-editor chrome: a stable top exit control
+    /// (leading, discard-if-dirty, and Esc on macOS when innermost) + Save
+    /// (trailing, disabled until the editor can save) — native bar on iOS, custom
+    /// header on macOS — plus the discard alert, the VM editor-stack registration,
+    /// and the `.onDisappear` safety net. Delete/Forget stays inline.
+    /// See `BufferedEditorChrome`.
+    ///
+    /// `exit` has no default on purpose — see `BufferedEditorExit`.
     func bufferedEditorChrome(
         isDirty: Bool,
         viewModel: SettingsViewModel,
@@ -236,6 +316,7 @@ extension View {
         suppressCancelOnExit: Binding<Bool>,
         title: String,
         saveTitle: LocalizedStringResource,
+        exit: BufferedEditorExit,
         canSave: @escaping () -> Bool,
         onSave: @escaping () -> Void
     ) -> some View {
@@ -247,7 +328,8 @@ extension View {
             title: title,
             saveTitle: saveTitle,
             canSave: canSave,
-            onSave: onSave
+            onSave: onSave,
+            exitStyle: exit
         ))
     }
 }

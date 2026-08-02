@@ -382,10 +382,19 @@ extension SettingsViewModel {
     // MARK: - Post-import gateway test (optional)
 
     /// Probe the just-imported gateway (`GET /v1/models` via the existing
-    /// `testConnection` path). Reads the PERSISTED config for `target` —
-    /// matching `retestRemoteAgent`'s stored-credential posture — falling back
-    /// to the payload only for slots not yet readable (e.g. a Keychain token
-    /// read failing transiently right after the write).
+    /// `testConnection` path). Reads the PERSISTED config for `target` and ONLY
+    /// the persisted config — matching `retestRemoteAgent`'s stored-credential
+    /// posture.
+    ///
+    /// NO PAYLOAD FALLBACK, and that is the load-bearing part. Probing the
+    /// payload's own URL/token when the stored slot reads empty proves the
+    /// SERVER is reachable while proving nothing about what was saved, so a
+    /// gateway whose commit came up short would still earn a green "Connected"
+    /// — and the editor behind it would read not-configured. This stage is the
+    /// only read-back the flow performs, so it is where a short save has to
+    /// surface. `payload` is therefore deliberately UNREAD here — it stays in
+    /// the signature because it is the `PairingImportEnvironment` seam's shape
+    /// (and the test double's), not because this method may consult it.
     ///
     /// Privacy: the token never leaves this method — no log, no retention,
     /// and failure copy is the existing secret-free `AppError` recovery text.
@@ -397,11 +406,26 @@ extension SettingsViewModel {
             return .openclaw
         }()
 
-        let url = await SettingsManager.shared.getRemoteAgentURL(for: target) ?? payload.url
         let authScheme = await SettingsManager.shared.getRemoteAgentAuthScheme(for: target)
+        // Terminal, not retryable: `retryStages()` re-runs the connectivity
+        // stages but never Stage 1, so a re-probe reads the same short storage
+        // and reaches the same verdict. The remedy is re-running the import,
+        // so the copy says that — same treatment `.committedGatewayOnly` gets.
+        let storageIncomplete = PairingGatewayTestOutcome.failed(
+            message: String(localized: "settings.pairing.error.saveNotReadable",
+                            defaultValue: "This gateway didn't save completely. Re-run the import to set it up again."),
+            error: .remoteAgentNotConfigured
+        )
+        guard let url = await SettingsManager.shared.getRemoteAgentURL(for: target) else {
+            return storageIncomplete
+        }
         let token: String
         if authScheme.requiresToken {
-            token = await SettingsManager.shared.getRemoteAgentToken(for: target) ?? payload.token ?? ""
+            guard let stored = await SettingsManager.shared.getRemoteAgentToken(for: target),
+                  !stored.isEmpty else {
+                return storageIncomplete
+            }
+            token = stored
         } else {
             token = ""
         }

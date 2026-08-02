@@ -31,8 +31,9 @@
 //   6. Destructive — Forget / Delete, isolated last, no header.
 //
 // ONE commit contract, page-wide: EVERY field and picker buffers until Save
-// (the single commit point); Cancel/back with any unsaved change asks
-// "Discard changes?" via `bufferedEditorChrome`. Only ACTIONS run immediately
+// (the single commit point, enabled only when the form is VALID and something
+// actually changed); backing out with any unsaved change asks "Discard changes?"
+// via `bufferedEditorChrome`. Only ACTIONS run immediately
 // (Quick connect, pairing export, Forget — each self-confirming), and the
 // File transfer sub-page is its own buffered editor with the same contract.
 // No zone narrates its commit timing — one contract needs no captions.
@@ -122,11 +123,25 @@ struct RemoteAgentConfigBody: View {
     /// that wrote config while this editor was open doesn't read as dirty edits.
     @State private var awaitingGuidedReturn: Bool = false
 
+    /// This ref's commit count at the moment WE launched the guided cover. On
+    /// dismissal a higher count means the cover committed underneath us and the
+    /// baselines are stale; an equal one means it didn't, so a cancelled cover
+    /// leaves an unsaved draft alone. Snapshotted per launch rather than
+    /// observed globally: the epoch is app-wide, and the Watch companion mounts
+    /// this editor with no guided host at all, so a phone-side import must never
+    /// reach in and reset a wrist editor that never opened a cover.
+    @State private var guidedLaunchCommitEpoch: Int = 0
+
     /// True while the post-Quick-connect rehydrate's async storage reads are in
     /// flight. The form is disabled for the duration — the editor is already
     /// interactive when the cover dismisses, and a fast edit would otherwise be
     /// overwritten by the delayed write-back and then rebaselined as pristine.
     @State private var rehydratingAfterGuidedReturn: Bool = false
+
+    /// True while a Save commit is in flight — feeds `canSave` so the button
+    /// greys for the duration of its own multi-await chain. Mirrors
+    /// `FileTransferSetupContent`'s gate.
+    @State private var saving: Bool = false
 
     /// The per-ref pairing TRANSPORT hint, loaded once from storage. Feeds
     /// `HostReachabilityClass.classify` so the keyless-on-public warning does NOT
@@ -366,11 +381,20 @@ struct RemoteAgentConfigBody: View {
             // shared, and someone else's cover must not wipe this editor.
             if !presented, awaitingGuidedReturn {
                 awaitingGuidedReturn = false
-                // Rehydrate ONLY when this ref actually has persisted config —
-                // a cancelled cover (nothing imported) on a never-saved custom
-                // draft would otherwise drop the draft's in-memory roster row
-                // (badge taps no-op, the row vanishes) and reset typed buffers.
-                if viewModel.isRemoteAgentConfigured(ref) {
+                // Rehydrate ONLY when the cover actually COMMITTED — a cancelled
+                // cover (nothing imported) on a never-saved custom draft would
+                // otherwise drop the draft's in-memory roster row (badge taps
+                // no-op, the row vanishes) and reset typed buffers.
+                //
+                // Gate on the commit receipt, NOT on `isRemoteAgentConfigured`.
+                // That predicate reads a cache which an interleaved reload can
+                // leave stale, so it answered `false` for a gateway the import
+                // had just committed and probed — skipping this rehydrate and
+                // stranding the editor with an empty Name, stale baselines, a
+                // phantom "unsaved changes" prompt, and a Save button that could
+                // not clear it. The epoch only ever increases, so it has no
+                // stale value to misread.
+                if (viewModel.remoteAgentCommitEpoch[ref] ?? 0) > guidedLaunchCommitEpoch {
                     rehydrateFromStorage()
                 }
             }
@@ -459,6 +483,9 @@ struct RemoteAgentConfigBody: View {
             suppressCancelOnExit: $suppressCancelOnExit,
             title: viewModel.displayName(for: ref),
             saveTitle: LocalizedStringResource("settings.editor.save", defaultValue: "Save"),
+            // Always a PUSH — from the Personal AI list, the Watch companion
+            // settings, or the iPad detail pane. Never its own modal root.
+            exit: .back,
             canSave: { canSave },
             onSave: { saveTapped() }
         )
@@ -533,6 +560,7 @@ struct RemoteAgentConfigBody: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Button {
                         awaitingGuidedReturn = true
+                        guidedLaunchCommitEpoch = viewModel.remoteAgentCommitEpoch[ref] ?? 0
                         // Destination + presence commit as ONE value (the host's
                         // `.fullScreenCover(item:)`) — writing them as separate
                         // fields raced the cover's first build on iOS 26 and
@@ -850,9 +878,22 @@ struct RemoteAgentConfigBody: View {
         return text
     }
 
-    /// A visible reason the top-trailing Save is disabled when a REQUIRED field
-    /// is empty — so a hosted backend that requires a model (OpenRouter) never
-    /// reads as a dead, unexplained button. No-op for the other lanes.
+    /// A visible reason the top-trailing Save is disabled when the MODEL — this
+    /// section's own required field — is empty, so a hosted lane that requires
+    /// one (OpenRouter) never reads as a dead, unexplained button.
+    ///
+    /// Scoped to this section deliberately. It renders inside `modelSection`, so
+    /// it can only ever explain a blocker belonging to the Model field; a hint
+    /// about the Name field would print two zones below the field it names, and
+    /// for a lane with no model section at all it would never render. Each
+    /// required field carries its own message instead — see `nameField`.
+    ///
+    /// INVALID only, never merely pristine. A gateway with nothing to save is
+    /// the ordinary state of opening a working one to look at it; a caption
+    /// there would render on the most common screen in the flow and read as a
+    /// warning about something that is fine. That case is announced to
+    /// VoiceOver on the Save button itself instead. Same argument the
+    /// Quick connect row makes for its quiet "Set up again" treatment.
     @ViewBuilder
     private var saveBlockerHint: some View {
         if builtinDescriptor?.requiresModel == true,
@@ -900,6 +941,28 @@ struct RemoteAgentConfigBody: View {
                     )
                     .font(.caption2)
                     .foregroundStyle(AppColors.warning)
+                } else if isDirty, pendingName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    // A name is REQUIRED to save a custom, so an empty one greys
+                    // Save out — say why, beside the field that owns the problem
+                    // rather than in the save-blocker slot, which lives in the
+                    // Model section two zones down.
+                    //
+                    // Dirty-gated so it reads as an unmet requirement, not a
+                    // scolding: a pristine draft opens with this field legitimately
+                    // empty and its placeholder already showing, and a hint there
+                    // would name only one of the two empty required fields. Once
+                    // the user has actually started, it is the live answer to "why
+                    // can't I save?". Same copy as the VM's own save guard, so the
+                    // pre-emptive hint and the post-failure message cannot diverge.
+                    Label(
+                        LocalizedStringResource(
+                            "remoteAgent.custom.name.required",
+                            defaultValue: "Give this gateway a name."
+                        ),
+                        systemImage: "info.circle"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textSecondary)
                 }
             }
         }
@@ -1588,9 +1651,21 @@ struct RemoteAgentConfigBody: View {
 
     // MARK: - Save gateway (the single commit point — surfaced in the chrome)
 
-    /// URL non-empty, plus a name for a custom — the minimum to persist. Drives
-    /// the chrome's top-trailing Save button enablement.
-    private var canSave: Bool {
+    /// Whether Save may fire: the form must be VALID *and* something must have
+    /// changed, and a commit must not already be in flight.
+    ///
+    /// Validity alone is not enough. `saveRemoteAgent` is not idempotent — it
+    /// clears the active session pointer and drops `remoteAgentLiveValidated`,
+    /// so re-committing an untouched gateway silently demotes a green
+    /// "Connected" to a bare "Saved". An enabled Save on a form with nothing to
+    /// save is also the wrong claim to make: a pairing import already committed,
+    /// so the truthful state on return is an inert Save, not an armed one. The
+    /// sibling file-transfer editor has always gated this way.
+    private var canSave: Bool { isValidForSave && isDirty && !saving }
+
+    /// URL non-empty, plus a name for a custom — the minimum to persist.
+    /// Validity ONLY; `canSave` adds the dirty + in-flight gates.
+    private var isValidForSave: Bool {
         let urlOK = !(viewModel.remoteAgentURLStrings[ref] ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let nameOK = !isCustom || !pendingName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1615,6 +1690,12 @@ struct RemoteAgentConfigBody: View {
     /// Persist all buffers; on success either prompt to set this as the default
     /// gateway (a new, non-default additional gateway) or dismiss immediately.
     private func saveTapped() {
+        // Re-entrancy gate: the commit below spans many awaits with the button
+        // still on screen, so a double-tap would run two commit chains over the
+        // same buffers. `canSave` reads this too, so the button greys for the
+        // duration rather than merely ignoring the second tap.
+        guard !saving else { return }
+        saving = true
         let staged = stagedToken
         let name = isCustom ? pendingName : nil
         // Snapshot the pre-save state the make-default decision keys off, BEFORE
@@ -1641,6 +1722,7 @@ struct RemoteAgentConfigBody: View {
             return (pendingBadgeColorID ?? customGateway?.colorID, monogram)
         }()
         Task {
+            defer { saving = false }
             let ok = await viewModel.saveRemoteAgent(ref: ref, name: name, stagedToken: staged)
             guard ok else { return }
             // Connection committed — commit the buffered page edits with it
@@ -1678,11 +1760,20 @@ struct RemoteAgentConfigBody: View {
 
     /// Whether ANY buffer on the page diverged from storage (a typed token, a
     /// staged voice-key reuse, an edited connection field, a staged Image
-    /// history pick, a staged badge edit). Drives the Cancel confirm via
+    /// history pick, a staged badge edit). Drives the discard confirm via
     /// `bufferedEditorChrome` and the Quick connect / File transfer gates — the
     /// page-wide one-commit contract means every control participates. A fresh
-    /// draft with NOTHING typed is pristine → Cancel dismisses silently.
+    /// draft with NOTHING typed is pristine → Back leaves silently.
+    ///
+    /// Pristine until seeded, ALWAYS. SwiftUI evaluates `body` — and everything
+    /// it reads — before `.onAppear` runs, so on the first frame of an existing
+    /// gateway the `original*` baselines are still `""` while the buffers
+    /// already hold storage's values: every comparison below reports a
+    /// divergence the user did not make. There cannot be an edit before the
+    /// editor is seeded, so the guard is safe by construction, and without it
+    /// `canSave` flashes enabled on every pristine open.
     private var isDirty: Bool {
+        guard didInitialize else { return false }
         if stagedVoiceKeyReuse { return true }
         if !pendingToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         if isCustom, pendingName != originalName { return true }

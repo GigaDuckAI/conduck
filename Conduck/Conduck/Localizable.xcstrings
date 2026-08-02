@@ -8138,6 +8138,17 @@
         }
       }
     },
+    "settings.editor.save.noChanges" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No changes to save."
+          }
+        }
+      }
+    },
     "settings.error.loadFailed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8585,6 +8596,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Couldn't save this configuration securely. Try again."
+          }
+        }
+      }
+    },
+    "settings.pairing.error.saveNotReadable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This gateway didn't save completely. Re-run the import to set it up again."
           }
         }
       }
@@ -10213,6 +10235,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Most likely: the AI endpoint is switched off"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.error.capReached" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You've reached the custom-gateway limit. Delete one to add another."
           }
         }
       }

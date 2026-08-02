@@ -1783,9 +1783,15 @@ actor SettingsManager {
     /// privacy bug silently. Refusing rather than clearing keeps a good stored
     /// value intact when a bad write is attempted over it. See
     /// `EndpointURLPolicy`.
-    func setRemoteAgentURL(_ url: URL?) {
+    ///
+    /// Returns `false` iff the fence refused the write, so a caller that
+    /// reports "saved" can tell the difference between a persisted URL and a
+    /// rejected one. Clearing (nil) always succeeds. `@discardableResult`
+    /// because migrations and teardown paths legitimately ignore it.
+    @discardableResult
+    func setRemoteAgentURL(_ url: URL?) -> Bool {
         if let url {
-            guard EndpointURLPolicy.isAdmissible(url) else { return }
+            guard EndpointURLPolicy.isAdmissible(url) else { return false }
             defaults.set(url.absoluteString, forKey: Constants.remoteAgentURLKey)
             iCloudStore.set(url.absoluteString, forKey: Constants.remoteAgentURLKey)
         } else {
@@ -1793,6 +1799,7 @@ actor SettingsManager {
             iCloudStore.removeObject(forKey: Constants.remoteAgentURLKey)
         }
         postSettingsDidChangeRemotely()
+        return true
     }
 
     /// Read the gateway bearer token from Keychain. Returns nil if the
@@ -1960,10 +1967,14 @@ actor SettingsManager {
     /// `setRemoteAgentURL(_:)` — this is the setter that actually puts a gateway
     /// URL into KVS, so it is the last line before a credential-bearing string
     /// would leave the Keychain boundary.
-    func setRemoteAgentURL(_ url: URL?, for ref: RemoteAgentRef) {
+    ///
+    /// Returns `false` iff the fence refused the write — see
+    /// `setRemoteAgentURL(_:)` for why the caller needs to know.
+    @discardableResult
+    func setRemoteAgentURL(_ url: URL?, for ref: RemoteAgentRef) -> Bool {
         let key = Constants.remoteAgentURLKey(for: ref)
         if let url {
-            guard EndpointURLPolicy.isAdmissible(url) else { return }
+            guard EndpointURLPolicy.isAdmissible(url) else { return false }
             defaults.set(url.absoluteString, forKey: key)
             iCloudStore.set(url.absoluteString, forKey: key)
         } else {
@@ -1971,10 +1982,12 @@ actor SettingsManager {
             iCloudStore.removeObject(forKey: key)
         }
         postSettingsDidChangeRemotely()
+        return true
     }
 
     /// Built-in convenience overload — forwards to the ref-based canonical.
-    func setRemoteAgentURL(_ url: URL?, for backend: RemoteAgentBackend) {
+    @discardableResult
+    func setRemoteAgentURL(_ url: URL?, for backend: RemoteAgentBackend) -> Bool {
         setRemoteAgentURL(url, for: .builtin(backend))
     }
 

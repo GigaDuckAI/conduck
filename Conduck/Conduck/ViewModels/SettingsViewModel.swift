@@ -464,6 +464,24 @@ final class SettingsViewModel {
     /// branched on emptiness alone. Show neither hero nor list until loaded.
     var hasLoadedRemoteAgentState: Bool = false
 
+    /// How many times each ref's config has been COMMITTED, bumped once per
+    /// successful `saveRemoteAgent`. A monotonic receipt, not a state mirror:
+    /// its only claim is "a commit for this ref happened", which is exactly what
+    /// an editor needs to learn that a child flow (pairing import, guided hosted
+    /// setup) saved underneath it and its own baselines are now stale.
+    ///
+    /// It exists because `configuredRemoteAgentRefSet` cannot answer that
+    /// question. That set is a CACHE of storage, refreshed by an incremental
+    /// `loadRemoteAgentState` that can interleave with a save — so a reader can
+    /// see `false` for a gateway that was just committed, and an editor gated on
+    /// it silently skips its post-import recovery. A counter that only ever
+    /// increases has no stale value to read: a bump the editor missed is still
+    /// visible in the comparison, whatever order the loads landed in.
+    ///
+    /// Bumped on EVERY commit path, not just imports — the guided cover also
+    /// hosts hosted-model setup, which saves through the same method.
+    var remoteAgentCommitEpoch: [RemoteAgentRef: Int] = [:]
+
     /// Refs whose config passed a LIVE Test Connection this session (session-
     /// scoped; starts empty each launch). Lets the redesigned editor's configured
     /// status row tell "Connected" (a live probe actually succeeded) apart from
@@ -2710,6 +2728,30 @@ final class SettingsViewModel {
             return storedSlotsExist
         }()
 
+        // Undo whatever landed before a mid-commit failure, restoring the
+        // snapshot above. Every persistence step from here on either completes
+        // the tuple or calls this — the spec contract is that a failed save
+        // persists NOTHING, so a half-written store is never left behind for a
+        // reader (the editor, CarPlay dispatch, the share-target snapshot) to
+        // observe as a configured gateway.
+        func rollbackPartialCommit() async {
+            if refExistedBefore {
+                await SettingsManager.shared.setRemoteAgentURL(priorURL, for: ref)
+                await SettingsManager.shared.setRemoteAgentAuthScheme(priorAuthScheme, for: ref)
+                if let priorRosterEntry {
+                    _ = await SettingsManager.shared.upsertCustomGateway(priorRosterEntry)
+                }
+            } else if case .custom(let id) = ref {
+                // Brand-new draft: deleteCustomGateway clears the roster row AND
+                // its per-ref URL / auth-scheme / cert slots in one call.
+                await SettingsManager.shared.deleteCustomGateway(id: id)
+            } else {
+                // Brand-new built-in configure: clear the URL + scheme just written.
+                await SettingsManager.shared.setRemoteAgentURL(nil, for: ref)
+                await SettingsManager.shared.clearRemoteAgentAuthScheme(for: ref)
+            }
+        }
+
         // Persist — custom roster first so per-ref slots have a complete home.
         if case .custom(let id) = ref, let trimmedName {
             let existing = customGateways.first(where: { $0.id == id })
@@ -2725,9 +2767,39 @@ final class SettingsViewModel {
                 colorID: colorID,
                 monogram: existing?.monogram
             )
-            _ = await SettingsManager.shared.upsertCustomGateway(updated)
+            // A refused upsert (roster at `Constants.maxCustomGateways`) must
+            // fail the save. Reporting success here would leave a ref with
+            // per-ref slots but NO roster row — which `cancelRemoteAgentEdit`
+            // reads as a never-stored draft and wipes, silently destroying a
+            // config the user was told had been saved. Nothing has persisted
+            // yet at this point (the roster upsert is the FIRST write), so
+            // returning is already clean.
+            //
+            // REACHABLE, despite `newCustomGatewayDraftID` refusing to mint a
+            // draft at the cap: that check reads the CACHED roster, so a peer
+            // device syncing its own fifth gateway in over KVS between the mint
+            // and this Save closes the last slot underneath an editor that is
+            // already open.
+            guard await SettingsManager.shared.upsertCustomGateway(updated) else {
+                remoteAgentValidationStates[ref] = .invalid(
+                    message: String(localized: "settings.remoteAgent.error.capReached",
+                                    defaultValue: "You've reached the custom-gateway limit. Delete one to add another.")
+                )
+                return false
+            }
         }
-        await SettingsManager.shared.setRemoteAgentURL(parsedURL, for: ref)
+        // The write fence can refuse an inadmissible URL (`EndpointURLPolicy`).
+        // The guard above already rejected one, and normalisation only strips
+        // query/fragment/path — so this is unreachable today and exists so a
+        // future normalisation change can't turn a refused write into a
+        // reported-saved gateway with no endpoint.
+        guard await SettingsManager.shared.setRemoteAgentURL(parsedURL, for: ref) else {
+            await rollbackPartialCommit()
+            remoteAgentValidationStates[ref] = .invalid(
+                message: Self.remoteAgentURLRejectionMessage(parsedURL.absoluteString)
+            )
+            return false
+        }
         // Persist the auth scheme EXPLICITLY (never inferred downstream from a
         // nil token).
         await SettingsManager.shared.setRemoteAgentAuthScheme(authScheme, for: ref)
@@ -2749,21 +2821,7 @@ final class SettingsViewModel {
                 // Roll back the roster / URL / auth scheme that already persisted
                 // above so the "nothing persisted on failure" contract holds — the
                 // UI reports total failure, so the store must match.
-                if refExistedBefore {
-                    await SettingsManager.shared.setRemoteAgentURL(priorURL, for: ref)
-                    await SettingsManager.shared.setRemoteAgentAuthScheme(priorAuthScheme, for: ref)
-                    if let priorRosterEntry {
-                        _ = await SettingsManager.shared.upsertCustomGateway(priorRosterEntry)
-                    }
-                } else if case .custom(let id) = ref {
-                    // Brand-new draft: deleteCustomGateway clears the roster row AND
-                    // its per-ref URL / auth-scheme / cert slots in one call.
-                    await SettingsManager.shared.deleteCustomGateway(id: id)
-                } else {
-                    // Brand-new built-in configure: clear the URL + scheme just written.
-                    await SettingsManager.shared.setRemoteAgentURL(nil, for: ref)
-                    await SettingsManager.shared.clearRemoteAgentAuthScheme(for: ref)
-                }
+                await rollbackPartialCommit()
                 remoteAgentValidationStates[ref] = .invalid(
                     message: String(localized: "Couldn't save your token securely. Try again.")
                 )
@@ -2787,6 +2845,12 @@ final class SettingsViewModel {
                 await SettingsManager.shared.clearActiveConversation()
             }
         }
+
+        // Every persistence step succeeded — the commit is real from here on, so
+        // stamp the receipt BEFORE the cache refreshes below. Order matters:
+        // those refreshes each await the actor, and an editor watching the epoch
+        // must not be able to observe a refreshed cache with an unbumped epoch.
+        remoteAgentCommitEpoch[ref, default: 0] += 1
 
         // Refresh local observable state from the freshly-persisted tuple.
         remoteAgentURLStrings[ref] = parsedURL.absoluteString
@@ -2897,6 +2961,17 @@ final class SettingsViewModel {
         if probedTupleSignature(for: ref) != probedTupleBefore {
             invalidateLiveValidation(for: ref)
         }
+
+        // Re-read the configured set from storage too. This method's contract is
+        // "make VM state for this ref match storage", and that set is VM state
+        // about this ref — leaving it behind is what kept a just-imported gateway
+        // reading unconfigured after the post-Quick-connect rehydrate, greying
+        // out File transfer and labelling Quick connect "Set up" on a gateway
+        // that was already set up. Whole-set (not a per-ref insert) because
+        // `configuredRemoteAgentRefs()` is the single authority on the predicate.
+        configuredRemoteAgentRefSet = Set(
+            await SettingsManager.shared.configuredRemoteAgentRefs()
+        )
     }
 
     /// The tuple a live verdict is a claim ABOUT: change any of it and a previous

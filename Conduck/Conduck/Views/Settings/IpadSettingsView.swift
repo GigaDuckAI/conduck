@@ -205,7 +205,7 @@ struct IpadSettingsView: View {
     //
     // Mirrors `MacSettingsView`. `pendingSelection == nil` means Done/Close —
     // Settings CLOSES back to the conversation; non-nil means a sidebar switch,
-    // which stays inside Settings. The editor's own Cancel confirm keeps the plain
+    // which stays inside Settings. The editor's own discard confirm keeps the plain
     // "Discard changes?" wording so the inner and outer alerts stay distinguishable.
 
     private var outerDiscardTitle: LocalizedStringResource {
