@@ -318,7 +318,7 @@ Top-level layout only; full annotated tree below. Keep in sync when top-level en
     │   │   │   ├── MessageRowFormatters.swift          # Relative-date + `conversationListDate` + title-fallback + device/modality icon maps + `ThinkingStage.clock`
     │   │   │   ├── SourceDeviceChip.swift              # Per-bubble device + modality chip
     │   │   │   └── EmptyStateMascot.swift              # Shared empty-state mascot renderer (pose + height + amber glow); pose chosen by caller from `MascotShuffleBag`, held on owning model (no reshuffle on re-render)
-    │   │   ├── Components/                              # `PendingRetryCard` · `MailComposerView` · `LanguagePickerView` · `ICloudUnavailableBanner` (shown only when iCloud is in a user-actionable bad state; opens the OS fix surface; pairs with `CloudSyncMonitor`)
+    │   │   ├── Components/                              # `PendingRetryCard` · `MailComposerView` · `LanguagePickerView` · `ICloudUnavailableBanner` (shown only when iCloud is in a user-actionable bad state; opens the OS fix surface; pairs with `CloudSyncMonitor`) · `MacPointerTargets` (the macOS click-target primitives every mouse-reachable control routes through [spec.md Per-Surface Behavior])
     │   │   └── Onboarding/
     │   │       ├── OnboardingContainerView.swift       # FLAT linear 3-step `{welcome, enableVoice, completion}` (gateway setup DEFERRED to Settings); nav via the constant `OnboardingFlow.orderedSteps` + `previousStep()` back-nav [spec.md Onboarding]
     │   │       ├── OnboardingStepScaffold.swift         # Shared step layout: greedy ScrollView + VStack-sibling pinned CTA (never overlaps at any Dynamic Type) + iPad-regular width caps + `onboardingMascot`
