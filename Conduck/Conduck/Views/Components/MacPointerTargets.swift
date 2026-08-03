@@ -32,13 +32,22 @@
 //     the whole frame hittable. Both halves are required; either alone leaves a
 //     dead zone.
 //
-//  3. A grouped `Form` adds a constant ~21pt of vertical inset per row and ~9pt
-//     of horizontal gutter between the section card's edge and the row's content
-//     box. That margin belongs to the Form and is unreachable — see (1). So a
-//     row can be made to fill its content box, not the card's full bleed, and a
-//     thin dead border around each row survives by construction. `SettingsRow`
-//     therefore also RAISES the row's minimum height, which is the only way to
-//     convert dead margin into live target.
+//  3. A grouped `Form` wraps every row's content box in FIXED padding —
+//     measured ~10.4pt above and below (48.8pt row pitch around a 28pt hover
+//     wash) plus ~10pt each side. It is PADDING, not a minimum row height, so
+//     it survives whatever `minHeight` the row asks for: raising the row's
+//     floor grows the wash and pushes the pitch out with it, leaving the dead
+//     border exactly as wide. And it belongs to the Form, so nothing applied
+//     from inside the row reaches it — `.listRowInsets`, `.listRowBackground`,
+//     `.contentShape(inset:)` and negative padding each move the live rect by
+//     zero (see (1)), and `.listSectionMargins` does not exist on macOS. A row
+//     inside a `Form` is therefore live over its content box and dead over the
+//     border around it, by construction. Screens that need the card live edge
+//     to edge draw the card themselves instead: `SettingsCard`
+//     (`MacSettingsCard.swift`) renders the section chrome with ZERO container
+//     padding, so a row's own frame IS the card's full bleed, and its rows take
+//     `.settingsCardRowButton()` / `.settingsCardRowLink()` — the same styles
+//     with the inset moved inside the live frame and the wash squared off.
 //
 // DELIBERATELY NOT DONE: no pointing-hand cursor on rows and buttons. macOS
 // reserves that cursor for links; System Settings, Finder and Mail all keep the
@@ -148,12 +157,20 @@ struct SettingsRowButtonStyle: ButtonStyle {
     /// a visibly ragged left edge.
     var horizontalPadding: CGFloat = 0
 
+    /// Corner radius of the hover/pressed wash. Pass 0 inside a `SettingsCard`,
+    /// where rows TOUCH: a rounded wash on two adjacent hovered rows leaves an
+    /// untinted notch where their corners meet. The card's own `.clipShape`
+    /// supplies the outer corners, so squaring the wash costs nothing at the
+    /// card's top and bottom edges.
+    var washCornerRadius: CGFloat = MacPointer.rowCornerRadius
+
     func makeBody(configuration: Configuration) -> some View {
         RowBody(
             configuration: configuration,
             alignment: alignment,
             minHeight: minHeight,
-            horizontalPadding: horizontalPadding
+            horizontalPadding: horizontalPadding,
+            washCornerRadius: washCornerRadius
         )
     }
 
@@ -166,6 +183,7 @@ struct SettingsRowButtonStyle: ButtonStyle {
         let alignment: Alignment
         let minHeight: CGFloat
         let horizontalPadding: CGFloat
+        let washCornerRadius: CGFloat
 
         @Environment(\.isEnabled) private var isEnabled
         @State private var hovering = false
@@ -177,7 +195,7 @@ struct SettingsRowButtonStyle: ButtonStyle {
                 // region (see file header, measurement 1).
                 .frame(maxWidth: .infinity, minHeight: minHeight, alignment: alignment)
                 .overlay {
-                    RoundedRectangle(cornerRadius: MacPointer.rowCornerRadius, style: .continuous)
+                    RoundedRectangle(cornerRadius: washCornerRadius, style: .continuous)
                         .fill(pointerHighlightFill(
                             hovering: hovering,
                             pressed: configuration.isPressed,
@@ -264,6 +282,112 @@ struct PointerIconButtonStyle: ButtonStyle {
             case .capsule:
                 AnyShape(Capsule())
             }
+        }
+    }
+}
+
+// MARK: - Persistent chrome control
+
+/// A header-chrome control that is VISIBLE AT REST — the Settings back chevron,
+/// an editor's Cancel. Draws a filled, stroked container the label sits on, and
+/// merely brightens it on hover.
+///
+/// WHY it is not `PointerIconButtonStyle`: that style's affordance is the hover
+/// wash alone, so at rest a bare chevron on the window background reads as
+/// decoration rather than as a control — the user has to sweep the pointer over
+/// it to discover it is clickable. Chrome that anchors a screen has to announce
+/// itself before the pointer arrives, so here the resting state carries the
+/// affordance and hover only confirms it.
+///
+/// The resting fill is OPAQUE chrome the label sits ON, so it is drawn as a
+/// `.background` with the hover/pressed wash stacked ABOVE it inside that same
+/// background — the file's usual overlay-only pattern would paint a wash with
+/// nothing underneath it, which is precisely the resting affordance this style
+/// exists to provide. Same construction as
+/// `MacDiagnosticsActionButtonStyle`.
+///
+/// Disabled drops the fill AND the stroke, not just the opacity: chrome that
+/// still looks like a container is a lie about what a click would do, the same
+/// reasoning behind `pointerHighlightFill`'s `guard enabled`.
+///
+/// A rounded square, deliberately not a circle or capsule — this is header
+/// chrome docked to a corner, not a floating control. Arrow cursor, per the
+/// file's rule reserving the hand for genuine links.
+struct PointerChromeButtonStyle: ButtonStyle {
+    /// Live square edge, and the resting container's size.
+    var size: CGFloat = 32
+
+    /// Radius of the container and of its hover wash — one shape, so they
+    /// cannot disagree at the corners.
+    var cornerRadius: CGFloat = 8
+
+    /// Extra width for a WORD label ("Cancel") rather than a glyph, exactly as
+    /// `PointerIconButtonStyle` uses it: without it the container hugs the
+    /// letters and reads as a cramped pill.
+    var horizontalPadding: CGFloat = 0
+
+    func makeBody(configuration: Configuration) -> some View {
+        ChromeBody(
+            configuration: configuration,
+            size: size,
+            cornerRadius: cornerRadius,
+            horizontalPadding: horizontalPadding
+        )
+    }
+
+    private struct ChromeBody: View {
+        let configuration: Configuration
+        let size: CGFloat
+        let cornerRadius: CGFloat
+        let horizontalPadding: CGFloat
+
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            return configuration.label
+                // The style OWNS the label colour — that is how hover reaches
+                // `textEmphasis`. A call site that sets its own
+                // `.foregroundStyle` on the button applies it closer to the
+                // leaf, wins, and freezes the label at one colour.
+                .foregroundStyle(labelColor)
+                .padding(.horizontal, horizontalPadding)
+                .frame(minWidth: size, minHeight: size)
+                .background {
+                    ZStack {
+                        shape.fill(isEnabled ? AppColors.cardBackgroundElevated : .clear)
+                        // Above the resting fill and still behind the label:
+                        // the fill is opaque, so a wash painted under it would
+                        // never be visible.
+                        shape.fill(pointerHighlightFill(
+                            hovering: hovering,
+                            pressed: configuration.isPressed,
+                            enabled: isEnabled
+                        ))
+                    }
+                }
+                .overlay {
+                    shape
+                        // `strokeBorder`, not `stroke`: a centred stroke puts
+                        // half its width outside the frame, where the container
+                        // it outlines has already ended.
+                        .strokeBorder(isEnabled ? AppColors.borderSubtle : .clear, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+                // The whole square, not just the rounded container — this style
+                // stands in for `PointerIconButtonStyle` at its call sites and
+                // must not hand back live area they already have.
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+                .opacity(isEnabled ? 1 : pointerDisabledOpacity)
+                .animation(MacPointer.highlightAnimation, value: hovering)
+                .animation(MacPointer.highlightAnimation, value: configuration.isPressed)
+        }
+
+        private var labelColor: Color {
+            guard isEnabled, hovering else { return AppColors.textSecondary }
+            return AppColors.textEmphasis
         }
     }
 }
@@ -427,6 +551,59 @@ extension View {
         #endif
     }
 
+    /// The `settingsRowButton` of a hand-drawn `SettingsCard` — the treatment
+    /// for a row that owns the card's FULL BLEED rather than a `Form`'s inset
+    /// content box.
+    ///
+    /// Two differences from `.settingsRowButton()`, both forced by the card:
+    /// the label's inset moves INSIDE the live frame (the card adds no padding
+    /// of its own, so anything it added would be dead), and the hover wash is
+    /// SQUARED — card rows touch, and a 7pt rounded wash leaves untinted
+    /// notches between two adjacent hovered rows. The card's `.clipShape`
+    /// supplies the rounded corners at its own top and bottom edges.
+    ///
+    /// Off macOS this is exactly `.buttonStyle(.plain)` — byte-identical to
+    /// what these rows already do on iOS, which matters because the shared
+    /// settings screens compile for both.
+    ///
+    /// - Parameters:
+    ///   - alignment: where the label sits in the widened row. Pass `.center`
+    ///     for a centred call-to-action.
+    ///   - minHeight: floor for the live height; taller content keeps its own.
+    func settingsCardRowButton(
+        alignment: Alignment = .leading,
+        minHeight: CGFloat = SettingsCardMetrics.rowMinHeight
+    ) -> some View {
+        #if os(macOS)
+        buttonStyle(SettingsRowButtonStyle(
+            alignment: alignment,
+            minHeight: minHeight,
+            horizontalPadding: SettingsCardMetrics.rowInset,
+            washCornerRadius: 0
+        ))
+        #else
+        buttonStyle(.plain)
+        #endif
+    }
+
+    /// The `settingsRowLink` of a hand-drawn `SettingsCard`: same full-bleed
+    /// live row and same arrow cursor as `.settingsCardRowButton()`, for a
+    /// `Link` with a custom label. No-op off macOS, matching
+    /// `.settingsRowLink()`.
+    ///
+    /// - Parameter minHeight: floor for the live height.
+    func settingsCardRowLink(minHeight: CGFloat = SettingsCardMetrics.rowMinHeight) -> some View {
+        #if os(macOS)
+        modifier(SettingsRowLink(
+            minHeight: minHeight,
+            horizontalPadding: SettingsCardMetrics.rowInset,
+            washCornerRadius: 0
+        ))
+        #else
+        self
+        #endif
+    }
+
     /// The canonical treatment for an icon-only control: a guaranteed
     /// `MacPointer.minTarget` square of live area plus a hover wash.
     /// `.buttonStyle(.plain)` off macOS.
@@ -444,6 +621,37 @@ extension View {
         buttonStyle(PointerIconButtonStyle(
             size: size,
             shape: shape,
+            horizontalPadding: horizontalPadding
+        ))
+        #else
+        buttonStyle(.plain)
+        #endif
+    }
+
+    /// The treatment for a header-chrome control that must be VISIBLE AT REST —
+    /// a Settings back chevron, an editor's Cancel: a filled, stroked container
+    /// that brightens on hover, rather than `.pointerIconButton()`'s wash that
+    /// only exists under the pointer. `.buttonStyle(.plain)` off macOS.
+    ///
+    /// The style sets the label's colour itself (that is how hover reaches
+    /// `AppColors.textEmphasis`), so the call site must NOT apply its own
+    /// `.foregroundStyle` to the button — a call-site modifier lands closer to
+    /// the leaf, wins, and pins the label to one colour through every state.
+    ///
+    /// - Parameters:
+    ///   - size: the live square, and the resting container's edge.
+    ///   - cornerRadius: radius of the container and its wash.
+    ///   - horizontalPadding: extra width when the label is a word, not a
+    ///     glyph — 0 for a chevron, ~10 for "Cancel".
+    func pointerChromeButton(
+        size: CGFloat = 32,
+        cornerRadius: CGFloat = 8,
+        horizontalPadding: CGFloat = 0
+    ) -> some View {
+        #if os(macOS)
+        buttonStyle(PointerChromeButtonStyle(
+            size: size,
+            cornerRadius: cornerRadius,
             horizontalPadding: horizontalPadding
         ))
         #else
@@ -547,14 +755,26 @@ extension View {
 private struct SettingsRowLink: ViewModifier {
     let minHeight: CGFloat
 
+    /// Inset applied to the LABEL inside the live area, mirroring
+    /// `SettingsRowButtonStyle.horizontalPadding`: the frame below widens the
+    /// row PAST this padding, so it indents the text without costing live area.
+    /// Defaults to 0 so a `Form` row's text stays flush with its unstyled
+    /// neighbours; a `SettingsCard` row passes `SettingsCardMetrics.rowInset`.
+    var horizontalPadding: CGFloat = 0
+
+    /// Corner radius of the hover wash — 0 inside a `SettingsCard`, for the
+    /// touching-rows reason spelled out on `SettingsRowButtonStyle`.
+    var washCornerRadius: CGFloat = MacPointer.rowCornerRadius
+
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
 
     func body(content: Content) -> some View {
         content
+            .padding(.horizontal, horizontalPadding)
             .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .leading)
             .overlay {
-                RoundedRectangle(cornerRadius: MacPointer.rowCornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: washCornerRadius, style: .continuous)
                     .fill(pointerHighlightFill(hovering: hovering, pressed: false, enabled: isEnabled))
                     .allowsHitTesting(false)
             }

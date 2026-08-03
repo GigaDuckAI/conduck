@@ -6,6 +6,11 @@
 //
 // macOS Settings → About category. Version string + Send Feedback (mailto via
 // the shared `openFeedbackEmailMac`) + Privacy Policy / Terms of Service links.
+//
+// Sections are hand-drawn `SettingsCard`s (`MacSettingsCard.swift`), so every
+// row is live edge to edge; the inset comes from each row's own style, inside
+// its live frame. Nothing here pads a row from the outside — see that file's
+// one rule.
 
 import SwiftUI
 
@@ -18,16 +23,14 @@ struct MacAboutCategory: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                Form {
+                VStack(alignment: .leading, spacing: SettingsCardMetrics.sectionSpacing) {
                     versionSection
                     aboutLinksSection
                     communitySection
                 }
-                .formStyle(.grouped)
-                .scrollContentBackground(.hidden)
 
-                // Free-floating sign-off — kept OUT of the grouped Form so it
-                // renders without a Section card (grey box) on the window bg.
+                // Free-floating sign-off — kept OUT of the card stack so it
+                // renders on the window bg rather than inside a card (grey box).
                 AboutThankYouFooter()
                     .padding(.top, 28)
                     .padding(.bottom, 24)
@@ -55,8 +58,17 @@ struct MacAboutCategory: View {
     // MARK: - Version (app icon + name + version)
 
     private var versionSection: some View {
-        Section {
+        SettingsCard {
+            // Passive content, not a control: no row modifier, and therefore no
+            // hover wash on something a click does nothing to. Its neighbours
+            // draw their inset from their row style, inside the live frame, so
+            // this row has to supply its own — the one place padding on a card
+            // row is correct, because there is no live frame for it to land
+            // outside of. Vertical 12 matches the breathing the 48pt rows leave
+            // around their single-line labels.
             AppIdentityHeader()
+                .padding(.horizontal, SettingsCardMetrics.rowInset)
+                .padding(.vertical, 12)
         } header: {
             Text(LocalizedStringResource("settings.mac.about.title", defaultValue: "About"))
         }
@@ -65,38 +77,38 @@ struct MacAboutCategory: View {
     // MARK: - About links (feedback / legal) — unlabeled housekeeping
 
     private var aboutLinksSection: some View {
-        Section {
+        SettingsCard {
             Button {
                 openFeedbackEmailMac()
             } label: {
                 rowLabel("Send Feedback", systemImage: "envelope", trailing: "arrow.up.right") // xcstrings
             }
-            .settingsRowButton()
+            .settingsCardRowButton()
 
             // `Link`, not `Button` — no `ButtonStyle` reaches it, so these rows
-            // take `.settingsRowLink()`: the same full-width live area and wash
-            // `.settingsRowButton()` gives the `Button` rows above and below, and
-            // deliberately the same ARROW cursor. These are rows, not inline
-            // prose links, and the pointing hand here would make one card answer
-            // the pointer three different ways. `.plain` stays for the link
-            // chrome it already suppressed.
+            // take `.settingsCardRowLink()`: the same full-bleed live area, row
+            // inset and wash `.settingsCardRowButton()` gives the `Button` rows
+            // above and below, and deliberately the same ARROW cursor. These are
+            // rows, not inline prose links, and the pointing hand here would
+            // make one card answer the pointer three different ways. `.plain`
+            // stays for the link chrome it already suppressed.
             Link(destination: URL(string: Constants.websiteURL)!) {
                 rowLabel("Visit conduck.com", systemImage: "globe", trailing: "arrow.up.right") // xcstrings
             }
             .buttonStyle(.plain)
-            .settingsRowLink()
+            .settingsCardRowLink()
 
             Link(destination: URL(string: Constants.privacyPolicyURL)!) {
                 rowLabel("Privacy Policy", systemImage: "hand.raised", trailing: "arrow.up.right") // xcstrings
             }
             .buttonStyle(.plain)
-            .settingsRowLink()
+            .settingsCardRowLink()
 
             Link(destination: URL(string: Constants.termsOfServiceURL)!) {
                 rowLabel("Terms of Service", systemImage: "doc.text", trailing: "arrow.up.right") // xcstrings
             }
             .buttonStyle(.plain)
-            .settingsRowLink()
+            .settingsCardRowLink()
 
             // Internal sheet (not an external link) — trailing chevron signals
             // in-app content. Apache-2.0 §4 / MIT notice preservation.
@@ -109,14 +121,14 @@ struct MacAboutCategory: View {
                     trailing: "chevron.forward"
                 )
             }
-            .settingsRowButton()
+            .settingsCardRowButton()
         }
     }
 
     // MARK: - Community (Discord) — honestly labeled; not a support desk
 
     private var communitySection: some View {
-        Section {
+        SettingsCard {
             Link(destination: URL(string: Constants.discordInviteURL)!) {
                 HStack {
                     Label {
@@ -134,10 +146,13 @@ struct MacAboutCategory: View {
                         .font(.caption)
                         .foregroundStyle(AppColors.textTertiary)
                 }
+                // Hand-rolled twin of `rowLabel`'s frame + shape, for the same
+                // reason: this label IS the `Link`'s live region.
+                .frame(maxWidth: .infinity, minHeight: SettingsCardMetrics.rowMinHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .settingsRowLink()
+            .settingsCardRowLink()
         } header: {
             Text("Community") // xcstrings
         }
@@ -152,9 +167,21 @@ struct MacAboutCategory: View {
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
         }
-        // Load-bearing for the `Link` rows: they get no `ButtonStyle`, so this
-        // is what makes the `Spacer()` gap hittable there. The `Button` rows
-        // get the same guarantee from `.settingsRowButton()`.
+        // Claims the whole row from INSIDE the label, which is the only place
+        // that reaches a `Link`. A `Link`'s live region is its label's laid-out
+        // frame, and `.settingsCardRowLink()` frames the `Link` from OUTSIDE —
+        // so the modifier's 48pt row governs the wash and the hover, while the
+        // label's own ~22pt line box would govern the click, leaving ~13pt of
+        // washed-but-dead band top and bottom. The `Spacer()` closes that gap
+        // horizontally; this closes it vertically. Costs the `Button` rows
+        // nothing: `.settingsCardRowButton()` imposes the same 48pt floor and
+        // the same full width one level out.
+        .frame(maxWidth: .infinity, minHeight: SettingsCardMetrics.rowMinHeight)
+        // Both halves are required — a filled frame stays dead over its
+        // `Spacer()` until this declares the frame hittable. The `Button` rows
+        // get the same guarantee from `.settingsCardRowButton()`, whose
+        // `.contentShape` sits inside the style body and therefore inside the
+        // button's own region.
         .contentShape(Rectangle())
     }
 }

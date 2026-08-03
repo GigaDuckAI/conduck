@@ -13,9 +13,12 @@
 // `SettingsStatusMark`, no colored pills, no in-row set-default.
 //
 // Content sits on the shared settings rail (720pt max width, centered, 28pt
-// horizontal padding) with the increased zone-header prominence — the same
-// treatment `RemoteAgentConfigBody` applies, so list and editor read as one
-// surface.
+// horizontal padding) as a stack of hand-drawn `SettingsCard` sections rather
+// than a grouped `Form`: the card applies no padding around its rows, so a
+// row's live frame IS the card's full bleed and the hover wash fills the whole
+// row (`MacSettingsCard.swift` carries the measurements). Section headers take
+// the card's own 13pt semibold secondary treatment — the zone-header prominence
+// `RemoteAgentConfigBody` applies — so list and editor read as one surface.
 //
 // Global pickers (Playback / Session / Attachments) live in `MacGeneralCategory`
 // per the plan's clean grouping — NOT here.
@@ -55,7 +58,11 @@ struct MacPersonalAICategory: View {
                         .padding(.horizontal, 28)
                         .padding(.top, 28)
 
-                    Form {
+                    // The section stack owns the gap BETWEEN cards; each card
+                    // owns the gap to its own header and footer. Nothing here
+                    // pads a card horizontally — a card's rows are live to its
+                    // edges, and padding applied out here would be dead.
+                    VStack(alignment: .leading, spacing: SettingsCardMetrics.sectionSpacing) {
                         // Always the populated layout — the "New chats use"
                         // selector, the permanent Connect section, then the
                         // gateway lists (configured rows get a green check;
@@ -70,8 +77,6 @@ struct MacPersonalAICategory: View {
                             customGatewaySection
                         }
                     }
-                    .formStyle(.grouped)
-                    .scrollContentBackground(.hidden)
                     .padding(.horizontal, 28)
                     .padding(.bottom, 28)
                 }
@@ -103,24 +108,13 @@ struct MacPersonalAICategory: View {
         }
     }
 
-    /// Zone-header treatment shared with the editor: sentence-case 13pt semibold
-    /// in the secondary color (increased prominence over the stock small gray),
-    /// with vertical padding that opens the section rhythm.
-    private func zoneHeader(_ text: Text) -> some View {
-        text
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(AppColors.textSecondary)
-            .padding(.top, 10)
-            .padding(.bottom, 2)
-    }
-
     // MARK: - Connect (permanent setup affordances)
 
     /// "Connect" — the prominent guided-setup entry (the lane chooser). Scan/paste
     /// is no longer a list-level row: it lives inside each gateway's "Guided setup"
     /// disclosure, and the chooser's guided flow ends in the same step.
     private var connectSection: some View {
-        Section {
+        SettingsCard {
             PersonalAIConnectRows(
                 emphasized: viewModel.hasLoadedRemoteAgentState
                     && viewModel.configuredRemoteAgentRefSet.isEmpty,
@@ -129,7 +123,7 @@ struct MacPersonalAICategory: View {
                 }
             )
         } header: {
-            zoneHeader(Text(GatewayGroupCopy.connectHeader))
+            Text(GatewayGroupCopy.connectHeader)
         }
     }
 
@@ -139,18 +133,18 @@ struct MacPersonalAICategory: View {
     /// canonical place to choose the gateway new conversations start on (mirrors
     /// the Voice STT/TTS selectors). Tapping opens the chooser.
     private var defaultSelector: some View {
-        Section {
+        SettingsCard {
             Button {
                 route = .defaultChooser
             } label: {
                 DefaultGatewaySelectorRow(defaultName: viewModel.defaultSelectorDisplayName)
             }
-            .settingsRowButton()
+            .settingsCardRowButton()
         } header: {
-            zoneHeader(Text(LocalizedStringResource(
+            Text(LocalizedStringResource(
                 "settings.personalAI.newChats.header",
                 defaultValue: "New chats use"
-            )))
+            ))
         }
     }
 
@@ -158,19 +152,26 @@ struct MacPersonalAICategory: View {
 
     /// "Full agent gateways" — the user's own self-hosted backends (OpenClaw /
     /// Hermes; tools, file attachments). Mirrors
-    /// `PersonalAISettingsView.selfHostedGatewaySection`.
+    /// `PersonalAISettingsView.selfHostedGatewaySection`. Omitted whole when the
+    /// registry yields none: the card is chrome its header NAMES, so a header
+    /// over an empty card reads as a rendering fault rather than as "nothing
+    /// here".
+    @ViewBuilder
     private var selfHostedGatewaySection: some View {
-        Section {
-            ForEach(viewModel.personalAIRows.filter {
-                guard case .builtin(let b) = $0.ref else { return false }
-                return RemoteAgentBackendRegistry.lookup(id: b).category == .selfHostedAgent
-            }) { row in
-                gatewayRow(row)
+        let selfHostedRows = viewModel.personalAIRows.filter {
+            guard case .builtin(let b) = $0.ref else { return false }
+            return RemoteAgentBackendRegistry.lookup(id: b).category == .selfHostedAgent
+        }
+        if !selfHostedRows.isEmpty {
+            SettingsCard {
+                ForEach(selfHostedRows) { row in
+                    gatewayRow(row)
+                }
+            } header: {
+                Text(GatewayGroupCopy.fullAgentHeader)
+            } footer: {
+                Text(GatewayGroupCopy.fullAgentFooter)
             }
-        } header: {
-            zoneHeader(Text(GatewayGroupCopy.fullAgentHeader))
-        } footer: {
-            Text(GatewayGroupCopy.fullAgentFooter)
         }
     }
 
@@ -183,12 +184,12 @@ struct MacPersonalAICategory: View {
             return RemoteAgentBackendRegistry.lookup(id: b).category == .hostedModel
         }
         if !hostedRows.isEmpty {
-            Section {
+            SettingsCard {
                 ForEach(hostedRows) { row in
                     gatewayRow(row)
                 }
             } header: {
-                zoneHeader(Text(GatewayGroupCopy.hostedModelHeader))
+                Text(GatewayGroupCopy.hostedModelHeader)
             } footer: {
                 Text(GatewayGroupCopy.hostedModelFooter)
             }
@@ -196,16 +197,16 @@ struct MacPersonalAICategory: View {
     }
 
     /// "Custom gateways" group — the user-added gateways + the Add row. Shows
-    /// even with zero customs so the Add row always has context. (The setup-code
-    /// row moved to the permanent "Connect" section.)
+    /// even with zero customs so the Add row always has context — the Add row is
+    /// permanent, so this card is never empty and needs no guard.
     private var customGatewaySection: some View {
-        Section {
+        SettingsCard {
             ForEach(viewModel.personalAIRows.filter { !$0.ref.isBuiltin }) { row in
                 gatewayRow(row)
             }
             addCustomGatewayCard
         } header: {
-            zoneHeader(Text(LocalizedStringResource("settings.personalAI.section.customHeader", defaultValue: "Custom gateways")))
+            Text(LocalizedStringResource("settings.personalAI.section.customHeader", defaultValue: "Custom gateways"))
         } footer: {
             Text(GatewayGroupCopy.customFooter)
         }
@@ -237,7 +238,7 @@ struct MacPersonalAICategory: View {
                     .foregroundStyle(AppColors.textTertiary)
             }
         }
-        .settingsRowButton()
+        .settingsCardRowButton()
         .accessibilityIdentifier("settings.personalAI.row.\(row.ref.rawString)")
     }
 
@@ -263,16 +264,23 @@ struct MacPersonalAICategory: View {
                 .font(.body)
                 .foregroundStyle(canAdd ? AppColors.textPrimary : AppColors.textTertiary)
             }
-            .settingsRowButton()
+            .settingsCardRowButton()
             .disabled(!canAdd)
             .accessibilityIdentifier("settings.personalAI.addCustomGateway")
             if !canAdd {
+                // Passive caption riding along in the Add row's cell, not a row
+                // of its own. Its inset is applied to the TEXT — the button's
+                // own inset lives inside the button's live frame, and the card
+                // supplies none, so without this the hint would sit flush
+                // against the card's left edge under an indented label.
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.customGateway.capHint",
                     defaultValue: "Delete a custom gateway above to add another."
                 ))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
+                    .padding(.horizontal, SettingsCardMetrics.rowInset)
+                    .padding(.bottom, 10)
             }
         }
     }

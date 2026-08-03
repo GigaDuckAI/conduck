@@ -26,9 +26,13 @@
 // through. The buffered EDITORS keep their own (exit/title/Save) chrome — this
 // is for the non-editor sub-screens, whose only top control is Back. Both lead
 // with the SAME back chevron, deliberately: `BufferedEditorChrome` renders this
-// exact `Image(systemName: "chevron.backward")` for its `.back` exit style and
-// reuses the `settings.mac.back` label, so a settings screen and an editor never
-// present two different-looking ways to go back.
+// exact `Image(systemName: "chevron.backward")` for its `.back` exit style,
+// wears the same `.pointerChromeButton()` container, and reuses the
+// `settings.mac.back` label, so a settings screen and an editor never present
+// two different-looking ways to go back. The header METRICS are part of that
+// contract (20pt lead, 10pt vertical, 32pt control): the chevron must land on
+// identical coordinates in both, or it visibly jumps as the user moves between a
+// sub-screen and an editor. Change one header's geometry, change the other.
 //
 // Back navigation uses `@Environment(\.dismiss)`, which pops the stack and
 // resets the parent's `navigationDestination(item:)` binding to nil — identical
@@ -68,8 +72,12 @@ private struct MacSettingsSubScreenChrome: ViewModifier {
                         Image(systemName: "chevron.backward")
                             .font(.body.weight(.semibold))
                     }
-                    .pointerIconButton()
-                    .foregroundStyle(AppColors.textSecondary)
+                    // Persistent chrome rather than a hover-only wash: this is
+                    // the screen's ONLY way back, so it has to read as a control
+                    // before the pointer ever reaches it. No `.foregroundStyle`
+                    // here — the style owns the label colour, which is how hover
+                    // reaches `AppColors.textEmphasis`.
+                    .pointerChromeButton()
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "settings.mac.back",
                         defaultValue: "Back"
@@ -78,7 +86,12 @@ private struct MacSettingsSubScreenChrome: ViewModifier {
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            // 10, not 12: the 32pt chrome control sets the row height, so
+            // 32 + 20 puts the header at the 52pt `BufferedEditorChrome`'s
+            // header also lands on — see the pixel-alignment contract in the
+            // file header. The centered title depends on it too: a taller row
+            // would slide the title down relative to the editors'.
+            .padding(.vertical, 10)
             Divider().overlay(AppColors.border)
         }
         // OPAQUE — the detail pane's gradient reads as `gradientStart` at its top

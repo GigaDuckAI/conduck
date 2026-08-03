@@ -13,10 +13,11 @@
 //   - not capable (Soon) → disabled "Soon" row (Qwen TTS).
 //   - Apple              → always present + keyless → always activatable.
 //
-// Shared iOS + macOS: one grouped-`Form` branch serves both platforms (macOS
-// adopts the iOS idiom for consistency; only the iOS-only nav-bar display mode
-// is gated). The caller owns activation (`setActive`/`setActiveTTS`) and the
-// deep-link; this view derives nothing and does no actor hop.
+// Shared iOS + macOS: ONE `Section` tree, rendered natively per platform by
+// `PlatformSettingsForm` — a grouped `Form` on iOS, hand-drawn full-bleed
+// `SettingsCard`s on macOS (only the iOS-only nav-bar display mode is gated).
+// The caller owns activation (`setActive`/`setActiveTTS`) and the deep-link;
+// this view derives nothing and does no actor hop.
 
 import SwiftUI
 
@@ -69,9 +70,9 @@ struct VoiceActiveProviderPicker: View {
     }
 
     var body: some View {
-        // Single grouped-Form branch on BOTH platforms (macOS adopts the iOS
-        // idiom for consistency); only the iOS-only nav-bar display mode is gated.
-        Form {
+        // One section tree for BOTH platforms — the adaptive container picks the
+        // rendering; only the iOS-only nav-bar display mode is gated.
+        PlatformSettingsForm {
             Section {
                 ForEach(options) { option in
                     optionRow(option)
@@ -94,7 +95,6 @@ struct VoiceActiveProviderPicker: View {
                 }
             }
         }
-        .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         #if os(iOS)
         .navigationTitle(Text(navTitle))
@@ -136,9 +136,11 @@ struct VoiceActiveProviderPicker: View {
             }
             .contentShape(Rectangle())
         }
-        // `horizontalPadding: 0` keeps the row's text flush with the inert
-        // "Soon" rows in the list above, which are not Buttons and get no style.
-        .settingsRowButton(horizontalPadding: 0)
+        // The card's rule: a row's inset comes from the row style, INSIDE the live
+        // frame — never from a padding at the call site, which would land outside
+        // the frame and be dead. So every row here lines up on one inset with no
+        // per-call-site number to keep in sync.
+        .settingsCardRowButton()
     }
 
     // MARK: - Option row (shared markup)
@@ -157,6 +159,22 @@ struct VoiceActiveProviderPicker: View {
                     .foregroundStyle(AppColors.textTertiary)
             }
             .contentShape(Rectangle())
+            #if os(macOS)
+            // The card's one exception to "never pad a row": a card row's inset
+            // normally rides inside the row style's live frame, but this row is
+            // deliberately not a `Button`, so no style carries one and there is
+            // no live frame here to land outside of. It therefore mirrors
+            // `SettingsRowButtonStyle`'s own geometry — same inset, same height
+            // floor — or it sits short and left-ragged against the live rows it
+            // is listed among. Everything the style adds beyond that (wash,
+            // pressed state, hit region) stays absent, which is the point.
+            .padding(.horizontal, SettingsCardMetrics.rowInset)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: SettingsCardMetrics.rowMinHeight,
+                alignment: .leading
+            )
+            #endif
         } else if option.configured || option.isOnDevice {
             // Configured (or keyless Apple) → activate on tap. The selected row
             // carries the single amber check (sanctioned — this IS the picker).
@@ -171,7 +189,7 @@ struct VoiceActiveProviderPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .settingsRowButton(horizontalPadding: 0)
+            .settingsCardRowButton()
         } else {
             // Not configured → deep-link to setup; never silently activates.
             Button {
@@ -191,7 +209,7 @@ struct VoiceActiveProviderPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .settingsRowButton(horizontalPadding: 0)
+            .settingsCardRowButton()
         }
     }
 
