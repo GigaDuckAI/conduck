@@ -23,6 +23,17 @@
 // library rows) — so there is never a duplicate `String` destination on one
 // stack. The detail itself is the shared `MacVoiceVendorDetail` (custom →
 // `CustomSTTConfigBody`; built-in → the Provider Access + STT + TTS Form).
+//
+// Layout: this category and the Providers & Keys library draw their sections as
+// hand-drawn `SettingsCard`s (`MacSettingsCard.swift`), so every row is live
+// and washes edge to edge. A grouped `Form` owns ~10pt of FIXED padding around
+// each row that nothing inside the row can reach and no `minHeight` reclaims,
+// which leaves the hover wash floating inside a dead border. `SettingsCard`
+// adds no padding of its own; a row's inset arrives with
+// `.settingsCardRowButton()`, INSIDE the row's live frame.
+// `MacVoiceVendorDetail`'s built-in branch deliberately stays on `Form` — it
+// hosts `ProviderConfigBody`'s text and secure fields, and the Form is what
+// lays a label/control pair out natively.
 
 import SwiftUI
 
@@ -55,12 +66,10 @@ struct MacVoiceCategory: View {
                         .padding(.horizontal, 28)
                         .padding(.top, 28)
 
-                    Form {
+                    VStack(alignment: .leading, spacing: SettingsCardMetrics.sectionSpacing) {
                         keyReadinessSection
                         voiceSetupSection
                     }
-                    .formStyle(.grouped)
-                    .scrollContentBackground(.hidden)
                     .padding(.horizontal, 28)
                     .padding(.bottom, 28)
                 }
@@ -95,10 +104,14 @@ struct MacVoiceCategory: View {
     /// The convergence-UX banner — present ONLY while the active TTS
     /// provider's key probes `.missing`/`.unreadable` on THIS Mac. Mirrors the
     /// iOS `VoiceProviderListView.keyReadinessSection`.
+    ///
+    /// Absent, this produces NO card: a bare `if` in a `@ViewBuilder` yields a
+    /// nil optional, which the enclosing `VStack` drops entirely rather than
+    /// laying out as an empty card with `sectionSpacing` around it.
     @ViewBuilder
     private var keyReadinessSection: some View {
         if let banner = viewModel.ttsKeyReadinessBanner {
-            Section {
+            SettingsCard {
                 TTSKeyReadinessBanner(
                     model: banner,
                     isRechecking: viewModel.isRecheckingTTSKey,
@@ -109,6 +122,14 @@ struct MacVoiceCategory: View {
                         { route = .vendor(id) }
                     }
                 )
+                // A PASSIVE row carries its own inset. The card supplies none,
+                // and unlike a `.settingsCardRowButton()` row there is no live
+                // frame here for this padding to fall outside of — the padded
+                // banner IS the row, so this is its content box, not dead
+                // margin. (The banner's action buttons keep their own
+                // `.pointerIconButton` targets inside it.)
+                .padding(.horizontal, SettingsCardMetrics.rowInset)
+                .padding(.vertical, 10)
             }
         }
     }
@@ -121,20 +142,20 @@ struct MacVoiceCategory: View {
     /// chooser; the old TTS "Apple fallback" footer is dropped — the TTS
     /// chooser's own footer already restates it.
     private var voiceSetupSection: some View {
-        Section {
+        SettingsCard {
             Button {
                 route = .chooser(.stt)
             } label: {
                 VoiceDirectionSelectorRow(direction: .stt, activeVendorName: viewModel.activeSTTVendorShortName)
             }
-            .settingsRowButton()
+            .settingsCardRowButton()
 
             Button {
                 route = .chooser(.tts)
             } label: {
                 VoiceDirectionSelectorRow(direction: .tts, activeVendorName: viewModel.activeTTSVendorShortName)
             }
-            .settingsRowButton()
+            .settingsCardRowButton()
 
             Button {
                 route = .providers
@@ -153,7 +174,7 @@ struct MacVoiceCategory: View {
                         .foregroundStyle(AppColors.textTertiary)
                 }
             }
-            .settingsRowButton()
+            .settingsCardRowButton()
         } header: {
             Text(LocalizedStringResource("settings.voice.setup.header", defaultValue: "Voice Setup"))
         }
@@ -244,13 +265,11 @@ private struct MacVoiceProvidersList: View {
 
     var body: some View {
         ScrollView {
-            Form {
+            VStack(alignment: .leading, spacing: SettingsCardMetrics.sectionSpacing) {
                 providerSection
                 customEndpointSection
                 reliabilitySection
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
             .padding(28)
         }
         .macSettingsSubScreenChrome(title: String(localized: LocalizedStringResource("settings.voice.providersKeys.label", defaultValue: "Providers & Keys")))
@@ -267,7 +286,7 @@ private struct MacVoiceProvidersList: View {
     /// "Providers" group — the frozen built-in vendors. Mirrors the iOS
     /// `VoiceProvidersListView.providerSection` (same header).
     private var providerSection: some View {
-        Section {
+        SettingsCard {
             ForEach(viewModel.voiceProviderRows.filter { !$0.isCustom }) { row in
                 vendorRow(row)
             }
@@ -283,12 +302,18 @@ private struct MacVoiceProvidersList: View {
 
     /// "Custom endpoints" group — the user-added per-uuid endpoints + the Add
     /// row. Shows even with zero customs so the Add row always has context.
+    ///
+    /// The Add row and its cap hint are SIBLING rows of the card, not a
+    /// `VStack` pair: a wrapper would make the two a single subview, and the
+    /// disabled button inside it would size to the wrapper instead of owning
+    /// the card's full bleed.
     private var customEndpointSection: some View {
-        Section {
+        SettingsCard {
             ForEach(viewModel.voiceProviderRows.filter { $0.isCustom }) { row in
                 vendorRow(row)
             }
             addCustomEndpointRow
+            capHintRow
         } header: {
             Text(LocalizedStringResource("settings.voice.section.customHeader", defaultValue: "Custom endpoints"))
         }
@@ -296,46 +321,64 @@ private struct MacVoiceProvidersList: View {
 
     /// The shared collapsed "About reliability" disclosure — last section, no
     /// header. Same subview as iOS (`VoiceReliabilityDisclosure`) so the copy
-    /// can't drift between platforms.
+    /// can't drift between platforms; it draws its own card row and expanded
+    /// body, so it needs no inset from here.
     private var reliabilitySection: some View {
-        Section {
+        SettingsCard {
             VoiceReliabilityDisclosure()
         }
     }
 
+    /// Whether another custom endpoint fits under
+    /// `Constants.maxCustomVoiceEndpoints`. Read by BOTH the Add row and the
+    /// cap hint, which live at the card's top level rather than sharing a
+    /// wrapper view — see `customEndpointSection`.
+    private var canAddCustomEndpoint: Bool {
+        viewModel.customVoiceEndpointCount < Constants.maxCustomVoiceEndpoints
+    }
+
     /// "+ Add custom endpoint" — VISIBLE-but-disabled at the cap. Tap → mint a
     /// draft → push the editor bound to its uuid (`custom_<uuid>` route).
-    @ViewBuilder
     private var addCustomEndpointRow: some View {
-        let canAdd = viewModel.customVoiceEndpointCount < Constants.maxCustomVoiceEndpoints
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                if let id = viewModel.newCustomVoiceEndpointDraftID() {
-                    vendorRoute = VoiceVendorRegistry.customVendorPrefix + id.uuidString.lowercased()
-                }
-            } label: {
-                Label {
-                    Text(canAdd
-                        ? LocalizedStringResource("settings.voice.custom.add", defaultValue: "Add custom endpoint")
-                        : LocalizedStringResource("settings.voice.custom.addAtCap", defaultValue: "Add custom endpoint (limit reached)"))
-                } icon: {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)
-                }
-                .font(.body)
-                .foregroundStyle(canAdd ? AppColors.textPrimary : AppColors.textTertiary)
+        let canAdd = canAddCustomEndpoint
+        return Button {
+            if let id = viewModel.newCustomVoiceEndpointDraftID() {
+                vendorRoute = VoiceVendorRegistry.customVendorPrefix + id.uuidString.lowercased()
             }
-            .settingsRowButton()
-            .disabled(!canAdd)
-            .accessibilityIdentifier("settings.voice.addCustomEndpoint")
-            if !canAdd {
-                Text(LocalizedStringResource(
-                    "settings.voice.custom.capHint",
-                    defaultValue: "Delete an endpoint above to add another."
-                ))
-                    .font(.caption2)
-                    .foregroundStyle(AppColors.textTertiary)
+        } label: {
+            Label {
+                Text(canAdd
+                    ? LocalizedStringResource("settings.voice.custom.add", defaultValue: "Add custom endpoint")
+                    : LocalizedStringResource("settings.voice.custom.addAtCap", defaultValue: "Add custom endpoint (limit reached)"))
+            } icon: {
+                Image(systemName: "plus.circle.fill")
+                    .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)
             }
+            .font(.body)
+            .foregroundStyle(canAdd ? AppColors.textPrimary : AppColors.textTertiary)
+        }
+        .settingsCardRowButton()
+        .disabled(!canAdd)
+        .accessibilityIdentifier("settings.voice.addCustomEndpoint")
+    }
+
+    /// The at-cap explanation, a PASSIVE row under the disabled Add row. Absent
+    /// below the cap it produces no subview at all, so the card draws neither a
+    /// separator nor an empty row for it.
+    @ViewBuilder
+    private var capHintRow: some View {
+        if !canAddCustomEndpoint {
+            Text(LocalizedStringResource(
+                "settings.voice.custom.capHint",
+                defaultValue: "Delete an endpoint above to add another."
+            ))
+            .font(.caption2)
+            .foregroundStyle(AppColors.textTertiary)
+            // Its own inset, for the `keyReadinessSection` reason: a passive row
+            // has no live frame for padding to land outside of, so this padding
+            // is the row's content box rather than dead margin.
+            .padding(.horizontal, SettingsCardMetrics.rowInset)
+            .padding(.vertical, 10)
         }
     }
 
@@ -359,7 +402,7 @@ private struct MacVoiceProvidersList: View {
                     .foregroundStyle(AppColors.textTertiary)
             }
         }
-        .settingsRowButton()
+        .settingsCardRowButton()
     }
 }
 
@@ -369,6 +412,12 @@ private struct MacVoiceProvidersList: View {
 /// and the chooser's "Set up…" deep-link. Custom endpoint → `CustomSTTConfigBody`;
 /// built-in → a grouped Form mirroring the iOS `VoiceProviderDetailView`
 /// (Provider Access + STT + TTS, closing with the quiet credit-hint footnote).
+///
+/// The built-in branch is the one macOS settings screen that KEEPS the grouped
+/// `Form` rather than moving to `SettingsCard`: its rows are `ProviderConfigBody`
+/// text and secure fields, and the Form is what pairs a label with its control.
+/// The card's full-bleed row geometry buys nothing here — these rows are not
+/// click targets — and adopting it would forfeit that layout.
 private struct MacVoiceVendorDetail: View {
     @Bindable var viewModel: SettingsViewModel
     let vendor: VoiceVendor

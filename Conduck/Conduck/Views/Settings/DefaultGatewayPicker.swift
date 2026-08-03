@@ -100,9 +100,10 @@ struct DefaultGatewayPicker: View {
     }
 
     var body: some View {
-        // Single grouped-Form branch on BOTH platforms (macOS adopts the iOS
-        // idiom for consistency); only the iOS-only nav-bar display mode is gated.
-        Form {
+        // One section tree for BOTH platforms — the adaptive container renders it
+        // as a grouped `Form` on iOS and as full-bleed `SettingsCard`s on macOS;
+        // only the iOS-only nav-bar display mode is gated.
+        PlatformSettingsForm {
             // Optional leading "Follow iPhone" option (Apple Watch chooser only).
             // Sits in its own section above the gateway list so it reads as the
             // "inherit" choice, distinct from picking a specific gateway.
@@ -122,7 +123,7 @@ struct DefaultGatewayPicker: View {
                         }
                         .contentShape(Rectangle())
                     }
-                    .settingsRowButton(horizontalPadding: 0)
+                    .settingsCardRowButton()
                 }
             }
 
@@ -159,7 +160,6 @@ struct DefaultGatewayPicker: View {
                 }
             }
         }
-        .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         #if os(iOS)
         .navigationTitle(Text(navTitle))
@@ -185,10 +185,13 @@ struct DefaultGatewayPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            // `horizontalPadding: 0` throughout this picker: the fixed 18pt check
-            // slot is what aligns the names, and it must line up with the twin
-            // voice chooser (`VoiceActiveProviderPicker`), which sits flush.
-            .settingsRowButton(horizontalPadding: 0)
+            // No padding argument anywhere in this picker: a card row takes its
+            // inset from the row style, INSIDE the live frame, so every row here
+            // — and in the twin voice chooser (`VoiceActiveProviderPicker`) —
+            // lands on the identical inset with the fixed 18pt check slot still
+            // doing the name alignment. A padding at the call site would sit
+            // outside the live frame and be dead.
+            .settingsCardRowButton()
         } else {
             Button {
                 onSetUp(row.ref)
@@ -207,7 +210,7 @@ struct DefaultGatewayPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .settingsRowButton(horizontalPadding: 0)
+            .settingsCardRowButton()
         }
     }
 
@@ -236,7 +239,7 @@ struct DefaultGatewayPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .settingsRowButton(horizontalPadding: 0)
+            .settingsCardRowButton()
         } else {
             Button {
                 onSetUp(row.ref)
@@ -263,7 +266,7 @@ struct DefaultGatewayPicker: View {
                 }
                 .contentShape(Rectangle())
             }
-            .settingsRowButton(horizontalPadding: 0)
+            .settingsCardRowButton()
         }
     }
 

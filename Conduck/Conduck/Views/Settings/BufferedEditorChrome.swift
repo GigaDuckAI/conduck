@@ -242,11 +242,13 @@ private struct BufferedEditorChrome: ViewModifier {
     }
 
     #if os(macOS)
-    /// Side breathing room for the exit control's hover wash. A WORD ("Cancel")
-    /// needs it or the wash hugs the letters and reads as a cramped pill; the
-    /// `.back` CHEVRON must not have it — it is aligned pixel-for-pixel with
-    /// `MacSettingsSubScreenChrome`'s unpadded chevron so the sub-screens and the
-    /// editors share one leading edge, and 10pt would visibly break that.
+    /// Side breathing room inside the exit control's chrome container. A WORD
+    /// ("Cancel") needs it or the container hugs the letters and reads as a
+    /// cramped pill; the `.back` CHEVRON must not have it — it is aligned
+    /// pixel-for-pixel with `MacSettingsSubScreenChrome`'s unpadded chevron so
+    /// the sub-screens and the editors share one leading edge, and 10pt would
+    /// visibly break that. So `.back` is a 32pt square and `.cancel` a wider
+    /// pill, both drawn at rest.
     private var exitWashPadding: CGFloat {
         switch exitStyle {
         case .back: return 0
@@ -272,8 +274,13 @@ private struct BufferedEditorChrome: ViewModifier {
                         // treatment. The mac pointer style stays on the macOS side.
                         // Padding only in the word-labelled `.cancel` form — see
                         // `exitWashPadding`.
-                        .pointerIconButton(horizontalPadding: exitWashPadding)
-                        .foregroundStyle(AppColors.textSecondary)
+                        //
+                        // Persistent chrome rather than a hover-only wash: this is
+                        // the editor's way out, and it has to read as a control
+                        // before the pointer reaches it. No `.foregroundStyle`
+                        // here — the style owns the label colour, which is how
+                        // hover reaches `AppColors.textEmphasis`.
+                        .pointerChromeButton(horizontalPadding: exitWashPadding)
                         // Esc exits the INNERMOST editor. Bound only on the top of
                         // the stack: SwiftUI documents no precedence between two live
                         // `.cancelAction` buttons, and on macOS a pushed-away parent
@@ -295,12 +302,14 @@ private struct BufferedEditorChrome: ViewModifier {
                         )
                     Spacer()
                     Button(saveTitle) { onSave() }
-                        // Same live band + hover wash as the exit control, so the
-                        // header's two peer actions read as one family. NOT the
-                        // inline-link style: that carries the pointing-hand cursor,
-                        // which macOS reserves for links, and Save is a commit.
-                        // The label is a WORD, so the wash gets side padding or it
-                        // hugs the letters.
+                        // A hover wash, NOT the exit control's persistent chrome:
+                        // Save signals its own state through its label colour
+                        // (amber live, tertiary inert) and `pointerChromeButton`
+                        // OWNS that colour, so wearing the same chrome would erase
+                        // the signal. NOT the inline-link style either: that carries
+                        // the pointing-hand cursor, which macOS reserves for links,
+                        // and Save is a commit. The label is a WORD, so the wash
+                        // gets side padding or it hugs the letters.
                         .pointerIconButton(horizontalPadding: 10)
                         .fontWeight(.semibold)
                         .foregroundStyle(canSave() ? AppColors.brandAmber : AppColors.textTertiary)
@@ -310,7 +319,12 @@ private struct BufferedEditorChrome: ViewModifier {
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            // 10, not 12: the 32pt exit chrome sets the row height, so 32 + 20
+            // holds this header at the same 52pt `MacSettingsSubScreenChrome`
+            // lands on. The two must match to the pixel — see `exitWashPadding`
+            // and that file's header — or the chevron jumps as the user moves
+            // between a settings sub-screen and an editor.
+            .padding(.vertical, 10)
             Divider().overlay(AppColors.border)
         }
         // OPAQUE — a translucent header let the scrolling form ghost through
