@@ -130,7 +130,7 @@ struct WatchConversationThreadView: View {
     /// post-stop stages: `.uploading` (STT, dictated text not yet known, no user
     /// bubble) → `.transcribing`; `.waiting` (agent in flight, user bubble on
     /// screen) → `.answering`.
-    private var inFlightPhase: WatchThinkingPhase? {
+    private var inFlightPhase: ThinkingPhase? {
         guard isOurInFlightTurn else { return nil }
         switch recordingService.state {
         case .uploading: return .transcribing
@@ -698,19 +698,19 @@ struct WatchConversationThreadView: View {
     /// Agent-side "thinking" row rendered as the last item of the message list,
     /// mirroring the iOS chat indicator: a left-aligned gray bubble (matching
     /// agent bubbles) with a mini amber spinner, a phase label
-    /// (`WatchThinkingIndicator.label` — "Transcribing…" → "{gateway} is
+    /// (`ThinkingIndicator.label` — "Transcribing…" → "{gateway} is
     /// answering…"), and — only while `.answering` — an elapsed `m:ss` clock that
     /// appears after 3s. Subdued in Always-On Display. Elapsed time recomputes
     /// from `startedAt` each tick, so a dropped wrist (where the timeline may not
     /// fire every second) catches up on the next update rather than drifting.
     @ViewBuilder
-    private func thinkingRow(phase: WatchThinkingPhase, startedAt: Date?) -> some View {
+    private func thinkingRow(phase: ThinkingPhase, startedAt: Date?) -> some View {
         HStack {
             HStack(spacing: 6) {
                 ProgressView()
                     .controlSize(.mini)
                     .tint(AppColors.brandAmber)
-                Text(WatchThinkingIndicator.label(phase: phase, backendName: threadBackendName))
+                Text(ThinkingIndicator.label(phase: phase, backendName: threadBackendName))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textSecondary)
                     // In-place crossfade of "Transcribing…" → "{gateway} is

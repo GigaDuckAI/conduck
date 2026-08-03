@@ -184,12 +184,20 @@ struct MessageComposerBar: View {
         draft.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// True while an agent turn is in flight — the send control becomes a
-    /// neutral Stop that cancels it. REQUIRED: change #6 removed the inline
-    /// Cancel from the shared thinking indicator, so this is the window's only
-    /// cancel control during the wait.
+    /// True once the turn has reached its gateway dispatch phase — the send
+    /// control becomes a neutral Stop that cancels it. REQUIRED: change #6
+    /// removed the inline Cancel from the shared thinking indicator, so this is
+    /// the window's only cancel control during the wait.
+    ///
+    /// Gated on the dispatch flag, NOT `isAwaitingReply`: during macOS's
+    /// pre-dispatch window `inFlightTask` is still nil, so a Stop offered there
+    /// would silently do nothing. `isSendDisabled` below stays on the claim, so
+    /// the control is a *disabled Send* for that window rather than a Stop that
+    /// lies. (There is no gap on the other side — nothing suspends between the
+    /// VM setting `inFlightStartedAt` and assigning `inFlightTask`, so the
+    /// MainActor cannot render a Stop that has no task behind it.)
     private var isInFlight: Bool {
-        viewModel?.isAwaitingReply ?? false
+        viewModel?.showsGatewayWaitIndicator ?? false
     }
 
     private var hasSendableContent: Bool {
