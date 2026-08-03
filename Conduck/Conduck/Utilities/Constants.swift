@@ -1565,8 +1565,7 @@ extension Notification.Name {
 
 /// GigaDuck brand color system — amber/teal/orange on warm dark neutrals.
 /// A Conduck-specific brand pass may replace these; views reference
-/// `AppColors.*`.
-/// Reference: docs/design-brand/design-system.md
+/// `AppColors.*`. These values are canonical — there is no external token doc.
 enum AppColors {
     // MARK: - Brand Colors
 
