@@ -8534,6 +8534,28 @@
         }
       }
     },
+    "settings.pairing.entry.clear" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear setup code"
+          }
+        }
+      }
+    },
+    "settings.pairing.entry.masked.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Setup code entered. Activate to edit it."
+          }
+        }
+      }
+    },
     "settings.pairing.entry.paste" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8541,6 +8563,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Paste setup code"
+          }
+        }
+      }
+    },
+    "settings.pairing.entry.pasteAction" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paste"
           }
         }
       }

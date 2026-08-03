@@ -6,6 +6,8 @@
 // Cross-platform clipboard write — the single home for the
 // `UIPasteboard` / `NSPasteboard` `#if` split that is otherwise
 // duplicated across the app's copy-to-clipboard call sites.
+//
+// Reads are macOS-only and deliberately asymmetric; see `read()`.
 
 import Foundation
 #if canImport(UIKit)
@@ -24,6 +26,21 @@ enum Pasteboard {
         NSPasteboard.general.setString(string, forType: .string)
         #endif
     }
+
+    #if os(macOS)
+    /// Current clipboard text, or nil when it holds none.
+    ///
+    /// macOS ONLY, and the asymmetry is the point: AppKit has no paste-consent
+    /// model, so a plain Button reading here is the native shape and matches the
+    /// surrounding controls. The same read on iOS raises the system
+    /// "<App> pasted from <App>" alert, so that call site uses SwiftUI's
+    /// `PasteButton` instead — there the tap IS the consent, no alert appears,
+    /// and the control self-disables when the clipboard has no text. Adding a
+    /// UIKit branch here would invite a call site that trips that alert.
+    static func read() -> String? {
+        NSPasteboard.general.string(forType: .string)
+    }
+    #endif
 
     /// What macOS leaves in the clipboard once a sensitive copy has expired.
     ///

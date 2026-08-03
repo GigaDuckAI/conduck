@@ -77,6 +77,11 @@ struct PairingImportSheet: View {
     @State private var scannerFailed: Bool = false
     #endif
 
+    /// Picks which of the code field's two renderings is on screen: the real
+    /// `TextField` while it holds focus, the masked read-only stand-in at rest.
+    /// Purely a View concern — the flow owns the string itself.
+    @FocusState private var codeFieldFocused: Bool
+
     @Environment(\.dismiss) private var dismiss
 
     // MARK: - Body
@@ -96,6 +101,9 @@ struct PairingImportSheet: View {
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
+            // App-wide standard: a Form hosting text input must let a drag
+            // dismiss the keyboard, or the iOS user is trapped behind it.
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(Text(sheetTitle))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -118,15 +126,7 @@ struct PairingImportSheet: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if flow.phase == .done {
-                        Button {
-                            dismiss()
-                        } label: {
-                            Text(LocalizedStringResource("settings.secret.done", defaultValue: "Done"))
-                                .fontWeight(.semibold)
-                        }
-                        .keyboardShortcut(.defaultAction)
-                    }
+                    confirmationAction
                 }
             }
             .alert(
@@ -180,6 +180,41 @@ struct PairingImportSheet: View {
             "settings.pairing.sheet.title",
             defaultValue: "Import setup code"
         )
+    }
+
+    /// The sheet's trailing action. `.done` offers Done everywhere; on macOS the
+    /// INPUT step also puts Import here, because `.confirmationAction`
+    /// bottom-docks inside a macOS sheet — with Import inline instead, `Cancel`
+    /// occupied the default-button slot and the primary action sat somewhere
+    /// else entirely. iOS keeps Import inline and thumb-reachable, the shape the
+    /// review card's `actionSection` already uses.
+    @ViewBuilder
+    private var confirmationAction: some View {
+        if flow.phase == .done {
+            Button {
+                dismiss()
+            } label: {
+                Text(LocalizedStringResource("settings.secret.done", defaultValue: "Done"))
+                    .fontWeight(.semibold)
+            }
+            .keyboardShortcut(.defaultAction)
+        } else {
+            #if os(macOS)
+            if flow.phase == .input {
+                Button {
+                    submitPastedCode()
+                } label: {
+                    Text(LocalizedStringResource(
+                        "settings.pairing.paste.import",
+                        defaultValue: "Import"
+                    ))
+                        .fontWeight(.semibold)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canImportPastedCode)
+            }
+            #endif
+        }
     }
 
     // MARK: - Input step
@@ -241,27 +276,16 @@ struct PairingImportSheet: View {
     }
     #endif
 
-    /// Paste field + Import button (the whole input step on macOS). The
+    /// Paste field + paste control + Import (the whole input step on macOS). The
     /// placeholder is VERBATIM — `"conduck-setup:v1:…"` is wire syntax, not prose,
     /// so it is deliberately not localized.
     private var pasteSection: some View {
-        @Bindable var flow = flow
-        return Section {
+        Section {
             VStack(alignment: .leading, spacing: 8) {
-                TextField(text: $flow.pastedCode, prompt: Text(verbatim: "conduck-setup:v1:…")) {
-                    Text(LocalizedStringResource(
-                        "settings.pairing.entry.paste",
-                        defaultValue: "Paste setup code"
-                    ))
+                HStack(spacing: 8) {
+                    codeField
+                    pasteControl
                 }
-                .labelsHidden()
-                .font(.system(.body, design: .monospaced))
-                #if os(iOS)
-                .keyboardType(.asciiCapable)
-                .textInputAutocapitalization(.never)
-                #endif
-                .autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
 
                 if let inlineError = flow.inlineError {
                     Text(inlineError)
@@ -270,18 +294,195 @@ struct PairingImportSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                #if os(iOS)
                 Button {
-                    flow.handleCode(flow.pastedCode)
+                    submitPastedCode()
                 } label: {
                     Text(LocalizedStringResource("settings.pairing.paste.import", defaultValue: "Import"))
                         .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color.accentColor)
-                .disabled(flow.planning || flow.pastedCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!canImportPastedCode)
+                #endif
             }
             .padding(.vertical, 4)
+            .onChange(of: flow.pastedCode) { previous, current in
+                // ⌘V into the field is the ordinary gesture on macOS, where the
+                // sheet hands the field first responder on open. It leaves focus
+                // in place, so without this the masked rendering would not
+                // appear until the user happened to click elsewhere — and seeing
+                // what landed is the reason the mask exists.
+                //
+                // Fires only on the short → maskable transition, so it cannot
+                // interrupt someone editing an already-long value: a single
+                // change that jumps a short string to full-code length is a
+                // paste, never typing. Nobody types 400 characters of base64.
+                guard
+                    PairingPayload.maskedForDisplay(previous) == previous,
+                    PairingPayload.maskedForDisplay(current) != current
+                else { return }
+                codeFieldFocused = false
+            }
         }
+    }
+
+    /// The code entry, in one of two renderings.
+    ///
+    /// FOCUSED (or short/empty) it is an ordinary `TextField`, so ⌘A, ⌘C, ⌘V,
+    /// undo, the right-click menu and drag-and-drop all behave exactly as the
+    /// platform's own text fields do — none of which survives a hand-rolled
+    /// read-only substitute, which is why the mask is a resting state rather
+    /// than a replacement.
+    ///
+    /// AT REST holding a long code it renders masked: a code runs 380-550
+    /// characters, so one line shows an unreadable slice of the middle, while
+    /// the head and tail are what tell the user a COMPLETE code landed rather
+    /// than one truncated by a wrapped terminal.
+    @ViewBuilder
+    private var codeField: some View {
+        @Bindable var flow = flow
+        if let masked = maskedPastedCode {
+            maskedCodeField(masked)
+        } else {
+            TextField(text: $flow.pastedCode, prompt: Text(verbatim: "conduck-setup:v1:…")) {
+                Text(LocalizedStringResource(
+                    "settings.pairing.entry.paste",
+                    defaultValue: "Paste setup code"
+                ))
+            }
+            .labelsHidden()
+            .font(.system(.body, design: .monospaced))
+            .focused($codeFieldFocused)
+            #if os(iOS)
+            .keyboardType(.asciiCapable)
+            .textInputAutocapitalization(.never)
+            #endif
+            .autocorrectionDisabled()
+            .textFieldStyle(.roundedBorder)
+            // Single-line, so `.onSubmit` is reliable here — the `axis: .vertical`
+            // caveat documented in `iOSMessageComposerBar` does not apply.
+            .submitLabel(.go)
+            .onSubmit { submitPastedCode() }
+        }
+    }
+
+    /// The masked rendering to show INSTEAD of the live field, or nil to keep the
+    /// field editable. Nil while focused (the user is working in it) and whenever
+    /// the code is short enough that masking would change nothing — so a
+    /// half-typed or non-pairing string stays fully visible, which is exactly the
+    /// case where reading the actual characters is how the user spots the problem.
+    private var maskedPastedCode: String? {
+        guard !codeFieldFocused else { return nil }
+        let trimmed = flow.pastedCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let masked = PairingPayload.maskedForDisplay(trimmed)
+        return masked == trimmed ? nil : masked
+    }
+
+    /// At rest: the masked code styled to read as the field it stands in for,
+    /// plus a clear button. Activating it hands focus back to the real field.
+    private func maskedCodeField(_ masked: String) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                codeFieldFocused = true
+            } label: {
+                Text(masked)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(AppColors.textPrimary)
+                    .lineLimit(1)
+                    // Defensive: the mask is short, but a narrow window at an
+                    // accessibility text size can still overflow it, and losing
+                    // the tail from the end would undo the point of masking.
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .settingsRowButton()
+            .accessibilityLabel(Text(LocalizedStringResource(
+                "settings.pairing.entry.masked.a11y",
+                defaultValue: "Setup code entered. Activate to edit it."
+            )))
+
+            Button {
+                flow.pastedCode = ""
+                codeFieldFocused = true
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(AppColors.textTertiary)
+            }
+            .pointerIconButton(shape: .circle)
+            .accessibilityLabel(Text(LocalizedStringResource(
+                "settings.pairing.entry.clear",
+                defaultValue: "Clear setup code"
+            )))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(AppColors.cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(AppColors.border, lineWidth: 1)
+                )
+        )
+    }
+
+    /// Paste-from-clipboard, split by platform for a behavioural reason rather
+    /// than a cosmetic one: on iOS SwiftUI's `PasteButton` treats the tap itself
+    /// as the consent, so it reads the clipboard WITHOUT the system
+    /// "pasted from" alert a manual `UIPasteboard` read raises, and it disables
+    /// itself when the clipboard holds no text. macOS has no paste-consent
+    /// model, so a plain button over `Pasteboard.read()` is the native shape and
+    /// matches the surrounding controls.
+    @ViewBuilder
+    private var pasteControl: some View {
+        #if os(iOS)
+        PasteButton(payloadType: String.self) { pasted in
+            guard let first = pasted.first else { return }
+            acceptPasted(first)
+        }
+        .labelStyle(.iconOnly)
+        .buttonBorderShape(.capsule)
+        #else
+        Button {
+            guard let pasted = Pasteboard.read() else { return }
+            acceptPasted(pasted)
+        } label: {
+            Label {
+                Text(LocalizedStringResource(
+                    "settings.pairing.entry.pasteAction",
+                    defaultValue: "Paste"
+                ))
+            } icon: {
+                Image(systemName: "doc.on.clipboard")
+            }
+            .font(.subheadline)
+        }
+        .buttonStyle(.bordered)
+        #endif
+    }
+
+    /// Clipboard text becomes the draft, then focus is RESIGNED so the masked
+    /// rendering is what the user lands on — looking at what arrived is the
+    /// whole reason to paste here. Import stays an explicit action.
+    private func acceptPasted(_ pasted: String) {
+        flow.pastedCode = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        codeFieldFocused = false
+    }
+
+    private var canImportPastedCode: Bool {
+        !flow.planning
+            && !flow.pastedCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Both Import affordances and the field's Return key land here. Re-entry is
+    /// harmless: `handleCode` refuses unless the phase is still `.input` and no
+    /// plan is already in flight, so Return racing the default button is a no-op.
+    private func submitPastedCode() {
+        guard canImportPastedCode else { return }
+        codeFieldFocused = false
+        flow.handleCode(flow.pastedCode)
     }
 
     // MARK: - Review step

@@ -726,4 +726,92 @@ final class PairingPayloadTests: XCTestCase {
         guard let payload = assertParses(stripped) else { return }
         XCTAssertEqual(payload.kind, .builtin(.openclaw))
     }
+
+    // MARK: - maskedForDisplay
+
+    /// The import sheet renders this INSTEAD of the raw code while its field is
+    /// at rest. It is display-only: the tests below lock that it keeps the two
+    /// spans a user reads, hides everything between them, and never becomes an
+    /// input to the parser.
+
+    func testMaskKeepsPrefixAndBothEnds() {
+        let full = pairingString(fullDict())
+        let masked = PairingPayload.maskedForDisplay(full)
+
+        XCTAssertNotEqual(masked, full, "A real-length code must mask")
+        XCTAssertTrue(
+            masked.hasPrefix("conduck-setup:v1:"),
+            "The version prefix is a literal and stays readable: \(masked)"
+        )
+
+        // The 8 payload characters after the prefix, and the last 6 overall.
+        let body = full.dropFirst("conduck-setup:v1:".count)
+        XCTAssertTrue(masked.hasPrefix("conduck-setup:v1:" + body.prefix(8)))
+        XCTAssertTrue(masked.hasSuffix(String(full.suffix(6))))
+        XCTAssertTrue(masked.contains("•"))
+    }
+
+    func testMaskHidesTheMiddle() {
+        let full = pairingString(fullDict())
+        let masked = PairingPayload.maskedForDisplay(full)
+
+        // The token and the file-server credential are the reason this exists.
+        XCTAssertFalse(masked.contains("tok-test-123".data(using: .utf8)!.base64EncodedString()))
+        XCTAssertLessThan(
+            masked.count, full.count / 2,
+            "Masking must collapse the string, not merely dot a few characters"
+        )
+    }
+
+    func testMaskWidthIsFixedRegardlessOfPayloadLength() {
+        // A proportional run would publish the payload length, which tracks the
+        // URLs and whether a file lane is attached.
+        let short = PairingPayload.maskedForDisplay(pairingString(minimalDict()))
+        let long = PairingPayload.maskedForDisplay(pairingString(fullDict()))
+
+        XCTAssertEqual(
+            short.filter { $0 == "•" }.count,
+            long.filter { $0 == "•" }.count,
+            "Bullet run must not vary with input length"
+        )
+        XCTAssertEqual(short.count, long.count)
+    }
+
+    func testShortStringIsReturnedUnchanged() {
+        // A half-typed or non-pairing string must stay fully visible — that is
+        // the case where reading the characters is how the user spots the fault.
+        for input in ["", "conduck-setup:v1:", "not a code at all", "https://gw.example.com"] {
+            XCTAssertEqual(
+                PairingPayload.maskedForDisplay(input), input,
+                "Short input must not be masked: \(input)"
+            )
+        }
+    }
+
+    func testMaskTrimsSurroundingWhitespaceOnly() {
+        let full = pairingString(fullDict())
+        XCTAssertEqual(
+            PairingPayload.maskedForDisplay("  \n\(full)\n  "),
+            PairingPayload.maskedForDisplay(full)
+        )
+    }
+
+    func testMaskedOutputIsNotParseable() {
+        // Display-only. If a masked string ever round-tripped into `parse`, a
+        // rendering helper would have become an input path.
+        let masked = PairingPayload.maskedForDisplay(pairingString(fullDict()))
+        switch PairingPayload.parse(masked) {
+        case .success:
+            XCTFail("A masked code must never parse")
+        case .failure(let error):
+            XCTAssertEqual(error, .malformed)
+        }
+    }
+
+    func testMaskLeavesTheStoredCodeUntouched() {
+        // The helper is pure: the caller keeps the real string to import.
+        let full = pairingString(fullDict())
+        _ = PairingPayload.maskedForDisplay(full)
+        XCTAssertNotNil(assertParses(full), "The original must still import")
+    }
 }

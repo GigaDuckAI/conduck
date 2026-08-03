@@ -299,6 +299,72 @@ struct PairingPayload: Equatable, Sendable {
         }
     }
 
+    // MARK: - Display
+
+    /// Head and tail of a setup code with the middle elided —
+    /// `conduck-setup:v1:eyJ2Ijox••••••••FhIn19`.
+    ///
+    /// DISPLAY ONLY: never parsed, never persisted, never sent. The caller keeps
+    /// the real string and renders this in its place while the field is at rest.
+    ///
+    /// A code runs 380-550 characters, so a single-line field shows an
+    /// unreadable slice of the middle and the user cannot tell a complete paste
+    /// from one truncated by a wrapped terminal — the common real failure.
+    /// Showing both ends answers that, and shows strictly LESS than the
+    /// unmasked field it replaces, which puts the whole bearer token on screen.
+    ///
+    /// The elision is a FIXED-WIDTH run, not one bullet per hidden character: a
+    /// proportional run would publish the payload length, and length tracks the
+    /// two URLs and whether a file lane is attached.
+    ///
+    /// Returns the input unchanged when it is short enough to read whole, so a
+    /// half-typed or non-pairing string is never hidden behind bullets — that is
+    /// the case where seeing the actual characters is how the user spots what
+    /// went wrong.
+    static func maskedForDisplay(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > minimumLengthToMask else { return trimmed }
+
+        // Keep `conduck-setup:v1:` whole when it is present. It is a literal, so
+        // it discloses nothing, and eliding it would cost the user the one span
+        // of the string that says what they are holding. Anything else — a stray
+        // paste that never had the prefix — masks from the first character.
+        let bodyStart: String.Index
+        if
+            trimmed.hasPrefix(prefix),
+            let versionColon = trimmed[trimmed.index(trimmed.startIndex, offsetBy: prefix.count)...]
+                .firstIndex(of: ":")
+        {
+            bodyStart = trimmed.index(after: versionColon)
+        } else {
+            bodyStart = trimmed.startIndex
+        }
+
+        let body = trimmed[bodyStart...]
+        // Masking a body this short would render LONGER than the original.
+        guard body.count > visibleHeadLength + visibleTailLength + elisionWidth else {
+            return trimmed
+        }
+
+        return String(trimmed[..<bodyStart])
+            + String(body.prefix(visibleHeadLength))
+            + String(repeating: "•", count: elisionWidth)
+            + String(body.suffix(visibleTailLength))
+    }
+
+    /// Below this a string fits the field and reads whole, so masking it would
+    /// only hide a malformed paste the user needs to inspect. Far under the
+    /// ~380-character floor of a real code, so a valid one always masks.
+    private static let minimumLengthToMask = 80
+    private static let visibleHeadLength = 8
+    /// Six, not more. The tail of the base64 decodes to the JSON's closing
+    /// `"}}` plus padding, so a wider window starts uncovering credential bytes
+    /// while adding nothing a user can recognise.
+    private static let visibleTailLength = 6
+    /// Bullets, matching `maskedTail` in `ProviderRow` — one masking vocabulary
+    /// across the app.
+    private static let elisionWidth = 8
+
     // Length caps for the two free-form display strings. `conduck-connect`
     // bounds NEITHER — both come from a bare `ask` prompt (`read -r`, no
     // truncation), and the model id is explicitly left whole on the way out of
