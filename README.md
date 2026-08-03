@@ -2,7 +2,7 @@
 
 Conduck is a native Swift/SwiftUI chat and voice client for your own AI. It talks directly to a gateway you run yourself — or to hosted models under your own key — from iPhone, iPad, Mac, Apple Watch, and CarPlay. There is no backend, no account, and no telemetry: you bring your own keys, and nothing you say or send ever passes through our servers, because there are none.
 
-[Get the official app](https://apps.apple.com/app/id6773045286) · [Build from source](#build-from-source) · [conduck.com](https://conduck.com) · [Join the Discord](https://discord.gg/HqVwTmM7)
+[Get the official app](https://apps.apple.com/app/id6773045286) · [Build from source](#build-from-source) · [Architecture](docs/ai-context/spec.md) · [conduck.com](https://conduck.com) · [Join the Discord](https://discord.gg/HqVwTmM7)
 
 ## How your data flows
 
@@ -63,6 +63,8 @@ Requires Xcode 26.5 or later.
 3. Build and run — no configuration needed. Simulator builds work as-is. Running on your own devices needs your development team plus your own identifiers (the community `com.example.*` app group, iCloud container, and push capabilities can't provision under an arbitrary team) — define them via a gitignored `Conduck/Configs/Identity-Override.xcconfig` as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The result is **Conduck Community**: identical functionality (minus the CarPlay entitlement) under a neutral identity with placeholder art. The real Conduck brand artwork is not part of this repository and is not covered by the code license — see [TRADEMARKS.md](TRADEMARKS.md).
+
+Before changing anything, read [the architecture document](docs/ai-context/spec.md) — it records the decisions and the deliberately rejected alternatives, which is the part the code cannot tell you.
 
 ## Documentation
 

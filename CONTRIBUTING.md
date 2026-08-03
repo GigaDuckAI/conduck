@@ -124,6 +124,28 @@ token on your server.
 For anything large — new features, refactors, architectural changes — please
 open an issue to discuss the direction first. It protects your time.
 
+## Some of this app's wire surface is shared with another repository
+
+[`conduck-connect`](https://github.com/gigaduckai/conduck-connect) is the
+companion setup tool: it walks a user through exposing their gateway over HTTPS
+and then prints the pairing code this app scans. It is a separate public
+repository, and three things are a contract between the two projects rather than
+internal choices here:
+
+- the **pairing payload** this app imports and can re-export;
+- **gateway-URL normalisation** — that repository keeps a parity fixture list
+  transcribed case by case from `SettingsViewModelGatewayValidationTests`, so
+  changing an existing assertion here breaks a tool that has already shipped;
+- the **request and reply shapes** the app accepts on the wire, which its
+  `--check-server` diagnostic grades other people's servers against.
+
+Adding to any of them is fine. Changing or removing one needs an issue on both
+repositories first — otherwise a user ends up with a setup code the app rejects,
+or a gateway a green check said would work.
+
+Nothing in this repository's test suite can catch that drift, because nothing
+here can see the other side.
+
 ## Bugs, feature requests, and security
 
 - Bugs and feature requests: [GitHub issues](../../issues). Include the
