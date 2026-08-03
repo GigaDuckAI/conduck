@@ -151,10 +151,13 @@ struct iOSMessageComposerBar: View {
         }
     }
 
-    /// True while an agent turn is in flight — the trailing control becomes a
-    /// neutral Stop that cancels the turn (TOP priority in the state machine).
+    /// True once the turn has reached its gateway dispatch phase — the trailing
+    /// control becomes a neutral Stop that cancels the turn (TOP priority in the
+    /// state machine). Same gate as the Mac composer for uniformity; on iOS the
+    /// two flags flip in the same synchronous block, so this is behaviourally
+    /// identical to the claim here. `isSendDisabled` stays on the claim.
     private var isInFlight: Bool {
-        viewModel?.isAwaitingReply == true
+        viewModel?.showsGatewayWaitIndicator == true
     }
 
     /// The SUBDUED secondary Send shows only when attachments are staged AND the

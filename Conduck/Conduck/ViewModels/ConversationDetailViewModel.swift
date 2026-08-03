@@ -388,12 +388,34 @@ final class ConversationDetailViewModel {
 
     // MARK: - Ephemeral in-flight state (NOT persisted — V1.0 has no Message.status)
 
-    /// True while an agent turn is in flight for this conversation.
+    /// True while an agent turn is in flight for this conversation — and, on
+    /// macOS, from the moment the send *claims* the VM, several `await`s before
+    /// the turn is durably written. It is therefore the CORRECTNESS latch (one
+    /// in-flight turn per VM, quick-lane re-fire guards, registry retention,
+    /// composer disabling), NOT a statement about the gateway. Anything the user
+    /// reads as "the agent is working" belongs on `showsGatewayWaitIndicator`.
     var isAwaitingReply = false
 
     /// When the in-flight turn started — drives the elapsed clock. Nil when no
     /// turn is in flight.
     var inFlightStartedAt: Date?
+
+    /// The single DISPLAY gate for the agent-side wait: the "{Gateway} is
+    /// answering…" row, the composer's Stop morph, and the popover's answering
+    /// phase. True once the turn has entered its gateway dispatch phase — after
+    /// attachment processing, the durable write, history assembly and credential
+    /// resolution, immediately before the hop.
+    ///
+    /// Deliberately NOT "the gateway received it": replies are non-streamed, so
+    /// neither transport exposes an early acceptance edge (macOS `data(for:)`
+    /// returns the finished body; the iOS background task's first data callback
+    /// is already the answer). A real "accepted" event would be a wire-contract
+    /// change. This is the closest honest signal the client owns.
+    ///
+    /// Derived, never mirrored into stored state — `inFlightStartedAt` is
+    /// already cleared by every success, failure, cancel and early-landing
+    /// release, and a second Bool would drift from it on one of them.
+    var showsGatewayWaitIndicator: Bool { inFlightStartedAt != nil }
 
     /// A transient error banner for the in-flight turn (cleared on the next
     /// send / cancel). Distinct from `loadError` (store-load failure).
