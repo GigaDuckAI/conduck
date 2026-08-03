@@ -22,18 +22,21 @@
 // for "Set up…") and inside `MacVoiceProvidersList` (its own `vendorRoute`, for
 // library rows) — so there is never a duplicate `String` destination on one
 // stack. The detail itself is the shared `MacVoiceVendorDetail` (custom →
-// `CustomSTTConfigBody`; built-in → the Provider Access + STT + TTS Form).
+// `CustomSTTConfigBody`; built-in → the Provider Access + STT + TTS sections).
 //
-// Layout: this category and the Providers & Keys library draw their sections as
-// hand-drawn `SettingsCard`s (`MacSettingsCard.swift`), so every row is live
-// and washes edge to edge. A grouped `Form` owns ~10pt of FIXED padding around
-// each row that nothing inside the row can reach and no `minHeight` reclaims,
-// which leaves the hover wash floating inside a dead border. `SettingsCard`
-// adds no padding of its own; a row's inset arrives with
-// `.settingsCardRowButton()`, INSIDE the row's live frame.
-// `MacVoiceVendorDetail`'s built-in branch deliberately stays on `Form` — it
-// hosts `ProviderConfigBody`'s text and secure fields, and the Form is what
-// lays a label/control pair out natively.
+// Layout: every screen in this file draws its sections as hand-drawn
+// `SettingsCard`s (`MacSettingsCard.swift`), so every row is live and washes
+// edge to edge. A grouped `Form` owns ~10pt of FIXED padding around each row
+// that nothing inside the row can reach and no `minHeight` reclaims, which
+// leaves the hover wash floating inside a dead border. `SettingsCard` adds no
+// padding of its own; a row's inset arrives with `.settingsCardRowButton()` or
+// `.settingsCardPassiveRow()`, INSIDE the row's own frame. The category and the
+// providers library build their card stacks directly; the vendor detail goes
+// through `PlatformSettingsForm` because two of its sections are declared
+// inside shared subviews (see `MacVoiceVendorDetail.builtInVendorDetail`).
+//
+// All three take `.macSettingsRail()`, so the content column keeps one width
+// from the category through every screen pushed out of it.
 
 import SwiftUI
 
@@ -73,6 +76,13 @@ struct MacVoiceCategory: View {
                     .padding(.horizontal, 28)
                     .padding(.bottom, 28)
                 }
+                // The shared settings content rail — one column width across
+                // every category and every screen pushed out of this one. On the
+                // stack INSIDE the `ScrollView` (capping the ScrollView itself
+                // would strand a wide window's margins as dead, unscrollable
+                // glass) and after the content's own 28pt gutter, so the gutter
+                // sits inside the capped column.
+                .macSettingsRail()
             }
             .navigationDestination(item: $route) { route in
                 switch route {
@@ -122,14 +132,11 @@ struct MacVoiceCategory: View {
                         { route = .vendor(id) }
                     }
                 )
-                // A PASSIVE row carries its own inset. The card supplies none,
-                // and unlike a `.settingsCardRowButton()` row there is no live
-                // frame here for this padding to fall outside of — the padded
-                // banner IS the row, so this is its content box, not dead
-                // margin. (The banner's action buttons keep their own
-                // `.pointerIconButton` targets inside it.)
-                .padding(.horizontal, SettingsCardMetrics.rowInset)
-                .padding(.vertical, 10)
+                // A PASSIVE row carries its own inset, and gets no wash: the
+                // banner is a block of state with its own buttons inside it,
+                // not one row-level action. (Those buttons keep their own
+                // `.pointerIconButton` targets.)
+                .settingsCardPassiveRow()
             }
         }
     }
@@ -271,6 +278,9 @@ private struct MacVoiceProvidersList: View {
                 reliabilitySection
             }
             .padding(28)
+            // Same rail as the category this pushes from, so the column width
+            // under the pointer doesn't change across the push.
+            .macSettingsRail()
         }
         .macSettingsSubScreenChrome(title: String(localized: LocalizedStringResource("settings.voice.providersKeys.label", defaultValue: "Providers & Keys")))
         .navigationDestination(item: $vendorRoute) { id in
@@ -374,11 +384,9 @@ private struct MacVoiceProvidersList: View {
             ))
             .font(.caption2)
             .foregroundStyle(AppColors.textTertiary)
-            // Its own inset, for the `keyReadinessSection` reason: a passive row
-            // has no live frame for padding to land outside of, so this padding
-            // is the row's content box rather than dead margin.
-            .padding(.horizontal, SettingsCardMetrics.rowInset)
-            .padding(.vertical, 10)
+            // Passive prose: the row primitive supplies the inset the card
+            // withholds, and deliberately no wash — there is nothing to click.
+            .settingsCardPassiveRow()
         }
     }
 
@@ -410,14 +418,8 @@ private struct MacVoiceProvidersList: View {
 
 /// The per-vendor config detail (macOS) — shared by the providers-library rows
 /// and the chooser's "Set up…" deep-link. Custom endpoint → `CustomSTTConfigBody`;
-/// built-in → a grouped Form mirroring the iOS `VoiceProviderDetailView`
-/// (Provider Access + STT + TTS, closing with the quiet credit-hint footnote).
-///
-/// The built-in branch is the one macOS settings screen that KEEPS the grouped
-/// `Form` rather than moving to `SettingsCard`: its rows are `ProviderConfigBody`
-/// text and secure fields, and the Form is what pairs a label with its control.
-/// The card's full-bleed row geometry buys nothing here — these rows are not
-/// click targets — and adopting it would forfeit that layout.
+/// built-in → the Provider Access + STT + TTS sections mirroring the iOS
+/// `VoiceProviderDetailView`, closing with the quiet credit-hint footnote.
 private struct MacVoiceVendorDetail: View {
     @Bindable var viewModel: SettingsViewModel
     let vendor: VoiceVendor
@@ -432,31 +434,36 @@ private struct MacVoiceVendorDetail: View {
         }
     }
 
+    /// `PlatformSettingsForm`, not a hand-written stack of `SettingsCard`s, even
+    /// though this file is macOS-only: two of the sections below are declared
+    /// inside SHARED subviews (`AppleEngineModeSection`, `AppleSpeechTestSection`
+    /// each return their own `Section`), and `Group(sections:)` — which is what
+    /// `PlatformSettingsForm` lifts sections with — resolves THROUGH a custom
+    /// view's body, so those two arrive as their own cards with their headers and
+    /// footers intact. Writing the cards by hand here would mean either forking
+    /// those subviews or losing their header/footer copy. Its macOS branch also
+    /// carries this screen's whole chrome — the scroll surface, the 28pt gutter
+    /// and the settings rail — so nothing here wraps it.
     private func builtInVendorDetail(_ vendor: VoiceVendor) -> some View {
-        ScrollView {
-            Form {
-                openRouterReuseSection(vendor)
-                if let metadata = vendor.sttMetadata, metadata.isOnDevice {
-                    // On-device Apple — bespoke layout (no cloud-style "Provider
-                    // Access" / "Test Connection"): the two-engine chooser with its
-                    // inline download, a live record→transcribe test, then TTS, and
-                    // the Apple-specific activation footnote.
-                    AppleEngineModeSection(viewModel: viewModel)
-                    AppleSpeechTestSection(viewModel: viewModel)
-                    ttsSection(vendor)
-                    appleFootnotes
-                } else {
-                    if let metadata = vendor.sttMetadata {
-                        providerAccessSection(metadata: metadata)
-                        speechToTextSection(metadata: metadata)
-                    }
-                    ttsSection(vendor)
-                    detailFootnotes
+        PlatformSettingsForm {
+            openRouterReuseSection(vendor)
+            if let metadata = vendor.sttMetadata, metadata.isOnDevice {
+                // On-device Apple — bespoke layout (no cloud-style "Provider
+                // Access" / "Test Connection"): the two-engine chooser with its
+                // inline download, a live record→transcribe test, then TTS, and
+                // the Apple-specific activation footnote.
+                AppleEngineModeSection(viewModel: viewModel)
+                AppleSpeechTestSection(viewModel: viewModel)
+                ttsSection(vendor)
+                appleFootnotes
+            } else {
+                if let metadata = vendor.sttMetadata {
+                    providerAccessSection(metadata: metadata)
+                    speechToTextSection(metadata: metadata)
                 }
+                ttsSection(vendor)
+                detailFootnotes
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .padding(28)
         }
         .macSettingsSubScreenChrome(title: vendor.displayName)
         .task {
@@ -500,6 +507,10 @@ private struct MacVoiceVendorDetail: View {
                     ),
                     action: { await viewModel.reuseGatewayKeyForOpenRouterVoice() }
                 )
+                // A passive block — prose, one offer button and a caveat — so it
+                // takes the inset and the height floor without a wash: the row
+                // as a whole is not one action.
+                .settingsCardPassiveRow()
             }
         }
     }
@@ -514,6 +525,11 @@ private struct MacVoiceVendorDetail: View {
             EmptyView()
         } else {
             Section {
+                // No inset from here, deliberately: `ProviderConfigBody` insets
+                // its own lines from inside the row, which is the only way its
+                // "Advanced" disclosure can keep the card's full bleed. An inset
+                // applied out here would wrap every one of its rows, including
+                // that one, and no modifier reaches back out of it.
                 ProviderConfigBody(
                     mode: .access,
                     metadata: metadata,
@@ -552,6 +568,8 @@ private struct MacVoiceVendorDetail: View {
     @ViewBuilder
     private func speechToTextSection(metadata: STTProviderMetadata) -> some View {
         Section {
+            // Uninset here for the `providerAccessSection` reason — this is the
+            // slice that carries the "Advanced" disclosure and the record test.
             ProviderConfigBody(
                 mode: .capabilitySTT,
                 metadata: metadata,
@@ -610,6 +628,8 @@ private struct MacVoiceVendorDetail: View {
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textTertiary)
                 }
+                // A status line, not a control: inset, no wash.
+                .settingsCardPassiveRow()
             } header: {
                 Text(LocalizedStringResource("settings.voice.section.textToSpeech", defaultValue: "Text-to-Speech"))
             }
@@ -641,6 +661,11 @@ private struct MacVoiceVendorDetail: View {
                 },
                 previewState: viewModel.ttsPreviewStates[ttsID]
             )
+            // No inset from here, exactly as for its `ProviderConfigBody` twin
+            // above: `TTSCapabilityBody` insets its own lines from inside, which
+            // is the only way its "Advanced" disclosure keeps the card's full
+            // bleed. An inset applied out here would wrap that row too, and no
+            // modifier reaches back out of it.
         } header: {
             Text(LocalizedStringResource("settings.voice.section.textToSpeech", defaultValue: "Text-to-Speech"))
         } footer: {
@@ -665,6 +690,13 @@ private struct MacVoiceVendorDetail: View {
 
     // MARK: - Trailing footnotes (activation + cloud-only credit hint)
 
+    /// A footer with no rows above it. `Section { EmptyView() }` is the shape
+    /// that produces one: MEASURED, an `EmptyView` content slot resolves to a
+    /// section whose CONTENT COLLECTION IS EMPTY (not to a section holding one
+    /// zero-size row), so the card drawn for it has no rows, no height and
+    /// therefore nothing to see — the footer caption below it is the whole
+    /// section. A loose `Text` here instead would resolve to a section of its
+    /// own and put the footnote inside a card.
     private var detailFootnotes: some View {
         Section {
             EmptyView()
@@ -690,6 +722,7 @@ private struct MacVoiceVendorDetail: View {
     /// plural (meaningless for a single on-device engine) and makes configuring-≠-
     /// activating concrete. The old "Standard vs High quality" engine-scope hint
     /// is gone — the engine is no longer a primary choice the user must adjudicate.
+    /// Footer-only, for the reason spelled out on `detailFootnotes`.
     private var appleFootnotes: some View {
         Section {
             EmptyView()

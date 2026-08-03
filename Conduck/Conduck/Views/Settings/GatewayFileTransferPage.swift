@@ -14,9 +14,14 @@
 // The content is a buffered EDITOR and brings its own Back/title/Save chrome
 // (`bufferedEditorChrome` with `exit: .back` — which also hides the macOS
 // window-toolbar back chevron and supplies its own, exactly like the gateway
-// editor one level up); this host adds only the macOS content rail / iOS title.
-// The composer's sheet presentation of the same content renders Cancel instead,
-// being the root of its own stack rather than a push.
+// editor one level up). The composer's sheet presentation of the same content
+// renders Cancel instead, being the root of its own stack rather than a push.
+//
+// This host adds NOTHING of its own. The content's `PlatformSettingsForm` owns
+// the whole macOS page chrome — its own scroll surface, the window gutter and
+// the settings rail — so a host-side `contentMargins` rail here would inset a
+// column that is already railed, and give this page a different one from every
+// other settings screen.
 
 import SwiftUI
 
@@ -26,21 +31,11 @@ struct GatewayFileTransferPage: View {
     let ref: RemoteAgentRef
 
     var body: some View {
-        #if os(macOS)
-        // Full-width scroll surface, railed CONTENT (`MacSettingsRail`) — a
-        // `.frame(maxWidth:)` on the form left a wide window's margins as dead,
-        // unscrollable glass.
-        GeometryReader { geo in
-            FileTransferSetupContent(viewModel: viewModel, ref: ref)
-                .contentMargins(.horizontal, MacSettingsRail.margin(for: geo.size.width), for: .scrollContent)
-                .contentMargins(.top, 8, for: .scrollContent)
-                .contentMargins(.bottom, 28, for: .scrollContent)
-        }
-        #else
-        // Title (nav bar) comes from the content itself — its `resolvedTitle`
-        // defaults to "File transfer" when no override is passed.
+        // Title (iOS nav bar) comes from the content itself — its `resolvedTitle`
+        // defaults to "File transfer" when no override is passed — and the macOS
+        // page chrome comes from its `PlatformSettingsForm`. Nothing is left for
+        // this host to add on either platform.
         FileTransferSetupContent(viewModel: viewModel, ref: ref)
-        #endif
     }
 }
 

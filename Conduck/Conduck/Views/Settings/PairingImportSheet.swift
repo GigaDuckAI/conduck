@@ -89,7 +89,14 @@ struct PairingImportSheet: View {
     var body: some View {
         @Bindable var flow = flow
         return NavigationStack {
-            Form {
+            // `PlatformSettingsForm`: ONE section tree, rendered as hand-drawn
+            // `SettingsCard`s on macOS (where it also supplies the scroll
+            // surface and the window gutter a `Form` gives for free) and as the
+            // grouped `Form` everywhere else. Each row below
+            // carries its own inset via a `SettingsCard` row primitive, because
+            // the card adds none — and `.listRowInsets` / `.listRowBackground`
+            // reach nothing there, since a card row is not a `List` row.
+            PlatformSettingsForm {
                 switch flow.phase {
                 case .input:
                     inputSections
@@ -99,7 +106,6 @@ struct PairingImportSheet: View {
                     progressSections
                 }
             }
-            .formStyle(.grouped)
             .scrollContentBackground(.hidden)
             // App-wide standard: a Form hosting text input must let a drag
             // dismiss the keyboard, or the iOS user is trapped behind it.
@@ -307,6 +313,11 @@ struct PairingImportSheet: View {
                 #endif
             }
             .padding(.vertical, 4)
+            // The row treatment sits on the VStack, which is invariant across
+            // the code field's live/masked swap — hanging it off either
+            // rendering instead would rebuild the row on every focus change and
+            // put the focus hand-off at risk.
+            .settingsCardPassiveRow()
             .onChange(of: flow.pastedCode) { previous, current in
                 // ⌘V into the field is the ordinary gesture on macOS, where the
                 // sheet hands the field first responder on open. It leaves focus
@@ -566,6 +577,7 @@ struct PairingImportSheet: View {
                 }
             }
             .padding(.vertical, 4)
+            .settingsCardPassiveRow()
         } header: {
             Text(LocalizedStringResource("settings.pairing.review.header",
                                          defaultValue: "Gateway"))
@@ -631,6 +643,12 @@ struct PairingImportSheet: View {
             // The callout draws its own amber container — a second Form-row
             // background behind it would read as a box inside a box.
             .listRowBackground(Color.clear)
+            // Deliberately the ONE row here with no `SettingsCard` row
+            // primitive, for that same box-inside-a-box reason: the callout
+            // already claims the full width and already carries its own 14pt
+            // inset, so letting it fill the card's bleed makes the amber panel
+            // read as the card rather than as a box floating in one. The card's
+            // clip supplies the corners.
         }
     }
 
@@ -647,6 +665,7 @@ struct PairingImportSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 4)
+            .settingsCardPassiveRow()
         }
     }
 
@@ -714,6 +733,12 @@ struct PairingImportSheet: View {
                 .disabled(flow.planning)
             }
             .frame(maxWidth: .infinity)
+            // Two stacked call-to-action buttons, so the row itself is passive:
+            // each button owns its own affordance, and a row-level wash would
+            // promise a third action the band does not have. It also supplies
+            // the inset the `.listRowInsets` below gives the other platforms —
+            // that modifier reaches nothing on a `SettingsCard` row.
+            .settingsCardPassiveRow()
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             .listRowBackground(Color.clear)
         }
@@ -796,12 +821,16 @@ struct PairingImportSheet: View {
             tailscaleCalloutSection
         }
         Section {
+            // The stages stay inside ONE `VStack`, so the card sees a single
+            // row: a stage appearing or disappearing mid-run then moves nothing
+            // the card's between-rows separators are keyed on.
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(flow.visibleStages, id: \.self) { stage in
                     stageRow(stage)
                 }
             }
             .padding(.vertical, 4)
+            .settingsCardPassiveRow()
         }
 
         // Recovery path: the gateway stage failed. The save already committed,
@@ -880,6 +909,10 @@ struct PairingImportSheet: View {
                 }
             }
             .padding(.vertical, 4)
+            // A prompt plus up to three bordered recovery buttons: each control
+            // is its own target, so the row supplies inset and height floor and
+            // no wash.
+            .settingsCardPassiveRow()
         }
     }
 
@@ -931,6 +964,15 @@ struct PairingImportSheet: View {
                 .pointerLink()
             }
             .padding(.vertical, 4)
+            .settingsCardPassiveRow()
+            // The amber wash the `.listRowBackground` below paints on the other
+            // platforms. A `SettingsCard` row is not a `List` row, so that
+            // modifier reaches nothing on macOS; the passive row above has
+            // already claimed the card's full bleed, so a `.background` here
+            // tints exactly the same band.
+            #if os(macOS)
+            .background(AppColors.warning.opacity(0.10))
+            #endif
         }
         .listRowBackground(AppColors.warning.opacity(0.10))
     }

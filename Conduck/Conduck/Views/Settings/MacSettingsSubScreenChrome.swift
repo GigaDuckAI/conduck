@@ -120,6 +120,8 @@ extension View {
 /// the FORM (inside a `GeometryReader` for the pane width) — never via
 /// `.frame(maxWidth:)` on the form itself, which shrinks the scroll surface to
 /// the rail and leaves a wide window's margins as dead, unscrollable glass.
+/// A `ScrollView` + `VStack` page takes the frame-based counterpart instead:
+/// `.macSettingsRail()`, below.
 enum MacSettingsRail {
     static let maxWidth: CGFloat = 720
     static let minGutter: CGFloat = 28
@@ -128,6 +130,39 @@ enum MacSettingsRail {
     /// of `paneWidth`, never tighter than `minGutter`.
     static func margin(for paneWidth: CGFloat) -> CGFloat {
         max(minGutter, (paneWidth - maxWidth) / 2)
+    }
+}
+
+extension View {
+    /// The settings rail for a `ScrollView` + `VStack` screen — the hand-drawn
+    /// `SettingsCard` stack shape. Caps the CONTENT at `MacSettingsRail.maxWidth`
+    /// and centers it, then re-expands to `.infinity` so the enclosing
+    /// `ScrollView` keeps a full-width scroll surface and only the content column
+    /// narrows.
+    ///
+    /// Both frames are load-bearing. The first alone would leave the capped
+    /// column pinned to the pane's leading edge (a `.frame(maxWidth:)` proposes
+    /// the smaller width to its child but claims only that width from its
+    /// parent); the second re-widens the result so the ScrollView's own scroll
+    /// surface — and therefore the scroll indicator and the wheel-catching
+    /// region — spans the whole pane.
+    ///
+    /// Apply to the outermost `VStack` INSIDE the `ScrollView`, after that
+    /// stack's own horizontal padding, so the gutter sits inside the capped
+    /// column rather than adding to it.
+    ///
+    /// NEVER apply this to a `Form` or `List`. There the scrolling view IS the
+    /// thing being capped, so shrinking its frame shrinks the scroll surface
+    /// itself and strands a wide window's margins as dead, unscrollable glass.
+    /// A `Form`-based screen instead applies `MacSettingsRail.margin(for:)` as
+    /// CONTENT margins inside a `GeometryReader`. No settings screen needs that
+    /// shape today — every one of them reaches macOS as a `ScrollView` of
+    /// `SettingsCard`s, directly or through `PlatformSettingsForm` — so
+    /// `margin(for:)` stands as the documented answer for a page that keeps a
+    /// real `Form`, not as something in use.
+    func macSettingsRail() -> some View {
+        frame(maxWidth: MacSettingsRail.maxWidth)
+            .frame(maxWidth: .infinity)
     }
 }
 #endif

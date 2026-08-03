@@ -216,7 +216,14 @@ struct ProviderConfigBody: View {
             // under the field (e.g. an iCloud KVS push / a reload).
             pendingCustomModel = newValue ?? ""
         }
+        // macOS mounts this body as a `SettingsCard` row, and the card adds no
+        // padding of its own: any applied here would sit OUTSIDE each row's live
+        // frame and become dead margin along the card's top and bottom edges. The
+        // mode bodies carry the card inset themselves instead. Elsewhere a grouped
+        // `Form` draws the section, so the block keeps its own breathing room.
+        #if !os(macOS)
         .padding(.vertical, 6)
+        #endif
         .alert(appleManageAlertTitle, isPresented: $showingDeleteConfirm) {
             #if os(iOS)
             // xcstrings: apple-voice-trim
@@ -269,14 +276,54 @@ struct ProviderConfigBody: View {
     /// they moved to the Speech-to-Text section (`.capabilitySTT`), so Provider
     /// Access reads as the bare shared-key surface (the section's own "One key —
     /// both directions" footer is supplied by the parent view).
+    ///
+    /// The two platforms differ only in the CONTAINER. macOS renders this inside a
+    /// hand-drawn `SettingsCard`, where the key surface and the destructive Clear
+    /// key are two rows with different jobs: the surface is a passive field/status
+    /// block that carries the card's inset itself, while Clear key is a single
+    /// action that owns the card's full bleed so its hover wash meets the card
+    /// edges. Elsewhere the grouped `Form` stacks both at one inset.
     @ViewBuilder
     private var accessBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if metadata.isOnDevice {
-                appleAccessBody
-            } else {
-                accessStateBody
+        #if os(macOS)
+        // Zero spacing: each row's own frame is the pitch, and a gap between them
+        // would be container-owned dead area inside the card.
+        VStack(alignment: .leading, spacing: 0) {
+            accessKeySurface
+                .settingsCardPassiveRow()
+            if showsClearKeyRow {
+                clearKeyControl
             }
+        }
+        #else
+        VStack(alignment: .leading, spacing: 10) {
+            accessKeySurface
+            if showsClearKeyRow {
+                clearKeyControl
+            }
+        }
+        #endif
+    }
+
+    /// The key surface itself — Apple's on-device model lifecycle, or the cloud
+    /// key states. Written once so only the container above forks per platform.
+    @ViewBuilder
+    private var accessKeySurface: some View {
+        if metadata.isOnDevice {
+            appleAccessBody
+        } else {
+            accessStateBody
+        }
+    }
+
+    /// Clear key accompanies the key surface only once a cloud key is stored:
+    /// there is nothing to clear in the empty / validating / invalid arms, and the
+    /// on-device provider has no key at all.
+    private var showsClearKeyRow: Bool {
+        guard !metadata.isOnDevice else { return false }
+        switch state {
+        case .storedInactive, .storedActive: return true
+        case .empty, .invalid, .validating: return false
         }
     }
 
@@ -285,26 +332,48 @@ struct ProviderConfigBody: View {
     /// Access). Apple gets the same Test (its model lifecycle is in `.access`);
     /// Apple has no cloud model caption, so the recommended-model line is
     /// cloud-only.
+    ///
+    /// Again only the CONTAINER forks. On macOS the caption + test surface are one
+    /// passive `SettingsCard` row carrying the card inset, and `Advanced` follows
+    /// as a row of its own: it is a single action whose hover wash has to reach
+    /// both card edges, so nothing may indent it from the outside.
     @ViewBuilder
     private var capabilityBody: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if !metadata.isOnDevice {
-                RecommendedModelLine(model: defaultModelPlaceholder)
+        #if os(macOS)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                capabilityLead
             }
-            // Activation is NOT here anymore — it lives only in the top Voice
-            // selectors → chooser (the single activation surface). This section is
-            // pure config: the cloud "Record a test" audition (or, for callers
-            // that don't inject it, the legacy Test Connection) + the per-direction
-            // model override.
-            if let sttRecordTest {
-                sttRecordTest
-            } else {
-                testConnectionAction
-                retestStatusLine
-            }
+            .settingsCardPassiveRow()
             if !metadata.isOnDevice {
                 advancedModelSection
             }
+        }
+        #else
+        VStack(alignment: .leading, spacing: 12) {
+            capabilityLead
+            if !metadata.isOnDevice {
+                advancedModelSection
+            }
+        }
+        #endif
+    }
+
+    /// Everything the capability section shows ABOVE `Advanced`. Activation is not
+    /// among it — that lives only in the top Voice selectors → chooser (the single
+    /// activation surface). This is pure config: the recommended-model caption plus
+    /// the cloud "Record a test" audition (or, for callers that don't inject it,
+    /// the legacy Test Connection).
+    @ViewBuilder
+    private var capabilityLead: some View {
+        if !metadata.isOnDevice {
+            RecommendedModelLine(model: defaultModelPlaceholder)
+        }
+        if let sttRecordTest {
+            sttRecordTest
+        } else {
+            testConnectionAction
+            retestStatusLine
         }
     }
 
@@ -369,9 +438,10 @@ struct ProviderConfigBody: View {
     // MARK: Provider Access state body (cloud — key once)
     //
     // The `.access` slice's cloud key surface. Empty/invalid/validating reuse
-    // `stateBody`'s controls; the stored arm shows masked tail + check, then the
-    // quiet destructive "Clear key" on its OWN line (never crammed beside Set-
-    // Active/Test — those moved to the capability section).
+    // `stateBody`'s controls; the stored arm shows masked tail + check. The quiet
+    // destructive "Clear key" is a SIBLING of this surface (see `accessBody`), on
+    // its OWN line and never crammed beside Set-Active/Test — those moved to the
+    // capability section.
 
     @ViewBuilder
     private var accessStateBody: some View {
@@ -379,16 +449,13 @@ struct ProviderConfigBody: View {
         case .empty, .invalid, .validating:
             stateBody
         case .storedInactive(let masked), .storedActive(let masked):
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(AppColors.success)
-                    Text(masked)
-                        .font(.system(.subheadline, design: .monospaced))
-                        .foregroundStyle(AppColors.textSecondary)
-                    Spacer()
-                }
-                clearKeyControl
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(AppColors.success)
+                Text(masked)
+                    .font(.system(.subheadline, design: .monospaced))
+                    .foregroundStyle(AppColors.textSecondary)
+                Spacer()
             }
         }
     }
@@ -404,9 +471,11 @@ struct ProviderConfigBody: View {
                   systemImage: "trash")
                 .font(.subheadline)
         }
-        // `horizontalPadding: 0` keeps the label flush with the masked-tail line
-        // stacked directly above it, which is not a Button and gets no style.
-        .settingsRowButton(horizontalPadding: 0)
+        // The card row treatment, so on macOS the row spans the card's full bleed
+        // and its label lands at the same inset as the masked-tail line stacked
+        // above it (which is passive and gets no style). Off macOS this is exactly
+        // `.buttonStyle(.plain)`, which is what the row already carries there.
+        .settingsCardRowButton()
         .foregroundStyle(AppColors.error)
         .confirmationDialog(
             LocalizedStringResource("settings.voice.access.clearKey.title", defaultValue: "Clear this key?"),

@@ -36,6 +36,13 @@ struct MacAboutCategory: View {
                     .padding(.bottom, 24)
             }
             .padding(28)
+            // The shared settings content rail — the same column every other
+            // Settings category reads at, so switching categories never changes
+            // the measure. On the stack INSIDE the `ScrollView` (capping the
+            // ScrollView itself would strand a wide window's margins as dead,
+            // unscrollable glass) and after that stack's own padding, so the
+            // gutter sits inside the capped column.
+            .macSettingsRail()
         }
         .sheet(isPresented: $showingLicenses) {
             NavigationStack {
@@ -59,16 +66,13 @@ struct MacAboutCategory: View {
 
     private var versionSection: some View {
         SettingsCard {
-            // Passive content, not a control: no row modifier, and therefore no
-            // hover wash on something a click does nothing to. Its neighbours
-            // draw their inset from their row style, inside the live frame, so
-            // this row has to supply its own — the one place padding on a card
-            // row is correct, because there is no live frame for it to land
-            // outside of. Vertical 12 matches the breathing the 48pt rows leave
-            // around their single-line labels.
+            // Passive content, not a control: the PASSIVE row primitive, so
+            // there is no hover wash on something a click does nothing to. It
+            // supplies the inset the card withholds, from inside the row's own
+            // frame — the same inset the neighbouring cards' button rows take
+            // from their style.
             AppIdentityHeader()
-                .padding(.horizontal, SettingsCardMetrics.rowInset)
-                .padding(.vertical, 12)
+                .settingsCardPassiveRow()
         } header: {
             Text(LocalizedStringResource("settings.mac.about.title", defaultValue: "About"))
         }

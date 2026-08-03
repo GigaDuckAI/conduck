@@ -9,12 +9,28 @@
 // Diagnostics" button. FOR THE USER: nothing is auto-sent, no backend, no
 // telemetry.
 //
-// Two entry shapes share `DiagnosticsContent` (the Sections + the runner):
-//   • `DiagnosticsView` wraps it in a `Form` + nav chrome — used by the iOS
-//     Settings push, the iPad split-view detail, and the conversation banner's
-//     Troubleshoot sheet (with a `focusedRef`/`focusedErrorCode`).
-//   • `MacDiagnosticsCategory` embeds `DiagnosticsContent` in its own
-//     `ScrollView { Form { … } }` category shell.
+// `DiagnosticsContent` owns BOTH the checklist and its container — a
+// `PlatformSettingsForm`, which is a grouped `Form` on iOS and a hand-drawn
+// `SettingsCard` stack (scroll surface, window gutter and reading rail
+// included) on macOS. The container lives INSIDE this view rather than at its
+// call sites so the screen's lifecycle modifiers — the auto-read task, the
+// scene-phase re-probe, the settings-changed observers — hang off the container
+// rather than off the section tree, which on macOS is decomposed section by
+// section by `Group(sections:)`.
+//
+// Two entry shapes wrap it:
+//   • `DiagnosticsView` adds the nav chrome — used by the iOS Settings push,
+//     the iPad split-view detail, and the conversation banner's Troubleshoot
+//     sheet (with a `focusedRef`/`focusedErrorCode`).
+//   • `MacDiagnosticsCategory` mounts it bare as a macOS Settings category.
+//
+// macOS row treatment: almost every row here is a STATUS block — a check glyph
+// with its explanation, often with its own inline test button — so it takes
+// `.settingsCardPassiveRow()`, which supplies the card's inset and row pitch and
+// withholds the hover wash a whole-row action would earn. Only the rows that ARE
+// a single action (the two standalone voice tests) take a live full-bleed row
+// treatment; the compact `.bordered` pills that sit in a status row's trailing
+// slot stay pills, because there the pill — not the row — is what a click hits.
 //
 // Guardrail surfaced in UI: opening the screen auto-runs only instant local
 // reads; the gateway/voice reachability sweep fires only inside the explicit
@@ -48,15 +64,20 @@ struct DiagnosticsView: View {
     }
 
     var body: some View {
-        Form {
-            DiagnosticsContent(runner: runner, focusedRef: focusedRef, focusedErrorCode: focusedErrorCode)
-        }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .navigationTitle(Text(LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics")))
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        // Nav chrome only — `DiagnosticsContent` brings its own container.
+        DiagnosticsContent(runner: runner, focusedRef: focusedRef, focusedErrorCode: focusedErrorCode)
+            .navigationTitle(Text(LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics")))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #else
+            // On macOS this wrapper is reached only as `TroubleshootButton`'s
+            // sheet, which sets no size of its own. The card stack scrolls, and a
+            // scroll surface has no intrinsic size for a sheet to adopt, so the
+            // size is stated here — the same fixed-frame idiom as the Licenses
+            // and menu-bar guide sheets, and wide enough for the checklist's
+            // status-plus-button rows not to wrap.
+            .frame(width: 680, height: 680)
+            #endif
     }
 }
 
@@ -88,7 +109,12 @@ struct DiagnosticsContent: View {
     }
 
     var body: some View {
-        Group {
+        // One section tree for both platforms. Every conditional below wraps a
+        // WHOLE `Section` (or, for `voiceSections`, a whole pair of them) —
+        // `Group(sections:)` counts declarations, so narrowing one of these to
+        // wrap content INSIDE a Section instead would silently change how many
+        // cards macOS draws, with nothing to catch it at compile time.
+        PlatformSettingsForm {
             if let focus = runner.focusedExplanation {
                 focusedCard(focus)
             }
@@ -101,6 +127,7 @@ struct DiagnosticsContent: View {
             if runner.showsSyncSection { syncSection }
             copySection
         }
+        .scrollContentBackground(.hidden)
         .task { await runner.runAutoReads() }
         // Live re-derive on (re)appear + foreground: re-read the provider config +
         // permissions AND re-probe connectivity so a provider the user just
@@ -162,6 +189,10 @@ struct DiagnosticsContent: View {
                 }
             }
             .padding(.vertical, 2)
+            // A prose block that owns an inner button, not a single row action:
+            // the passive treatment gives it the card's inset and pitch and
+            // withholds the wash that would promise a whole-row click.
+            .settingsCardPassiveRow()
         }
     }
 
@@ -204,9 +235,13 @@ struct DiagnosticsContent: View {
                 testEverythingLabel
             }
             #if os(macOS)
-            // Full-row filled surface so it reads as a real push button (the stock
-            // `.bordered` control was a faint grey label with margins around it).
-            // Same label colors as before — only the button shape changes.
+            // Full-row filled surface so it reads as a real push button rather
+            // than the stock `.bordered` control's faint grey label with margins
+            // around it. It carries its own live frame, hover wash and vertical
+            // inset, so it takes NO card row modifier: inside a `SettingsCard`
+            // — which pads nothing — the style's own `maxWidth: .infinity` frame
+            // already spans the card edge to edge. Label colors are the style's
+            // business only in that it sets none; the shape is all it changes.
             .buttonStyle(MacDiagnosticsActionButtonStyle())
             #else
             .buttonStyle(.bordered)
@@ -276,6 +311,11 @@ struct DiagnosticsContent: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(AppColors.warning)
             }
+            // Applied INSIDE each branch, never to the property as a whole: the
+            // third state renders nothing at all, and a modifier wrapped around
+            // that would risk giving the card a phantom row with the full row
+            // pitch and nothing in it.
+            .settingsCardPassiveRow()
         } else if runner.checksSettledGreen {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
@@ -288,6 +328,7 @@ struct DiagnosticsContent: View {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(AppColors.success)
             }
+            .settingsCardPassiveRow()
         }
     }
 
@@ -405,6 +446,7 @@ struct DiagnosticsContent: View {
                         chatProvenLine(for: entry.ref)
                             .padding(.leading, 30)
                     }
+                    .settingsCardPassiveRow()
                 }
                 if let lane = runner.fileLanes.first(where: { $0.ref == entry.ref }) {
                     fileServerSubRow(lane)
@@ -416,6 +458,7 @@ struct DiagnosticsContent: View {
                     && ($0.id != "connection.network" || runner.showsNetworkConnectionIssue)
             }) {
                 DiagnosticCheckRow(check: $0)
+                    .settingsCardPassiveRow()
             }
         } header: {
             Text(LocalizedStringResource("diagnostics.section.connection", defaultValue: "Connection"))
@@ -451,7 +494,16 @@ struct DiagnosticsContent: View {
                 )
                 .labelStyle(AccentGlyphActionLabelStyle())
             }
+            #if os(macOS)
+            // A row that IS one action, so on macOS it becomes a live full-bleed
+            // card row rather than a compact pill floating in a dead row. The
+            // pills elsewhere on this screen stay pills for the opposite reason:
+            // they sit in a status row's trailing slot, where the pill and not
+            // the row is the thing a click is aimed at.
+            .settingsCardRowButton()
+            #else
             .buttonStyle(.bordered)
+            #endif
             .disabled(runner.isTranscribing || runner.isRunningAllTests)
             transcriptionTestResult
         } header: {
@@ -477,7 +529,12 @@ struct DiagnosticsContent: View {
                 )
                 .labelStyle(AccentGlyphActionLabelStyle())
             }
+            #if os(macOS)
+            // A whole-row action, like "Test transcription" above it.
+            .settingsCardRowButton()
+            #else
             .buttonStyle(.bordered)
+            #endif
             .disabled(runner.voicePreview == .preparing || runner.voicePreview == .playing || runner.isRunningAllTests)
             voicePreviewStatus
         } footer: {
@@ -535,6 +592,8 @@ struct DiagnosticsContent: View {
                 .foregroundStyle(AppColors.textPrimary)
         }
         .accessibilityElement(children: .combine)
+        // A read-only label/value pair — inset and pitch, no wash.
+        .settingsCardPassiveRow()
     }
 
     @ViewBuilder
@@ -559,20 +618,25 @@ struct DiagnosticsContent: View {
     /// Shared row dispatcher — routes the actionable permission rows to
     /// `permissionRow` (with their Allow / Open Settings button) wherever they
     /// render; every other check gets the plain row.
-    @ViewBuilder
+    ///
+    /// The card row treatment lands HERE rather than at the two `ForEach` call
+    /// sites, so every branch of the switch arrives on the same inset and pitch.
     private func checkRow(_ check: DiagnosticCheck) -> some View {
-        switch check.id {
-        case "voice.mic.permission":
-            permissionRow(check, permission: .microphone)
-        case "voice.speech.permission":
-            permissionRow(check, permission: .speechRecognition)
-        case "connection.notifications":
-            permissionRow(check, permission: .notifications)
-        case "capability.screenRecording":
-            permissionRow(check, permission: .screenRecording)
-        default:
-            DiagnosticCheckRow(check: check)
+        Group {
+            switch check.id {
+            case "voice.mic.permission":
+                permissionRow(check, permission: .microphone)
+            case "voice.speech.permission":
+                permissionRow(check, permission: .speechRecognition)
+            case "connection.notifications":
+                permissionRow(check, permission: .notifications)
+            case "capability.screenRecording":
+                permissionRow(check, permission: .screenRecording)
+            default:
+                DiagnosticCheckRow(check: check)
+            }
         }
+        .settingsCardPassiveRow()
     }
 
     private func permissionRow(
@@ -647,9 +711,13 @@ struct DiagnosticsContent: View {
     private var transcriptionTestResult: some View {
         if let test = runner.checks.first(where: { $0.id == "voice.stt.test" }), test.status != .notRun {
             DiagnosticCheckRow(check: test)
+                .settingsCardPassiveRow()
         }
     }
 
+    /// The card row treatment sits inside each populated branch, not around the
+    /// switch: `.idle` renders nothing, and a wrapper there would risk an empty
+    /// row at the card's tail carrying the full row pitch.
     @ViewBuilder
     private var voicePreviewStatus: some View {
         switch runner.voicePreview {
@@ -661,6 +729,7 @@ struct DiagnosticsContent: View {
                 Text(LocalizedStringResource("diagnostics.voice.playing", defaultValue: "Playing a sample…"))
                     .font(.caption).foregroundStyle(AppColors.textSecondary)
             }
+            .settingsCardPassiveRow()
         case .done:
             Label {
                 Text(LocalizedStringResource("diagnostics.voice.played", defaultValue: "Played a sample"))
@@ -668,12 +737,14 @@ struct DiagnosticsContent: View {
             } icon: {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(AppColors.success)
             }
+            .settingsCardPassiveRow()
         case .failed(let message):
             Label {
                 Text(message).font(.caption).foregroundStyle(AppColors.error)
             } icon: {
                 Image(systemName: "xmark.circle.fill").foregroundStyle(AppColors.error)
             }
+            .settingsCardPassiveRow()
         }
     }
 
@@ -714,6 +785,9 @@ struct DiagnosticsContent: View {
         }
         .padding(.vertical, 2)
         .padding(.leading, 28)   // nest the file server under its gateway row
+        // Outside the nesting indent, so the card's own inset adds to it and the
+        // lane still reads as a child of the gateway row above.
+        .settingsCardPassiveRow()
     }
 
     /// The "File server" status column (badge glyph + label + derived badge text +
@@ -823,6 +897,7 @@ struct DiagnosticsContent: View {
                     watchRow(check)
                 } else {
                     DiagnosticCheckRow(check: check)
+                        .settingsCardPassiveRow()
                 }
             }
         } header: {
@@ -868,6 +943,7 @@ struct DiagnosticsContent: View {
             }
         }
         .padding(.vertical, 2)
+        .settingsCardPassiveRow()
     }
 
     /// The live watch health re-query (`diagnostics-pull` round trip — free /
@@ -1018,8 +1094,10 @@ struct DiagnosticsContent: View {
                 .frame(maxWidth: .infinity)
             }
             #if os(macOS)
-            // Same full-row filled surface as Test everything — proper button, same
-            // label colors.
+            // Same full-row filled surface as Test everything, and for the same
+            // reason it takes no card row modifier: the style already owns a
+            // full-width live frame, its own inset and its own hover wash, so
+            // inside a `SettingsCard` it fills the card edge to edge on its own.
             .buttonStyle(MacDiagnosticsActionButtonStyle())
             #else
             .buttonStyle(.bordered)
@@ -1028,9 +1106,10 @@ struct DiagnosticsContent: View {
             .listRowInsets(EdgeInsets())
         } header: {
             #if os(macOS)
-            // `listSectionSpacing` is unavailable on macOS, so reserve extra room
-            // above this trailing action with a clear header spacer — it renders
-            // OUTSIDE the section card, setting Copy apart from the checklist above.
+            // A clear header spacer, purely to reserve extra room above this
+            // trailing action: it renders OUTSIDE the section card, setting Copy
+            // apart from the checklist above by more than the uniform gap
+            // between cards. (`listSectionSpacing` is unavailable on macOS.)
             Color.clear.frame(height: 10)
             #endif
         } footer: {

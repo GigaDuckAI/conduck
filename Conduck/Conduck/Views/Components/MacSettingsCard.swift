@@ -31,6 +31,25 @@
 // corner clip, separators, header and footer — and never inspects a row to
 // decide whether it is a button, a toggle or passive text. A row that needs a
 // treatment asks for it at its own call site.
+//
+// MEASURED RESOLUTION BEHAVIOUR (macOS 26.5, probe hierarchies rendered through
+// `ImageRenderer`). This is the contract a caller honours, not a set of
+// inferences — do not re-derive it:
+//
+//  1. `Group(sections:)` DESCENDS into a custom view whose body is a `Section`.
+//     A shared subview that declares its own section therefore arrives here as
+//     its own card, with its header and footer intact.
+//  2. `Group(subviews:)` descends into custom views as well, so a child's SHAPE
+//     decides its row count: a child whose body is a `VStack` is ONE row, a
+//     child whose body emits two `Text`s is TWO rows. Whatever must stay a
+//     single row says so with a stack of its own.
+//  3. `Section { EmptyView() } footer: { … }` is NOT dropped. It resolves to a
+//     real section whose content collection is EMPTY, so the card draws a
+//     zero-row panel beneath the footnote. A footnote-only section belongs
+//     outside the card stack, as free-floating text.
+//  4. A LOOSE view among sections becomes its own header-less section — its own
+//     bare card. An `EmptyView()` sibling and an `if false { Section … }` both
+//     resolve to nothing, so a conditional section costs no phantom card.
 
 import SwiftUI
 
@@ -56,6 +75,13 @@ enum SettingsCardMetrics {
     /// by the card: padding applied by the card would sit outside the row's
     /// frame and be dead.
     static let rowInset: CGFloat = 14
+
+    /// Vertical inset of a PASSIVE row's content inside its own frame (see
+    /// `.settingsCardPassiveRow()`). Smaller than the horizontal inset on
+    /// purpose: `rowMinHeight` already sets the pitch for a short row, and this
+    /// only decides how much air a TALL row — a multi-line field block, a
+    /// wrapped warning banner — keeps once it grows past that floor.
+    static let passiveRowVerticalInset: CGFloat = 10
 
     /// Gap between stacked cards in a `PlatformSettingsForm`.
     static let sectionSpacing: CGFloat = 16
@@ -235,7 +261,9 @@ extension SettingsCard where Header == EmptyView {
 /// each `Section` declaration back out and feeds its header, content and footer
 /// into the matching `SettingsCard` slot; an empty header or footer collection
 /// is dropped rather than rendered, or a headerless section would leave phantom
-/// spacing above its card.
+/// spacing above its card. That branch also carries the page chrome a `Form`
+/// would otherwise supply — scrolling, the window gutter and the settings rail —
+/// so a shared screen needs no macOS-only wrapper of its own.
 struct PlatformSettingsForm<Content: View>: View {
     private let content: Content
 
@@ -245,16 +273,25 @@ struct PlatformSettingsForm<Content: View>: View {
 
     var body: some View {
         #if os(macOS)
-        Group(sections: content) { sections in
-            VStack(alignment: .leading, spacing: SettingsCardMetrics.sectionSpacing) {
-                ForEach(sections) { section in
-                    SettingsCard(
-                        rows: section.content,
-                        cardHeader: section.header.isEmpty ? nil : section.header,
-                        cardFooter: section.footer.isEmpty ? nil : section.footer
-                    )
+        // The macOS branch owns the page chrome a `Form` supplies for free on
+        // the other platforms: a scroll surface, the window gutter, and the
+        // settings reading rail. The gutter is padding INSIDE the rail's cap,
+        // and the cap goes on the card stack rather than on the `ScrollView`,
+        // so the scroll surface still spans the pane — see `.macSettingsRail()`.
+        ScrollView {
+            Group(sections: content) { sections in
+                VStack(alignment: .leading, spacing: SettingsCardMetrics.sectionSpacing) {
+                    ForEach(sections) { section in
+                        SettingsCard(
+                            rows: section.content,
+                            cardHeader: section.header.isEmpty ? nil : section.header,
+                            cardFooter: section.footer.isEmpty ? nil : section.footer
+                        )
+                    }
                 }
             }
+            .padding(MacSettingsRail.minGutter)
+            .macSettingsRail()
         }
         #else
         Form {
