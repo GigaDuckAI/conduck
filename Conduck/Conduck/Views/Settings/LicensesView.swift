@@ -80,10 +80,11 @@ enum LegalDocument: String, CaseIterable, Identifiable {
 /// (the iOS About stack / the macOS sheet's stack owns navigation).
 struct LicensesView: View {
     var body: some View {
-        // Grouped Form (not a plain List): renders the same card look as the
-        // rest of Settings on macOS and a grouped list on iOS, and its footer
-        // wraps — a plain macOS List truncates the footer to one line.
-        Form {
+        // `PlatformSettingsForm`, not a plain `List`: one Section tree that
+        // renders as hand-drawn `SettingsCard`s on macOS (live edge to edge) and
+        // as the grouped `Form` on iOS, and whose footer wraps —
+        // a plain macOS List truncates the footer to one line.
+        PlatformSettingsForm {
             Section {
                 ForEach(LegalDocument.allCases) { doc in
                     NavigationLink {
@@ -97,6 +98,28 @@ struct LicensesView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                    // macOS-only, so iOS keeps the List's own row treatment
+                    // untouched. `NavigationLink` IS a `Button`, so the card row
+                    // STYLE reaches it and brings the full-bleed live frame, the
+                    // row inset and the squared wash in one modifier. The
+                    // chevron comes back as an overlay because a
+                    // `NavigationLink` draws its disclosure only inside a
+                    // `List`, and a card row is not one — trailing-inset to
+                    // `rowInset` so it lines up with the label on the other side.
+                    #if os(macOS)
+                    .settingsCardRowButton()
+                    .overlay(alignment: .trailing) {
+                        Image(systemName: "chevron.forward")
+                            .font(.caption)
+                            .foregroundStyle(AppColors.textTertiary)
+                            .padding(.trailing, SettingsCardMetrics.rowInset)
+                            .allowsHitTesting(false)
+                            // Decoration: an overlay is a SIBLING of the link,
+                            // so without this it lands in the rotor as a stray
+                            // element the row's own label already covers.
+                            .accessibilityHidden(true)
+                    }
+                    #endif
                 }
             } footer: {
                 Text(LocalizedStringResource(
@@ -105,7 +128,6 @@ struct LicensesView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .formStyle(.grouped)
         .navigationTitle(Text(LocalizedStringResource(
             "settings.about.licenses.title", defaultValue: "Open Source Licenses")))
         #if os(iOS)

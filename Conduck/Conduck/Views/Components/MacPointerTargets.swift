@@ -604,6 +604,113 @@ extension View {
         #endif
     }
 
+    /// The `.settingsCardRowButton()` of a SPLIT-ACTION row: a composite built
+    /// from several sub-`Button`s that all perform the SAME action (the
+    /// secret/certificate row shape — a label `Button` plus a trailing status
+    /// `Button`, split only so an info tip can sit between them without either
+    /// swallowing its tap). Same full-bleed live frame, same squared wash and
+    /// same row inset as every other `SettingsCard` row, applied from OUTSIDE as
+    /// a `ViewModifier` rather than a `ButtonStyle` because there is no single
+    /// `Button` for a style to reach.
+    ///
+    /// Shares its engine with `.settingsCardRowLink()`: `SettingsRowLink` holds
+    /// nothing `Link`-specific, so the two are separate NAMES over one modifier
+    /// purely so a call site reads as what it wraps.
+    ///
+    /// PASS THE ROW'S ACTION. The sub-`Button`s cannot reach the inset band this
+    /// modifier adds on either side, so without `action` that band washes under
+    /// the pointer and answers nothing — a lit target that does nothing is the
+    /// exact defect the card exists to remove, merely at `rowInset` instead of
+    /// the `Form`'s 10pt. With it, the uncovered band forwards to the row's one
+    /// action. Omit it only for a row that genuinely has none.
+    ///
+    /// MEASURED (macOS 26.5, synthesised clicks against a probe of this exact
+    /// shape): the tap sits UNDER the sub-`Button`s rather than fighting them. A
+    /// click on a child fires that child exactly once and never this action; a
+    /// click on the bare band fires this action exactly once; and the children's
+    /// hit regions and pressed states are identical whether the action is
+    /// attached or not — a popover child (`InfoTipButton`) included, which still
+    /// receives its own tap. So this neither steals a tap nor double-fires.
+    ///
+    /// The one-same-action rule still decides WHICH rows may take this modifier,
+    /// because one wash promises one row-level action. So:
+    ///   - A row whose only live thing is a `Toggle` or a `Picker(.menu)` does
+    ///     NOT take this modifier. A `Toggle` row becomes a whole-row `Button`
+    ///     that flips the binding (with the switch `.allowsHitTesting(false)` so
+    ///     the two cannot both fire) and takes `.settingsCardRowButton()` — the
+    ///     shape a grouped `Form` gives a `Toggle` for free. A popup opens on its
+    ///     own frame and no row action can raise its menu, so a `Picker` row
+    ///     takes `.settingsCardPassiveRow()`.
+    ///   - A row holding two INDEPENDENT actions — an `InfoTipButton` beside a
+    ///     switch or a popup — takes `.settingsCardPassiveRow()` too: each keeps
+    ///     its own affordance and no wash claims a row-level action.
+    ///   - A `.segmented` `Picker` is a set of choices, not one action:
+    ///     `.settingsCardPassiveRow()` again.
+    ///
+    /// Off macOS this is a no-op, for the same reason `.settingsCardRowLink()`
+    /// is: the row already sits inside a real grouped `Form`, which supplies the
+    /// identical inset, pitch and native control styling for free.
+    ///
+    /// - Parameters:
+    ///   - minHeight: floor for the row's live height.
+    ///   - action: the row's single action, fired when the pointer lands on the
+    ///     part of the row no sub-`Button` covers. Omit ONLY for a row that has
+    ///     no row-level action at all — a washed band with nothing behind it is
+    ///     the defect this parameter exists to close.
+    func settingsCardRowControl(
+        minHeight: CGFloat = SettingsCardMetrics.rowMinHeight,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        #if os(macOS)
+        modifier(SettingsRowLink(
+            minHeight: minHeight,
+            horizontalPadding: SettingsCardMetrics.rowInset,
+            washCornerRadius: 0,
+            action: action
+        ))
+        #else
+        self
+        #endif
+    }
+
+    /// The PASSIVE counterpart to `.settingsCardRowButton()` /
+    /// `.settingsCardRowLink()` / `.settingsCardRowControl()` — for a
+    /// `SettingsCard` row that is not a single activation: a
+    /// `TextField`/`SecureField` block, a `.segmented` `Picker`, a row holding two
+    /// independent controls, or plain descriptive text (a status caption, a
+    /// warning banner, a disclosure's expanded body).
+    ///
+    /// Supplies exactly what the card withholds — the row's own inset and a
+    /// height floor — and nothing else: no wash, no `contentShape`, no
+    /// `onHover`. A wash here would promise a single row-level action that a
+    /// multi-control row does not have.
+    ///
+    /// It never reaches inside its content, so two control-specific gaps stay
+    /// the call site's to close, on the control it owns: outside a `Form` a
+    /// `Toggle` renders as a CHECKBOX until it is given `.toggleStyle(.switch)`
+    /// (and `.tint` alone does not reshape it), and a `Picker` fills the row's
+    /// full width until the call site gives it a `.fixedSize()` or an explicit
+    /// trailing width. A `Picker(.menu)` also needs `.labelsHidden()` plus a
+    /// hand-rolled sibling label `Text`, since a `Picker`'s own label does not
+    /// lay out beside its value outside a `Form`.
+    ///
+    /// Off macOS this is a no-op — the row already sits inside a real grouped
+    /// `Form`, which supplies the identical inset and pitch for free.
+    ///
+    /// - Parameter minHeight: floor for the row's live height. Defaults to the
+    ///   same floor as an active row, so a passive row keeps the rhythm of its
+    ///   Button/Toggle/Picker siblings in the same card. Taller content (a
+    ///   multi-line `TextField` block) grows past it — this is a floor, not a cap.
+    func settingsCardPassiveRow(minHeight: CGFloat = SettingsCardMetrics.rowMinHeight) -> some View {
+        #if os(macOS)
+        padding(.horizontal, SettingsCardMetrics.rowInset)
+            .padding(.vertical, SettingsCardMetrics.passiveRowVerticalInset)
+            .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .leading)
+        #else
+        self
+        #endif
+    }
+
     /// The canonical treatment for an icon-only control: a guaranteed
     /// `MacPointer.minTarget` square of live area plus a hover wash.
     /// `.buttonStyle(.plain)` off macOS.
@@ -766,6 +873,11 @@ private struct SettingsRowLink: ViewModifier {
     /// touching-rows reason spelled out on `SettingsRowButtonStyle`.
     var washCornerRadius: CGFloat = MacPointer.rowCornerRadius
 
+    /// The row's single action, for a SPLIT-ACTION row whose sub-`Button`s
+    /// cannot reach the inset band this modifier adds. Nil for a `Link` row,
+    /// where the `Link` itself owns activation across the whole frame.
+    var action: (() -> Void)? = nil
+
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
 
@@ -779,9 +891,29 @@ private struct SettingsRowLink: ViewModifier {
                     .allowsHitTesting(false)
             }
             .contentShape(Rectangle())
+            // AFTER `contentShape`, so the tap covers the whole padded frame
+            // including the inset band. MEASURED to sit under the sub-`Button`s:
+            // a click on a child fires only that child, a click on the bare band
+            // only this — see `settingsCardRowControl`.
+            .modifier(RowActionTap(action: action))
             .onHover { hovering = $0 }
             .opacity(isEnabled ? 1 : pointerDisabledOpacity)
             .animation(MacPointer.highlightAnimation, value: hovering)
+    }
+}
+
+/// Attaches the row-level tap only when there IS one. A `.onTapGesture` wired to
+/// an empty closure would still claim the band and swallow the click silently,
+/// which reads to the user exactly like the dead band being fixed.
+private struct RowActionTap: ViewModifier {
+    let action: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        if let action {
+            content.onTapGesture { action() }
+        } else {
+            content
+        }
     }
 }
 

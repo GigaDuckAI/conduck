@@ -12,6 +12,11 @@
 // a sample (not Test Connection), and the Advanced disclosure additionally holds
 // the voice field.
 //
+// The CONTAINER around those leaves forks per platform exactly as
+// `ProviderConfigBody`'s does — one passive block plus a full-bleed `Advanced`
+// row inside the macOS `SettingsCard`, one stacked column inside the grouped
+// `Form` everywhere else — while the content stays a single copy.
+//
 // Stateless w.r.t. the view model (callbacks only, like `ProviderConfigBody`) —
 // it owns ONLY the two transient text buffers (voice + model), seeded from the
 // persisted values on appear/change (KVS-push sync). This single shared body
@@ -57,21 +62,34 @@ struct TTSCapabilityBody: View {
     /// appear/change; persisted via `onSaveModel` / `onPreview`.
     @State private var pendingModel: String = ""
 
+    /// Gap between the lead block and `Advanced`. Zero on macOS: there the two
+    /// are separate rows of a `SettingsCard`, whose rows touch — the lead block
+    /// carries its own vertical inset from `.settingsCardPassiveRow()`, and a gap
+    /// on top of it would be container-owned dead area between two live rows.
+    /// Elsewhere both halves share one grouped-`Form` row and need air between
+    /// them.
+    #if os(macOS)
+    private static let advancedGap: CGFloat = 0
+    #else
+    private static let advancedGap: CGFloat = 12
+    #endif
+
+    /// Inside the macOS `SettingsCard` the lead block and `Advanced` are two rows
+    /// with different jobs: the lead is a passive caption/button/status block and
+    /// carries the card's inset itself, while `Advanced` is a single action that
+    /// owns the card's FULL BLEED so its hover wash meets both card edges.
+    /// Insetting it from out here would indent it twice and pull that wash off
+    /// the edges — leaving its STT twin, one section up the same screen, full
+    /// bleed beside an inset one.
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Recommended-model caption — cloud-only (Apple's sentinel model is
-            // withheld, exactly like STT withholds it for the on-device provider).
-            if provider.bodyFactory != nil {
-                RecommendedModelLine(model: provider.model)
+        VStack(alignment: .leading, spacing: Self.advancedGap) {
+            VStack(alignment: .leading, spacing: 12) {
+                lead
             }
-
-            // Primary action — top-level, BEFORE Advanced, mirroring STT's Test
-            // Connection position. The only intended difference: icon + label.
-            previewButton
-
-            // Status line — error-only. No "Connected" on success (the audio is
-            // the success signal). `.checking` shows in the button, not here.
-            previewStatusLine
+            // No wash: the block holds a caption AND a button, so it is not one
+            // row-level action. No-op off macOS, where the `Form` row it sits in
+            // already supplies this inset.
+            .settingsCardPassiveRow()
 
             // Advanced — voice + model override (cloud-only; Apple has no wire
             // model to override and a confirmed-inert voice field).
@@ -96,6 +114,25 @@ struct TTSCapabilityBody: View {
         }
         .onChange(of: currentVoice) { _, v in pendingVoice = v ?? "" }
         .onChange(of: currentModel) { _, m in pendingModel = m ?? "" }
+    }
+
+    /// Everything the section shows ABOVE `Advanced`, written once so only the
+    /// container around it forks.
+    @ViewBuilder
+    private var lead: some View {
+        // Recommended-model caption — cloud-only (Apple's sentinel model is
+        // withheld, exactly like STT withholds it for the on-device provider).
+        if provider.bodyFactory != nil {
+            RecommendedModelLine(model: provider.model)
+        }
+
+        // Primary action — top-level, BEFORE Advanced, mirroring STT's Test
+        // Connection position. The only intended difference: icon + label.
+        previewButton
+
+        // Status line — error-only. No "Connected" on success (the audio is
+        // the success signal). `.checking` shows in the button, not here.
+        previewStatusLine
     }
 
     // MARK: - Speak a sample (primary action)

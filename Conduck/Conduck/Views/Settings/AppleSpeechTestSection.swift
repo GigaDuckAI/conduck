@@ -36,6 +36,13 @@ struct AppleSpeechTestSection: View {
     var body: some View {
         Section {
             content
+                // A block of state with its own controls inside it — a record
+                // button, a live timer beside a Stop, a transcript — never one
+                // row-level action, so it takes the passive row: the inset the
+                // macOS `SettingsCard` withholds and the row's height floor, and
+                // deliberately no hover wash. No-op off macOS, where the grouped
+                // `Form` supplies the identical inset.
+                .settingsCardPassiveRow()
         } header: {
             Text(LocalizedStringResource("settings.voice.apple.test.header", defaultValue: "Try voice"))
         } footer: {

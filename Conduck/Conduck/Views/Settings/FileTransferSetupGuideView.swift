@@ -63,9 +63,14 @@ struct AccentGlyphActionLabelStyle: LabelStyle {
 
 // MARK: - Shared setup content (the pushed page AND the composer sheet)
 
-/// The file-transfer editor: a grouped `Form` of sections (status → explanation →
-/// sign-in → connection → compact agent requirements → forget) under the shared
-/// `bufferedEditorChrome` (Cancel · title · Save). Owns the credential
+/// The file-transfer editor: a `PlatformSettingsForm` of sections (status →
+/// explanation → sign-in → connection → compact agent requirements → forget),
+/// under the shared `bufferedEditorChrome` (Cancel · title · Save). That
+/// container renders the one section tree as hand-drawn full-bleed
+/// `SettingsCard`s on macOS and as the grouped `Form` everywhere else, and it
+/// carries the macOS page chrome for BOTH hosts — so
+/// neither the pushed page nor the composer sheet adds a rail of its own.
+/// Owns the credential
 /// reveal/copy state, the certificate-trust sheet, the Forget confirm
 /// alert, and the URL/pin dirty detection against the VM's persisted mirrors. The
 /// `.missing/.savedNeedsTest/.ready` machine drives only small touches (hide the
@@ -167,7 +172,7 @@ struct FileTransferSetupContent: View {
     }
 
     var body: some View {
-        Form {
+        PlatformSettingsForm {
             if context == .composer && state != .ready {
                 composerEscapeSection
             }
@@ -194,16 +199,14 @@ struct FileTransferSetupContent: View {
                 forgetSection
             }
         }
-        .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
-        #if os(macOS)
-        // Composer-sheet-only content inset — the Settings page rails via the
-        // host's `contentMargins` instead. Applied INSIDE the chrome so the
-        // pinned Cancel/Save header stays full-bleed.
-        .padding(.horizontal, context == .composer ? 28 : 0)
-        .padding(.bottom, context == .composer ? 28 : 0)
-        #endif
+        // No macOS content inset here, in either host: `PlatformSettingsForm`'s
+        // macOS branch owns the page chrome — its own scroll surface, the 28pt
+        // window gutter and the settings rail — so both the pushed Settings page
+        // and the composer sheet inherit one identical column. A host- or
+        // context-specific inset on top of it would double the gutter and give
+        // the two presentations different rails.
         .onAppear {
             // One-shot: seed the URL/pin buffers (and drop any stale edits a
             // previous visit abandoned) from the persisted mirrors, so the
@@ -320,6 +323,11 @@ struct FileTransferSetupContent: View {
                     Spacer(minLength: 0)
                 }
                 .padding(.vertical, 3)
+                // Descriptive, not activatable: the row takes the card's inset
+                // and height floor but no wash, because there is no click here
+                // for a wash to promise. No-op off macOS, where the grouped
+                // `Form` supplies the same inset itself.
+                .settingsCardPassiveRow()
             }
         }
     }
@@ -342,6 +350,7 @@ struct FileTransferSetupContent: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 2)
+            .settingsCardPassiveRow()
         }
     }
 
@@ -402,6 +411,7 @@ struct FileTransferSetupContent: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 2)
+            .settingsCardPassiveRow()
         }
     }
 
@@ -464,6 +474,10 @@ struct FileTransferSetupContent: View {
                 .pointerLink()
             }
             .padding(.vertical, 2)
+            // One passive block, not a row-level action: the "Setup help" link
+            // inside it is the only live thing here and keeps its own inline
+            // affordance, so a whole-row wash would point at the wrong target.
+            .settingsCardPassiveRow()
         } header: {
             Text(LocalizedStringResource(
                 "fileTransfer.requirements.header",
@@ -576,6 +590,10 @@ struct FileTransferSetupContent: View {
                 }
             }
             .padding(.vertical, 2)
+            // A label, a helper sentence, the credential values and one or two
+            // bordered actions — several independent controls in one block, so
+            // it takes the inset and the floor and no wash.
+            .settingsCardPassiveRow()
         }
     }
 
@@ -740,6 +758,9 @@ struct FileTransferSetupContent: View {
             }
         }
         .padding(.vertical, 2)
+        // A field block, not an activation — inset and floor only. The
+        // `TextField` owns its own click target inside.
+        .settingsCardPassiveRow()
     }
 
     private var urlField: some View {
@@ -888,10 +909,16 @@ struct FileTransferSetupContent: View {
         // Matches the vertical rhythm of its section siblings `urlGroup` and
         // `actionGroup`.
         .padding(.vertical, 2)
-        // The row's three sibling Buttons already cover its full width, but a
-        // per-button wash would light only the half under the pointer. One wash
-        // on the container makes the whole push row react as a unit.
-        .pointerHoverWash()
+        // The split-action shape `.settingsCardRowControl()` is written for: the
+        // row's sibling Buttons all perform the SAME action, so one wash on the
+        // container makes the push row react as a unit instead of lighting only
+        // the half under the pointer, and the modifier carries the card's inset,
+        // its 48pt floor and the squared wash that lets adjacent rows meet. It
+        // does not reach inside, so the trailing value Button's `Spacer` is what
+        // keeps the middle of the row live, and the row action below is what
+        // makes the inset band it cannot reach open the sheet rather than wash
+        // and do nothing. No-op off macOS.
+        .settingsCardRowControl { showingCertSheet = true }
         .sheet(isPresented: $showingCertSheet) {
             CertificateTrustSheet(fingerprint: certPinBinding)
         }
@@ -924,6 +951,10 @@ struct FileTransferSetupContent: View {
             }
         }
         .padding(.vertical, 2)
+        // The bordered "Test Connection" button draws and hit-tests itself, and
+        // the feedback under it is prose — nothing here is one row-wide action,
+        // so the row supplies the inset and the floor and no wash.
+        .settingsCardPassiveRow()
     }
 
     /// One easy-to-find full-width secondary action. Feedback sits below it so a
@@ -1062,7 +1093,9 @@ struct FileTransferSetupContent: View {
             #endif
         }
         #if os(macOS)
-        .settingsRowButton(horizontalPadding: 0)
+        // The card's own row treatment: the inset moves inside the live frame
+        // and the wash squares off, so this single-row card washes edge to edge.
+        .settingsCardRowButton()
         #endif
         .foregroundStyle(AppColors.error)
         .alert(

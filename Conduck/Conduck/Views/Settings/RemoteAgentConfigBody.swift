@@ -49,7 +49,7 @@
 // `modelField`/`imageHistoryPicker`/`badgeFields`) are each independently
 // guarded off the descriptor, so the unified template just lists them. The
 // bearer-token `secretRow` is an ORDINARY row that opens `SecretEntrySheet`
-// (the only `SecureField`); NO `SecureField` is ever inline in this Form
+// (the only `SecureField`); NO `SecureField` is ever inline in this editor
 // (out-of-process macOS `NSSecureTextField` layout-recursion).
 //
 // Privacy invariants (unchanged):
@@ -61,12 +61,16 @@
 //     commit/probe time — the raw key never enters this View.
 //   - The masked tail is the only token surface in `.valid` state.
 //
-// Cross-platform (iOS + macOS): the body is shared. UIKit-only TextField
-// modifiers (`.textContentType(.URL)`, `.keyboardType`,
-// `.textInputAutocapitalization`)
-// are `#if os(iOS)`-gated. macOS additionally applies the settings content
-// rail (720pt max width) + increased section-header prominence; iOS keeps the
-// stock inset-grouped metrics.
+// Cross-platform (iOS + macOS): the body is shared, and the zone tree is
+// written ONCE inside `PlatformSettingsForm` — hand-drawn `SettingsCard`s on
+// macOS, the stock grouped `Form` on iOS. On macOS that container also owns the
+// page chrome (scroll surface, 28pt window gutter, 720pt settings rail), so the
+// editor's column lands on exactly the width of the Personal AI list it is
+// pushed from, and each row supplies its own inset and full-bleed live frame
+// through the card row primitives in `MacPointerTargets.swift` — every one of
+// which is a no-op off macOS. UIKit-only `TextField` modifiers
+// (`.textContentType(.URL)`, `.keyboardType`, `.textInputAutocapitalization`)
+// stay `#if os(iOS)`-gated.
 //
 // Type-checker-budget discipline: `nameField` / `modelField` / `colorSwatch`
 // / `monogramField` are separate `@ViewBuilder` sub-views guarded by
@@ -98,7 +102,7 @@ struct RemoteAgentConfigBody: View {
     @State private var stagedVoiceKeyReuse: Bool = false
 
     /// Drives the tap-in `SecretEntrySheet` for bearer-token entry (the only place
-    /// a `SecureField` exists — never inline in this Form).
+    /// a `SecureField` exists — never inline in this editor).
     @State private var showingSecretSheet: Bool = false
 
     /// Drives the `CertificateTrustSheet` — opened from the Server certificate row.
@@ -202,32 +206,26 @@ struct RemoteAgentConfigBody: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    /// The grouped form, railed on macOS (`MacSettingsRail`). The rail is
-    /// applied as CONTENT margins on a full-width form (a `GeometryReader`
-    /// supplies the pane width) — NOT as a `.frame(maxWidth:)` on the form,
-    /// which shrank the scroll surface to the rail and left a wide window's
-    /// margins as dead, unscrollable glass (the wheel only worked over the
-    /// centered column). iOS keeps the native full-bleed Form (verified
-    /// premium look).
-    @ViewBuilder
-    private var railedForm: some View {
-        #if os(macOS)
-        GeometryReader { geo in
-            formCore
-                .contentMargins(.horizontal, MacSettingsRail.margin(for: geo.size.width), for: .scrollContent)
-                .contentMargins(.top, 8, for: .scrollContent)
-                .contentMargins(.bottom, 28, for: .scrollContent)
-        }
-        #else
-        formCore
-        #endif
-    }
-
+    /// The zone tree in the adaptive settings container: a stack of hand-drawn
+    /// `SettingsCard`s on macOS, the stock grouped `Form` on iOS.
+    ///
+    /// The container carries the macOS page chrome itself — scroll surface, the
+    /// 28pt window gutter and the 720pt `MacSettingsRail` — so this editor adds
+    /// no rail of its own and its column is exactly as wide as the Personal AI
+    /// list it is pushed from. A `.frame(maxWidth:)` rail here would be the
+    /// wrong lever anyway: on the scrolling view itself it shrinks the scroll
+    /// surface and leaves a wide window's margins as dead, unscrollable glass,
+    /// which is why `.macSettingsRail()` caps the card STACK inside the
+    /// `ScrollView` rather than the `ScrollView`.
+    ///
+    /// The two scroll modifiers ride the container rather than a `Form` nested
+    /// inside it: both apply to the scrollable view anywhere in the subtree, so
+    /// the iOS grouped `Form` still drops its opaque backing (the app gradient
+    /// reads through) and still dismisses the keyboard on drag.
     private var formCore: some View {
-        Form {
+        PlatformSettingsForm {
             editorSections
         }
-        .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
     }
@@ -317,7 +315,7 @@ struct RemoteAgentConfigBody: View {
     }
 
     var body: some View {
-        railedForm
+        formCore
         .sheet(isPresented: $showingSecretSheet) {
             SecretEntrySheet(
                 title: secretSheetTitle,
@@ -527,22 +525,13 @@ struct RemoteAgentConfigBody: View {
         destructiveSection
     }
 
-    /// macOS zone-header treatment: sentence-case 13pt semibold in the secondary
-    /// color (increased prominence over the stock small-caps gray), with vertical
-    /// padding that opens the zone rhythm toward 24pt section separation and ~6pt
-    /// header-to-container. iOS keeps the stock inset-grouped header.
-    @ViewBuilder
-    private func zoneHeader<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        #if os(macOS)
-        content()
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(AppColors.textSecondary)
-            .padding(.top, 10)
-            .padding(.bottom, 2)
-        #else
-        content()
-        #endif
-    }
+    // A zone header is plain `Text`, styled by the container: on macOS
+    // `SettingsCard` gives every header the same 13pt semibold secondary
+    // treatment and the same gap down to its card, so this editor's zones and
+    // the Personal AI list's sections read as one surface; on iOS the grouped
+    // `Form` supplies the stock inset-grouped header. Styling a header here
+    // would land closer to the leaf, win over the card's default, and split the
+    // rhythm across two files.
 
     // MARK: - Zone 1: Quick connect (guided cover deep-link; never OpenRouter)
 
@@ -594,7 +583,12 @@ struct RemoteAgentConfigBody: View {
                         }
                         .contentShape(Rectangle())
                     }
-                    .settingsRowButton(horizontalPadding: 0)
+                    // The action is the row; the gate caption below it is not.
+                    // So the BUTTON carries the card row treatment (its own
+                    // frame is the card's full bleed, wash included) and the
+                    // caption takes the passive inset — never the enclosing
+                    // `VStack`, which would put the wash around both.
+                    .settingsCardRowButton()
                     .disabled(isDirty)
                     .accessibilityIdentifier("settings.remoteAgent.editor.quickConnect")
                     // A disabled row must say why — the gate subtitle doubles as
@@ -605,6 +599,9 @@ struct RemoteAgentConfigBody: View {
                             .font(.caption2)
                             .foregroundStyle(AppColors.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
+                            // No height floor: the caption trails a row that
+                            // already sets the pitch, so it owes only its inset.
+                            .settingsCardPassiveRow(minHeight: 0)
                     }
                 }
             }
@@ -640,9 +637,7 @@ struct RemoteAgentConfigBody: View {
             endpointRemedyCallout
             serverCertificateRow
         } header: {
-            zoneHeader {
-                Text(LocalizedStringResource("settings.remoteAgent.connection.header", defaultValue: "Connection"))
-            }
+            Text(LocalizedStringResource("settings.remoteAgent.connection.header", defaultValue: "Connection"))
         } footer: {
             connectionFooterView
         }
@@ -672,12 +667,10 @@ struct RemoteAgentConfigBody: View {
                 // The tip rides the section HEADER because the field itself is
                 // deliberately label-less (the header already names it) — there is
                 // no in-row label to sit beside.
-                zoneHeader {
-                    HStack(spacing: 0) {
-                        Text(LocalizedStringResource("settings.remoteAgent.model.header", defaultValue: "Model"))
-                        InfoTipButton(tip: GatewayFieldTips.model)
-                        Spacer(minLength: 0)
-                    }
+                HStack(spacing: 0) {
+                    Text(LocalizedStringResource("settings.remoteAgent.model.header", defaultValue: "Model"))
+                    InfoTipButton(tip: GatewayFieldTips.model)
+                    Spacer(minLength: 0)
                 }
             }
         }
@@ -730,7 +723,7 @@ struct RemoteAgentConfigBody: View {
             .labelStyle(AccentGlyphActionLabelStyle())
         }
         // Explicit style, never automatic — an automatic style on a button hosted
-        // inside a Form footer picks up the row-wide activation treatment.
+        // inside a section footer picks up the row-wide activation treatment.
         .inlineLinkButton()
     }
 
@@ -850,13 +843,17 @@ struct RemoteAgentConfigBody: View {
     /// Local spelling of the shared `AmberCallout` — the same shape the guided
     /// Commands step's handoff callout and the pairing review card use, so "amber
     /// block" means one consistent thing across the setup surfaces. Kept as a
-    /// wrapper so this file's call sites keep reading `body:`.
+    /// wrapper so this file's call sites keep reading `body:`, and so the card
+    /// row inset is declared ONCE for both callouts: a callout is something to
+    /// read, not a row action, so it takes the passive treatment and gets no
+    /// hover wash.
     private func amberCallout(
         systemImage: String,
         title: LocalizedStringResource,
         body: LocalizedStringResource
     ) -> some View {
         AmberCallout(systemImage: systemImage, title: title, message: body)
+            .settingsCardPassiveRow()
     }
 
     /// Builds the hosted (OpenRouter) footer as a single `AttributedString` so the
@@ -905,6 +902,7 @@ struct RemoteAgentConfigBody: View {
             )
                 .font(.caption)
                 .foregroundStyle(AppColors.textSecondary)
+                .settingsCardPassiveRow()
         }
     }
 
@@ -965,6 +963,12 @@ struct RemoteAgentConfigBody: View {
                     .foregroundStyle(AppColors.textSecondary)
                 }
             }
+            // A label + field + hints block is a place to TYPE, not one row
+            // action: it takes the card row's inset and height floor and no
+            // wash. The stacked label is also why nothing here depends on a
+            // `Form` laying a label column out — the block reads the same in a
+            // hand-drawn card as it does in the iOS grouped Form.
+            .settingsCardPassiveRow()
         }
     }
 
@@ -1035,6 +1039,7 @@ struct RemoteAgentConfigBody: View {
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .settingsCardPassiveRow()
         }
     }
 
@@ -1117,6 +1122,7 @@ struct RemoteAgentConfigBody: View {
 
                 modelSuggestionList(binding: modelBinding)
             }
+            .settingsCardPassiveRow()
         }
     }
 
@@ -1233,7 +1239,7 @@ struct RemoteAgentConfigBody: View {
     /// on the toggle, and the flip drives `secretRow`'s presence (the bearer-token
     /// summary row shows ONLY under `.bearer`, disappears when keyless). The secret
     /// itself is entered in `SecretEntrySheet` — there is NO `SecureField` anywhere
-    /// in this Form, so showing/hiding `secretRow` on `isKeyless` can't trip the
+    /// in this editor, so showing/hiding `secretRow` on `isKeyless` can't trip the
     /// out-of-process macOS `NSSecureTextField` layout recursion that the old
     /// inline `tokenField` had to avoid (see `SecretEntrySheet.swift`).
     @ViewBuilder
@@ -1297,7 +1303,14 @@ struct RemoteAgentConfigBody: View {
                 EmptyView()
             }
             .labelsHidden()
-            // The visual title now lives outside the Toggle, so the control needs
+            #if os(macOS)
+            // A `Form` is what resolves `.automatic` to a switch on macOS;
+            // outside one it resolves to a CHECKBOX, and `.tint` alone does not
+            // reshape the control. iOS already renders a switch by default, so
+            // the request is macOS-only rather than unconditional.
+            .toggleStyle(.switch)
+            #endif
+            // The visual title lives outside the Toggle, so the control needs
             // its own VoiceOver name — an unlabeled switch reads as just "off".
             .accessibilityLabel(Text(LocalizedStringResource(
                 "settings.remoteAgent.auth.requiresToken.label",
@@ -1305,6 +1318,13 @@ struct RemoteAgentConfigBody: View {
             )))
             .tint(AppColors.brandAmber)
         }
+        // Passive: the ⓘ and the switch are two INDEPENDENT actions sharing one
+        // row, so there is no single row-level action for a wash to stand for —
+        // it would light the helper sentence and the gap before the switch as
+        // though either were clickable. Inset and height floor only. (The
+        // `CustomSTTConfigBody` auth row takes the whole-row `Button` instead,
+        // which it can precisely because it carries no tip.)
+        .settingsCardPassiveRow()
     }
 
     // MARK: - OpenRouter key reuse (voice → gateway; STAGED intent)
@@ -1337,11 +1357,14 @@ struct RemoteAgentConfigBody: View {
                     viewModel.noteRemoteAgentSecretEdited(for: ref)
                 }
             )
+            // A callout that owns its own inner button, not a single row
+            // action: passive treatment, so no wash promises a row-wide tap.
+            .settingsCardPassiveRow()
         }
     }
 
     // MARK: - Secret row (tap-in entry; the SecureField lives in SecretEntrySheet,
-    // never inline in this Form — see SecretEntrySheet.swift for why).
+    // never inline in this editor — see SecretEntrySheet.swift for why).
 
     /// A non-secure summary row that opens the secret-entry sheet. Shown ONLY when
     /// auth is `.bearer`; when keyless it's absent. Because it is an ORDINARY row
@@ -1373,13 +1396,25 @@ struct RemoteAgentConfigBody: View {
                     Text(secretRowLabel)
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)
+                        #if os(macOS)
+                        // Both halves claim the card row's FULL height as their
+                        // own live band, so the pointer activates the row from
+                        // its top edge to its bottom rather than only over the
+                        // glyphs. Height alone: the label's leading inset is the
+                        // row's, applied once by `.settingsCardRowControl()`
+                        // below, and any extra here would indent this row past
+                        // every other row in the card.
+                        .frame(minHeight: SettingsCardMetrics.rowMinHeight)
+                        #endif
                         .contentShape(Rectangle())
                 }
-                // Icon primitive, not `.settingsRowButton` — the row is SPLIT, so
-                // a full-width style here would stretch this half and halve the
-                // trailing one. This gives the label the 28pt live band the rest
-                // of the row already has, plus a wash pill hugging the word.
-                .pointerIconButton(horizontalPadding: 6)
+                // `.plain`, and deliberately no per-half style: the two halves
+                // are ONE action split only so the tip can sit between them, so
+                // the wash belongs to the whole row and arrives once, from
+                // `.settingsCardRowControl()`. A style on a half would stack a
+                // second tint over its share of the row and draw a seam down
+                // the middle on hover.
+                .buttonStyle(.plain)
                 .accessibilityValue(secretStatusAccessibilityValue)
 
                 InfoTipButton(tip: secretTip)
@@ -1394,9 +1429,12 @@ struct RemoteAgentConfigBody: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.textTertiary)
                     }
+                    #if os(macOS)
+                    .frame(maxWidth: .infinity, minHeight: SettingsCardMetrics.rowMinHeight)
+                    #endif
                     .contentShape(Rectangle())
                 }
-                .settingsRowButton(horizontalPadding: 0)
+                .buttonStyle(.plain)
                 .accessibilityHidden(true)
 
                 if stagedVoiceKeyReuse {
@@ -1411,6 +1449,9 @@ struct RemoteAgentConfigBody: View {
                             .font(.subheadline)
                             .foregroundStyle(AppColors.textTertiary)
                     }
+                    // Keeps its own icon wash — unlike the two halves above,
+                    // this is a DIFFERENT action from the row's, so its own
+                    // hover affordance is the honest one.
                     .pointerIconButton()
                     .padding(.leading, 8)
                     .accessibilityLabel(Text(LocalizedStringResource(
@@ -1419,6 +1460,9 @@ struct RemoteAgentConfigBody: View {
                     )))
                 }
             }
+            // The row's own action, so the inset band the sub-`Button`s can't
+            // reach opens the sheet too instead of washing and doing nothing.
+            .settingsCardRowControl { showingSecretSheet = true }
         }
     }
 
@@ -1519,6 +1563,9 @@ struct RemoteAgentConfigBody: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        // A bordered button beside its own result, not a row-wide action: the
+        // card row's inset and height floor, no wash.
+        .settingsCardPassiveRow()
     }
 
     private var testButton: some View {
@@ -1618,7 +1665,7 @@ struct RemoteAgentConfigBody: View {
                     #endif
                 }
                 #if os(macOS)
-                .settingsRowButton(horizontalPadding: 0)
+                .settingsCardRowButton()
                 #endif
                 .foregroundStyle(AppColors.error)
             } header: {
@@ -1935,11 +1982,14 @@ struct RemoteAgentConfigBody: View {
                     ))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)
+                        #if os(macOS)
+                        .frame(minHeight: SettingsCardMetrics.rowMinHeight)
+                        #endif
                         .contentShape(Rectangle())
                 }
-                // Icon primitive, not `.settingsRowButton` — see `secretRow`: a
-                // full-width style would stretch this half of the split row.
-                .pointerIconButton(horizontalPadding: 6)
+                // Wash-free halves + one row-wide wash — see `secretRow` for
+                // why a per-half style would seam this row on hover.
+                .buttonStyle(.plain)
                 .accessibilityIdentifier("settings.remoteAgent.editor.serverCertificate")
                 .accessibilityValue(Text(certRowValue))
 
@@ -1957,11 +2007,16 @@ struct RemoteAgentConfigBody: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.textTertiary)
                     }
+                    #if os(macOS)
+                    .frame(maxWidth: .infinity, minHeight: SettingsCardMetrics.rowMinHeight)
+                    #endif
                     .contentShape(Rectangle())
                 }
-                .settingsRowButton(horizontalPadding: 0)
+                .buttonStyle(.plain)
                 .accessibilityHidden(true)
             }
+            // Row action for the uncovered inset band — see `secretRow`.
+            .settingsCardRowControl { showingCertSheet = true }
         }
     }
 
@@ -2012,9 +2067,7 @@ struct RemoteAgentConfigBody: View {
             fileTransferRow
             imageHistoryPicker
         } header: {
-            zoneHeader {
-                Text(LocalizedStringResource("settings.remoteAgent.inChats.header", defaultValue: "In chats"))
-            }
+            Text(LocalizedStringResource("settings.remoteAgent.inChats.header", defaultValue: "In chats"))
         }
     }
 
@@ -2045,11 +2098,29 @@ struct RemoteAgentConfigBody: View {
                                 .font(.caption)
                                 .foregroundStyle(status.tint)
                         }
+                        #if os(macOS)
+                        // A `NavigationLink` draws its disclosure only inside a
+                        // `List`, and a card row is not one — so the row draws
+                        // it, with the glyph the sibling secret and certificate
+                        // rows already use, or this push would be the only row
+                        // in the editor with no forward affordance.
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppColors.textTertiary)
+                        #endif
                     }
                     // Claims the `Spacer()` gap between label and badge, the same
                     // way every other full-width row in this file does.
                     .contentShape(Rectangle())
                 }
+                // macOS-only: a `NavigationLink` IS a `Button`, so the card row
+                // style reaches it and brings the full-bleed live frame, the row
+                // inset and the squared wash in one modifier. Unconditional it
+                // would also strip the iOS row of the grouped list's own
+                // highlight and system chevron.
+                #if os(macOS)
+                .settingsCardRowButton()
+                #endif
                 .disabled(gateReason != nil)
                 .accessibilityIdentifier("settings.remoteAgent.editor.fileTransfer")
                 .accessibilityValue(fileTransferAccessibilityValue(status: status, gateReason: gateReason))
@@ -2058,6 +2129,7 @@ struct RemoteAgentConfigBody: View {
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .settingsCardPassiveRow(minHeight: 0)
                 }
             }
         }
@@ -2179,7 +2251,7 @@ struct RemoteAgentConfigBody: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .fixedSize()
-            // The visual title now lives outside the Picker, so the control needs its
+            // The visual title lives outside the Picker, so the control needs its
             // own VoiceOver name — an unlabeled popup reads as just its value.
             .accessibilityLabel(Text(LocalizedStringResource(
                 "settings.remoteAgent.imageHistory.label",
@@ -2188,12 +2260,19 @@ struct RemoteAgentConfigBody: View {
             .tint(AppColors.brandAmber)
             #endif
             }
+            // The card row treatment goes on the trigger LINE, not on the
+            // enclosing stack, so the caption below keeps its own tighter
+            // spacing. Passive: the ⓘ and the popup are two INDEPENDENT actions
+            // sharing one row, and no row-level action can raise a popup's menu
+            // anyway, so a wash would stand for nothing the row can do.
+            .settingsCardPassiveRow()
             // String-swap (NOT an if/else producing distinct Texts) — stable
             // view identity, only the localized content differs.
             Text(captionResource(for: binding.wrappedValue))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+                .settingsCardPassiveRow(minHeight: 0)
         }
     }
 
@@ -2261,9 +2340,7 @@ struct RemoteAgentConfigBody: View {
                 }
                 badgeFields
             } header: {
-                zoneHeader {
-                    Text(LocalizedStringResource("settings.remoteAgent.devices.header", defaultValue: "Devices"))
-                }
+                Text(LocalizedStringResource("settings.remoteAgent.devices.header", defaultValue: "Devices"))
             } footer: {
                 if showsExportCode {
                     Text(LocalizedStringResource(
@@ -2291,7 +2368,7 @@ struct RemoteAgentConfigBody: View {
             .font(.subheadline.weight(.semibold))
             .labelStyle(AccentGlyphActionLabelStyle())
         }
-        .settingsRowButton(horizontalPadding: 0)
+        .settingsCardRowButton()
         .accessibilityIdentifier("settings.remoteAgent.editor.setupOtherDevice")
     }
 
@@ -2316,6 +2393,10 @@ struct RemoteAgentConfigBody: View {
                 colorSwatchRow(id: id)
                 monogramField(id: id)
             }
+            // A titled block of several independent controls (swatches + a text
+            // field), not one row action — passive inset, no wash. Each swatch
+            // keeps its own circular hover wash: those ARE separate actions.
+            .settingsCardPassiveRow()
         }
     }
 

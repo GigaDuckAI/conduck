@@ -35,10 +35,6 @@ private enum MacPersonalAIRoute: Hashable {
 struct MacPersonalAICategory: View {
     @Bindable var viewModel: SettingsViewModel
 
-    /// The settings content rail — matches `RemoteAgentConfigBody`'s editor rail
-    /// so the list and the pushed editor share one column width.
-    private static let contentRailMaxWidth: CGFloat = 720
-
     /// Drives all pushes — the default chooser + a gateway config detail.
     @State private var route: MacPersonalAIRoute?
 
@@ -80,11 +76,12 @@ struct MacPersonalAICategory: View {
                     .padding(.horizontal, 28)
                     .padding(.bottom, 28)
                 }
-                // The settings content rail: cap the column, center it in the
-                // window (the trailing `.frame(maxWidth: .infinity)` re-expands
-                // so the ScrollView keeps full-width scrolling).
-                .frame(maxWidth: Self.contentRailMaxWidth)
-                .frame(maxWidth: .infinity)
+                // The shared settings content rail — the same column width
+                // `RemoteAgentConfigBody`'s editor takes, so the list and the
+                // pushed editor read as one surface. Applied to the stack INSIDE
+                // the ScrollView (never to the ScrollView itself, which would
+                // shrink the scroll surface) and after that stack's own padding.
+                .macSettingsRail()
             }
             .navigationDestination(item: $route) { route in
                 switch route {

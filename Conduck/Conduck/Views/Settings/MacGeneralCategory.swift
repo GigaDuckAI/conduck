@@ -9,6 +9,19 @@
 // (max image dimension). Plus Launch at
 // Login — a `Toggle` bound to `SMAppService.mainApp.status` (same mechanism as
 // `MenuBarController.toggleLaunchAtLogin`; no new entitlement).
+//
+// Sections are hand-drawn `SettingsCard`s (`MacSettingsCard.swift`), so a row's
+// highlight reaches the card's edge; each row's inset comes from its own row
+// style, inside its live frame. Nothing here pads a row from the outside — see
+// that file's one rule.
+//
+// The card draws no `Form`, and this screen is the densest control mix in
+// Settings, so each control carries the two things a grouped `Form` supplies
+// for free and a `VStack` does not: the label/control SPLIT (label leading,
+// control trailing — hand-laid here as `HStack { label; Spacer(); control }`
+// with the control `labelsHidden`, and the same title standing in as its
+// VoiceOver name), and the NATIVE control resolution (`.automatic` picks a
+// checkbox outside a `Form`, hence the explicit `.toggleStyle(.switch)`).
 
 import AppKit
 import KeyboardShortcuts
@@ -51,12 +64,16 @@ struct MacGeneralCategory: View {
 
     var body: some View {
         ScrollView {
-            Form {
+            VStack(alignment: .leading, spacing: SettingsCardMetrics.sectionSpacing) {
                 launchSection
                 onLaunchSection
                 if syncMonitor.iCloudUnavailable, let reason = syncMonitor.unavailableReason {
-                    Section {
+                    SettingsCard {
+                        // A status block that owns its own inner button, not a
+                        // single row action: it takes the passive treatment, so
+                        // it gets the card's inset and pitch and no hover wash.
                         ICloudSyncSettingsRow(reason: reason)
+                            .settingsCardPassiveRow()
                     } header: {
                         Text(LocalizedStringResource("sync.icloud.settings.header", defaultValue: "Sync"))
                     }
@@ -64,9 +81,11 @@ struct MacGeneralCategory: View {
                 menuBarSection
                 shortcutSection
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
             .padding(28)
+            // The reading rail goes on the card stack, after its gutter, so the
+            // gutter sits inside the capped column and the `ScrollView` keeps a
+            // full-width scroll surface.
+            .macSettingsRail()
         }
         .sheet(isPresented: $showingMenuBarGuide) {
             // Fixed frame so the guide never resizes the window — matches the
@@ -82,28 +101,94 @@ struct MacGeneralCategory: View {
         }
     }
 
+    // MARK: - Card row shapes
+
+    /// One card row holding a `Toggle`: title leading, switch trailing.
+    ///
+    /// The title is laid out as a SIBLING of the control rather than as the
+    /// `Toggle`'s own label, because outside a grouped `Form` a `Toggle` keeps
+    /// its label glued to its control instead of splitting the two across the
+    /// row. `.toggleStyle(.switch)` is likewise the `Form`'s doing: `.automatic`
+    /// resolves to a CHECKBOX on macOS everywhere else, and `.tint` alone does
+    /// not reshape the control.
+    ///
+    /// The whole row is a `Button` that flips the binding, which is what a
+    /// grouped `Form` gives a `Toggle` for free: there the title IS the control's
+    /// label, so clicking the words flips the switch. Splitting the label out
+    /// costs that, and `.settingsCardRowButton()` hands it back — the row's wash
+    /// then covers exactly what the row activates. The switch is drawn inside the
+    /// label with `.allowsHitTesting(false)`, so a click on the switch itself
+    /// reaches the same `Button` rather than firing a second, cancelling flip.
+    ///
+    /// `.accessibilityRepresentation` collapses the pair back into the single
+    /// standard switch VoiceOver expects — without it the `Button` and the
+    /// `Toggle` inside it are two elements for one setting.
+    private func toggleRow(_ title: Text, isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack {
+                title.foregroundStyle(AppColors.textPrimary)
+                Spacer()
+                Toggle(isOn: isOn) { EmptyView() }
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(AppColors.brandAmber)
+                    .allowsHitTesting(false)
+            }
+        }
+        .settingsCardRowButton()
+        .accessibilityRepresentation { Toggle(isOn: isOn) { title } }
+    }
+
+    /// One card row holding a `.menu` `Picker`: title leading, popup trailing.
+    /// Same split, same hidden-label-as-VoiceOver-name reasoning as `toggleRow`.
+    ///
+    /// `.fixedSize()` pins the popup to its widest option; left to itself it
+    /// stretches across whatever width the row offers, which a `Form` never
+    /// gives it.
+    ///
+    /// Passive, unlike `toggleRow`: a popup opens on its own frame and no
+    /// row-level action can raise its menu, so a wash across the whole row would
+    /// invite a click the row cannot answer. The card's inset and height floor,
+    /// no wash — the treatment the segmented "Ask with" row takes for the same
+    /// reason.
+    private func menuPickerRow<Value: Hashable, Options: View>(
+        _ title: Text,
+        selection: Binding<Value>,
+        @ViewBuilder options: () -> Options
+    ) -> some View {
+        HStack {
+            title.foregroundStyle(AppColors.textPrimary)
+            Spacer()
+            Picker(selection: selection, content: options) { title }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+        }
+        .settingsCardPassiveRow()
+    }
+
     // MARK: - Launch at Login
 
     private var launchSection: some View {
-        Section {
-            Toggle(isOn: Binding(
-                get: { launchAtLogin },
-                set: { newValue in setLaunchAtLogin(newValue) }
-            )) {
+        SettingsCard {
+            toggleRow(
                 // Reuse the MenuBarController verbatim source string.
-                Text(String(localized: "Launch at Login"))
-                    .foregroundStyle(AppColors.textPrimary)
-            }
-            .tint(AppColors.brandAmber)
+                Text(String(localized: "Launch at Login")),
+                isOn: Binding(
+                    get: { launchAtLogin },
+                    set: { newValue in setLaunchAtLogin(newValue) }
+                )
+            )
 
-            Toggle(isOn: Binding(
-                get: { showDockIcon },
-                set: { newValue in setShowDockIcon(newValue) }
-            )) {
-                Text(String(localized: "Show in Dock"))
-                    .foregroundStyle(AppColors.textPrimary)
-            }
-            .tint(AppColors.brandAmber)
+            toggleRow(
+                Text(String(localized: "Show in Dock")),
+                isOn: Binding(
+                    get: { showDockIcon },
+                    set: { newValue in setShowDockIcon(newValue) }
+                )
+            )
         } header: {
             Text(LocalizedStringResource("settings.mac.general.title", defaultValue: "General"))
         } footer: {
@@ -117,7 +202,11 @@ struct MacGeneralCategory: View {
     // MARK: - Keyboard Shortcut
 
     private var shortcutSection: some View {
-        Section {
+        SettingsCard {
+            // A recorder row is a FIELD, not a row-level action — clicking the
+            // label does nothing, and the recorder arms only on its own box. So
+            // it takes the passive treatment: the card's inset and height floor,
+            // and no wash promising the whole row is clickable.
             HStack {
                 Label(
                     // Mode-neutral name pairing with "Screenshot & Ask": ⌘⇧1 is
@@ -131,6 +220,7 @@ struct MacGeneralCategory: View {
                 Spacer()
                 KeyboardShortcuts.Recorder(for: .toggleVoiceCapture)
             }
+            .settingsCardPassiveRow()
 
             HStack {
                 Label(
@@ -142,6 +232,7 @@ struct MacGeneralCategory: View {
                 Spacer()
                 KeyboardShortcuts.Recorder(for: .captureRegionAndVoice)
             }
+            .settingsCardPassiveRow()
         } header: {
             Text(LocalizedStringResource("settings.mac.general.shortcut.header", defaultValue: "Keyboard Shortcut"))
         } footer: {
@@ -155,61 +246,73 @@ struct MacGeneralCategory: View {
     // MARK: - Menu Bar (input mode + conversation continuation)
 
     private var menuBarSection: some View {
-        Section {
+        SettingsCard {
             let inputSelection = Binding<MenuBarInputMode>(
                 get: { menuBarInputMode },
                 set: { newValue in setMenuBarInputMode(newValue) }
             )
-            Picker(selection: inputSelection) {
-                Text(LocalizedStringResource(
-                    "settings.mac.general.inputMode.voice",
-                    defaultValue: "Voice"
-                )).tag(MenuBarInputMode.voice)
-                Text(LocalizedStringResource(
-                    "settings.mac.general.inputMode.text",
-                    defaultValue: "Text"
-                )).tag(MenuBarInputMode.text)
-            } label: {
-                Text(LocalizedStringResource(
-                    "settings.mac.general.inputMode.label",
-                    defaultValue: "Ask with"
-                ))
-                .foregroundStyle(AppColors.textPrimary)
+            // One `Text` value used twice — as the visible title and as the
+            // hidden picker label VoiceOver reads — so the two cannot drift.
+            let inputModeTitle = Text(LocalizedStringResource(
+                "settings.mac.general.inputMode.label",
+                defaultValue: "Ask with"
+            ))
+            HStack {
+                inputModeTitle.foregroundStyle(AppColors.textPrimary)
+                Spacer()
+                Picker(selection: inputSelection) {
+                    Text(LocalizedStringResource(
+                        "settings.mac.general.inputMode.voice",
+                        defaultValue: "Voice"
+                    )).tag(MenuBarInputMode.voice)
+                    Text(LocalizedStringResource(
+                        "settings.mac.general.inputMode.text",
+                        defaultValue: "Text"
+                    )).tag(MenuBarInputMode.text)
+                } label: {
+                    inputModeTitle
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                // A segmented control takes every point of width it is offered,
+                // so unpinned it swallows the row and shoves the title out.
+                // Sized to its two segments it sits where a `Form` puts it.
+                .fixedSize()
             }
-            .pickerStyle(.segmented)
+            // A set of choices, not one row-level action — inset and height
+            // floor, no wash.
+            .settingsCardPassiveRow()
 
             let policySelection = Binding<SessionContinuationPolicy>(
                 get: { viewModel.sessionContinuationPolicy },
                 set: { newValue in Task { await viewModel.setSessionContinuationPolicy(newValue) } }
             )
-            Picker(selection: policySelection) {
+            menuPickerRow(
+                Text(LocalizedStringResource("settings.remoteAgent.sessionPolicy.label", defaultValue: "Add to last conversation")),
+                selection: policySelection
+            ) {
                 ForEach(SessionContinuationPolicy.allCases.reversed()) { policy in
                     Text(policy.label).tag(policy)
                 }
-            } label: {
-                Text(LocalizedStringResource("settings.remoteAgent.sessionPolicy.label", defaultValue: "Add to last conversation"))
-                    .foregroundStyle(AppColors.textPrimary)
             }
-            .pickerStyle(.menu)
 
             // Spoken output — the OUTPUT half of a menu-bar ask, paired with the
             // "Ask with" input row above. Engine config lives under Voice; this
             // is just the per-surface on/off. Device-local persist (the dock-icon
             // idiom): state first, then a fire-and-forget actor write.
-            Toggle(isOn: Binding(
-                get: { speakQuickLaneReplies },
-                set: { newValue in
-                    speakQuickLaneReplies = newValue
-                    Task { await SettingsManager.shared.setSpeakQuickLaneReplies(newValue) }
-                }
-            )) {
+            toggleRow(
                 Text(LocalizedStringResource(
                     "settings.quickCapture.speakReplies.label",
                     defaultValue: "Speak replies"
-                ))
-                .foregroundStyle(AppColors.textPrimary)
-            }
-            .tint(AppColors.brandAmber)
+                )),
+                isOn: Binding(
+                    get: { speakQuickLaneReplies },
+                    set: { newValue in
+                        speakQuickLaneReplies = newValue
+                        Task { await SettingsManager.shared.setSpeakQuickLaneReplies(newValue) }
+                    }
+                )
+            )
 
             // "How to Use" — the relocated menu-bar shortcut guide. Blue `.tint`
             // (NOT amber) to read as a setup/guide affordance, matching Personal
@@ -225,7 +328,10 @@ struct MacGeneralCategory: View {
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.tint)
             }
-            .settingsRowButton()
+            // The card row style, not the `Form` one: this row IS one action, so
+            // its highlight runs to the card's edges instead of stopping at a
+            // `Form`'s inset content box.
+            .settingsCardRowButton()
         } header: {
             Text(LocalizedStringResource("settings.quickCapture.header.mac", defaultValue: "Menu Bar"))
         } footer: {
@@ -287,12 +393,18 @@ struct MacGeneralCategory: View {
     // MARK: - On launch
 
     private var onLaunchSection: some View {
-        Section {
+        SettingsCard {
             let selection = Binding<OnLaunchMode>(
                 get: { viewModel.onLaunchMode },
                 set: { newValue in Task { await viewModel.setOnLaunchMode(newValue) } }
             )
-            Picker(selection: selection) {
+            menuPickerRow(
+                Text(LocalizedStringResource(
+                    "settings.general.onLaunch.label",
+                    defaultValue: "On launch"
+                )),
+                selection: selection
+            ) {
                 Text(LocalizedStringResource(
                     "settings.general.onLaunch.startNew",
                     defaultValue: "Start a new conversation"
@@ -301,14 +413,7 @@ struct MacGeneralCategory: View {
                     "settings.general.onLaunch.resumeLast",
                     defaultValue: "Resume last conversation"
                 )).tag(OnLaunchMode.resumeLastConversation)
-            } label: {
-                Text(LocalizedStringResource(
-                    "settings.general.onLaunch.label",
-                    defaultValue: "On launch"
-                ))
-                .foregroundStyle(AppColors.textPrimary)
             }
-            .pickerStyle(.menu)
         } header: {
             Text(LocalizedStringResource("settings.general.onLaunch.header", defaultValue: "Startup"))
         } footer: {

@@ -86,7 +86,12 @@ struct AppleEngineModeSection: View {
                 state: standardStateLine
             )
         }
-        .settingsRowButton()
+        // The CARD row treatment, not the `Form` one: on macOS this section is
+        // lifted into a hand-drawn `SettingsCard` that adds no padding of its
+        // own, so the row owns the card's full bleed and supplies the label
+        // inset from inside its own live frame. Exactly `.buttonStyle(.plain)`
+        // off macOS, same as the `Form` variant it replaces.
+        .settingsCardRowButton()
         .disabled(testerBusy)
     }
 
@@ -120,7 +125,8 @@ struct AppleEngineModeSection: View {
                 state: higherAccuracyStateLine
             )
         }
-        .settingsRowButton()
+        // The card row treatment, for the `standardRow` reason.
+        .settingsCardRowButton()
         .disabled(testerBusy)
     }
 

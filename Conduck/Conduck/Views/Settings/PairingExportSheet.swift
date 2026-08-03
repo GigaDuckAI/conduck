@@ -110,7 +110,13 @@ struct PairingExportSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            // `PlatformSettingsForm`: ONE section tree, rendered as hand-drawn
+            // `SettingsCard`s on macOS (where it also supplies the scroll
+            // surface and the window gutter a `Form` gives for free) and as the
+            // grouped `Form` everywhere else. Every row below
+            // therefore carries its own inset via a `SettingsCard` row
+            // primitive, because the card adds none.
+            PlatformSettingsForm {
                 switch phase {
                 case .authenticating:
                     authenticatingSection
@@ -122,7 +128,6 @@ struct PairingExportSheet: View {
                     lockedSection(reason)
                 }
             }
-            .formStyle(.grouped)
             .scrollContentBackground(.hidden)
             .navigationTitle(Text(LocalizedStringResource(
                 "settings.pairing.export.title",
@@ -211,6 +216,7 @@ struct PairingExportSheet: View {
                     .foregroundStyle(AppColors.textSecondary)
             }
             .padding(.vertical, 4)
+            .settingsCardPassiveRow()
         }
     }
 
@@ -224,6 +230,7 @@ struct PairingExportSheet: View {
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
                 .padding(.vertical, 4)
+                .settingsCardPassiveRow()
         }
     }
 
@@ -255,6 +262,7 @@ struct PairingExportSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 4)
+            .settingsCardPassiveRow()
         } header: {
             Text(String(
                 format: String(localized: "settings.pairing.export.forGateway",
@@ -288,6 +296,15 @@ struct PairingExportSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, 4)
+            .settingsCardPassiveRow()
+            // The amber wash the `.listRowBackground` below paints on the other
+            // platforms. A `SettingsCard` row is not a `List` row, so that
+            // modifier reaches nothing on macOS; the passive row above has
+            // already claimed the card's full bleed, so a `.background` here
+            // tints exactly the same band.
+            #if os(macOS)
+            .background(AppColors.warning.opacity(0.10))
+            #endif
         }
         .listRowBackground(AppColors.warning.opacity(0.10))
     }
@@ -350,6 +367,12 @@ struct PairingExportSheet: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
+            // Passive content, so inset and height floor but no wash — the QR
+            // plate is a thing to scan, not a thing to click. On macOS it sits
+            // on the card's own fill: `.listRowBackground` below is a `List`
+            // modifier and a `SettingsCard` row is not a `List` row, and the QR
+            // carries its own white quiet-zone plate anyway.
+            .settingsCardPassiveRow()
             .listRowBackground(Color.clear)
         }
     }
@@ -443,6 +466,11 @@ struct PairingExportSheet: View {
                     .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
+                // Passive rather than a card row BUTTON: the reveal control is a
+                // bordered pill whose own border is the affordance, and
+                // promoting it to a full-bleed row would arm a secret reveal
+                // anywhere in the band, including the empty space beside it.
+                .settingsCardPassiveRow()
             }
         } footer: {
             Text(LocalizedStringResource(
@@ -475,6 +503,10 @@ struct PairingExportSheet: View {
             .buttonStyle(.bordered)
         }
         .padding(.vertical, 4)
+        // The code block and its Copy pill are two independent things to look at
+        // and act on, so the row carries the card's inset and height floor and
+        // no wash.
+        .settingsCardPassiveRow()
     }
 
     private func lockedSection(_ reason: LockReason) -> some View {
@@ -507,6 +539,10 @@ struct PairingExportSheet: View {
                 .tint(AppColors.brandAmber)
             }
             .padding(.vertical, 4)
+            // A title, an explanation and a prominent re-reveal pill: the row is
+            // a block to read, not one target to hit, so it takes the inset and
+            // the height floor without a wash.
+            .settingsCardPassiveRow()
         }
     }
 
