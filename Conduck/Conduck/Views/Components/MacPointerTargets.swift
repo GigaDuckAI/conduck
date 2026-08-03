@@ -49,6 +49,25 @@
 //     `.settingsCardRowButton()` / `.settingsCardRowLink()` — the same styles
 //     with the inset moved inside the live frame and the wash squared off.
 //
+//  4. A `List` insets its rows the same unreachable way — measured 16pt each
+//     side and 4pt above/below under `.listStyle(.inset)` (8pt each side under
+//     `.plain`), with `.listRowInsets(EdgeInsets())` moving it by ZERO, exactly
+//     as in the `Form`. `.listRowBackground` is the one thing that DOES span the
+//     full row band, which is why a selected sidebar row's fill reached the edge
+//     while its hover wash did not.
+//
+//     What DOES move the frame is negative padding applied OUTSIDE the styled
+//     button: `.buttonStyle(…)` then `.padding(.horizontal, -16)` measured a
+//     268pt live frame → 300pt in a 300pt list, against an untouched control
+//     that stayed at 268pt. This does NOT contradict (1): that measurement
+//     covers tricks that leave the frame's own size alone and try to widen only
+//     the `.contentShape` on top of it. Here the negative padding changes the
+//     LAYOUT PROPOSAL, so the frame itself grows — and the hit region follows it
+//     because the hit region is the frame. Overshoot is safe: the list clips the
+//     wash to its own bounds, measured identical at -16 and -40. Reach it
+//     through `.settingsListRowButton()`, which pairs the negative padding with
+//     an equal label inset so the text does not move.
+//
 // DELIBERATELY NOT DONE: no pointing-hand cursor on rows and buttons. macOS
 // reserves that cursor for links; System Settings, Finder and Mail all keep the
 // arrow over a list row, and a hand everywhere would read as a web page rather
@@ -79,6 +98,16 @@ enum MacPointer {
 
     /// Corner radius of the hover/pressed wash on a full-width row.
     static let rowCornerRadius: CGFloat = 7
+
+    /// The horizontal inset a macOS `List` puts around every row's content —
+    /// measured 16pt each side under `.listStyle(.inset)` (and 8pt under
+    /// `.plain`). Rows reclaim it with matching negative padding; see
+    /// `.settingsListRowButton()` and file-header measurement 4.
+    static let listRowInset: CGFloat = 16
+
+    /// The vertical half of the same inset — measured 4pt above and below a
+    /// row's content box (a 36pt row content sits in a 44pt row background).
+    static let listRowVerticalInset: CGFloat = 4
 
     /// Corner radius of the wash behind a compact icon control.
     static let iconCornerRadius: CGFloat = 6
@@ -535,17 +564,53 @@ extension View {
     ///     unstyled rows stay put, leaving a visibly ragged left edge. Keep this
     ///     in step with `SettingsRowButtonStyle.horizontalPadding`: call sites
     ///     go through here, so THIS default is the one that ships.
+    ///   - washCornerRadius: corner radius of the hover/pressed wash. Pass 0
+    ///     where the row owns a full-bleed band that touches its neighbours.
     func settingsRowButton(
         alignment: Alignment = .leading,
         minHeight: CGFloat = MacPointer.rowMinHeight,
-        horizontalPadding: CGFloat = 0
+        horizontalPadding: CGFloat = 0,
+        washCornerRadius: CGFloat = MacPointer.rowCornerRadius
     ) -> some View {
         #if os(macOS)
         buttonStyle(SettingsRowButtonStyle(
             alignment: alignment,
             minHeight: minHeight,
-            horizontalPadding: horizontalPadding
+            horizontalPadding: horizontalPadding,
+            washCornerRadius: washCornerRadius
         ))
+        #else
+        buttonStyle(.plain)
+        #endif
+    }
+
+    /// The treatment for a row that is a `Button` inside a macOS `List` — the
+    /// sidebar's conversation rows.
+    ///
+    /// A `List` insets every row's content (measured 16pt each side, 4pt above
+    /// and below) and nothing applied from inside the row reaches that inset,
+    /// exactly as in a grouped `Form`. But `.listRowBackground` paints the FULL
+    /// row band, so a selected row's fill already runs edge to edge while the
+    /// hover wash floated in a narrower rounded box inside it — two different
+    /// shapes for the same row, with the outer strip lit by neither and live to
+    /// neither.
+    ///
+    /// The row reclaims the inset by growing its own frame outwards
+    /// (file-header measurement 4) and re-applying the same value to the label,
+    /// so the wash and the live area both match `.listRowBackground` while the
+    /// text does not move by a point. The wash is SQUARED to match it too.
+    ///
+    /// Off macOS this is exactly `.buttonStyle(.plain)` — the shared list
+    /// compiles for iPhone and iPad, where touch already hit-tests the whole row
+    /// and the negative padding would shove rows off the screen edge.
+    func settingsListRowButton() -> some View {
+        #if os(macOS)
+        settingsRowButton(
+            horizontalPadding: MacPointer.listRowInset,
+            washCornerRadius: 0
+        )
+        .padding(.horizontal, -MacPointer.listRowInset)
+        .padding(.vertical, -MacPointer.listRowVerticalInset)
         #else
         buttonStyle(.plain)
         #endif

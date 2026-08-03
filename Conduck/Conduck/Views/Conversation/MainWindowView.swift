@@ -480,9 +480,13 @@ struct MainWindowView: View {
                         .foregroundStyle(AppColors.textTertiary)
                 }
             }
-            .settingsRowButton(horizontalPadding: 0)
+            // The row's 12pt inset lives INSIDE its live frame, and the height
+            // floor carries the rest of it (32pt icon + 12pt above and below),
+            // so the wash and the click target span the footer edge to edge.
+            // Padding applied from outside lands beyond the frame, where it
+            // reads as a dead, unlit border.
+            .settingsRowButton(minHeight: 56, horizontalPadding: 12, washCornerRadius: 0)
             .keyboardShortcut(",", modifiers: .command)
-            .padding(12)
         }
         .background(AppColors.cardBackground)
     }

@@ -349,7 +349,11 @@ struct ConversationListView: View {
                         } label: {
                             conversationRow(convo)
                         }
-                        .settingsRowButton(horizontalPadding: 0)
+                        // Full-bleed live row on macOS: the wash and the click
+                        // target reach exactly the band `.listRowBackground`
+                        // paints below, so a hovered row and a selected one
+                        // share one shape. No-op on iOS.
+                        .settingsListRowButton()
                         // Active-conversation highlight (persistent-sidebar hosts
                         // only; nil on the iPhone sheet → Color.clear). A subtle
                         // amber row fill — the app's accent reads as "selected" on
