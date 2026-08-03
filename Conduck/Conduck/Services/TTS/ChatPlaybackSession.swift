@@ -9,7 +9,8 @@ import AVFoundation
 ///
 /// Why this exists: `ReplyVoice` / `SpeechPlayer` deliberately NEVER call
 /// `setCategory` / `setActive` — they ride the *caller's* session (load-bearing
-/// for CarPlay's deactivate-once invariant, spec Text-to-Speech). CarPlay's
+/// for CarPlay's deactivate-once invariant — see the single-speak-boundary rule
+/// in `docs/ai-context/spec.md`). CarPlay's
 /// caller is `CarPlayAudioSession`. The iOS chat path had **no** such caller, so
 /// chat TTS played into whatever the session happened to be: `.soloAmbient` on a
 /// fresh launch (silenced by the hardware mute switch) or `.record` + inactive

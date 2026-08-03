@@ -66,8 +66,16 @@ The result is **Conduck Community**: identical functionality (minus the CarPlay 
 
 ## Documentation
 
-- [`docs/ai-context/spec.md`](docs/ai-context/spec.md) — the full architecture specification.
-- [`docs/ai-context/project-structure.md`](docs/ai-context/project-structure.md) — annotated project layout.
+Two short documents cover the whole project. Both are written for people and for
+AI coding agents, and both are deliberately kept small — the code itself, through
+per-file header comments and a large test suite, is the detailed documentation.
+
+- [`docs/ai-context/spec.md`](docs/ai-context/spec.md) — the architecture: what
+  the boundaries are, the decisions behind them, and the alternatives that were
+  deliberately rejected. The things the code cannot tell you.
+- [`docs/ai-context/project-structure.md`](docs/ai-context/project-structure.md)
+  — a map of the folders and build targets, and where to start for a given kind
+  of change.
 
 ## Community and contributing
 

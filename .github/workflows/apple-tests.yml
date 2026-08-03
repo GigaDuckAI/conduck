@@ -36,6 +36,12 @@ jobs:
       - name: Check storage seam
         run: scripts/check-storage-seam.sh
 
+      # Same reasoning again. This one fires a couple of times a year at most —
+      # folders barely move — but a folder map nobody checks is how the previous
+      # one drifted 12% out of date without anyone noticing.
+      - name: Check folder map
+        run: scripts/check-folder-map.sh
+
       - name: Show Xcode version
         run: xcodebuild -version
 

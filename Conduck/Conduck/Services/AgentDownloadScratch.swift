@@ -22,8 +22,9 @@
 //  every adoption — launch-only would grow unbounded in a long-running
 //  menu-bar app. An actor so adopt/discard/sweep never interleave.
 //
-//  PRIVACY: never logs filenames / URLs / storedKeys (spec — Agent File
-//  Transfer, Privacy).
+//  PRIVACY: never logs filenames / URLs / storedKeys. A filename is itself
+//  leakable — see `LoggingPrivacyDriftGuardTests`, which fails the build on the
+//  mechanical half of this rule.
 
 import Foundation
 import UniformTypeIdentifiers

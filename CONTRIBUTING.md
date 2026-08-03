@@ -182,6 +182,13 @@ so the judgement is still yours.
 
 - Match the surrounding code. Consistency with the file you're editing beats
   any external style guide.
+- **Every source file opens with a header comment.** Say what the file is for,
+  and where the design is not self-evident, say why it is that way — the
+  constraint you were working around, the approach you tried that did not work,
+  the thing that will break if someone "simplifies" it. This is not decoration.
+  The architecture document under `docs/ai-context/` deliberately does not
+  describe individual files, so the header is the only place that knowledge
+  lives, and the next person to open the file is the only reader who needs it.
 - **No new dependencies without prior discussion in an issue.** Every
   dependency is a long-term maintenance commitment, so additions are deliberate.
 - **Adding or bumping a dependency? Update `THIRD_PARTY_NOTICES.md`.** A test
@@ -190,6 +197,31 @@ so the judgement is still yours.
   vendored C++, fonts). Those live in the notices under "Components embedded via
   dependencies" and need a manual look — reproducing their notices is an
   obligation of every distributed build, not a one-time write.
+
+## Documentation
+
+Two documents under `docs/ai-context/` describe the project as a whole:
+[`spec.md`](docs/ai-context/spec.md) records the decisions behind the
+architecture, and [`project-structure.md`](docs/ai-context/project-structure.md)
+maps the folders and build targets. Both are written to be read by people and by
+AI coding agents, and both are deliberately small.
+
+Keeping them small is the point, so there are two rules about adding to them:
+
+- **A sentence belongs in `spec.md` only if it cannot be confirmed by opening
+  one file.** If a reader could check it by reading the code, it belongs in that
+  file's header comment instead. Type inventories, method names, UI labels,
+  provider model identifiers, and walkthroughs of how something is implemented
+  all fail this test.
+- **Never write a literal number — name the constant that owns it.** Write
+  `Constants.maxCustomGateways`, not the value. A number written into prose goes
+  wrong silently the moment someone changes it; a symbol name stays findable and
+  stays true.
+
+Most pull requests should not touch either document. Update `spec.md` when a
+decision changes — something that was rejected is now the design, or a boundary
+moved. Update `project-structure.md` when a folder or a build target appears or
+disappears; CI checks that every folder containing Swift source is listed.
 
 ## License and trademarks
 
