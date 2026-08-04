@@ -108,6 +108,29 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
     /// field.
     let fileTransferAvailable: Bool
 
+    /// The `SettingsManager.FileTransferSnapshot.durableLaneID` of THIS ref's
+    /// READY lane — the one-way SHA-256 over `baseURL + credential` that names
+    /// the durable server namespace. The wrist stamps it onto the agent reply it
+    /// persists (`Message.outputScanLaneID` + `outputScanDone = false`), which
+    /// is the ONLY thing that makes a Watch-originated turn eligible for the
+    /// retroactive output scan a capable device runs when the thread is next
+    /// opened. Without it a wrist turn is permanently invisible to the scan even
+    /// though its request carried the file-delivery instruction.
+    ///
+    /// Couriered rather than derived: the file-server CREDENTIAL never syncs to
+    /// the wrist, so the Watch cannot compute this digest itself, and shipping
+    /// the credential to compute it would widen the secret surface for no gain.
+    /// The digest carries no secret (one-way, and the envelope already carries
+    /// the raw gateway bearer token, a strictly larger exposure).
+    ///
+    /// Paired with `fileTransferAvailable` from the SAME snapshot read on the
+    /// iPhone, so the flag and the identity can never describe different lanes.
+    /// Omit-nil on the wire (like `token`): nil = no READY lane for this ref, and
+    /// a MISSING key decodes to nil — an un-upgraded sender therefore lands
+    /// exactly today's behavior (turn dispatched, never stamped, never scanned)
+    /// rather than stranding the envelope. Never logged.
+    let fileTransferLaneID: String?
+
     /// Active conversation session ID (`spec.md "Settings & Storage"`).
     /// Optional — nil means no live session (first turn after backend /
     /// URL change clears it). Cross-device session continuity:
@@ -141,6 +164,7 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         authScheme: RemoteAgentAuthScheme = .bearer,
         certFingerprintHex: String?,
         fileTransferAvailable: Bool = false,
+        fileTransferLaneID: String? = nil,
         activeSessionID: String?,
         timestamp: TimeInterval
     ) {
@@ -154,8 +178,32 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         self.authScheme = authScheme
         self.certFingerprintHex = certFingerprintHex
         self.fileTransferAvailable = fileTransferAvailable
+        // Normalize at the BOUNDARY so a malformed value can never reach the
+        // wire, the Watch's durable slots, or a persisted `outputScanLaneID`.
+        // Every construction site (broadcaster + decoder) funnels through here.
+        self.fileTransferLaneID = Self.sanitizedLaneID(fileTransferLaneID)
         self.activeSessionID = activeSessionID
         self.timestamp = timestamp
+    }
+
+    /// Accept a lane id ONLY in its canonical shape — exactly 64 lowercase hex
+    /// characters, the fixed output of `FileTransferSnapshot.durableLaneID`'s
+    /// SHA-256 — else nil ("no lane"). The id is an OPAQUE identity token that
+    /// is compared for equality and nothing else, so anything off-shape is
+    /// already useless; rejecting it here bounds what a malformed / hostile
+    /// payload can push into Watch `UserDefaults`, task metadata, and Core Data.
+    /// Length is version-stable: the domain-separation tag lives INSIDE the
+    /// hashed input (`conduck.file-lane.v1\0`), so a future lane-id revision
+    /// changes the digest, never its shape.
+    private static func sanitizedLaneID(_ raw: String?) -> String? {
+        // Explicit ASCII alphabet rather than `Character.isHexDigit`, which also
+        // accepts full-width Unicode digit forms — a look-alike id would be
+        // stored and compared but could never match a real digest.
+        let hex = Set("0123456789abcdef")
+        guard let raw, raw.count == 64, raw.allSatisfy({ hex.contains($0) }) else {
+            return nil
+        }
+        return raw
     }
 
     /// Plist-compatible dict for `WCSession.transferUserInfo`.
@@ -193,6 +241,11 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         }
         if let certFingerprintHex {
             dict["certFingerprintHex"] = certFingerprintHex
+        }
+        // Omit-nil (not a false-ish sentinel): "key absent" is the SAME signal
+        // an un-upgraded sender produces, so both roads lead to "no lane".
+        if let fileTransferLaneID {
+            dict["fileTransferLaneID"] = fileTransferLaneID
         }
         if let activeSessionID {
             dict["activeSessionID"] = activeSessionID
@@ -236,6 +289,11 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         // never wrote this) rather than failing the decode — same tolerant
         // posture as the optional fields, but the field itself is non-optional.
         let fileTransferAvailable = dict["fileTransferAvailable"] as? Bool ?? false
+        // Missing key (un-upgraded sender) OR an off-shape value → nil: the
+        // wrist simply never stamps a lane on that turn, which is the
+        // pre-upgrade behavior, not a decode failure that would strand the
+        // whole envelope. Shape enforcement happens in `init`.
+        let fileTransferLaneID = dict["fileTransferLaneID"] as? String
         let sessionID = dict["activeSessionID"] as? String
         return RemoteAgentBroadcastEnvelope(
             backendRef: backendRef,
@@ -248,6 +306,7 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
             authScheme: authScheme,
             certFingerprintHex: fingerprint,
             fileTransferAvailable: fileTransferAvailable,
+            fileTransferLaneID: fileTransferLaneID,
             activeSessionID: sessionID,
             timestamp: timestamp
         )

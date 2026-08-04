@@ -1101,6 +1101,16 @@ actor ConversationStore {
         sourceDevice: String,
         status: String? = nil,
         fileTransferLaneID: String? = nil,
+        /// The durable file-lane identity that OWNS this reply's output scan.
+        /// Agent rows only, and only from a dispatch that latched a READY lane.
+        /// Non-nil writes the explicit pending pair (`outputScanDone = false` +
+        /// the identity) in the SAME insert, which is what makes the turn
+        /// eligible for the retroactive scan; nil leaves BOTH fields nil, so
+        /// `false`-without-identity is impossible for newly-written rows and an
+        /// unprovable turn is never probed. Exists for the surfaces that persist
+        /// a reply WITHOUT an exact user-turn id to flip (the Watch's standalone
+        /// dispatch) — the paired-flip surfaces use `completeAgentTurn` instead.
+        outputScanLaneID: String? = nil,
         attachments: [AttachmentDraft] = []
     ) async throws -> MessageRecord {
         try await ensureLoaded()
@@ -1155,6 +1165,15 @@ actor ConversationStore {
             message.setValue(sourceDevice, forKey: "sourceDevice")
             message.setValue(status, forKey: "status")
             message.setValue(fileTransferLaneID, forKey: "fileTransferLaneID")
+            // Explicit pending marker + owner identity, written in the SAME
+            // transaction as the reply itself: a process death between the two
+            // would otherwise leave a reply whose recovery lane was lost, which
+            // is unrecoverable rather than merely late. Both stay nil without a
+            // dispatch lane (see the parameter doc).
+            if let outputScanLaneID {
+                message.setValue(false, forKey: "outputScanDone")
+                message.setValue(outputScanLaneID, forKey: "outputScanLaneID")
+            }
             message.setValue(conversation, forKey: "conversation")
 
             for draft in attachments {
@@ -1191,6 +1210,12 @@ actor ConversationStore {
             sourceDevice: sourceDevice,
             status: status,
             fileTransferLaneID: fileTransferLaneID,
+            // Mirror the row just written: an owner identity always arrives
+            // paired with the explicit `false` marker (same rule as
+            // `completeAgentTurn`), so an in-memory record and a re-fetched one
+            // agree on retro-scan eligibility.
+            outputScanDone: outputScanLaneID == nil ? nil : false,
+            outputScanLaneID: outputScanLaneID,
             attachments: Self.attachmentRecords(from: attachments, at: now)
         )
     }
@@ -1742,16 +1767,27 @@ actor ConversationStore {
     ///   - allocate each inserted attachment's `sequence` continuing AFTER the
     ///     message's current max (the draft's own pass-local sequence is ignored);
     ///   - set `outputScanDone = true` when `markScanned`.
-    /// Returns whether ANY attachment was inserted; posts `.conversationsDidChange`
-    /// ONCE, and ONLY when something was inserted — a marker-only write (conclusive
-    /// pass that found no new file) must not trigger a reload echo.
+    /// Returns whether ANY attachment was INSERTED — that is the caller's gate
+    /// for preview enrichment, so it stays strictly about chips.
+    ///
+    /// Posts `.conversationsDidChange` ONCE, when either an attachment was
+    /// inserted OR a turn's `outputScanDone` actually TRANSITIONED false → true.
+    /// The marker is user-visible state now that `MissingOutputNotice` derives
+    /// the "named a file, delivered nothing" row from it: without the second
+    /// condition, a deferred grace-window pass that confirms the miss would
+    /// write `true` to the store while every mounted thread kept rendering the
+    /// stale `false`, and the row would appear only on the next unrelated
+    /// reload. The post is gated on the TRANSITION, not on `markScanned` — a
+    /// re-stamp of an already-true marker changes nothing, so a reload storm
+    /// cannot be manufactured by repeatedly reconciling the same turn.
     func reconcileOutputScan(
         _ results: [OutputScanReconciliation]
     ) async throws -> Bool {
         guard !results.isEmpty else { return false }
         try await ensureLoaded()
         let bgContext = newWriteContext()
-        let changedVisibleState: Bool = try await bgContext.perform { [bgContext] in
+        let outcome: (inserted: Bool, changedVisibleState: Bool) = try await bgContext.perform { [bgContext] in
+            var insertedAny = false
             var changedVisibleState = false
             let now = Date()
             for result in results {
@@ -1795,19 +1831,26 @@ actor ConversationStore {
                     Self.applyDraft(draft, to: attachment, on: message, id: UUID(), sequence: nextSequence, at: now)
                     if let key = draft.storedKey { presentKeys.insert(key) }
                     nextSequence += 1
+                    insertedAny = true
                     changedVisibleState = true
                 }
 
                 if result.markScanned {
+                    // Read before write: only a real false → true transition is
+                    // a visible change. Re-stamping an already-closed turn is a
+                    // no-op that must not echo a reload.
+                    let wasDone = (message.value(forKey: "outputScanDone") as? NSNumber)?.boolValue
+                    if wasDone != true {
+                        changedVisibleState = true
+                    }
                     message.setValue(true, forKey: "outputScanDone")
                 }
             }
             try bgContext.save()
-            return changedVisibleState
+            return (insertedAny, changedVisibleState)
         }
-        // Marker-only writes carry no visible change — never echo a reload.
-        if changedVisibleState { await postDidChange() }
-        return changedVisibleState
+        if outcome.changedVisibleState { await postDidChange() }
+        return outcome.inserted
     }
 
     /// Apply synced server-reference PREVIEWS onto already-persisted attachment

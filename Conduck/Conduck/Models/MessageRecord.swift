@@ -66,10 +66,12 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
     /// excluded rather than guessing the currently configured server.
     let outputScanDone: Bool?
     /// Stable one-way identity of the exact file lane used by a recoverable
-    /// dispatch (foreground Mac, in-app/background, and modern CarPlay).
-    /// Non-nil only when `outputScanDone == false` (or after that scan becomes
-    /// true). Legacy rows—and Watch until its broadcast/uploader metadata
-    /// threads the durable ID—remain nil and are not scanned.
+    /// dispatch — foreground Mac, in-app/background, CarPlay, and the Watch's
+    /// standalone dispatch (which stamps the lane the iPhone couriered to it in
+    /// the gateway envelope, since the wrist cannot derive one). Non-nil only
+    /// when `outputScanDone == false` (or after that scan becomes true). Legacy
+    /// rows remain nil and are not scanned: guessing the currently configured
+    /// lane could attach a file from an unrelated server.
     let outputScanLaneID: String?
     /// Image / text-file attachments on this turn, ordered by `sequence`.
     /// Empty for text-only turns. The snapshots carry thumbnails + extracted

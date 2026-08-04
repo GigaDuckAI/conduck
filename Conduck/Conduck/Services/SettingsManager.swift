@@ -3755,6 +3755,11 @@ actor SettingsManager {
         // `RemoteAgentBackend(rawValue:)` still routes a built-in default and
         // simply ignores a custom default (graceful degradation).
         let custom: CustomGateway? = defaultRef.customID.flatMap { customGateway(id: $0) }
+        // ONE read of the READY lane feeds BOTH wire fields below. Two separate
+        // `fileTransferReadySnapshot(for:)` calls could straddle a settings edit
+        // and ship a `true` flag beside a different lane's identity — the wrist
+        // would then stamp a turn with a lane the request was never built for.
+        let fileLane = fileTransferReadySnapshot(for: defaultRef)
         return RemoteAgentBroadcastEnvelope(
             backendRef: defaultRef.rawString,
             url: snapshot.url,
@@ -3777,7 +3782,13 @@ actor SettingsManager {
             // AND the staged test passed), NOT the raw `available` flag, which
             // can read true while the credential is unreadable. In-actor
             // self-call, no `await`.
-            fileTransferAvailable: fileTransferReadySnapshot(for: defaultRef) != nil,
+            fileTransferAvailable: fileLane != nil,
+            // Carried for wire symmetry with the multi envelope (which is what a
+            // modern Watch actually consumes — `WatchSessionManager` prefers the
+            // multi key and only falls back here for a pre-multi iPhone). Same
+            // posture as `fileTransferAvailable`, which the legacy single-apply
+            // path also ignores.
+            fileTransferLaneID: fileLane?.durableLaneID,
             activeSessionID: snapshot.activeSessionID,
             timestamp: Date().timeIntervalSinceReferenceDate
         )
@@ -3817,6 +3828,11 @@ actor SettingsManager {
             let custom: CustomGateway? = ref.customID.flatMap { id in
                 customs.first { $0.id == id }
             }
+            // ONE read per ref feeds BOTH file-lane wire fields (see the single
+            // builder): the readiness flag and the lane identity must describe
+            // the SAME lane or the wrist can stamp a turn with a lane its
+            // request never referenced.
+            let fileLane = fileTransferReadySnapshot(for: ref)
             return RemoteAgentBroadcastEnvelope(
                 backendRef: ref.rawString,
                 url: snapshot.url,
@@ -3838,7 +3854,12 @@ actor SettingsManager {
                 // per-turn file-delivery instruction per bound gateway. The raw
                 // `available` flag can read true while the credential is
                 // unreadable; the ready-gate can't. In-actor self-call.
-                fileTransferAvailable: fileTransferReadySnapshot(for: ref) != nil,
+                fileTransferAvailable: fileLane != nil,
+                // Per-ref lane IDENTITY — what the wrist stamps onto the reply it
+                // persists so a capable device's retroactive output scan can
+                // prove which lane that turn belongs to. The wrist can't derive
+                // it (the file-server credential never syncs there).
+                fileTransferLaneID: fileLane?.durableLaneID,
                 activeSessionID: snapshot.activeSessionID,
                 timestamp: now
             )

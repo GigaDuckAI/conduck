@@ -648,7 +648,7 @@ struct MainWindowView: View {
         VStack(spacing: 0) {
             // Thread fills the pane width (scrollbar at the window edge); its
             // message column is capped + centered internally via contentMaxWidth.
-            ConversationThreadView(viewModel: vm, contentMaxWidth: Constants.Layout.chatContentWidth, emptyMascot: hostMascot)
+            ConversationThreadView(viewModel: vm, settingsVM: settingsVM, contentMaxWidth: Constants.Layout.chatContentWidth, emptyMascot: hostMascot)
                 // INSIDE the `.id` boundary so a sidebar switch tears the
                 // reporter down/re-mounts it with the thread (clean
                 // appear/disappear per conversation, no onChange plumbing).

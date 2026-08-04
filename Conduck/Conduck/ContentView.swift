@@ -652,7 +652,7 @@ struct ContentView: View {
         if !isRemoteAgentConfigured {
             unconfiguredEmptyState
         } else if let vm = detailVM {
-            ConversationThreadView(viewModel: vm, emptyMascot: hostMascot)
+            ConversationThreadView(viewModel: vm, settingsVM: settingsVM, emptyMascot: hostMascot)
                 .id(vm.conversationID)
         } else {
             startEmptyState

@@ -807,8 +807,18 @@ struct ConverseRequest: Encodable, Sendable {
     /// scope on, so a rule like "no MEDIA: in Conduck sessions" can be gated to
     /// Conduck turns and never leak into the same agent's WhatsApp/Telegram
     /// channels, where MEDIA: is correct.
+    /// Why "on a line of its own": it is the ONE structural difference between
+    /// a handover and a passing mention. `MissingOutputNotice` uses exactly that
+    /// property to decide whether a named-but-absent file is worth telling the
+    /// user about — a filename in prose ("I read your config.yaml", "this uses
+    /// Node.js") always shares its line with other words, while a delivered
+    /// artifact can stand alone. Asking for the shape here is what makes the
+    /// diagnostic possible without a language-specific verb heuristic, and it
+    /// costs a compliant agent nothing. Non-compliance degrades to the previous
+    /// behaviour: the chip still appears (the detector reads filenames wherever
+    /// they sit), only the failure notice stays silent.
     static let fileDeliveryInstruction =
-        "[Conduck file transfer] To return a file, write it to the root of your working directory and state its exact filename in plain text in your reply. Attachment directives (MEDIA: lines or similar) do not reach this user — only files named in plain reply text are delivered."
+        "[Conduck file transfer] To return a file, write it to the root of your working directory and state its exact filename in plain text in your reply, on a line of its own. Attachment directives (MEDIA: lines or similar) do not reach this user — only files named in plain reply text are delivered."
 
     /// Append `fileDeliveryInstruction` to a fully-spliced turn text. LAST in
     /// the text-body order (base → text-file fences → server refs → image refs →

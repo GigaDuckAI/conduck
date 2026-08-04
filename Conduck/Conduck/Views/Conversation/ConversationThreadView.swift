@@ -51,6 +51,13 @@ struct ConversationThreadView: View {
     /// scroll state.
     let viewModel: ConversationDetailViewModel
 
+    /// The host-owned Settings VM, borrowed for ONE thing: the "Review file
+    /// setup" route out of the missing-output notice. Passed in rather than
+    /// minted here because every host already owns a stable instance, and the
+    /// file-transfer editor is a buffered editor whose unsaved-changes state
+    /// must not be duplicated across two live view models.
+    let settingsVM: SettingsViewModel
+
     /// Optional cap on the message-column width. When set (macOS unified window
     /// passes `Layout.chatContentWidth`), the `ScrollView` stays full-bleed — so
     /// the macOS overlay scrollbar sits at the window edge — while the message
@@ -116,6 +123,12 @@ struct ConversationThreadView: View {
     /// bytes) and hand the adopted scratch file up here; the latest tap wins.
     @State private var filePreview = FilePreviewCoordinator()
 
+    /// The file-transfer setup sheet, opened from a missing-output notice.
+    /// Owned HERE and not per row, exactly like `filePreview`: the rows live in
+    /// a recycling `LazyVStack`, so a row-owned sheet would be torn down by a
+    /// scroll while presented.
+    @State private var showingFileSetup = false
+
     var body: some View {
         @Bindable var vm = viewModel
         @Bindable var preview = filePreview
@@ -161,6 +174,29 @@ struct ConversationThreadView: View {
         }
         .sheet(isPresented: $vm.showingGatewaySheet) {
             gatewayLockSheet
+        }
+        // "Review file setup" from a missing-output notice. A SHEET, not a
+        // navigation push: a mid-conversation diagnostic must let the user peek
+        // at the setup and land back in the thread, never eject them into
+        // Settings (same reasoning as `TroubleshootButton`). On dismiss the
+        // lane identity is re-resolved, so a repointed or removed server retires
+        // its notices immediately rather than on the next unrelated reload.
+        .sheet(isPresented: $showingFileSetup, onDismiss: {
+            Task { await viewModel.refreshFileLaneDerivedState() }
+        }) {
+            if let ref = viewModel.boundRef {
+                NavigationStack {
+                    // Cancel/Save chrome comes from the content's
+                    // `bufferedEditorChrome` — no host Done button.
+                    FileTransferSetupGuideView(
+                        viewModel: settingsVM,
+                        ref: ref,
+                        titleOverride: settingsVM.displayName(for: ref),
+                        context: .settings
+                    )
+                }
+                .frame(minWidth: 520, minHeight: 600)
+            }
         }
         // Quick Look for attachment files — downloaded server files AND
         // locally-stored inline text files (see `filePreview` doc).
@@ -237,12 +273,16 @@ struct ConversationThreadView: View {
                             boundRef: viewModel.boundRef,
                             speakState: speaker.speakState(for: message.id),
                             usedFallbackVoice: speaker.usedFallbackVoice(for: message.id),
+                            showsMissingOutputNotice: viewModel.missingOutputNoticeIDs.contains(message.id),
+                            outputRecheckState: viewModel.outputRecheckStates[message.id],
                             filePreview: filePreview,
                             onCopy: { viewModel.copy(message) },
                             onSpeak: { speaker.speak(message.text, messageID: message.id) },
                             onRetry: { Task { await viewModel.retry(message) } },
                             onResendWithoutPhoto: { Task { await viewModel.resendWithoutPhoto(message) } },
-                            onKeepChattingWithoutPhotos: { Task { await viewModel.enableHideEarlierPhotos() } }
+                            onKeepChattingWithoutPhotos: { Task { await viewModel.enableHideEarlierPhotos() } },
+                            onRecheckOutputs: { Task { await viewModel.recheckOutputs(for: message) } },
+                            onOpenFileSetup: { showingFileSetup = true }
                         )
                         .equatable()
                         .id(message.id)
@@ -875,6 +915,13 @@ private struct MessageBubble: View, Equatable {
     /// — the transparency half of the never-silent-voice-fallback contract.
     /// Only ever true on assistant bubbles. Drives the footer fallback caption.
     let usedFallbackVoice: Bool
+    /// This reply named a file on a line of its own that the user's file server
+    /// definitively does not have. Derived by the VM (`MissingOutputNotice`) —
+    /// never persisted, never computed here: the derivation walks
+    /// adversary-controlled reply text and must not run inside `body`.
+    let showsMissingOutputNotice: Bool
+    /// Outcome of the user's last "Check again" on this turn, if any.
+    let outputRecheckState: ConversationDetailViewModel.OutputRecheckState?
     /// The thread's single Quick Look presenter — download chips hand their
     /// adopted file up to it. A stable `@State`-owned reference (excluded from
     /// `==` alongside the closures).
@@ -890,6 +937,11 @@ private struct MessageBubble: View, Equatable {
     /// poisoned chat — the user keeps typing, earlier photos ride as the
     /// canonical disclosure from the next send on).
     let onKeepChattingWithoutPhotos: () -> Void
+    /// Re-probe this turn's output window against the file server, on demand
+    /// (the missing-output row's "Check again").
+    let onRecheckOutputs: () -> Void
+    /// Open the bound gateway's file-transfer setup (the row's second action).
+    let onOpenFileSetup: () -> Void
 
     @State private var didCopy = false
     /// Full-screen gallery state (start index = tapped thumbnail).
@@ -909,6 +961,8 @@ private struct MessageBubble: View, Equatable {
             && lhs.boundRef == rhs.boundRef
             && lhs.speakState == rhs.speakState
             && lhs.usedFallbackVoice == rhs.usedFallbackVoice
+            && lhs.showsMissingOutputNotice == rhs.showsMissingOutputNotice
+            && lhs.outputRecheckState == rhs.outputRecheckState
     }
 
     private var isUser: Bool { message.role == "user" }
@@ -942,10 +996,18 @@ private struct MessageBubble: View, Equatable {
         // The delivery error row sits UNDER the bubble, outside its
         // background — persistent delivery metadata, never a fabricated
         // assistant bubble and never part of outbound history.
-        VStack(alignment: .trailing, spacing: 6) {
+        VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
             bubbleRow
             if isUser, message.status == "failed" {
                 deliveryErrorRow
+            }
+            // Handback diagnostic: sits UNDER the agent bubble, outside its
+            // background — device-local metadata about THIS turn's delivery,
+            // never a fabricated assistant bubble and never part of outbound
+            // history. Same structural place the failed-turn row occupies on
+            // the user side.
+            if !isUser, showsMissingOutputNotice {
+                missingOutputRow
             }
         }
         .fullScreenCoverCompat(item: $fullScreenStartIndex) { startIndex in
@@ -1127,6 +1189,122 @@ private struct MessageBubble: View, Equatable {
         .frame(maxWidth: 520, alignment: .trailing)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: "\(presentation.title). \(presentation.body)"))
+    }
+
+    // MARK: - Missing-output row (agent named a file that isn't there)
+
+    /// Persistent inline row under an agent turn whose reply handed over a
+    /// filename the file server does not have. Deliberately QUIETER than the
+    /// delivery-error row: this is not a failure of the message, it is a fact
+    /// about the user's own setup, and it is a heuristic verdict on top of that.
+    /// Neutral tint, no warning red, no accusation — the file may still be on
+    /// its way, saved somewhere else, or the served folder may not be the one
+    /// the agent writes into, and the copy says exactly that instead of calling
+    /// the agent a liar.
+    ///
+    /// Two actions, both of which can actually change the outcome: re-ask the
+    /// server now, or go look at the setup. "Check again" is the only path that
+    /// re-probes a permanently-closed turn, which is why it exists at all.
+    private var missingOutputRow: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: "questionmark.folder")
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+                Text(LocalizedStringResource(
+                    "thread.missingOutput.title",
+                    defaultValue: "File not on your file server"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+            Text(LocalizedStringResource(
+                "thread.missingOutput.body",
+                defaultValue: "This reply names a file that isn't in the folder Conduck reads. It may still be on its way, saved somewhere else, or the folder may not be the one your agent writes to."))
+                .font(.caption2)
+                .foregroundStyle(AppColors.textTertiary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 14) {
+                if outputRecheckState == .checking {
+                    HStack(spacing: 5) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(AppColors.textTertiary)
+                        Text(LocalizedStringResource(
+                            "thread.missingOutput.checking",
+                            defaultValue: "Checking…"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppColors.textTertiary)
+                    }
+                } else {
+                    Button(action: onRecheckOutputs) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.clockwise")
+                            Text(LocalizedStringResource(
+                                "thread.missingOutput.action.checkAgain",
+                                defaultValue: "Check again"))
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppColors.brandAmber)
+                    }
+                    .inlineLinkButton()
+                }
+                Button(action: onOpenFileSetup) {
+                    Text(LocalizedStringResource(
+                        "thread.missingOutput.action.reviewSetup",
+                        defaultValue: "Review file setup"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppColors.brandAmber)
+                }
+                .inlineLinkButton()
+            }
+            // The re-check verdict, and ONLY when it says something the row
+            // doesn't already: a check that never got an answer is a materially
+            // different claim from a clean repeat 404, and reporting the former
+            // as the latter would be the one lie this row must never tell.
+            if let resultCaption {
+                Text(resultCaption)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(AppColors.cardBackgroundElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(AppColors.borderSubtle, lineWidth: 1)
+        )
+        .frame(maxWidth: 520, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Caption for the last "Check again" outcome. A SUCCESS has no caption:
+    /// the chip appears and the whole row retires, so there is nothing left to
+    /// annotate.
+    private var resultCaption: LocalizedStringResource? {
+        switch outputRecheckState {
+        case .stillMissing:
+            return LocalizedStringResource(
+                "thread.missingOutput.result.stillMissing",
+                defaultValue: "Checked again — still not there.")
+        case .couldNotCheck:
+            // Deliberately names NO cause. This one state covers a lane that no
+            // longer matches the turn's, a re-check the app itself declined
+            // because another pass held the turn, a settings edit mid-probe, and
+            // a genuine transport/auth/certificate failure. Only the last is a
+            // server the app could not reach, so naming reachability would send
+            // most users to debug a server that is working perfectly.
+            return LocalizedStringResource(
+                "thread.missingOutput.result.couldNotCheck",
+                defaultValue: "Couldn't finish the check just now.")
+        case .checking, nil:
+            return nil
+        }
     }
 
     @ViewBuilder

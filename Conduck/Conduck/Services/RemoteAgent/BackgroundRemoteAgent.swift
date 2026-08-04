@@ -1083,11 +1083,17 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                       let captured = await SettingsManager.shared
                         .fileTransferReadySnapshot(for: ref),
                       captured.durableLaneID == fileTransferLaneID {
+                // The landing probe fires within milliseconds of the reply, so
+                // it is inside the turn's grace window by construction: it
+                // attaches whatever already exists, and leaves the turn PENDING
+                // rather than closing it on a 404 the file may be one second
+                // away from disproving. A later thread open finishes the job.
                 let scan = await FileTransferOutputDetector.reconciliationScan(
                     reply: reply,
                     conversationID: conversationID,
                     snapshot: captured,
-                    excludedKeys: []
+                    excludedKeys: [],
+                    turnCreatedAt: appended.createdAt
                 )
                 guard let current = await SettingsManager.shared
                     .fileTransferReadySnapshot(for: ref),
@@ -1517,8 +1523,13 @@ enum SourceDevice {
 ///     tells the agent each uploaded file's stored name, so a reply merely
 ///     echoing it would otherwise probe `.exists` (the file IS on the server —
 ///     WE put it there) and chip the user's own upload back at them.
-///   - Distinct candidates are CAPPED at 5 so a chatty reply can't fan out into
-///     dozens of probes against the user's home server.
+///   - Distinct candidates are CAPPED (`maxCandidates`) so a chatty reply can't
+///     fan out into dozens of probes against the user's home server, and the
+///     first lane-wide probe failure abandons the rest of the turn's window.
+///   - A pass that could not examine every eligible candidate, or that ran
+///     before the turn's age gate opened, does NOT close the turn — see
+///     `outputScanGrace`, `truncatedScanHorizon` and `scanMayClose`. Closing a
+///     turn is permanent, so it is reserved for a pass that actually finished.
 ///   - A candidate is kept ONLY when it probes `.exists` (a real GET 200/206) —
 ///     a name the model INVENTED yields nothing. A name that happens to match a
 ///     real file at the served root DOES chip, whoever wrote it (see "WHAT THE
@@ -1537,20 +1548,163 @@ enum FileTransferOutputDetector {
         let conclusive: Bool
     }
 
-    /// Curated set of output-file extensions worth probing. Deliberately narrow:
-    /// document / data / archive / image / code types an agent tool realistically
-    /// WRITES, chosen so common prose tokens ("e.g.", "v1.1", "example.com") with
-    /// a non-file extension never reach the network. Lowercased for matching.
-    private static let outputAllowlist: Set<String> = [
-        "pdf", "csv", "tsv", "json", "xml", "yaml", "yml", "txt", "md", "log",
-        "zip", "tar", "gz", "png", "jpg", "jpeg", "gif", "svg",
-        "xlsx", "xls", "docx", "doc", "pptx", "html",
-        "py", "js", "ts", "sh", "sql", "parquet"
+    /// Curated set of output-file extensions worth probing — document / data /
+    /// archive / image / audio / code types an agent tool realistically WRITES.
+    /// Lowercased for matching.
+    ///
+    /// THE LIST IS A PROSE-NOISE FILTER, not a MIME registry. The candidate
+    /// regex enumerates every `<base>.<ext>` token in the reply; this set is the
+    /// only thing standing between ordinary sentences ("e.g.", "v1.1",
+    /// "example.com") and a GET against the user's home server. Every entry is
+    /// therefore weighed on ONE question: how often does this appear as the tail
+    /// of a `<base>.<ext>` token in prose that names no file?
+    ///
+    /// What a false candidate actually costs, because it bounds how strict this
+    /// has to be: ONE ranged GET that returns 404. It can never produce a chip —
+    /// the two-source rule needs a real file at the served root with that exact
+    /// name. So the filter is tuned to keep NOISE proportionate, not to be
+    /// airtight.
+    ///
+    /// ADMITTED, and why:
+    ///   - Audio (`m4a`/`mp3`/`wav`/`flac`/`ogg`/`aac`/`opus`) — a voice-first
+    ///     product whose agents synthesise speech and clips had no way to hand
+    ///     one back. All are distinctive tails; none occur in prose.
+    ///   - `ipynb` / `toml` — unambiguous artifact extensions with zero prose
+    ///     shape. `ppt` restores the symmetry `doc`/`xls` already had with their
+    ///     modern twins.
+    ///   - `rtf` / `epub` — document deliverables a "write this up for me" turn
+    ///     genuinely produces.
+    ///   - `webp` — a modern raster output format the image set simply lacked;
+    ///     it also earns a thumbnail (see `imagePreviewExtensions`).
+    ///   - Languages (`go`/`rs`/`rb`/`kt`/`java`/`swift`/`cpp`/`hpp`/`css`/
+    ///     `scss`/`tex`/`bat`/`ps1`, on top of the existing `py`/`js`/`ts`/
+    ///     `sh`/`sql`) — the showcase gateways are CODING agents, so source
+    ///     files are the modal deliverable. Short tails were weighed, not waved
+    ///     through: a missing space after a full stop makes `Done.Go` a token,
+    ///     so `go` costs occasional 404s. Admitted anyway, because `main.go` is
+    ///     one of the most common agent deliverables there is and the cost of
+    ///     the noise is a probe that cannot chip.
+    ///
+    /// REFUSED, and why:
+    ///   - ONE-character tails (`c`, `h`, `r`, `m`) — the noise floor of ordinary
+    ///     numbered prose ("section 4.c") swamps the signal.
+    ///   - `env` — the canonical `.env` cannot match the regex anyway (no base
+    ///     before the dot), while ordinary code prose (`process.env`) matches
+    ///     every time. All noise, no coverage, and the artifact it would name is
+    ///     a secrets file this app must never pull into the conversation store.
+    ///   - `db` / `bin` / `dat` — generic, usually pre-existing, and carry no
+    ///     evidence that the agent AUTHORED anything (the probe proves existence
+    ///     only — see "WHAT THE PROBE PROVES" above).
+    ///   - `sqlite` — legitimate but sensitive: accidentally chipping a live
+    ///     workspace database is a worse mis-fire than chipping a stray document.
+    ///   - Video (`mp4`/`mov`/`webm`) and config (`ini`/`cfg`/`conf`) — widening
+    ///     handback to those artifact classes is a product decision, taken
+    ///     deliberately or not at all.
+    nonisolated static let outputAllowlist: Set<String> = [
+        "pdf", "csv", "tsv", "json", "xml", "yaml", "yml", "toml", "txt", "md", "log",
+        "zip", "tar", "gz", "png", "jpg", "jpeg", "gif", "svg", "webp",
+        "xlsx", "xls", "docx", "doc", "pptx", "ppt", "html", "rtf", "epub",
+        "m4a", "mp3", "wav", "flac", "ogg", "aac", "opus",
+        "py", "js", "ts", "sh", "sql", "parquet", "ipynb",
+        "go", "rs", "rb", "kt", "java", "swift", "cpp", "hpp", "css", "scss",
+        "tex", "bat", "ps1"
     ]
 
-    /// Maximum distinct candidates probed per reply (caps fan-out on a chatty
-    /// reply that mentions many filenames).
-    private static let maxCandidates = 5
+    /// Maximum distinct candidates probed per reply — a fan-out budget, so a
+    /// chatty reply can't fire dozens of GETs at the user's home server in one
+    /// pass. Applied AFTER the inbound / already-chipped filters, so an echoed
+    /// name can never displace a real output from the window.
+    ///
+    /// 10 rather than a handful: with the widened allowlist an honest coding
+    /// reply routinely names the half-dozen files it touched BEFORE naming the
+    /// deliverable, and a window that a normal reply overflows is a window that
+    /// loses real outputs. Ten sequential probes is still a bounded worst case,
+    /// and `detect` abandons the whole turn on the first lane-wide failure, so a
+    /// dead server costs ONE probe, not ten.
+    nonisolated static let maxCandidates = 10
+
+    /// Lifetime ceiling on detector-minted chips for ONE message. Reached ⇒ the
+    /// turn closes without probing: nothing further can be added, so further
+    /// examination cannot change the outcome.
+    ///
+    /// This is what makes "a truncated pass stays open" safe. Every pass drops
+    /// the keys already chipped on the message before applying `maxCandidates`,
+    /// so confirmed files make the probe window WALK FORWARD through a long
+    /// candidate list across passes. Without a ceiling, a reply naming hundreds
+    /// of files that happen to exist at the served root could walk the whole
+    /// list over repeated thread opens — minting unbounded chips and, worse,
+    /// re-arming the per-pass preview download budget each time.
+    ///
+    /// TWICE `maxCandidates`, deliberately: at parity the walk would be an
+    /// illusion, because every chip that advances the window's head also shrinks
+    /// the remaining allowance that sets its tail, pinning the far end at the
+    /// same candidate forever. A ceiling above the per-pass cap is what lets a
+    /// long list actually be worked through.
+    ///
+    /// HOW FAR THE WALK ACTUALLY REACHES, because it bounds what
+    /// `probeOrderedCandidates` has to get right. With `c` keys already chipped,
+    /// a pass probes `min(maxCandidates, maxOutputChipsPerMessage - c)` further
+    /// candidates, so the furthest plan-order position any pass can reach is
+    /// `c + min(maxCandidates, maxOutputChipsPerMessage - c)` — maximised at
+    /// `c == maxCandidates`, i.e. TWENTY. The reachable prefix is therefore
+    /// `maxOutputChipsPerMessage` candidates deep, not the sum of the two
+    /// constants, and everything past it is never asked about. That is precisely
+    /// why probe ORDER is load-bearing rather than cosmetic.
+    nonisolated static let maxOutputChipsPerMessage = maxCandidates * 2
+
+    /// How long after an agent turn was created a probing pass must wait before
+    /// it may PERMANENTLY close that turn. Inside the window a scan still
+    /// attaches whatever it confirms — chips appear instantly — it just may not
+    /// stamp the turn scanned, so a later pass re-probes.
+    ///
+    /// WHY A GRACE PERIOD AT ALL: the landing probe fires in the same async call
+    /// as reply persistence, i.e. within milliseconds of the agent's last token.
+    /// A file that lands a second later — a tool that flushes after it answers,
+    /// or an rclone VFS directory cache that has not settled — reads as a
+    /// definitive 404 and closes the turn forever. This project's own
+    /// connect-doctor still needs a five-second retry loop to avoid exactly that
+    /// false negative even with `--dir-cache-time 1s` configured; a product that
+    /// trusts ONE instant probe is trusting something its own tooling does not.
+    ///
+    /// WHY 60 SECONDS: an order of magnitude of headroom over that observed
+    /// five-second settling, plus room for modest inter-device clock skew, while
+    /// still being short enough that the one useful terminal retry is not
+    /// deferred into irrelevance. Longer windows (minutes) only enlarge the
+    /// pending set; a valid agent that publishes files minutes after replying
+    /// needs an explicit completion protocol, not a bigger heuristic.
+    ///
+    /// AN ATTEMPT COUNT WOULD NOT DO: a second pass can fire milliseconds after
+    /// the first (a notification tap, a foreground reload, another store event)
+    /// and permanently repeat the same stale 404. Only wall-clock age separates
+    /// "asked again" from "asked later".
+    ///
+    /// ANCHOR + SKEW: the deadline is measured from the turn's persisted
+    /// `createdAt`, which every device sees identically after sync — no new
+    /// field, no schema change. It is a wall clock, so a device whose clock runs
+    /// BEHIND the author's simply waits longer (safe), and one running AHEAD by
+    /// more than the window can close a turn early (the pre-change behaviour).
+    /// Automatic time on Apple devices makes a minute of skew unusual, and the
+    /// bad direction degrades to today's semantics rather than to something new.
+    nonisolated static let outputScanGrace: TimeInterval = 60
+
+    /// The same rule for a TRUNCATED pass — one where more eligible candidates
+    /// existed than `maxCandidates` allowed it to examine.
+    ///
+    /// A truncated examination is not a finished examination: the pass never
+    /// looked at the tail, so stamping the turn complete throws away whatever is
+    /// there. It therefore stays open far longer than an ordinary pass, and each
+    /// later pass walks the window forward past the keys already chipped.
+    ///
+    /// WHY IT IS A HORIZON AND NOT "FOREVER": the window only advances when a
+    /// probe CONFIRMS a file, so a reply whose first ten candidates are all
+    /// misses would otherwise re-probe the identical ten on every thread open
+    /// for the life of the conversation, learning nothing. That is not
+    /// hypothetical — a coding agent listing eleven files it edited in
+    /// subdirectories produces exactly that shape, because the regex can only
+    /// see each path's last segment and the served root does not hold it. One
+    /// hour keeps the turn recoverable for as long as the user is plausibly
+    /// still working in that thread, then lets it close.
+    nonisolated static let truncatedScanHorizon: TimeInterval = 60 * 60
 
     /// True only while the ref still resolves to the exact lane captured by a
     /// dispatch/probe caller. The stable ID binds URL + credential across
@@ -1571,62 +1725,150 @@ enum FileTransferOutputDetector {
     /// Run a reconciliation scan against a caller-captured lane. This overload
     /// never resolves settings and therefore cannot silently jump from dispatch
     /// lane A to a later lane B. The caller owns pre/post identity guards.
+    ///
+    /// `turnCreatedAt` is the persisted `createdAt` of the agent turn being
+    /// scanned — the grace anchor (see `outputScanGrace`). `scanStartedAt` is
+    /// captured HERE, before any probe, and threaded through: a pass that began
+    /// inside the grace window must stay pending no matter how long its probes
+    /// take to finish, or a slow multi-probe pass could drift past the deadline
+    /// and stamp the turn on the strength of an early 404.
+    ///
+    /// Extraction runs ONCE and its result is handed to `detect` — the reply
+    /// text is adversary-controlled and the regex is linear-but-not-free at
+    /// ~2.2 s/MiB in its worst surviving shape, so a second pass over the same
+    /// string is a cost with no answer attached.
     static func reconciliationScan(
         reply: String,
         conversationID: UUID,
         snapshot: SettingsManager.FileTransferSnapshot,
-        excludedKeys: Set<String>
+        excludedKeys: Set<String>,
+        turnCreatedAt: Date,
+        scanStartedAt: Date = Date()
     ) async -> ReconciliationScan {
-        guard !(await extractCandidatesOffMainActor(from: reply)).isEmpty else {
+        let candidates = await extractCandidatesOffMainActor(from: reply)
+        guard !candidates.isEmpty else {
             return ReconciliationScan(drafts: [], conclusive: true)
         }
         let inbound = await inboundStoredKeyTokens(conversationID: conversationID)
         let result = await detect(
+            candidates: candidates,
             reply: reply,
             snapshot: snapshot,
             inboundTokens: inbound,
-            excludedKeys: excludedKeys
+            excludedKeys: excludedKeys,
+            turnCreatedAt: turnCreatedAt,
+            scanStartedAt: scanStartedAt
         )
         return ReconciliationScan(drafts: result.drafts, conclusive: result.conclusive)
     }
 
-    /// Core detector on PRE-RESOLVED context — the seam the retroactive scan
-    /// drives (it resolves the snapshot + inbound set ONCE for a whole pass, then
-    /// calls this per candidate turn). Same candidate extraction / allowlist /
-    /// inbound-exclusion / cap-5 pipeline as the public entry point, plus:
-    ///   - `excludedKeys` additionally drops candidates whose storedKey is already
-    ///     attached on the TARGET message (retro dedupe BEFORE the probe, so an
-    ///     already-chipped key can't eat a probe slot). Empty on the landing path.
-    ///   - Reports `conclusive` = every probe attempted returned a DEFINITIVE
-    ///     verdict (`.exists` / `.missing`); `.unauthorized` / `.serverError` /
-    ///     `.unknown` ⇒ false (a transient failure the caller must retry, not
-    ///     stamp as scanned). Zero candidates ⇒ conclusive true (nothing to probe).
-    ///
-    /// PRIVACY (see the spec's Privacy & Security section): never logs the reply text, candidate filenames,
-    /// storedKeys, or the snapshot — no `print`/`os_log` in this path.
+    /// Convenience entry point that extracts candidates from `reply` and runs
+    /// the core detector. Prefer the `candidates:` overload wherever the caller
+    /// has already paid for an extraction — see `reconciliationScan`.
     static func detect(
         reply: String,
         snapshot: SettingsManager.FileTransferSnapshot,
         inboundTokens: Set<String>,
-        excludedKeys: Set<String>
+        excludedKeys: Set<String>,
+        turnCreatedAt: Date,
+        scanStartedAt: Date = Date()
     ) async -> (drafts: [AttachmentDraft], conclusive: Bool) {
-        let candidates = await extractCandidatesOffMainActor(from: reply)
-        // Nothing filename-shaped to probe → definitively conclusive (a marked
-        // turn will never be re-scanned, which is correct: there is no output).
-        guard !candidates.isEmpty else { return ([], true) }
+        await detect(
+            candidates: await extractCandidatesOffMainActor(from: reply),
+            reply: reply,
+            snapshot: snapshot,
+            inboundTokens: inboundTokens,
+            excludedKeys: excludedKeys,
+            turnCreatedAt: turnCreatedAt,
+            scanStartedAt: scanStartedAt
+        )
+    }
 
-        // Drop the conversation's own inbound uploads AND any storedKey already
-        // attached on the target message BEFORE the cap, so neither an echoed
-        // inbound name nor an already-chipped output can become a duplicate chip
-        // or eat a probe slot.
-        let outputs = candidates
-            .filter { !inboundTokens.contains($0) && !excludedKeys.contains($0) }
-            .prefix(maxCandidates)
-        guard !outputs.isEmpty else { return ([], true) }
+    /// Core detector on PRE-RESOLVED context — the seam the retroactive scan
+    /// drives (it resolves the snapshot + inbound set ONCE for a whole pass, then
+    /// calls this per candidate turn):
+    ///   - `excludedKeys` drops candidates whose storedKey is already attached on
+    ///     the TARGET message (retro dedupe BEFORE the probe, so an already-
+    ///     chipped key can't eat a probe slot). It is exactly that message's
+    ///     stored keys, which is why its COUNT is also read as the message's
+    ///     chip census for `maxOutputChipsPerMessage`. Empty on the landing path
+    ///     (a turn that did not exist a moment ago carries no chips).
+    ///   - `turnCreatedAt` / `scanStartedAt` drive the age gate — see
+    ///     `outputScanGrace`. `scanStartedAt` must be captured BEFORE the first
+    ///     probe, never read as `Date()` after the loop.
+    ///   - `reply` is the text `candidates` was extracted from, and is used for
+    ///     ONE thing: ordering a window the cap cannot hold (see
+    ///     `probeOrderedCandidates`). It carries no default — a caller that
+    ///     forgot it would silently probe a raw prefix and re-open the tail-
+    ///     starvation this ordering exists to close.
+    ///
+    /// CONCLUSIVENESS — the single question "may this pass permanently close the
+    /// turn?" (see `scanMayClose`). Three ways to answer yes without probing at
+    /// all, each because no future pass could learn anything more:
+    ///   - nothing filename-shaped in the reply;
+    ///   - nothing left after the inbound / already-chipped filters;
+    ///   - the message already holds `maxOutputChipsPerMessage` chips.
+    /// Otherwise the verdict needs the network, and then it needs every probe to
+    /// have been definitive AND the age gate to have opened.
+    ///
+    /// FAIL-FAST ON THE FIRST LANE-WIDE PROBE FAILURE: `.unauthorized` /
+    /// `.certRefused` / `.serverError` / `.unknown` are not key-specific — a
+    /// wrong credential, an untrusted certificate, a server that is down.
+    /// Firing the remaining probes at the same snapshot learns nothing and
+    /// spends the user's home server (and, on a timeout, a 15-second budget
+    /// each). The turn stays pending, so anything the abandoned probes would
+    /// have found is found by the next pass.
+    ///
+    /// `.ambiguous` is the one non-definitive outcome that does NOT stop the
+    /// pass — see `probeFailureIsLaneWide`. It is a fact about one key, and
+    /// stopping on it would let a single unreadable filename permanently starve
+    /// every real deliverable named after it.
+    ///
+    /// PRIVACY (see the spec's Privacy & Security section): never logs the reply text, candidate filenames,
+    /// storedKeys, or the snapshot — no `print`/`os_log` in this path.
+    static func detect(
+        candidates: [String],
+        reply: String,
+        snapshot: SettingsManager.FileTransferSnapshot,
+        inboundTokens: Set<String>,
+        excludedKeys: Set<String>,
+        turnCreatedAt: Date,
+        scanStartedAt: Date = Date()
+    ) async -> (drafts: [AttachmentDraft], conclusive: Bool) {
+        // TWO PLANS, and the cheap one decides whether the second is worth
+        // paying for. `probeOrderedCandidates` only changes WHICH candidates a
+        // window holds when the cap actually cuts the list, so a reply that fits
+        // never pays for the claim scan at all — and `reply` is the same string
+        // `candidates` came from, threaded here rather than re-extracted.
+        let rawPlan = probePlan(
+            candidates: candidates,
+            inboundTokens: inboundTokens,
+            excludedKeys: excludedKeys
+        )
+        let plan: ProbePlan
+        if rawPlan.truncated {
+            plan = probePlan(
+                candidates: candidates,
+                inboundTokens: inboundTokens,
+                excludedKeys: excludedKeys,
+                claimTokens: await standaloneClaimTokensOffMainActor(
+                    in: reply,
+                    candidates: Set(candidates)
+                )
+            )
+        } else {
+            plan = rawPlan
+        }
+        // An empty window means there is nothing left for ANY pass to learn —
+        // no filename in the reply, nothing eligible after the filters, or the
+        // message already at its chip ceiling. Reply text is immutable, so a
+        // later pass would reach the same answer: close the turn, no grace, no
+        // network. See `probePlan`.
+        guard !plan.window.isEmpty else { return ([], true) }
 
         var drafts: [AttachmentDraft] = []
-        var conclusive = true
-        for candidate in outputs {
+        var everyProbeDefinitive = true
+        for candidate in plan.window {
             // Size-returning probe so the download chip can render the file size
             // and gate a soft-confirm on very large downloads. Same ranged GET as
             // `probeExists`; `byteLength` is nil when the server omits a parseable
@@ -1635,11 +1877,19 @@ enum FileTransferOutputDetector {
                 snapshot: snapshot,
                 storedKey: candidate
             )
-            // A single inconclusive probe (auth / 5xx / transport) unmarks the
-            // whole pass so a later open retries — never stamps `outputScanDone`.
-            if !probeIsConclusive(outcome) { conclusive = false }
+            // A lane-wide failure ends the turn's pass immediately; the turn
+            // stays pending so a later open retries the whole window. A
+            // key-LOCAL one (`.ambiguous`) only costs this candidate — the pass
+            // keeps going, because the next filename in the same reply may be a
+            // real deliverable and the window is re-probed in this same order
+            // every time. See `probeFailureIsLaneWide`.
+            guard probeIsConclusive(outcome) else {
+                everyProbeDefinitive = false
+                if probeFailureIsLaneWide(outcome) { break }
+                continue
+            }
             // Only a confirmed-present file chips; a mentioned-but-never-written
-            // name (`.missing`) yields nothing but is still a conclusive verdict.
+            // name (`.missing`) yields nothing.
             guard outcome == .exists else { continue }
             var draft = AttachmentDraft(
                 mimeType: mimeType(for: candidate),
@@ -1655,23 +1905,298 @@ enum FileTransferOutputDetector {
             draft.storedKey = candidate
             drafts.append(draft)
         }
+        let conclusive = scanMayClose(
+            turnCreatedAt: turnCreatedAt,
+            scanStartedAt: scanStartedAt,
+            everyProbeDefinitive: everyProbeDefinitive,
+            truncated: plan.truncated
+        )
         return (drafts, conclusive)
     }
 
-    /// Whether a single probe outcome is DEFINITIVE for scan-completeness: only a
-    /// real present/absent verdict (`.exists` / `.missing`) lets a retro pass mark
-    /// the turn `outputScanDone`. `.unauthorized` / `.serverError` / `.unknown` /
-    /// `.certRefused` are inconclusive — the pass stays unmarked so a later
-    /// thread open retries. Pure + content-free; internal for the test target.
+    /// What a pass will actually probe, and whether it will have seen
+    /// everything. Pure + content-free (never logged); `nonisolated` and
+    /// internal so the cap / exclusion / truncation rules are testable without
+    /// a file server.
+    struct ProbePlan: Equatable, Sendable {
+        /// The candidates this pass will probe. First-appearance order whenever
+        /// the window holds every eligible candidate; when the cap cuts the
+        /// list, `probeOrderedCandidates` decides which ones make it in. Empty
+        /// ⇒ there is nothing left for any pass to learn (see `detect`).
+        let window: [String]
+        /// Eligible candidates existed that the window could not hold. The pass
+        /// is therefore an INCOMPLETE examination of the reply.
+        let truncated: Bool
+    }
+
+    /// `claimTokens` is the reply's STANDALONE delivery claims
+    /// (`MissingOutputNotice.standaloneClaimTokens`), used only to order an
+    /// OVERFLOWING window — see `probeOrderedCandidates`. Empty is always safe:
+    /// it costs ordering quality, never correctness, and it is what the notice's
+    /// window reconstruction passes (see below).
     ///
-    /// `.certRefused` is inconclusive despite being TERMINAL for the attempt
+    /// WHY THE NOTICE MAY OMIT IT, stated here because the omission is invisible
+    /// at that call site. `MissingOutputNotice.replyClaims` reconstructs this
+    /// plan to decide whether a named file was definitively absent, and it must
+    /// reconstruct what production actually probed. It still does, exactly:
+    /// ordering is reached ONLY on the `eligible.count > budget` branch, which
+    /// returns `truncated: true`, and `MissingOutputNotice.shouldSurface` refuses
+    /// every truncated turn. On the branch a notice can survive, the window is
+    /// the WHOLE eligible list and no ordering runs at all — so the two agree
+    /// element for element, not merely as sets.
+    nonisolated static func probePlan(
+        candidates: [String],
+        inboundTokens: Set<String>,
+        excludedKeys: Set<String>,
+        claimTokens: Set<String> = []
+    ) -> ProbePlan {
+        // Nothing filename-shaped to probe → closed. A marked turn is never
+        // re-scanned, which is correct here: there is no output to find, and no
+        // later pass over the same immutable reply text could disagree.
+        guard !candidates.isEmpty else {
+            return ProbePlan(window: [], truncated: false)
+        }
+        // The message already carries its lifetime allowance of chips, so no
+        // probe could add one. Close it rather than re-probing forever.
+        guard excludedKeys.count < maxOutputChipsPerMessage else {
+            return ProbePlan(window: [], truncated: false)
+        }
+        // Drop the conversation's own inbound uploads AND any storedKey already
+        // attached on the target message BEFORE the cap, so neither an echoed
+        // inbound name nor an already-chipped output can become a duplicate chip
+        // or eat a probe slot. This is also what makes the window WALK: keys
+        // confirmed by an earlier pass fall out, exposing the next slice.
+        let eligible = candidates
+            .filter { !inboundTokens.contains($0) && !excludedKeys.contains($0) }
+        guard !eligible.isEmpty else {
+            return ProbePlan(window: [], truncated: false)
+        }
+        // A pass may only chip up to the message's REMAINING allowance, so a
+        // walked window can never overshoot the lifetime ceiling.
+        let budget = min(maxCandidates, maxOutputChipsPerMessage - excludedKeys.count)
+        // The window holds everything eligible, so WHICH candidates it contains
+        // cannot depend on order — and a pass that probes them all reaches the
+        // same set of chips whatever sequence it asks in. Ordering is skipped
+        // entirely here, which is also what keeps its cost off the common path.
+        guard eligible.count > budget else {
+            return ProbePlan(window: eligible, truncated: false)
+        }
+        return ProbePlan(
+            window: Array(
+                probeOrderedCandidates(eligible, claimTokens: claimTokens).prefix(budget)
+            ),
+            truncated: true
+        )
+    }
+
+    /// The order an OVERFLOWING candidate list is probed in — a three-group
+    /// STABLE partition, original relative order preserved inside each group and
+    /// nothing dropped. Reached only from `probePlan`'s truncating branch.
+    ///
+    /// WHY ORDER IS A CORRECTNESS PROPERTY AND NOT A PREFERENCE. Taking a raw
+    /// first-appearance prefix starves the tail of a long reply, and the tail is
+    /// exactly where a coding agent puts its deliverable: it reports the files it
+    /// touched, THEN names what it produced. Truncation keeps the turn open, but
+    /// the window only WALKS when a probe CONFIRMS a file — so a window filled
+    /// with ten names that do not exist at the served root never advances, and
+    /// the turn closes at `truncatedScanHorizon` having never once asked about
+    /// the artifact. Nothing about that failure is visible to the user.
+    ///
+    /// GROUP 1 — THE COMPATIBILITY RESERVE, and the reason this function exists.
+    /// The extensions in `MissingOutputNotice.evidenceFloorAllowlist`, capped at
+    /// `evidenceFloorMaxCandidates`, are precisely the rules the previous build
+    /// probed under. Reserving the head of the window for them GUARANTEES that
+    /// every candidate that build would have examined is still examined here —
+    /// so widening `outputAllowlist` and raising `maxCandidates` cannot cost a
+    /// handback that already worked. Without the reserve the widening is a
+    /// regression by construction: ten newly-admitted `.go` names now displace
+    /// the `.md` deliverable that used to be candidate #1.
+    ///
+    /// Those two constants are borrowed rather than restated because a second
+    /// copy of a thirty-entry list is a copy that drifts. They carry a
+    /// may-only-SHRINK maintenance rule for the notice's sake, which is the same
+    /// direction this needs: the reserve must describe a build that shipped.
+    ///
+    /// GROUP 2 — STANDALONE DELIVERY CLAIMS among what the reserve did not take.
+    /// This is what covers a deliverable whose extension the reserve does not
+    /// know (audio, a notebook, a source file). The discriminator is structural,
+    /// not linguistic — a filename alone on its line is a handover, one sharing
+    /// its line with other words is a mention — and it is reused verbatim from
+    /// `MissingOutputNotice.standaloneClaimTokens` rather than reimplemented, so
+    /// there is ONE definition of "claim" in the product.
+    /// `ConverseRequest.fileDeliveryInstruction` asks agents for exactly that
+    /// shape, so a compliant agent lands in this group by construction.
+    ///
+    /// `ecosystemProseTokens` is subtracted because the line rule alone cannot
+    /// tell a handover from a tech-stack bullet: a reply listing `- Node.js`,
+    /// `- Next.js`, `- Vue.js` … produces ten perfectly standalone "claims" that
+    /// would otherwise push a real deliverable out of the window. The notice
+    /// applies the same subtraction at its own verdict; doing it here keeps the
+    /// two callers' notion of a claim identical.
+    ///
+    /// GROUP 3 — everything else, still in first-appearance order. Non-claims are
+    /// REORDERED, never discarded: they remain probeable on this pass and on
+    /// every later one, and a reply with no claims at all is left exactly as it
+    /// was.
+    ///
+    /// WHAT THIS COSTS, because a reordering can only ever move loss around: a
+    /// deliverable that is neither reserve-eligible NOR standalone, in a reply
+    /// whose other names are, is pushed further back than a raw prefix would have
+    /// put it. The reserve bounds that to deliverables using one of the newly
+    /// admitted extensions AND named in prose only — i.e. an agent ignoring the
+    /// delivery instruction it was given in the same turn — while the shape it
+    /// fixes is the modal one for the coding gateways this product showcases.
+    ///
+    /// DETERMINISTIC: `claimTokens` is only ever membership-tested, never
+    /// iterated, so the output order is a function of `eligible` alone. Reply
+    /// text is immutable, so repeated passes over the same turn build the same
+    /// order and the walk cannot oscillate.
+    ///
+    /// COST: one pass over `eligible` with an extension lookup per element —
+    /// negligible beside the extraction that produced the list, and beside the
+    /// network probes it schedules. The claim SET is the priced part; see
+    /// `standaloneClaimTokensOffMainActor`.
+    ///
+    /// Pure + content-free (never logged); `nonisolated` and internal so the
+    /// ordering rules are testable without a file server.
+    nonisolated static func probeOrderedCandidates(
+        _ eligible: [String],
+        claimTokens: Set<String>
+    ) -> [String] {
+        var reserved: [String] = []
+        var claimed: [String] = []
+        var incidental: [String] = []
+        for candidate in eligible {
+            if reserved.count < MissingOutputNotice.evidenceFloorMaxCandidates,
+               MissingOutputNotice.evidenceFloorAllowlist
+                   .contains(MissingOutputNotice.fileExtension(of: candidate)) {
+                reserved.append(candidate)
+            } else if claimTokens.contains(candidate),
+                      !MissingOutputNotice.ecosystemProseTokens.contains(candidate.lowercased()) {
+                claimed.append(candidate)
+            } else {
+                incidental.append(candidate)
+            }
+        }
+        return reserved + claimed + incidental
+    }
+
+    /// Longest reply this will run the claim scan over. Above it a pass keeps
+    /// the compatibility reserve and skips group 2 — i.e. it degrades to the
+    /// ordering it would have had anyway, never to something worse.
+    ///
+    /// WHY A CEILING AT ALL: `standaloneClaimTokens` splits the reply into lines
+    /// before it can classify any, and reply text is adversary-controlled up to
+    /// the 16 MiB `Constants.maxBackgroundResponseBytes` transport ceiling. A
+    /// body of bare newlines materialises one array element per byte — tens of
+    /// millions of them, hundreds of megabytes of descriptors — which on a phone
+    /// is a memory-pressure kill, not a slow scan. The CPU is the smaller half of
+    /// that problem.
+    ///
+    /// WHY 1 MiB COSTS NOTHING REAL: it is a quarter-million words of reply text.
+    /// An agent turn that long has already failed the user for other reasons, and
+    /// the fallback still probes what the previous build probed.
+    nonisolated static let maxClaimOrderingReplyBytes = 1 << 20
+
+    /// The reply's standalone delivery claims, off the caller's thread and
+    /// bounded. `probePlan` is `nonisolated`, which does NOT relocate execution —
+    /// a nonisolated sync function runs on its caller's thread, and `detect` is
+    /// main-actor (module default). Deriving claims inside the plan would
+    /// therefore put an adversary-sized line scan on the main actor, so the
+    /// derivation lives out here and the result is handed IN.
+    ///
+    /// COST (measured, `swiftc -O` arm64, per MiB of reply): 0.011 s on ordinary
+    /// prose, 0.10 s on the worst shape for it — a body of bare newlines, one
+    /// allocation per line. The extraction it accompanies is 2.27 s/MiB in its
+    /// own worst surviving shape (`extractCandidates`), so on any reply where the
+    /// regex is expensive this adds under 1%; on the newline shape, where the
+    /// regex is nearly free, `maxClaimOrderingReplyBytes` is what bounds it.
+    ///
+    /// Callers pay this ONLY when `probePlan` reports truncation — an ordinary
+    /// reply naming at most `maxCandidates` files never reaches it.
+    ///
+    /// Pure + content-free (never logged).
+    nonisolated static func standaloneClaimTokensOffMainActor(
+        in reply: String,
+        candidates: Set<String>
+    ) async -> Set<String> {
+        guard !candidates.isEmpty, reply.utf8.count <= maxClaimOrderingReplyBytes else {
+            return []
+        }
+        return await Task.detached(priority: .utility) {
+            MissingOutputNotice.standaloneClaimTokens(in: reply, candidates: candidates)
+        }.value
+    }
+
+    /// Whether a PROBING pass may permanently stamp `outputScanDone`. Pure +
+    /// content-free; `nonisolated` so the test target can call it off the main
+    /// actor. The three no-probe-needed closures live in `detect` — this answers
+    /// only the case where the verdict came from the network.
+    ///
+    /// Two independent gates, both of which must open:
+    ///   - EVIDENCE: every probe the pass attempted came back definitive. One
+    ///     transient outcome and the pass learned nothing it can stand behind.
+    ///   - AGE: the pass STARTED at or after the turn's deadline —
+    ///     `createdAt + outputScanGrace`, or `+ truncatedScanHorizon` when the
+    ///     pass could not examine every eligible candidate.
+    ///
+    /// The age gate is deliberately measured from when the pass STARTED. Ten
+    /// sequential probes against a slow server can outlive the grace window on
+    /// their own; reading the clock afterwards would let a 404 from the first
+    /// millisecond close a turn purely because the pass took a while.
+    nonisolated static func scanMayClose(
+        turnCreatedAt: Date,
+        scanStartedAt: Date,
+        everyProbeDefinitive: Bool,
+        truncated: Bool
+    ) -> Bool {
+        guard everyProbeDefinitive else { return false }
+        let horizon = truncated ? truncatedScanHorizon : outputScanGrace
+        return scanStartedAt >= turnCreatedAt.addingTimeInterval(horizon)
+    }
+
+    /// Whether a single probe outcome is DEFINITIVE — a real present/absent
+    /// verdict (`.exists` / `.missing`). Everything else is not: the pass
+    /// learned nothing about the file, so it stays pending for a later thread
+    /// open. Pure + content-free; internal for the test target.
+    ///
+    /// Definitive is NOT the same as sufficient. A `.missing` is a real answer
+    /// about this instant, and this instant may simply be too early — the age
+    /// gate in `scanMayClose` is what decides whether the pass may act on it.
+    ///
+    /// `.certRefused` is non-definitive despite being TERMINAL for the attempt
     /// that produced it: the refusal says nothing about whether the file exists,
     /// and the user can fix the certificate, so a later open must re-probe
     /// rather than permanently stamp a scan that learned nothing.
+    ///
+    /// Definitiveness is a SEPARATE question from `probeFailureIsLaneWide`,
+    /// which decides whether the rest of the window is still worth probing.
     static func probeIsConclusive(_ outcome: FileProbeOutcome) -> Bool {
         switch outcome {
         case .exists, .missing: return true
-        case .unauthorized, .serverError, .certRefused, .unknown: return false
+        case .unauthorized, .serverError, .certRefused, .ambiguous, .unknown: return false
+        }
+    }
+
+    /// Whether a non-definitive outcome is a fact about the LANE rather than
+    /// about the one key that produced it — i.e. whether the pass should stop.
+    ///
+    /// A wrong credential, an untrusted certificate, a server that is down, an
+    /// endpoint that cannot answer sensibly: every remaining probe would meet
+    /// the same wall, so firing them learns nothing and, on a timeout, spends 15
+    /// seconds each against the user's home server.
+    ///
+    /// `.ambiguous` is the exception, and the reason this predicate is not just
+    /// `!probeIsConclusive`. It means the lane answered fine and THIS key's
+    /// answer was unusable — an HTML document under a `.pdf` name, a `206` whose
+    /// body contradicts its own `Content-Range`. Treating that as lane-wide
+    /// would let one unreadable filename starve every real deliverable named
+    /// after it in the same reply, forever, since the window is re-probed in the
+    /// same order on every pass. The turn still stays open either way.
+    static func probeFailureIsLaneWide(_ outcome: FileProbeOutcome) -> Bool {
+        switch outcome {
+        case .ambiguous: return false
+        case .exists, .missing, .unauthorized, .serverError, .certRefused, .unknown: return true
         }
     }
 
@@ -1868,27 +2393,50 @@ enum FileTransferOutputDetector {
         case "json": return "application/json"
         case "xml": return "application/xml"
         case "yaml", "yml": return "application/yaml"
+        case "toml": return "application/toml"
         case "txt", "log": return "text/plain"
         case "md": return "text/markdown"
         case "html": return "text/html"
+        case "rtf": return "application/rtf"
+        case "epub": return "application/epub+zip"
         case "zip": return "application/zip"
         case "tar": return "application/x-tar"
         case "gz": return "application/gzip"
         case "png": return "image/png"
         case "jpg", "jpeg": return "image/jpeg"
         case "gif": return "image/gif"
+        case "webp": return "image/webp"
         case "svg": return "image/svg+xml"
+        case "m4a", "aac": return "audio/mp4"
+        case "mp3": return "audio/mpeg"
+        case "wav": return "audio/wav"
+        case "flac": return "audio/flac"
+        case "ogg", "opus": return "audio/ogg"
         case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         case "xls": return "application/vnd.ms-excel"
         case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         case "doc": return "application/msword"
         case "pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        case "ppt": return "application/vnd.ms-powerpoint"
         case "py": return "text/x-python"
         case "js": return "text/javascript"
         case "ts": return "application/typescript"
         case "sh": return "application/x-sh"
+        case "bat": return "application/x-bat"
+        case "ps1": return "application/x-powershell"
         case "sql": return "application/sql"
         case "parquet": return "application/vnd.apache.parquet"
+        case "ipynb": return "application/x-ipynb+json"
+        case "go": return "text/x-go"
+        case "rs": return "text/x-rust"
+        case "rb": return "text/x-ruby"
+        case "kt": return "text/x-kotlin"
+        case "java": return "text/x-java-source"
+        case "swift": return "text/x-swift"
+        case "cpp", "hpp": return "text/x-c++src"
+        case "css": return "text/css"
+        case "scss": return "text/x-scss"
+        case "tex": return "application/x-tex"
         default: return "application/octet-stream"
         }
     }
@@ -1919,8 +2467,11 @@ enum FileTransferOutputDetector {
     /// (drop one from `outputAllowlist` and it drops here too). `svg` is in the
     /// allowlist but excluded: ImageIO cannot rasterize it (no thumbnail), so
     /// fetching one would burn an 8 MiB download only to fail the decode.
+    /// `webp` IS included — ImageIO has decoded it since long before this app's
+    /// deployment floor, so an agent-produced WebP earns a wrist thumbnail like
+    /// any other raster output.
     nonisolated static let imagePreviewExtensions: Set<String> =
-        outputAllowlist.intersection(["png", "jpg", "jpeg", "gif"])
+        outputAllowlist.intersection(["png", "jpg", "jpeg", "gif", "webp"])
 
     /// Build first-writer preview patches for `drafts` (one reply's output
     /// chips), SEQUENTIALLY in draft order — no parallel downloads. Pure

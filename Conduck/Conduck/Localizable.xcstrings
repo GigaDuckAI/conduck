@@ -15311,6 +15311,83 @@
         }
       }
     },
+    "thread.missingOutput.action.checkAgain" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check again"
+          }
+        }
+      }
+    },
+    "thread.missingOutput.action.reviewSetup" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Review file setup"
+          }
+        }
+      }
+    },
+    "thread.missingOutput.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This reply names a file that isn't in the folder Conduck reads. It may still be on its way, saved somewhere else, or the folder may not be the one your agent writes to."
+          }
+        }
+      }
+    },
+    "thread.missingOutput.checking" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checking…"
+          }
+        }
+      }
+    },
+    "thread.missingOutput.result.couldNotCheck" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't finish the check just now."
+          }
+        }
+      }
+    },
+    "thread.missingOutput.result.stillMissing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checked again — still not there."
+          }
+        }
+      }
+    },
+    "thread.missingOutput.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File not on your file server"
+          }
+        }
+      }
+    },
     "thread.speak.announce.paused" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

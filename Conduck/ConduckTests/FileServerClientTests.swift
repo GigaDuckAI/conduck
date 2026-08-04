@@ -13,7 +13,10 @@
 //    • request shapes    = correct HTTP verb (PUT upload / GET download+probe —
 //                          NEVER HEAD / DELETE / PROPFIND), URL = base/storedKey,
 //                          Authorization Basic present, timeouts from Constants.
-//    • parseProbeOutcome = the exact status→outcome table.
+//    • probeStatusPrefilter = the exact status→outcome table. NOTE this is the
+//                          byte-echo PRE-FILTER, not the existence verdict —
+//                          the body-reading verdict lives in
+//                          `FileProbeBodyVerdictTests`.
 //
 //  Privacy: no real credentials/URLs/filenames are logged; the fixtures below are
 //  synthetic and never printed.
@@ -434,12 +437,17 @@ final class FileServerClientTests: XCTestCase {
         XCTAssertNotNil(req.value(forHTTPHeaderField: "Authorization"))
         XCTAssertEqual(req.timeoutInterval, Constants.fileServerProbeTimeout, accuracy: 0.001,
                        "probe uses the short ephemeral probe timeout")
-        // The existence probe is capped to a single byte so it can never pull a
-        // large file into memory; a server that ignores Range still 200s the
-        // full body (parsed identically as `.exists`). The real download
-        // (`buildDownloadRequest`) carries NO Range.
+        // The existence probe asks for a single byte so a compliant server saves
+        // the bandwidth; the real safety is the client-side cap in
+        // `collectProbeEvidence`. The real download (`buildDownloadRequest`)
+        // carries NO Range.
         XCTAssertEqual(req.value(forHTTPHeaderField: "Range"), "bytes=0-0",
                        "probe MUST cap the body via Range: bytes=0-0")
+        // Two of the verdict's inputs are byte counts (one delivered byte for a
+        // one-byte range; Content-Length as the file's size on a 200), so
+        // transparent decompression must be refused or neither is verifiable.
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Accept-Encoding"), "identity",
+                       "probe MUST refuse transparent decompression")
         let download = FileServerClient.buildDownloadRequest(snapshot: snap, storedKey: key)
         XCTAssertNil(download.value(forHTTPHeaderField: "Range"),
                      "the real download must NOT be range-capped")
@@ -475,27 +483,29 @@ final class FileServerClientTests: XCTestCase {
                        "URL = base.appending(path: storedKey); nothing but the storedKey is in the path")
     }
 
-    // MARK: - parseProbeOutcome table
+    // MARK: - probeStatusPrefilter table
 
-    func testParseProbeOutcomeStatusTable() {
+    func testProbeStatusPrefilterStatusTable() {
         // 200/206 → exists ; 404 → missing ; 401/403 → unauthorized ;
         // 5xx → serverError ; everything else → unknown.
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 200), .exists)
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 206), .exists)
-        // 416 Range-Not-Satisfiable ⟹ the resource exists but is shorter than the
-        // `bytes=0-0` probe range (an empty file); a missing file 404s, so 416 is
-        // an existence signal, not a failure.
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 416), .exists)
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 404), .missing)
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 401), .unauthorized)
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 403), .unauthorized)
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 500), .serverError)
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 502), .serverError)
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 503), .serverError)
+        //
+        // This is a PRE-FILTER, not a verdict: its `.exists` is exactly what a
+        // uniform-200 SSO wall produces, which is why its only two callers each
+        // require a byte-echo of a payload they just PUT. The existence probe's
+        // real verdict is `classifyProbe` (`FileProbeBodyVerdictTests`).
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 200), .exists)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 206), .exists)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 416), .exists)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 404), .missing)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 401), .unauthorized)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 403), .unauthorized)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 500), .serverError)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 502), .serverError)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 503), .serverError)
         // Unmapped statuses fall through to .unknown.
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 301), .unknown)
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 418), .unknown)
-        XCTAssertEqual(FileServerClient.parseProbeOutcome(status: 0), .unknown)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 301), .unknown)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 418), .unknown)
+        XCTAssertEqual(FileServerClient.probeStatusPrefilter(status: 0), .unknown)
     }
 
     // MARK: - Transport-error classification (staged test)
