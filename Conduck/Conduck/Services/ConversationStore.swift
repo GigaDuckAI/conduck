@@ -2088,6 +2088,43 @@ actor ConversationStore {
         }
     }
 
+    /// Every distinct `backend` raw string across the WHOLE conversation store,
+    /// unparsed — an unrecognizable value comes back verbatim for the caller to
+    /// resolve. Empty values are dropped: a partially-synced CloudKit row
+    /// carries `""`, which names no gateway.
+    ///
+    /// Exists for CarPlay. The other list surfaces already hold every
+    /// conversation in memory and derive the same set from that array, but
+    /// CarPlay's picker fetches a CAPPED slice (`CarPlayConversationLabel
+    /// .recentCap`), so deriving "how many gateways does this history span"
+    /// from what it displays would answer a different question than the phone —
+    /// two gateways whose only chats fall past the cap would silently drop the
+    /// badge in the car and keep it everywhere else.
+    ///
+    /// A dictionary-result fetch of ONE attribute with `returnsDistinctResults`:
+    /// SQLite returns one row per distinct value, so this costs a fraction of
+    /// materializing the conversations, and CarPlay runs it once per picker
+    /// refresh. `returnsDistinctResults` requires `.dictionaryResultType` —
+    /// it is silently ignored on a managed-object fetch.
+    func distinctBackends() async throws -> Set<String> {
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSDictionary>(entityName: "Conversation")
+            request.resultType = .dictionaryResultType
+            request.propertiesToFetch = ["backend"]
+            request.returnsDistinctResults = true
+            let rows = try context.fetch(request)
+            var backends: Set<String> = []
+            for row in rows {
+                if let backend = row["backend"] as? String, !backend.isEmpty {
+                    backends.insert(backend)
+                }
+            }
+            return backends
+        }
+    }
+
     // MARK: - Title snippet
 
     /// Derive a list-row title from a message body: first non-empty line,

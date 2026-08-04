@@ -7,9 +7,15 @@
 // `RemoteAgentRef` (built-in or custom), reused by every surface — the
 // per-conversation pickers, the Settings list, the Watch badge/Ask chooser,
 // and the CarPlay gateway switcher — so built-in-vs-custom labeling is never
-// re-derived per call site. Plus the badge color palette.
+// re-derived per call site. Plus the badge color palette, and the one rule
+// deciding whether a conversation list shows badges at all
+// (`shouldShowBadges`) — it lives beside the monogram it depends on, because
+// "should the list badge" and "can this ref render a badge" must never drift
+// apart on any of the five list surfaces.
 //
-// Shared by the app AND Watch targets (Approach A membership exception).
+// Shared by the app AND Watch targets (Approach A membership exception) — the
+// Watch list applies the identical rule, so a new file would be the wrong home
+// for it (it would silently miss the Watch target).
 
 import SwiftUI
 
@@ -47,6 +53,56 @@ enum RemoteAgentRefMetadata {
     static func deriveMonogram(from name: String) -> String {
         let alphanumerics = name.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }
         return String(String.UnicodeScalarView(alphanumerics.prefix(2))).uppercased()
+    }
+
+    /// Whether a conversation LIST should render per-row gateway badges: true
+    /// once the list can display TWO distinct gateway identities.
+    ///
+    /// The count spans the CONFIGURED set UNION the gateways the listed
+    /// conversations were created with — not the configured set alone. A
+    /// conversation stays bound to the gateway that created it
+    /// (`Conversation.backend`), and forgetting that gateway does not merge it
+    /// with the others; asking only "how many gateways are set up right now"
+    /// blanks the badge on a mixed history the moment the user is down to one
+    /// live gateway, which is exactly when the rows are hardest to tell apart.
+    ///
+    /// Two details are load-bearing:
+    /// - Dedup by REF, never by monogram. Two gateways can carry the same
+    ///   letters; they are still two identities and still two colors.
+    /// - A ref that resolves to NO monogram does not count. `GatewayBadge`
+    ///   renders `EmptyView` for one (a forgotten custom, whose roster entry is
+    ///   gone), so counting it could switch badges on for a list that then
+    ///   shows a single badge beside a blank gap — worse than showing none.
+    ///
+    /// Callers pass the same roster they hand the badge, so "can it render"
+    /// here and "did it render" there are the same question. Single-gateway
+    /// setups keep a badge-free list.
+    ///
+    /// This governs the BADGE only. The gateway pickers and switchers gate on
+    /// `configuredRefs.count >= 2` for an unrelated reason — you cannot switch
+    /// to a gateway you have forgotten — and that gate stays as it is.
+    static func shouldShowBadges(
+        configured: [RemoteAgentRef],
+        conversationBackends: some Sequence<String>,
+        customs: [CustomGateway]
+    ) -> Bool {
+        var identities: Set<RemoteAgentRef> = []
+        for ref in configured where !monogram(for: ref, customs: customs).isEmpty {
+            identities.insert(ref)
+            if identities.count >= 2 { return true }
+        }
+        // Bails at the second identity — which the SINGLE-gateway case never
+        // reaches, so that case scans the whole array every time. That is the
+        // common case, so callers resolve this ONCE per list build; evaluating
+        // it per row makes the scan quadratic in the number of conversations.
+        for raw in conversationBackends {
+            guard let ref = RemoteAgentRef(rawString: raw),
+                  !monogram(for: ref, customs: customs).isEmpty
+            else { continue }
+            identities.insert(ref)
+            if identities.count >= 2 { return true }
+        }
+        return false
     }
 }
 

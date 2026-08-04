@@ -513,7 +513,7 @@ struct ContentView: View {
                             startNewConversation()
                         },
                         customGateways: customGateways,
-                        showsGatewayBadge: configuredRefs.count >= 2,
+                        configuredRefs: configuredRefs,
                         onOpenSettings: {
                             showingList = false
                             pendingShowSettingsFromList = true

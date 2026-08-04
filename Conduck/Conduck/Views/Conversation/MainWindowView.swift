@@ -303,7 +303,7 @@ struct MainWindowView: View {
                 showsToolbarActions: false,
                 externalSearchText: $sidebarSearch,
                 customGateways: customGateways,
-                showsGatewayBadge: configuredRefs.count >= 2,
+                configuredRefs: configuredRefs,
                 // Persistent window sidebar: highlight the active thread's row.
                 selectedConversationID: selectedConversationID
             )

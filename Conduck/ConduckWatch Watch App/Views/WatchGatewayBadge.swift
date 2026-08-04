@@ -4,10 +4,14 @@
 // WatchGatewayBadge.swift
 //
 // Compact per-conversation gateway monogram ("OC" / "H" / a custom's monogram)
-// for the Watch conversation list rows AND the thread header. Derives the REF
-// from the stored `ConversationRecord.backend` raw string; renders NOTHING when
-// the ref is unknown/empty OR a custom whose roster entry is missing (deleted /
+// for the Watch conversation list rows. Derives the REF from the stored
+// `ConversationRecord.backend` raw string; renders NOTHING when the ref is
+// unknown/empty OR a custom whose roster entry is missing (deleted /
 // not-yet-synced) so the row never shows a meaningless box.
+//
+// WHETHER a row badges at all is not decided here — the list owns that, via
+// `RemoteAgentRefMetadata.shouldShowBadges`, so all five surfaces answer it
+// identically. This view only renders the identity it is handed.
 //
 // Capsule HUGS its text, so monograms of different widths read as clean
 // pill-tags rather than misaligned fixed-width chips. Tint distinguishes
