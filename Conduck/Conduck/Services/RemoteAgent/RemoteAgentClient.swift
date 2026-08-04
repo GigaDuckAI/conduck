@@ -147,6 +147,9 @@ actor RemoteAgentClient {
         newUserServerFileRefs: [(originalName: String, storedKey: String)] = [],
         newUserImageFileRefs: [(storedKey: String, filename: String)] = [],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)] = [],
+        // Count of this turn's server files whose bytes this dispatch cannot
+        // reach (cross-lane clone) — see `assembleMessages`.
+        newUserUnavailableFileCount: Int = 0,
         // True when the conversation's bound gateway has a READY file lane
         // (`fileTransferReadySnapshot != nil`) — appends the per-turn
         // file-delivery instruction to the newest user turn. REQUIRED (no
@@ -168,6 +171,7 @@ actor RemoteAgentClient {
             newUserServerFileRefs: newUserServerFileRefs,
             newUserImageFileRefs: newUserImageFileRefs,
             newUserTextFileServerRefs: newUserTextFileServerRefs,
+            newUserUnavailableFileCount: newUserUnavailableFileCount,
             fileServerReady: fileServerReady
         )
 
@@ -180,6 +184,7 @@ actor RemoteAgentClient {
             newUserServerFileRefs: newUserServerFileRefs,
             newUserImageFileRefs: newUserImageFileRefs,
             newUserTextFileServerRefs: newUserTextFileServerRefs,
+            newUserUnavailableFileCount: newUserUnavailableFileCount,
             fileServerReady: fileServerReady
         )
         RemoteAgentDiagnostics.log.log("send(fg): \(RemoteAgentDiagnostics.shapeSummary(diagMessages, bodyBytes: request.httpBody?.count ?? 0), privacy: .public)")
@@ -225,6 +230,25 @@ actor RemoteAgentClient {
         newUserServerFileRefs: [(originalName: String, storedKey: String)] = [],
         newUserImageFileRefs: [(storedKey: String, filename: String)] = [],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)] = [],
+        // Server-backed files attached to THIS turn whose bytes this dispatch
+        // cannot reach — a cloned turn whose `storedKey`s were minted on another
+        // file lane. `ConverseRequest.priorTurns` emits the honest
+        // "not available in the current file-transfer lane" note for HISTORY,
+        // but the newest turn is assembled here and is excluded from that pass,
+        // so without this count the first dispatch after a cross-lane clone
+        // would drop the file silently and let the model answer as if nothing
+        // had been attached.
+        //
+        // DEFAULTED, unlike its `fileServerReady` sibling below — and the
+        // difference is real, not laziness. `fileServerReady` is a property of
+        // the GATEWAY, so every surface has an answer and a silent default hides
+        // a wrong one. A detached reference can only be produced by RETRY over a
+        // STORED row: every composing surface stages its files fresh against the
+        // lane it is about to dispatch on (an un-uploadable file is blocked at
+        // the composer as `.needsSetup`, never sent as a dangling reference), so
+        // 0 is the truthful value there rather than an unexamined one. A future
+        // surface that re-sends stored turns must pass this.
+        newUserUnavailableFileCount: Int = 0,
         // READY file lane on the bound gateway → append the per-turn
         // file-delivery instruction (`ConverseRequest.fileDeliveryInstruction`)
         // to the NEWEST user turn only. Rides on attachment-LESS turns too —
@@ -273,6 +297,14 @@ actor RemoteAgentClient {
             splicedText,
             textFiles: newUserTextFileServerRefs
         )
+        // AFTER every reference splice, BEFORE the per-turn instructions: the
+        // note is a fact about this turn's attachments (same position it holds
+        // in `ConverseRequest.priorTurns`), while the instructions below are
+        // directives that stay last.
+        splicedText = ConverseRequest.spliceFileUnavailableNote(
+            splicedText,
+            fileCount: newUserUnavailableFileCount
+        )
         // LAST in the text body, and ONLY here — never in the splice helpers
         // (they also run on replayed prior turns, which would duplicate the
         // instruction across the whole resent history). Order on the newest
@@ -317,6 +349,8 @@ actor RemoteAgentClient {
         newUserServerFileRefs: [(originalName: String, storedKey: String)] = [],
         newUserImageFileRefs: [(storedKey: String, filename: String)] = [],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)] = [],
+        // Count of this turn's unreachable server files — see `assembleMessages`.
+        newUserUnavailableFileCount: Int = 0,
         fileServerReady: Bool = false
     ) -> URLRequest {
         // `URL.appending(path:)` (iOS 16+) preserves the user's optional
@@ -343,6 +377,7 @@ actor RemoteAgentClient {
                 newUserServerFileRefs: newUserServerFileRefs,
                 newUserImageFileRefs: newUserImageFileRefs,
                 newUserTextFileServerRefs: newUserTextFileServerRefs,
+                newUserUnavailableFileCount: newUserUnavailableFileCount,
                 fileServerReady: fileServerReady
             ),
             stream: false,

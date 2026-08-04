@@ -362,6 +362,10 @@ struct ConverseRequest: Encodable, Sendable {
                 .filter { _ in ownsStoredKeys }
                 .map { (originalName: $0.filename ?? $0.storedKey ?? "file", storedKey: $0.storedKey ?? "") }
             splicedText = Self.spliceServerFileRefs(splicedText, serverFiles: serverFileRefs + agedTextRefs)
+            // BOTH roles, deliberately — the note's own wording ("Do not claim
+            // to have read or created them") is written for an agent-authored
+            // output as much as a user input, and a cloned thread's detached
+            // agent rows are exactly the case the "created" half covers.
             splicedText = Self.spliceFileUnavailableNote(
                 splicedText,
                 fileCount: ownsStoredKeys ? 0 : serverFileAtts.count

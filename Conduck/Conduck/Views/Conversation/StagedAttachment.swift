@@ -418,6 +418,29 @@ struct ComposerDeferredTeardown {
     }
 }
 
+/// Can a server-reference chip address its bytes AT ALL — before any question
+/// of whether the lane is currently reachable?
+///
+/// A GET needs two things that both live on the message: the opaque `storedKey`
+/// naming the blob, and the durable lane that minted it (the credential the GET
+/// authenticates with). Missing EITHER makes the file unaddressable, and the
+/// two failure shapes are equally common: a cross-lane clone clears the key, and
+/// a legacy/partially-synced row can carry a key with no provable owner.
+/// Without this gate such a chip stays tappable and falls through to a red
+/// "File transfer isn't set up for this gateway" — a dead tap under a claim
+/// that is very often false (the gateway's file transfer may be perfectly fine;
+/// it is THIS row that has nothing to point at).
+///
+/// Deliberately separate from `FileTransferLaneOwnership.matches`, which asks
+/// the LATER question of whether the owning lane is the one configured now.
+enum ServerFileChipAvailability {
+    static func isAddressable(storedKey: String?, ownerLaneID: String?) -> Bool {
+        guard let storedKey, !storedKey.isEmpty else { return false }
+        guard let ownerLaneID, !ownerLaneID.isEmpty else { return false }
+        return true
+    }
+}
+
 /// Exact file-lane verdict used by download chips. Both sides must be present;
 /// a legacy nil owner is unprovable and always fails closed.
 enum FileTransferLaneOwnership {
