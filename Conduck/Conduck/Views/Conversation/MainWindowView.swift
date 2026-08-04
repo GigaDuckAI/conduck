@@ -14,6 +14,22 @@
 // from the retired `ConversationsWindowView` — the VM-binding invariant below is
 // copied VERBATIM and is load-bearing.
 //
+// FILE DROP (window-owned): the drop target spans the whole configured
+// conversation pane — transcript included — because that is the target users
+// actually aim at. It lives here rather than on the composer for a hard
+// reason: `.onDrop` requires every provider's load to BEGIN inside the drop
+// callback (retaining a provider does not extend its access window, and a
+// web-page image drag is a promise), so the window resolves each item to
+// durable bytes or an app-owned file copy, stamps the batch with the
+// `ComposerMountIdentity` that was on screen, and parks it for that composer to
+// claim. Drop state is window-scoped `@State` because `detailColumn` is a
+// computed property whose composer mounts are deliberately destroyed across
+// identity changes. Anything that removes the destination — a thread switch,
+// the Settings mode swap, an unconfigured gateway, window close — DISCARDS the
+// batch and reclaims its temp files rather than redirecting it, so a file
+// dropped on one conversation never surfaces in another. The unconfigured
+// branch gets no target at all: there is nothing to stage into.
+//
 // VM binding (LOAD-BEARING): selecting a thread binds the coordinator's
 // WINDOW lane (`bindWindowViewModel` — in-memory only, never the quick-capture
 // pointer). The window is the EXPLICIT surface: browsing the sidebar AND
@@ -30,6 +46,7 @@
 
 import KeyboardShortcuts
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MainWindowView: View {
     let coordinator: MenuBarCoordinator
@@ -104,6 +121,78 @@ struct MainWindowView: View {
     /// founder's "still not full screen" complaint). Threaded into `MacSettingsView`
     /// → `MacPersonalAICategory`, which triggers it.
     @State private var guidedHost = GuidedGatewayHostState()
+
+    // MARK: - Pane-wide file drop
+    //
+    // The WINDOW owns the drop target because the useful target is the whole
+    // conversation pane, and staging lives in the composer at the bottom of it.
+    // Every provider's load must BEGIN inside the drop callback (retaining a
+    // provider does not extend its access window, and a web-page image drag is
+    // a promise that may not have materialised yet), so the window resolves
+    // each item to durable bytes/files, stamps the batch with the mount that
+    // was on screen, and parks it for that composer to claim.
+    //
+    // These live at window scope, NOT inside `detailColumn` — that is a
+    // computed property, and its composer mounts are deliberately destroyed
+    // across identity changes.
+
+    /// Loads still in flight for the current drop. Object identity is the
+    /// generation guard: cancelling it makes every late callback a no-op.
+    @State private var dropSession: DropSession?
+    /// Retained so a still-running load can be cancelled on teardown.
+    @State private var dropLoadProgresses: [Progress] = []
+    /// Watchdogs that fail a slot whose provider never calls back.
+    @State private var dropTimeoutTasks: [Task<Void, Never>] = []
+    /// Resolved and waiting for its stamped composer to claim it.
+    @State private var pendingDropBatch: PendingDropBatch?
+    @State private var isDropTargeted = false
+    /// Which composer, if any, is mid-dispatch. Identity-tagged so a mount
+    /// swap cannot leave a stale raised flag.
+    @State private var composerDispatching: ComposerMountIdentity?
+
+    /// The new-chat gateway is pinned while EITHER the composer holds staging
+    /// or the window is still resolving a drop. A drop that resolves after the
+    /// user switched gateways would otherwise stage against a server the file
+    /// was never destined for.
+    /// Spans resolving AND parked-but-unclaimed: for a VM-less new chat the
+    /// drain resolves the gateway from the LIVE `selectedRef`, so releasing the
+    /// lock the moment a batch is parked would let a remote settings sync
+    /// overwrite it and upload the file to a gateway it was never destined for.
+    private var gatewaySelectionLocked: Bool {
+        newChatGatewaySelectionLocked || isDropResolving
+    }
+
+    /// True from the moment a drop is ACCEPTED until its composer has claimed
+    /// it. The composer's own loading counters cannot see this window, so
+    /// without it a fast Send between drop and drain would ship the turn
+    /// without the file and leave the tile stranded for the next one.
+    private var isDropResolving: Bool {
+        dropSession != nil || pendingDropBatch != nil
+    }
+
+    /// How many items the in-flight drop is carrying, so the composer can show
+    /// that many loading tiles. Without them Send simply goes dead for as long
+    /// as the slowest item takes (up to the watchdog) with an empty strip and
+    /// nothing on screen accounting for it.
+    private var resolvingDropCount: Int {
+        dropSession?.providerCount ?? pendingDropBatch?.items.count ?? 0
+    }
+
+    /// Whether a drop released right now would be taken. The HIGHLIGHT reads
+    /// this too: `isTargeted` is pure hover, so painting the full "Drop files
+    /// to attach" affordance for a drag that will then be refused tells the
+    /// user the opposite of the truth.
+    ///
+    /// Dispatch is compared against the CURRENT mount, not merely non-nil —
+    /// a send still settling in the conversation you just left says nothing
+    /// about whether the one you are looking at can take a file.
+    private var canAcceptDropNow: Bool {
+        ComposerDropRouting.canAcceptDrop(
+            hasActiveSession: dropSession != nil,
+            hasParkedBatch: pendingDropBatch != nil,
+            isDispatching: composerDispatching == currentMountIdentity
+        )
+    }
 
     /// The two-column shell, split from `body`'s event-modifier chain so the
     /// column builders type-check independently (keeps SourceKit within budget).
@@ -223,13 +312,23 @@ struct MainWindowView: View {
             if shown {
                 windowRecorder.dismissError()
                 voiceRecovery = nil
+                // Settings REPLACES the split view without unmounting this root,
+                // so no `onDisappear` fires for the pane. The composer that
+                // would claim a drop is gone; discard rather than strand.
+                cancelDropWork()
             }
+        }
+        // The destination a drop was stamped for has gone away. Discard it —
+        // never redirect, or a file dropped on one thread surfaces in another.
+        .onChange(of: currentMountIdentity) { _, _ in
+            cancelDropWork()
         }
         .onAppear { onAppear() }
         .onDisappear {
             // Window closing — stop any in-flight capture so it can't outlive the
             // UI that owns it.
             cancelWindowCapture()
+            cancelDropWork()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openConversationDeepLink)) { note in
             leaveSettingsForConversationAction()
@@ -303,7 +402,7 @@ struct MainWindowView: View {
                 showsToolbarActions: false,
                 externalSearchText: $sidebarSearch,
                 customGateways: customGateways,
-                showsGatewayBadge: configuredRefs.count >= 2,
+                configuredRefs: configuredRefs,
                 // Persistent window sidebar: highlight the active thread's row.
                 selectedConversationID: selectedConversationID
             )
@@ -420,7 +519,7 @@ struct MainWindowView: View {
                 } else {
                     gatewayReadOnlyLabel(vm.backendDisplayName)
                 }
-            } else if configuredRefs.count >= 2 && !newChatGatewaySelectionLocked {
+            } else if configuredRefs.count >= 2 && !gatewaySelectionLocked {
                 gatewayPickerMenu
                     .font(.subheadline.weight(.semibold))
                     .fixedSize()
@@ -513,14 +612,14 @@ struct MainWindowView: View {
 
     private func refreshConfiguredBackends() async {
         configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
-        customGateways = await SettingsManager.shared.customGateways()
-        if !newChatGatewaySelectionLocked {
+        customGateways = await SettingsManager.shared.gatewayBadgeRoster()
+        if !gatewaySelectionLocked {
             selectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
         }
         // Keep the pending mint-ref in sync with the visible picker label so a
         // first typed turn binds to the gateway the user sees selected. Gated
         // on the WINDOW lane — `pendingNewConversationRef` is window-mint state.
-        if coordinator.windowViewModel == nil, !newChatGatewaySelectionLocked {
+        if coordinator.windowViewModel == nil, !gatewaySelectionLocked {
             coordinator.pendingNewConversationRef = selectedRef
         }
     }
@@ -631,13 +730,16 @@ struct MainWindowView: View {
             if !coordinator.isRemoteAgentConfigured {
                 // No composer mounts here, so a "Type Instead" screenshot parked on
                 // the bridge has nowhere to drain — discard it rather than let it
-                // strand and surface in a future unrelated composer.
+                // strand and surface in a future unrelated composer. For the same
+                // reason this branch gets NO drop target: there is nothing to
+                // stage into, and a target here would highlight then refuse.
                 unconfiguredEmptyState
-                    .onAppear { coordinator.pendingComposerImage = nil }
-            } else if let vm = coordinator.windowViewModel {
-                activeChat(vm: vm)
+                    .onAppear {
+                        coordinator.pendingComposerImage = nil
+                        cancelDropWork()
+                    }
             } else {
-                newChat
+                configuredDetail
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -645,6 +747,214 @@ struct MainWindowView: View {
         // cardBackground reads distinct from the gradient sidebar and runs the
         // full height/width of the detail pane.
         .background(AppColors.cardBackground)
+    }
+
+    /// The configured conversation surface — active thread or new chat — and
+    /// the drop target that spans it.
+    ///
+    /// ONE destination wrapping both branches rather than a modifier on each:
+    /// two destinations would mean two lifecycles and a `isDropTargeted` that
+    /// can be left raised by whichever branch swapped out mid-drag. The frame
+    /// expands BEFORE `.onDrop` because a drop destination is exactly the size
+    /// of the view it modifies — applying it first would leave the target at
+    /// the content's natural size instead of the whole pane.
+    @ViewBuilder
+    private var configuredDetail: some View {
+        Group {
+            if let vm = coordinator.windowViewModel {
+                activeChat(vm: vm)
+            } else {
+                newChat
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(dropHighlight)
+        .animation(.easeInOut(duration: 0.18), value: isDropTargeted)
+        // `.image` covers a web-page image drag, whose provider is a promise
+        // with no file URL. `.fileURL` covers everything dragged from Finder,
+        // including text and code — those reach the same classifier as the
+        // importer. Raw text UTTypes are deliberately NOT advertised: nothing
+        // consumes them, so declaring them lights the target for a drag that
+        // then bounces, and it makes the pane fight text selection in the
+        // transcript.
+        .onDrop(of: [.image, .fileURL], isTargeted: $isDropTargeted) { providers in
+            handlePaneDrop(providers)
+        }
+    }
+
+    /// Full-pane drop affordance. Non-hittable so it never steals the drag it
+    /// is describing.
+    @ViewBuilder
+    private var dropHighlight: some View {
+        if isDropTargeted, canAcceptDropNow {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(AppColors.brandAmber, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(AppColors.brandAmber.opacity(0.08))
+                    )
+                Text(LocalizedStringResource(
+                    "composer.drop.prompt",
+                    defaultValue: "Drop files to attach"
+                ))
+                .font(.headline)
+                .foregroundStyle(AppColors.brandAmber)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    Capsule().fill(AppColors.cardBackground.opacity(0.92))
+                )
+            }
+            .padding(8)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+        }
+    }
+
+    // MARK: - Pane drop handling
+
+    /// The mount a drop landing right now belongs to. Derived from
+    /// `windowViewModel` — the same state `configuredDetail` branches on — and
+    /// NOT from `selectedConversationID`, which a first-turn mint deliberately
+    /// leaves untouched.
+    private var currentMountIdentity: ComposerMountIdentity {
+        coordinator.windowViewModel.map { .conversation($0.conversationID) } ?? .newChat
+    }
+
+    /// Accept a drop and start every load synchronously.
+    ///
+    /// Returning true only ACCEPTS the drag; it promises nothing about later
+    /// resolvability, which is why each load is started here and never inside a
+    /// `Task` (that might not begin until after this returns).
+    private func handlePaneDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard canAcceptDropNow else { return false }
+
+        let routed = providers.compactMap { provider -> (NSItemProvider, DropProviderRoute)? in
+            let route = ComposerDropRouting.route(
+                hasFileURL: provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
+                canLoadImage: provider.canLoadObject(ofClass: NSImage.self)
+            )
+            return route == .unsupported ? nil : (provider, route)
+        }
+        guard !routed.isEmpty else { return false }
+
+        let session = DropSession(destination: currentMountIdentity, count: routed.count)
+        dropSession = session
+        for (index, entry) in routed.enumerated() {
+            startDropLoad(entry.0, route: entry.1, index: index, session: session)
+        }
+        return true
+    }
+
+    /// Start ONE provider's load and arm its watchdog.
+    private func startDropLoad(_ provider: NSItemProvider,
+                               route: DropProviderRoute,
+                               index: Int,
+                               session: DropSession) {
+        let typeIdentifier = route == .fileURL
+            ? UTType.fileURL.identifier
+            : UTType.image.identifier
+
+        let progress = provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
+            // The copy is done OFF the main actor: a dropped file can live on a
+            // network or not-yet-downloaded iCloud volume, where copying blocks.
+            let resolved: ResolvedDropItem = {
+                guard let data else { return .failed }
+                switch route {
+                case .imageData:
+                    return .image(data)
+                case .fileURL:
+                    guard let url = URL(dataRepresentation: data, relativeTo: nil) else { return .failed }
+                    // FOLDERS are rejected BEFORE the copy — `copyItem` recurses,
+                    // so the downstream guard in `stageOneFile` would only run
+                    // after the whole tree had already been duplicated into temp.
+                    guard !ComposerDropRouting.isDirectory(url),
+                          let staged = AttachmentStagingFile.copyUnderScope(url) else { return .failed }
+                    // The staging leaf is prefixed, so the name the user knows
+                    // travels separately from here on.
+                    return .file(DroppedFileSource(
+                        url: staged,
+                        originalName: url.lastPathComponent,
+                        isAppOwned: true
+                    ))
+                case .unsupported:
+                    return .failed
+                }
+            }()
+            Task { @MainActor in
+                finishDropSlot(index, with: resolved, session: session)
+            }
+        }
+        dropLoadProgresses.append(progress)
+
+        // A provider that never calls back would otherwise hold the batch — and
+        // the Send gate — open forever. Fail just that slot and let the rest
+        // through.
+        let watchdog = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Constants.dropProviderLoadTimeoutSeconds))
+            guard !Task.isCancelled, !session.isFinished else { return }
+            progress.cancel()
+            finishDropSlot(index, with: .failed, session: session)
+        }
+        dropTimeoutTasks.append(watchdog)
+    }
+
+    /// Record one slot's outcome and hand the batch over once every slot is in.
+    @MainActor
+    private func finishDropSlot(_ index: Int,
+                                with item: ResolvedDropItem,
+                                session: DropSession) {
+        // A result for a session that is no longer ours (navigation cancelled
+        // it, or it already completed) owns a temp nothing else knows about.
+        guard dropSession === session else {
+            reclaim(item)
+            return
+        }
+        if case .rejected(let orphan) = session.resolve(index: index, with: item),
+           let orphan {
+            try? FileManager.default.removeItem(at: orphan.url)
+        }
+        guard let batch = session.takeBatch() else { return }
+        clearDropLoadBookkeeping()
+        dropSession = nil
+        pendingDropBatch = batch
+    }
+
+    private func reclaim(_ item: ResolvedDropItem) {
+        guard case .file(let source) = item, source.isAppOwned else { return }
+        try? FileManager.default.removeItem(at: source.url)
+    }
+
+    private func clearDropLoadBookkeeping() {
+        for task in dropTimeoutTasks { task.cancel() }
+        dropTimeoutTasks.removeAll()
+        dropLoadProgresses.removeAll()
+    }
+
+    /// Abandon all drop work and reclaim every file the window still owns.
+    ///
+    /// Called when the destination stops existing — a conversation switch, the
+    /// Settings mode swap, an unconfigured gateway, window teardown. A batch is
+    /// DISCARDED rather than redirected: a file dropped on one conversation
+    /// must never surface in another.
+    private func cancelDropWork() {
+        // Cancel BEFORE clearing — the bookkeeping sweep empties this list.
+        for progress in dropLoadProgresses { progress.cancel() }
+        clearDropLoadBookkeeping()
+        if let session = dropSession {
+            for source in session.cancel() {
+                try? FileManager.default.removeItem(at: source.url)
+            }
+        }
+        dropSession = nil
+        if let parked = pendingDropBatch {
+            for source in parked.appOwnedSources {
+                try? FileManager.default.removeItem(at: source.url)
+            }
+        }
+        pendingDropBatch = nil
+        isDropTargeted = false
     }
 
     /// ACTIVE thread: messages fill, composer pinned to the bottom.
@@ -676,7 +986,12 @@ struct MainWindowView: View {
                 onVoiceResult: handleWindowVoiceResult,
                 settingsVM: settingsVM,
                 selectedRef: selectedRef,
-                pendingStagedImage: composerImageBridge
+                pendingStagedImage: composerImageBridge,
+                mountIdentity: .conversation(vm.conversationID),
+                pendingDropBatch: $pendingDropBatch,
+                dispatchingIdentity: $composerDispatching,
+                isDropResolving: isDropResolving,
+                resolvingDropCount: resolvingDropCount
             )
             // Attachment staging is view-local @State. Give each active
             // conversation its own mount so A → B runs A's onDisappear/deferred
@@ -713,7 +1028,12 @@ struct MainWindowView: View {
                             settingsVM: settingsVM,
                             selectedRef: selectedRef,
                             newChatGatewaySelectionLocked: $newChatGatewaySelectionLocked,
-                            pendingStagedImage: composerImageBridge
+                            pendingStagedImage: composerImageBridge,
+                            mountIdentity: .newChat,
+                            pendingDropBatch: $pendingDropBatch,
+                            dispatchingIdentity: $composerDispatching,
+                            isDropResolving: isDropResolving,
+                            resolvingDropCount: resolvingDropCount
                         )
                         // Keep the VM-less minting composer explicitly distinct
                         // from every established-conversation mount.

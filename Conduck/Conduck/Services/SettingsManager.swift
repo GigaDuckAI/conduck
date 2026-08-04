@@ -3089,6 +3089,32 @@ actor SettingsManager {
 
     // MARK: - Apple Watch session-policy override (App-Group ONLY — never iCloud KVS)
 
+    /// Whether the user explicitly forgot their LAST gateway on this device —
+    /// the sole authority for broadcasting a Watch teardown
+    /// (`Constants.remoteAgentUserClearedAllKey` carries the full rationale for
+    /// why an empty configured set is not that authority).
+    func userClearedAllGateways() -> Bool {
+        defaults.bool(forKey: Constants.remoteAgentUserClearedAllKey)
+    }
+
+    /// Arm (`true`, at the Forget site) or disarm (`false`, once gateways exist
+    /// again) the teardown latch. App-Group only — never iCloud KVS.
+    ///
+    /// Posts `.settingsDidChangeRemotely` so `PhoneSessionManager` re-broadcasts:
+    /// arming the latch is the whole delivery mechanism for a teardown, so it
+    /// has to schedule the broadcast itself rather than depend on a neighbouring
+    /// statement at the Forget site happening to post. Every sibling override
+    /// setter posts for the same reason.
+    func setUserClearedAllGateways(_ on: Bool) {
+        guard on != userClearedAllGateways() else { return }
+        if on {
+            defaults.set(true, forKey: Constants.remoteAgentUserClearedAllKey)
+        } else {
+            defaults.removeObject(forKey: Constants.remoteAgentUserClearedAllKey)
+        }
+        postSettingsDidChangeRemotely()
+    }
+
     /// The Watch-specific `SessionContinuationPolicy` override, or `nil` =
     /// "Follow iPhone". Stored App-Group-LOCAL on the iPhone — NEVER iCloud KVS
     /// (it must not leak to iPad/Mac, which own their own per-device policy).
@@ -3186,6 +3212,10 @@ actor SettingsManager {
             list.append(gateway)
         }
         persistCustomGateways(list)
+        // A gateway that exists cannot also be a forgotten one. Covers both a
+        // recreation under a recycled uuid and a record derived from a roster
+        // snapshot that was merely stale.
+        pruneRetiredBadges(liveIDs: Set(list.map(\.id)))
         return true
     }
 
@@ -3272,6 +3302,103 @@ actor SettingsManager {
             iCloudStore.removeObject(forKey: Constants.remoteAgentBackendKey)
             defaults.removeObject(forKey: Constants.remoteAgentCertFingerprintKey)
         }
+    }
+
+    // MARK: - Custom Gateways — Retired badges (App-Group JSON, never KVS)
+
+    /// The forgotten-gateway badges this device knows about, newest first.
+    func retiredGatewayBadges() -> [RetiredGatewayBadge] {
+        guard let data = defaults.data(forKey: Constants.retiredGatewayBadgesKey),
+              let list = try? JSONDecoder().decode([RetiredGatewayBadge].self, from: data)
+        else { return [] }
+        return list
+    }
+
+    /// Freeze a custom gateway's badge identity before it is deleted.
+    ///
+    /// MUST be called while the roster entry still exists — the monogram is
+    /// often DERIVED from the name, so after `deleteCustomGateway` there is
+    /// nothing left to freeze.
+    ///
+    /// Returns whether a record for `id` is retained afterwards. False covers
+    /// three cases that are all "no badge will draw": the gateway is already
+    /// retired, it resolves to no monogram, or the record fell straight out of
+    /// the retention trim because `date` predates every kept record.
+    @discardableResult
+    func retireCustomGatewayBadge(id: UUID, at date: Date = Date()) -> Bool {
+        guard let gateway = persistedCustomGateways().first(where: { $0.id == id }),
+              let badge = RetiredGatewayBadge.freeze(gateway, at: date),
+              let updated = retiredGatewayBadges().retiring(badge)
+        else { return false }
+        persistRetiredGatewayBadges(updated)
+        return updated.contains { $0.id == id }
+    }
+
+    /// App Group ONLY — never iCloud KVS (`RetiredGatewayBadge` carries the
+    /// rationale).
+    ///
+    /// Deliberately does NOT post `.settingsDidChangeRemotely`. Nothing the
+    /// Watch reads and nothing any Settings screen renders changes here, and
+    /// that notification wakes `PhoneSessionManager` into a full token-bearing
+    /// broadcast — which retiring N gateways during one iCloud change would fire
+    /// N times. The callers that DO change visible state (`deleteCustomGateway`
+    /// and the two inbound roster paths) already post for their own reasons.
+    private func persistRetiredGatewayBadges(_ list: [RetiredGatewayBadge]) {
+        if let data = try? JSONEncoder().encode(list) {
+            defaults.set(data, forKey: Constants.retiredGatewayBadgesKey)
+        }
+    }
+
+    /// Reconcile the retirement records against a roster change: retire every
+    /// custom that VANISHED between the two snapshots, and drop any record whose
+    /// gateway is present again.
+    ///
+    /// This is how a peer device learns about a Forget performed elsewhere. The
+    /// roster itself syncs, the records do not, so each device recomputes the
+    /// same conclusion from the disappearance it already observes. Called from
+    /// both inbound roster paths (cold-launch hydration and the KVS change
+    /// mirror) BEFORE the local copy is overwritten, because the outgoing entry
+    /// is the only place the monogram and colour still exist.
+    ///
+    /// The prune is what keeps a wrong guess cheap: an initial-sync change can
+    /// deliver a server roster older than a gateway this device just created,
+    /// which looks exactly like a Forget. That record is already invisible
+    /// (`gatewayBadgeRoster()` prefers the live entry) and is now dropped
+    /// outright the next time the roster names the gateway again.
+    ///
+    /// Deliberately not gated on "some conversation still references it": that
+    /// check would couple settings sync to the conversation store, and the cost
+    /// of being wrong is one unused record occupying a cap slot — invisible,
+    /// since a badge only ever renders for a conversation that names it.
+    func retireVanishedCustomGateways(previous: [CustomGateway], current: [CustomGateway]) {
+        let surviving = Set(current.map(\.id))
+        for gone in previous where !surviving.contains(gone.id) {
+            retireCustomGatewayBadge(id: gone.id)
+        }
+        pruneRetiredBadges(liveIDs: surviving)
+    }
+
+    /// Drop retirement records for gateways that are live again. Runs wherever
+    /// the live roster is written, so a record derived from a stale roster
+    /// self-corrects instead of holding a retention slot forever.
+    private func pruneRetiredBadges(liveIDs: Set<UUID>) {
+        let list = retiredGatewayBadges()
+        let pruned = list.pruning(liveIDs: liveIDs)
+        guard pruned.count != list.count else { return }
+        persistRetiredGatewayBadges(pruned)
+    }
+
+    /// Badge identity for EVERY gateway a conversation list may need to draw —
+    /// the live roster plus the forgotten ones, adapted into the same shape the
+    /// badge resolvers already take.
+    ///
+    /// Display surfaces only. Routing, the picker, the cap check, configured-ref
+    /// discovery and the share-target snapshot keep reading `customGateways()`:
+    /// a forgotten gateway must never be selectable, and keeping the two rosters
+    /// as separate calls means a consumer that does not know about retirement
+    /// cannot accidentally receive one.
+    func gatewayBadgeRoster() -> [CustomGateway] {
+        customGateways().unioningRetired(retiredGatewayBadges())
     }
 
     private func persistCustomGateways(_ list: [CustomGateway]) {
@@ -3927,9 +4054,24 @@ actor SettingsManager {
     /// Full multi-gateway Watch support. Build the
     /// MULTI-gateway envelope carrying EVERY configured backend's per-backend
     /// sub-envelope plus the default-backend pointer, stamped with a monotonic
-    /// `Date().timeIntervalSinceReferenceDate`. Returns nil when NO backend is
-    /// configured — `PhoneSessionManager` skips the `transferUserInfo` enqueue
-    /// for the multi slot in that case (mirrors the single-envelope skip).
+    /// `Date().timeIntervalSinceReferenceDate`.
+    ///
+    /// With no backend configured this returns a TEARDOWN envelope if the user
+    /// explicitly forgot their last gateway on this device, and nil otherwise —
+    /// in which case `PhoneSessionManager` skips the `transferUserInfo` enqueue
+    /// for the multi slot (mirroring the single-envelope skip). The empty branch
+    /// below carries why an empty configured set cannot itself authorize the
+    /// teardown.
+    ///
+    /// **This composer WRITES**: it disarms the teardown latch once the phone
+    /// has gateways to courier again. That lives here rather than at a save site
+    /// because this is the one place that always knows the answer — a gateway
+    /// can also arrive by pairing import or a peer's iCloud sync, and a latch
+    /// left armed would courier teardowns at every subsequent broadcast. The
+    /// consequence is that any caller, including the Watch-initiated pull that
+    /// shares `assembleSettingsPayload`, settles the latch as a side effect;
+    /// that is safe (a non-empty configured set is exactly the state where the
+    /// latch is spent) but it is not a pure read.
     ///
     /// Each sub-envelope is the SAME `RemoteAgentBroadcastEnvelope` the single
     /// broadcast uses, built from `remoteAgentSnapshot(for:)` so a backend
@@ -3940,7 +4082,35 @@ actor SettingsManager {
     func currentRemoteAgentMultiEnvelope() -> RemoteAgentMultiBroadcastEnvelope? {
         let configured = configuredRemoteAgentRefs()
         guard !configured.isEmpty else {
-            return nil
+            // Nothing is configured. That alone says NOTHING about whether the
+            // user deleted anything — it is equally the reading on a restored /
+            // reinstalled device before iCloud KVS has downloaded, on a locked
+            // Keychain before first unlock (the bearer predicate fails closed),
+            // and whenever the custom roster has not yet synced (customs are
+            // only enumerable THROUGH it). `activate()` broadcasts without
+            // awaiting `performInitialSync`, so those windows are reachable in
+            // practice. Inferring teardown here would wipe a healthy Watch.
+            //
+            // Only a recorded user action authorizes destruction.
+            guard userClearedAllGateways() else { return nil }
+            return RemoteAgentMultiBroadcastEnvelope(
+                backends: [],
+                // Still a valid non-empty ref (the decoder requires one):
+                // `defaultRemoteAgentRef()` falls back to the built-in default
+                // in a no-gateway state.
+                defaultBackendRef: watchEffectiveDefaultRef().rawString,
+                timestamp: Date().timeIntervalSinceReferenceDate,
+                sessionPolicy: watchEffectiveSessionContinuationPolicy().rawValue,
+                clearAll: true
+            )
+        }
+        // The phone has gateways to courier again, so the teardown latch has
+        // served its purpose. Cleared HERE rather than at the save site because
+        // this is the one place that always knows the answer — a gateway can
+        // also arrive via pairing import or a peer's iCloud sync, and a latch
+        // left armed would keep couriering teardowns at every broadcast.
+        if userClearedAllGateways() {
+            setUserClearedAllGateways(false)
         }
         // Snapshot the roster ONCE so each custom sub-envelope reads its name /
         // model / badge without re-walking the registry per ref.
@@ -4605,7 +4775,14 @@ actor SettingsManager {
         // listed in the picker, with no URL behind them, because the slots
         // themselves correctly refuse to push up.
         if let iCloudGatewayRoster = iCloudStore.data(forKey: Constants.customGatewaysRegistryKey) {
+            // Retire whatever this hydration is about to drop. A Forget on
+            // ANOTHER device reaches here as a shrunken roster, and the outgoing
+            // local entry is the last place that gateway's monogram and colour
+            // exist — read it BEFORE the overwrite or its conversations lose
+            // their badge on this device only.
+            let previous = persistedCustomGateways()
             defaults.set(iCloudGatewayRoster, forKey: Constants.customGatewaysRegistryKey)
+            retireVanishedCustomGateways(previous: previous, current: persistedCustomGateways())
         }
         let gatewayUUIDs = ((try? JSONDecoder().decode(
             [CustomGateway].self,
@@ -5073,11 +5250,16 @@ actor SettingsManager {
         // `didChange`, so `.settingsDidChangeRemotely` never posts and the open
         // Settings screen never reloads — the original cross-device-sync gap.
         if changedKeys.contains(Constants.customGatewaysRegistryKey) {
+            // Same reason as the cold-launch hydrate: snapshot before the
+            // overwrite so a peer's Forget retires the badge here too, instead
+            // of blanking the rows of conversations this device still holds.
+            let previousRoster = persistedCustomGateways()
             if let data = iCloudStore.data(forKey: Constants.customGatewaysRegistryKey) {
                 defaults.set(data, forKey: Constants.customGatewaysRegistryKey)
             } else {
                 defaults.removeObject(forKey: Constants.customGatewaysRegistryKey)
             }
+            retireVanishedCustomGateways(previous: previousRoster, current: persistedCustomGateways())
             didChange = true
         }
 

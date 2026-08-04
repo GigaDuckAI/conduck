@@ -356,14 +356,71 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
                 //   • `.bearer` + nil token → PRESERVE the existing token.
                 // Refs absent from `backends` keep whatever they had; a DELETED
                 // custom's stale slots are cleared by `updateRemoteAgents`.
-                for sub in multiEnvelope.backends {
-                    if sub.authScheme == .none {
-                        await WatchIdentityResolver.shared.clearRemoteAgentToken(for: sub.backendRef)
-                    } else if let token = sub.token, !token.isEmpty {
-                        await WatchIdentityResolver.shared.setRemoteAgentToken(token, for: sub.backendRef)
+                if multiEnvelope.clearAll == true {
+                    // TEARDOWN — the user forgot their last gateway. Order is
+                    // INVERTED versus the write path below, deliberately: the
+                    // commit is what re-checks and advances the high-water mark
+                    // atomically, so doing it FIRST means an out-of-order
+                    // teardown is rejected before it can destroy anything. The
+                    // write path can safely persist tokens first (a token
+                    // without config is inert); a destructive apply cannot —
+                    // this method awaits, and the main actor is reentrant across
+                    // those awaits, so a newer full envelope can interleave. Old
+                    // ordering would let a stale teardown delete credentials the
+                    // newer envelope had just installed.
+                    //
+                    // Capture the doomed refs BEFORE the commit — it replaces
+                    // the roster and the URL map that name them.
+                    //
+                    // The roster is NOT a sufficient index. A custom sub-envelope
+                    // arriving without a name is dropped from the roster as
+                    // malformed, yet the write path below still stored its token
+                    // under its per-ref account — so enumerating the roster
+                    // alone would leave a live bearer token behind a Forget the
+                    // user believes wiped everything. `remoteAgentURLs` holds
+                    // every ref that was ever configured here, named or not.
+                    let doomedRefs = Set(
+                        WatchSettingsReader.shared.customGateways.map(\.ref.rawString)
+                    ).union(WatchSettingsReader.shared.remoteAgentURLs.keys)
+                        .union(RemoteAgentBackend.allCases.map { RemoteAgentRef.builtin($0).rawString })
+                    if WatchSettingsReader.shared.updateRemoteAgents(multi: multiEnvelope) {
+                        // Every per-ref slot, then the legacy single account.
+                        // Built-ins are cleared here and NOT on ordinary
+                        // per-ref absence: absence of one ref among many is
+                        // ambiguous (a transient iPhone Keychain failure drops a
+                        // ref from the configured set), whereas `clearAll` is
+                        // minted only from a recorded user Forget.
+                        //
+                        // Committing first defuses a teardown that is stale AT
+                        // the commit. It cannot defuse one that goes stale
+                        // AFTER it: this loop awaits, the main actor is
+                        // reentrant across those awaits, and a newer envelope
+                        // that interleaves installs tokens this loop would then
+                        // delete — leaving a gateway with a URL, an auth scheme
+                        // and no token, which fails closed until the next
+                        // broadcast. So re-read the high-water mark before every
+                        // clear and abandon the teardown the moment a newer
+                        // envelope has landed.
+                        for ref in doomedRefs {
+                            guard WatchSettingsReader.shared.lastRemoteAgentEnvelopeTimestamp
+                                    == multiEnvelope.timestamp else { break }
+                            await WatchIdentityResolver.shared.clearRemoteAgentToken(for: ref)
+                        }
+                        if WatchSettingsReader.shared.lastRemoteAgentEnvelopeTimestamp
+                            == multiEnvelope.timestamp {
+                            await WatchIdentityResolver.shared.clearRemoteAgentToken()
+                        }
                     }
+                } else {
+                    for sub in multiEnvelope.backends {
+                        if sub.authScheme == .none {
+                            await WatchIdentityResolver.shared.clearRemoteAgentToken(for: sub.backendRef)
+                        } else if let token = sub.token, !token.isEmpty {
+                            await WatchIdentityResolver.shared.setRemoteAgentToken(token, for: sub.backendRef)
+                        }
+                    }
+                    _ = WatchSettingsReader.shared.updateRemoteAgents(multi: multiEnvelope)
                 }
-                _ = WatchSettingsReader.shared.updateRemoteAgents(multi: multiEnvelope)
             } else {
                 #if DEBUG
                 print("[Watch] Discarding stale RemoteAgent MULTI envelope (ts=\(multiEnvelope.timestamp) <= last=\(lastSeen))")

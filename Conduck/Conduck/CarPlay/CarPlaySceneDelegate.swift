@@ -445,7 +445,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
 
             // Custom roster (for labeling built-in vs custom refs in the
             // switcher + chooser). Fetched once per refresh.
-            let customs = await SettingsManager.shared.customGateways()
+            let customs = await SettingsManager.shared.gatewayBadgeRoster()
 
             // Default-gateway switcher (idle list ONLY — the picker is the root
             // and no voice modal is up while idle). Shown only when ≥2 gateways
@@ -485,7 +485,18 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             let recents = (try? await ConversationStore.shared.fetchRecentForPicker(limit: cap)) ?? []
             if !recents.isEmpty {
                 let now = Date()
-                let showGatewayBadge = configuredRefs.count >= 2
+                // Badge visibility spans the WHOLE store, not `recents` — that
+                // slice is capped, and the phone answers from every
+                // conversation. Failing the fetch degrades to the displayed
+                // slice, which is the safe direction: it can only under-report
+                // identities and hide the badge, never draw a blank one.
+                let allBackends = (try? await ConversationStore.shared.distinctBackends())
+                    ?? Set(recents.map(\.backend))
+                let showGatewayBadge = RemoteAgentRefMetadata.shouldShowBadges(
+                    configured: configuredRefs,
+                    conversationBackends: allBackends,
+                    customs: customs
+                )
                 let recentItems: [CPListItem] = recents.map { recent in
                     let item = CPListItem(
                         text: recent.label,

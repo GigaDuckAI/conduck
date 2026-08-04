@@ -3330,6 +3330,18 @@ final class SettingsViewModel {
         await clearFileTransferConfig(for: ref)
 
         if case .custom(let id) = ref {
+            // Freeze the badge FIRST — the roster entry about to be deleted is
+            // the only place the monogram and colour exist, and the monogram is
+            // usually derived from the name. Conversations bound to this gateway
+            // keep their `custom_<uuid>` binding forever, so without this they
+            // would render a blank gap where their colour tag used to be, while
+            // a forgotten BUILT-IN keeps its badge for free.
+            //
+            // Attached HERE and not inside `deleteCustomGateway`, for the same
+            // reason the file-lane wipe above is: that method doubles as the
+            // failed-save rollback for a brand-new draft, and retiring there
+            // would leave a tombstone for a gateway that never existed.
+            await SettingsManager.shared.retireCustomGatewayBadge(id: id)
             // `deleteCustomGateway` clears the per-ref url/token/cert slots +
             // the roster entry + repoints the default to a built-in if it
             // pointed here — the whole "forget a custom" operation. Don't
@@ -3357,6 +3369,33 @@ final class SettingsViewModel {
                let replacement = stillConfigured.first(where: { $0 != ref }) {
                 await SettingsManager.shared.setDefaultRemoteAgentRef(replacement)
             }
+        }
+
+        // Arm the Watch teardown latch when this Forget left the device with no
+        // gateway evidence at all. This is the ONLY place the intent exists:
+        // the broadcast composer sees an empty configured set, which is also
+        // what a pre-sync or locked-Keychain read looks like, so it can never
+        // distinguish "the user deleted everything" from "this process cannot
+        // see anything yet". Without the latch the wrist keeps a live route —
+        // URL, auth scheme and Keychain token — to a gateway the user believes
+        // they disconnected, across relaunches, because Forget is local to the
+        // phone and the token stays valid at the server.
+        //
+        // The test spans CONFIGURED plus PARTIALLY-configured, never
+        // `configuredRemoteAgentRefs()` alone: arming must not depend on the
+        // fail-closed bearer predicate, or a Forget performed while ANOTHER
+        // gateway's token is momentarily unreadable would courier a teardown
+        // that destroys it on the wrist.
+        //
+        // Nor `removableRemoteAgentRefs()`, which is deliberately WIDER — it
+        // counts auxiliary residue (a transport hint, an image-history policy)
+        // that a Forget can leave behind. Residue is not a gateway, and gating
+        // on it would leave the latch permanently unarmed on exactly the device
+        // that has some, so the wrist would never be told.
+        let stillConfigured = await SettingsManager.shared.configuredRemoteAgentRefs()
+        let stillPartial = await SettingsManager.shared.partiallyConfiguredRemoteAgentRefs()
+        if stillConfigured.isEmpty, stillPartial.isEmpty {
+            await SettingsManager.shared.setUserClearedAllGateways(true)
         }
 
         // The active SESSION pointer is global; a forgotten gateway invalidates

@@ -180,8 +180,11 @@ struct WatchConversationThreadView: View {
         guard let id = conversationID,
               let raw = viewModel.conversations.first(where: { $0.id == id })?.backend,
               let ref = RemoteAgentRef(rawString: raw) else { return "" }
-        let customs = WatchSettingsReader.shared.customGateways
-        // A custom missing from the roster → empty (no generic fallback word).
+        // The BADGE roster: a thread bound to a forgotten custom names it
+        // "Forgotten gateway" rather than going blank, matching the colour tag
+        // its row already carries in the list.
+        let customs = WatchSettingsReader.shared.gatewayBadgeRoster
+        // A custom missing from BOTH rosters → empty (no generic fallback word).
         if case .custom(let id) = ref, !customs.contains(where: { $0.id == id }) {
             return ""
         }

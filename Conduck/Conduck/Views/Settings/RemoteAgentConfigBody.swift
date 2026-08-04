@@ -501,11 +501,19 @@ struct RemoteAgentConfigBody: View {
     /// this one. Only the certificate pin is per-device. A user reaching this
     /// alert from a Diagnostics row that says "on this device" would otherwise
     /// reasonably read the wipe as local.
+    ///
+    /// The custom variant also names what SURVIVES. A forgotten custom keeps its
+    /// badge — two characters and a palette colour — so the conversations it
+    /// created stay tellable apart; an alert that lists only destruction would
+    /// misdescribe that, in the one direction a user cannot check afterwards.
     private var forgetAlertMessage: Text {
         if isCustom {
+            // A NEW key, not an edit of an existing one. Rewording an existing
+            // `defaultValue:` is inert — the string catalog's stored value wins
+            // and extraction never overwrites it.
             return Text(LocalizedStringResource(
-                "settings.remoteAgent.forgetAlert.message.custom",
-                defaultValue: "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). The URL and token are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns."
+                "settings.remoteAgent.forgetAlert.message.custom.retained",
+                defaultValue: "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). The URL and token are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns. They keep this gateway's colour tag so you can still tell them apart; its name is not kept."
             ))
         }
         return Text(LocalizedStringResource(

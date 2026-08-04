@@ -33,11 +33,13 @@ struct ConversationListView: View {
     /// Custom-gateway roster snapshot, used to resolve a row's gateway badge
     /// (name / color / monogram) for a `.custom` ref. Host-owned.
     var customGateways: [CustomGateway] = []
-    /// Show the per-row gateway identity badge. Hosts pass
-    /// `configuredRefs.count >= 2` so the badge appears only in a multi-gateway
-    /// setup (single-gateway users see no new chrome) — mirrors the nav-title
-    /// gateway-picker gate.
-    var showsGatewayBadge: Bool = false
+    /// The gateways configured on this device. Feeds the per-row badge
+    /// visibility rule together with the loaded conversations — the view owns
+    /// that decision (`RemoteAgentRefMetadata.shouldShowBadges`) rather than
+    /// taking a pre-computed Bool, so all three hosts of this list answer it
+    /// identically. Empty (the default) still shows badges on a history that
+    /// spans two gateways: the rows outlive the config that made them.
+    var configuredRefs: [RemoteAgentRef] = []
     /// Optional host callback to open Settings from a bottom footer row. When
     /// non-nil, a "Settings" row renders pinned to the list's bottom (iOS
     /// sheet/sidebar); when nil the inset is empty (layout-neutral) so macOS —
@@ -340,14 +342,19 @@ struct ConversationListView: View {
     // MARK: - List
 
     private var conversationsList: some View {
-        List {
+        // Resolved ONCE per list build, not once per row: the rule scans the
+        // whole conversation array, and a single-gateway list is exactly the
+        // case where it can't bail early — evaluating it per row would make
+        // that scan quadratic in the number of conversations.
+        let showsBadge = showsGatewayBadge
+        return List {
             ForEach(filteredTimeGroups) { group in
                 Section {
                     ForEach(group.conversations) { convo in
                         Button {
                             onSelect(convo.id)
                         } label: {
-                            conversationRow(convo)
+                            conversationRow(convo, showsBadge: showsBadge)
                         }
                         // Full-bleed live row on macOS: the wash and the click
                         // target reach exactly the band `.listRowBackground`
@@ -389,12 +396,26 @@ struct ConversationListView: View {
         .refreshable { await viewModel.reload() }
     }
 
-    private func conversationRow(_ convo: ConversationRecord) -> some View {
+    /// Whether rows carry the leading gateway badge. Computed from the WHOLE
+    /// loaded list (`viewModel.conversations`), never the search-filtered
+    /// subset — `fetchConversations()` takes no limit, so this is every stored
+    /// conversation, and keying off the filtered set would make badges blink in
+    /// and out as the user types.
+    private var showsGatewayBadge: Bool {
+        RemoteAgentRefMetadata.shouldShowBadges(
+            configured: configuredRefs,
+            conversationBackends: viewModel.conversations.lazy.map(\.backend),
+            customs: customGateways
+        )
+    }
+
+    private func conversationRow(_ convo: ConversationRecord, showsBadge: Bool) -> some View {
         HStack(spacing: 12) {
-            // Leading gateway badge — only in a multi-gateway setup, and only
-            // for a resolvable ref (a deleted / un-synced custom renders
-            // nothing via `GatewayBadge`'s empty-monogram guard).
-            if showsGatewayBadge, let ref = RemoteAgentRef(rawString: convo.backend) {
+            // Leading gateway badge — only when the list spans two gateway
+            // identities, and only for a resolvable ref (a deleted / un-synced
+            // custom renders nothing via `GatewayBadge`'s empty-monogram
+            // guard, and is excluded from the count for that same reason).
+            if showsBadge, let ref = RemoteAgentRef(rawString: convo.backend) {
                 GatewayBadge(ref: ref, customs: customGateways)
             }
 

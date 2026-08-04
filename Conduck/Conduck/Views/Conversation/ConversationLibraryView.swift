@@ -122,7 +122,7 @@ struct ConversationLibraryView: View {
                 showsToolbarActions: true,
                 externalSearchText: $sidebarSearch,
                 customGateways: customGateways,
-                showsGatewayBadge: configuredRefs.count >= 2,
+                configuredRefs: configuredRefs,
                 // iPad sidebar is always-visible (not a sheet), so the footer
                 // row flips Settings directly — no deferred-after-dismiss flag.
                 // No deep-link: the footer row opens the Settings root list.

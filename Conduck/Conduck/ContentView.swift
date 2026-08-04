@@ -513,7 +513,7 @@ struct ContentView: View {
                             startNewConversation()
                         },
                         customGateways: customGateways,
-                        showsGatewayBadge: configuredRefs.count >= 2,
+                        configuredRefs: configuredRefs,
                         onOpenSettings: {
                             showingList = false
                             pendingShowSettingsFromList = true
@@ -626,7 +626,7 @@ struct ContentView: View {
         // with the default pre-selected for this fresh conversation.
         Task {
             configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
-            customGateways = await SettingsManager.shared.customGateways()
+            customGateways = await SettingsManager.shared.gatewayBadgeRoster()
             if !attachmentGatewaySelectionLocked {
                 pickerSelectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
             }
@@ -836,7 +836,7 @@ struct ContentView: View {
         // a send would fail closed. Align with the strict predicate used
         // everywhere else (`configuredRemoteAgentRefs()`).
         isRemoteAgentConfigured = !configuredRefs.isEmpty
-        customGateways = await SettingsManager.shared.customGateways()
+        customGateways = await SettingsManager.shared.gatewayBadgeRoster()
 
         // Cross-device "set up later, then it synced" path: a gateway just
         // appeared where there was none. Gate on the FIRST load (an
