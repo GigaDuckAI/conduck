@@ -375,6 +375,17 @@ final class DiagnosticsRunner {
     /// nested file-server sub-row from `fileLanes` (by `ref`). See `GatewayDisplayEntry`.
     private(set) var gatewayDisplayOrder: [GatewayDisplayEntry] = []
 
+    /// Display model (UI-only) for gateways whose setup is INCOMPLETE on this
+    /// device — one entry per `connection.gateway.incomplete.<ref>` row, in the
+    /// same order those rows are built.
+    ///
+    /// Exists for the same reason as `gatewayDisplayOrder`: the row itself is
+    /// titled with the gateway KIND so `copyBlock()` can never paste a user's
+    /// gateway name, while the screen shows the real one. Naming them on screen
+    /// is the whole point — an anonymous "2 leftover gateways" sent the user to a
+    /// Settings list that marked none of them.
+    private(set) var incompleteGatewayDisplay: [GatewayDisplayEntry] = []
+
     /// Config signatures captured on the last rebuild — the guard that decides
     /// whether a live re-derive may CARRY a prior probe/test result. Provider (or
     /// key-presence) change ⇒ the STT/TTS test rows RESET rather than keep a
@@ -387,6 +398,13 @@ final class DiagnosticsRunner {
     /// once the first local read lands; `@Observable` re-renders reactively).
     var showsVoiceSection = false
     var showsSyncSection = false
+
+    /// Whether the Connection section shows its "nothing here can send" footer —
+    /// true only when every gateway on the device is half-configured, so the
+    /// per-gateway rows have replaced `connection.gateway.none`. Held outside
+    /// `checks` so the global conclusion never counts as its own finding on top of
+    /// the rows that name each repairable gateway.
+    private(set) var showsNoSendableGatewayNotice = false
     /// The network-path row is supporting evidence, not a useful standing green
     /// result. Show it only when the device appears offline or Low Data Mode may
     /// constrain transfers; the underlying fact remains in Copy Diagnostics.
@@ -589,18 +607,31 @@ final class DiagnosticsRunner {
     private func performLocalReadsAndRebuild(carryOver: Bool) async {
         // --- Local config-shape reads (Keychain / defaults; no network) --------
         let manager = SettingsManager.shared
-        let refs = await manager.configuredRemoteAgentRefs()
+        // ONE gateway-state snapshot. `configuredRefs` and `incompleteRefs` are
+        // projections of a single classification pass, so an iCloud change landing
+        // mid-rebuild can no longer show the same ref as both send-able and
+        // half-configured (or as neither) — the two used to be separate actor hops
+        // with a dozen unrelated awaits between them. The roster rides along for
+        // the same reason: names and ordinals must describe the same moment.
+        let inventory = await manager.remoteAgentInventory()
+        let refs = inventory.configuredRefs
+        let customGateways = inventory.customGateways
         let defaultRef = await manager.defaultRemoteAgentRef()
         let sttSnapshot = await manager.activeSTTSnapshot()
         let ttsSnapshot = await manager.activeTTSSnapshot()
         let storedKeys = await manager.presetIDsWithStoredKey()
         let roster = await manager.customVoiceEndpoints()
-        let customGateways = await manager.customGateways()
-        // Single canonical per-custom ordinal (config/input order) — the SAME `N`
-        // the copy block's `custom-gateway#N` tag + `file[custom-gateway#N]` line
-        // use, reused for the gateway rows' `reportLabel` AND the on-screen
-        // "Custom gateway N" display fallback, so screen and report never disagree.
-        let customOrdinals = Self.customOrdinals(refs)
+        // Single canonical per-custom ordinal — the SAME `N` the copy block's
+        // `custom-gateway#N` tag + `file[custom-gateway#N]` line use, reused for the
+        // gateway rows' `reportLabel` AND the on-screen "Custom gateway N" display
+        // fallback, so screen and report never disagree.
+        //
+        // Numbered over the FULL ROSTER, not the configured refs: an incomplete
+        // custom is by definition absent from `refs`, so a configured-only map gave
+        // its row `custom-gateway#0` — and worse, renumbered every sibling the
+        // moment one gateway's token failed to sync. Roster order is the one
+        // ordering that doesn't move under us.
+        let customOrdinals = Self.customOrdinals(customGateways.map { RemoteAgentRef.custom($0.id) })
 
         var authSchemes: [RemoteAgentAuthScheme] = []
         // Per-ref gateway config signature (hash of url + token + scheme + pin) —
@@ -621,18 +652,29 @@ final class DiagnosticsRunner {
             }
         }
 
-        // Partially-configured gateways — URL synced here but not send-able
-        // (bearer token / required model missing on THIS device). Fail-closed
-        // `configuredRemoteAgentRefs()` silently drops these, and a healthy
-        // sibling gateway masks the drop entirely — the one cross-device-skew
-        // case the "No Personal AI configured" row can't catch. The focused
-        // ref is excluded when its own dedicated row (`focused.missing`) is
-        // about to say the same thing more specifically.
-        var partialRefs = await manager.partiallyConfiguredRemoteAgentRefs()
-        if let focusedRef, !refs.contains(focusedRef) {
-            partialRefs.removeAll { $0 == focusedRef }
+        // Gateways whose setup is INCOMPLETE on this device — evidence of a real
+        // setup attempt, but not send-able as it stands (a bearer token or a
+        // required model that hasn't synced here, a malformed URL, a Keychain that
+        // wouldn't read). Fail-closed `configuredRefs` silently drops these, and a
+        // healthy sibling gateway masks the drop entirely — the cross-device-skew
+        // case the "No Personal AI configured" row can't catch.
+        //
+        // The Troubleshoot deep-link's OWN gateway always gets exactly ONE row,
+        // and it is its own: `focused.missing` is more specific than a generic
+        // incomplete row because it can offer Clone. So it is pulled out of the
+        // incomplete set — but ONLY because the row below is now guaranteed to
+        // render for it.
+        //
+        // It used to be gated on `!refs.isEmpty`, matching where the row was
+        // emitted, which left a hole: with nothing send-able, the focused gateway
+        // was subtracted from the incomplete set AND its row lived in a branch
+        // that could not run, so the gateway the user arrived from was described
+        // nowhere at all.
+        let focusedNeedsOwnRow = focusedRef.map { !refs.contains($0) } ?? false
+        var incompleteRefs = inventory.incompleteRefs
+        if focusedNeedsOwnRow, let focusedRef {
+            incompleteRefs.removeAll { $0 == focusedRef }
         }
-        let partialGatewayCount = partialRefs.count
 
         // Phase-D silent-failure reads — all local + cheap (dir listing /
         // metadata decode / volume capacity), no network, no prompt.
@@ -943,8 +985,12 @@ final class DiagnosticsRunner {
         factTTSArchetype = DiagnosticsExplainer.archetype(forProviderID: ttsSnapshot.providerID)
         factSTTKeyCount = storedKeys.filter { $0 != "apple-on-device" }.count
         factGatewayKinds = refs.map(Self.gatewayKind)
-        factCustomGatewayCount = refs.filter { $0.customID != nil }.count
-        factPartialGatewayCount = partialGatewayCount
+        // The ROSTER size, matching what `custom-gateway#N` indexes. Counting only
+        // the send-able customs let the report print `customs=1` beside a
+        // `custom-gateway#2` tag — an ordinal larger than the count it appears to
+        // belong to, which reads as a bug to whoever is helping the user.
+        factCustomGatewayCount = customGateways.count
+        factPartialGatewayCount = incompleteRefs.count
         factAuthBearerCount = authSchemes.filter { $0 == RemoteAgentAuthScheme.bearer }.count
         factAuthNoneCount = authSchemes.filter { $0 == RemoteAgentAuthScheme.none }.count
         factUbiquityPresent = ubiquityPresent
@@ -1051,34 +1097,12 @@ final class DiagnosticsRunner {
         // section honest. `configuredRemoteAgentRefs()` is fail-closed, so an empty
         // set ALSO catches cross-device token skew (a ref with a synced URL but no
         // bearer token in the synced Keychain is dropped).
-        if refs.isEmpty {
-            // With NO send-able gateway, a half-configured leftover is absorbed
-            // into this row rather than emitted as its own amber one below. The
-            // standalone partial row exists because a healthy sibling gateway
-            // would otherwise mask the drop; with no sibling there is nothing to
-            // mask, and two rows describing the same nothing — a red "none" and
-            // an amber "2 gateways" — read as a contradiction.
-            let detail: String
-            if partialGatewayCount == 1 {
-                detail = String(localized: "diagnostics.connection.gateway.none.detail.partialOne", defaultValue: "Add your Personal AI gateway in Settings — every request needs one on this device. A leftover gateway is still stored here without its key or model; open it in Settings to finish or forget it.")
-            } else if partialGatewayCount > 1 {
-                detail = String(localized: "diagnostics.connection.gateway.none.detail.partialMany", defaultValue: "Add your Personal AI gateway in Settings — every request needs one on this device. \(partialGatewayCount) leftover gateways are still stored here without their key or model; open them in Settings to finish or forget them.")
-            } else {
-                detail = String(localized: "diagnostics.connection.gateway.none.detail", defaultValue: "Add your Personal AI gateway in Settings — every request needs one on this device.")
-            }
-            built.append(DiagnosticCheck(
-                id: "connection.gateway.none",
-                title: String(localized: "diagnostics.connection.gateway.none", defaultValue: "No Personal AI configured"),
-                category: .connection,
-                tier: .autoRead,
-                status: .failed(code: AppError.remoteAgentNotConfigured.errorCode),
-                detail: detail,
-                role: nil, reportLabel: nil
-            ))
-        } else if let focusedRef, !refs.contains(focusedRef) {
+        if focusedNeedsOwnRow, let focusedRef {
             // The Troubleshoot deep-link's OWN gateway is not send-able here (token
-            // skew / deleted) even though another gateway is healthy — the partial-
-            // skew case that matters most. Name the KIND only, never a user name.
+            // skew / deleted). Emitted UNCONDITIONALLY when that is true — whether
+            // or not some other gateway still works — because the user arrived here
+            // from that gateway's failure and it is the one thing the screen owes
+            // them. Name the KIND only, never a user name.
             let kindTitle: String
             switch focusedRef {
             case .builtin(let backend): kindTitle = "\(backend.displayName) \(Self.gatewayWord)"
@@ -1093,33 +1117,41 @@ final class DiagnosticsRunner {
                 detail: String(localized: "diagnostics.connection.gateway.focused.missing.detail", defaultValue: "This gateway isn't set up on this device — finish adding it in Settings, or Clone the conversation to a configured gateway."),
                 role: .focused, reportLabel: nil
             ))
-        }
-
-        // Partial-config row — a URL synced here without its key/model. Shown
-        // EVEN beside healthy gateways (the masking is the point); anonymous
-        // count only, never a name/URL. Suppressed when there is no send-able
-        // gateway at all: the red row above already carries the count, and two
-        // rows about the same nothing contradict each other.
-        if partialGatewayCount > 0, !refs.isEmpty {
+        } else if refs.isEmpty, incompleteRefs.isEmpty {
+            // The "nothing here at all" row — reserved for a device that holds no
+            // gateway state whatsoever. When half-configured gateways DO exist they
+            // each get their own named red row below instead: "finish OpenClaw" is a
+            // better instruction than "add a gateway" for someone who already
+            // started one, and emitting both would count a single outage plus its
+            // causes as several findings.
             built.append(DiagnosticCheck(
-                id: "connection.gateway.partial",
-                title: String(localized: "diagnostics.connection.gateway.partial", defaultValue: "Gateway missing its key or model"),
+                id: "connection.gateway.none",
+                title: String(localized: "diagnostics.connection.gateway.none", defaultValue: "No Personal AI configured"),
                 category: .connection,
                 tier: .autoRead,
-                status: .warning,
-                // SAME VOCABULARY AND SAME REMEDY as the folded copy in the
-                // `.none` row above. These two rows describe the identical
-                // predicate (`partiallyConfiguredRemoteAgentRefs`), so naming it
-                // "a leftover gateway" here and "a gateway synced to this
-                // device" there — and prescribing "finish or forget" against
-                // "re-enter, or re-pair" — describes one state two ways. A user
-                // who forgets a healthy sibling watches the same gateway get
-                // re-described mid-session.
-                detail: partialGatewayCount == 1
-                    ? String(localized: "diagnostics.connection.gateway.partial.one", defaultValue: "A leftover gateway is stored here without its key or model — open it in Settings to finish or forget it.")
-                    : String(localized: "diagnostics.connection.gateway.partial.many", defaultValue: "\(partialGatewayCount) leftover gateways are stored here without their key or model — open them in Settings to finish or forget them."),
+                status: .failed(code: AppError.remoteAgentNotConfigured.errorCode),
+                detail: String(localized: "diagnostics.connection.gateway.none.detail", defaultValue: "Add your Personal AI gateway in Settings — every request needs one on this device."),
                 role: nil, reportLabel: nil
             ))
+        }
+
+        // ONE ROW PER incomplete gateway — never an aggregate count. A single row
+        // saying "2 gateways" under a header that counts ROWS reads as arithmetic
+        // that doesn't add up ("1 item needs attention" / "2 leftover gateways"),
+        // and it names neither, so "open them in Settings" points nowhere. Per-ref
+        // rows make the header count the gateways by construction and give each
+        // one a name the user can act on.
+        built.append(contentsOf: buildIncompleteGatewayRows(
+            refs: incompleteRefs,
+            customOrdinals: customOrdinals,
+            anyConfigured: !refs.isEmpty
+        ))
+        let newIncompleteDisplay = incompleteRefs.map { ref in
+            GatewayDisplayEntry(
+                ref: ref,
+                displayName: Self.gatewayDisplayName(ref, customGateways: customGateways, ordinal: customOrdinals[ref]),
+                connectionCheckID: Self.incompleteCheckID(for: ref)
+            )
         }
 
         built.append(DiagnosticCheck(
@@ -1353,6 +1385,13 @@ final class DiagnosticsRunner {
         // --- Commit (disable the row-insert animation on a structural change) ---
         fileLanes = newFileLanes
         gatewayDisplayOrder = newGatewayDisplayOrder
+        incompleteGatewayDisplay = newIncompleteDisplay
+        // The global conclusion when the per-gateway rows have replaced the
+        // "No Personal AI configured" row: nothing here can send. Rendered as a
+        // section FOOTER, deliberately outside `checks`, so it explains the
+        // situation without minting a finding of its own on top of the rows that
+        // already name each repairable gateway.
+        showsNoSendableGatewayNotice = refs.isEmpty && (!incompleteRefs.isEmpty || focusedNeedsOwnRow)
         fileLaneSignatures = newFileLaneSignatures
         gatewaySignatures = newGatewaySignatures
         activeSTTSignature = newSTTSignature
@@ -2474,6 +2513,65 @@ final class DiagnosticsRunner {
         return items
             .sorted { ($0.priority, $0.index) < ($1.priority, $1.index) }
             .map { ($0.ref, $0.role) }
+    }
+
+    /// The `checks` row id for a gateway's INCOMPLETE-setup row. Deliberately not
+    /// the `gateway.` prefix `connectionCheckID(for:)` mints: that prefix drives
+    /// carry-over and the view's gateway-row filter, and an incomplete gateway has
+    /// no probe result to carry — it is a pure config read, recomputed every
+    /// rebuild.
+    static func incompleteCheckID(for ref: RemoteAgentRef) -> String {
+        "connection.gateway.incomplete.\(ref.rawString)"
+    }
+
+    /// One row per gateway whose setup is incomplete on this device.
+    ///
+    /// RED when nothing else can send — those gateways ARE the outage, and
+    /// `connection.gateway.none` is suppressed in that case. AMBER when a healthy
+    /// sibling exists: the gateway still can't send, and because conversations are
+    /// bound per gateway and never silently rerouted, a working sibling does not
+    /// make an incomplete gateway's conversations usable. That masking is exactly
+    /// what this row exists to defeat.
+    ///
+    /// Titles stay GENERIC for the same reason as `buildGatewayRows`: `copyBlock()`
+    /// reads `check.title`, so a user's own gateway name must never live here. The
+    /// real name reaches the screen through `incompleteGatewayDisplay`.
+    private func buildIncompleteGatewayRows(
+        refs: [RemoteAgentRef],
+        customOrdinals: [RemoteAgentRef: Int],
+        anyConfigured: Bool
+    ) -> [DiagnosticCheck] {
+        refs.map { ref in
+            let title: String
+            switch ref {
+            case .builtin(let backend):
+                title = "\(backend.displayName) \(Self.gatewayWord)"
+            case .custom:
+                title = Self.customGatewayTitle
+            }
+            return DiagnosticCheck(
+                id: Self.incompleteCheckID(for: ref),
+                title: title,
+                category: .connection,
+                tier: .autoRead,
+                status: anyConfigured
+                    ? .warning
+                    : .failed(code: AppError.remoteAgentNotConfigured.errorCode),
+                // Names no specific missing field ON PURPOSE. A nil Keychain read
+                // means "no token OR the Keychain wouldn't open right now", and a
+                // URL that hasn't synced yet is indistinguishable from one that
+                // never existed. "Setup isn't finished here" is the strongest claim
+                // the storage can actually support.
+                detail: String(
+                    localized: "diagnostics.connection.gateway.incomplete.detail",
+                    defaultValue: "Setup isn't finished on this device — open it in Personal AI to finish, or forget it."
+                ),
+                role: nil,
+                reportLabel: ref.customID != nil
+                    ? "custom-gateway#\(customOrdinals[ref] ?? 0)"
+                    : nil
+            )
+        }
     }
 
     /// Build the gateway connection rows from the shared sorted order. Titles stay

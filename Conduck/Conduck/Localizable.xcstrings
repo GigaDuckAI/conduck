@@ -1814,57 +1814,24 @@
         }
       }
     },
-    "diagnostics.connection.gateway.none.detail.partialMany" : {
+    "diagnostics.connection.gateway.noneSendable.footer" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Add your Personal AI gateway in Settings — every request needs one on this device. %lld leftover gateways are still stored here without their key or model; open them in Settings to finish or forget them."
+            "value" : "No gateway can send on this device until you finish one above, or connect another in Personal AI."
           }
         }
       }
     },
-    "diagnostics.connection.gateway.none.detail.partialOne" : {
+    "diagnostics.connection.gateway.incomplete.detail" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Add your Personal AI gateway in Settings — every request needs one on this device. A leftover gateway is still stored here without its key or model; open it in Settings to finish or forget it."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.partial" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Gateway missing its key or model"
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.partial.many" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld leftover gateways are stored here without their key or model — open them in Settings to finish or forget them."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.partial.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A leftover gateway is stored here without its key or model — open it in Settings to finish or forget it."
+            "value" : "Setup isn't finished on this device — open it in Personal AI to finish, or forget it."
           }
         }
       }
@@ -10413,7 +10380,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conduck will erase the saved URL, token, and pin, plus any file-transfer setup for this gateway (server address and generated password). You'll re-enter them next time."
+            "value" : "Conduck will erase the saved URL, token, and pin, plus any file-transfer setup for this gateway (server address and generated password). The URL and token are removed from all your devices signed in to iCloud; the pin is only on this one. You'll re-enter them next time."
           }
         }
       }
@@ -10424,7 +10391,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). Conversations bound to it stay readable but can't send new turns."
+            "value" : "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). The URL and token are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns."
           }
         }
       }
@@ -11657,6 +11624,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Configured"
+          }
+        }
+      }
+    },
+    "settings.status.incomplete.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Setup incomplete on this device"
+          }
+        }
+      }
+    },
+    "settings.status.incomplete" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Needs setup"
           }
         }
       }

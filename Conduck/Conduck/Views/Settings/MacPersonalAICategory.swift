@@ -212,9 +212,10 @@ struct MacPersonalAICategory: View {
     @ViewBuilder
     private func gatewayRow(_ row: PersonalAIRow) -> some View {
         // Single tap → config detail. Discrete status: a quiet green check (+ a
-        // tertiary "Default" caption on the default) when configured, nothing +
-        // a dimmed name when not. The default is chosen in the top selector;
-        // file-transfer readiness lives in the detail (Advanced).
+        // tertiary "Default" caption on the default) when configured, a quiet
+        // "Needs setup" when half-configured, nothing when untouched; both
+        // non-configured states dim the name. The default is chosen in the top
+        // selector; file-transfer readiness lives in the detail (Advanced).
         let configured = row.configured
         Button {
             route = .configure(row.ref)
@@ -226,6 +227,7 @@ struct MacPersonalAICategory: View {
                 Spacer()
                 SettingsStatusMark(
                     configured: configured,
+                    incomplete: row.incomplete,
                     caption: row.isDefault
                         ? LocalizedStringResource("settings.remoteAgent.list.pill.default", defaultValue: "Default")
                         : nil

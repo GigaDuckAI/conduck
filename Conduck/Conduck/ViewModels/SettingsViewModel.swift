@@ -121,6 +121,11 @@ struct PersonalAIRow: Identifiable, Hashable {
     let displayName: String
     let configured: Bool
     let isDefault: Bool
+    /// Setup was started on this device but the gateway can't be used as it
+    /// stands. Distinct from `!configured`, which conflated "half set up" with
+    /// "never touched" and left a URL-without-key gateway looking untouched —
+    /// while Diagnostics warned about it and sent the user to this very list.
+    let incomplete: Bool
 
     var id: RemoteAgentRef { ref }
 }
@@ -457,18 +462,27 @@ final class SettingsViewModel {
     /// blocking on `SettingsManager` actor hops mid-render.
     var configuredRemoteAgentRefSet: Set<RemoteAgentRef> = []
 
-    /// Snapshot of refs this device holds SOME stored state for, whether or not
-    /// that state is complete enough to send with
-    /// (`SettingsManager.hasStoredRemoteAgentEvidence`). Refreshed in lockstep
-    /// with `configuredRemoteAgentRefSet`.
+    /// Snapshot of refs whose setup was STARTED here but can't be used as it
+    /// stands — a URL that synced in while its token did not, a required model
+    /// that hasn't landed, a malformed saved URL. Drives the Personal AI list's
+    /// "Needs setup" mark.
     ///
-    /// It is what the editor's Forget affordance keys on: a gateway can be
-    /// half-configured — a URL that synced in while its token did not, or a
-    /// leftover slot from a since-removed gateway — and Diagnostics tells the
-    /// user to go remove it. Gating Forget on CONFIGURED alone left exactly that
+    /// Disjoint from `configuredRemoteAgentRefSet` by construction: both are
+    /// projected from ONE `remoteAgentInventory()` snapshot, so no gateway can
+    /// read as usable and half-finished at the same time.
+    var incompleteRemoteAgentRefSet: Set<RemoteAgentRef> = []
+
+    /// Snapshot of refs holding anything Forget would erase — what the editor's
+    /// destructive section keys on.
+    ///
+    /// Deliberately WIDER than `incompleteRemoteAgentRefSet`: auxiliary residue
+    /// is worth offering to remove without claiming the gateway is broken. The
+    /// direction that matters is the other one — every incomplete ref is
+    /// removable, so a Diagnostics row that says "go remove it" always finds a
+    /// Forget button waiting. Gating Forget on CONFIGURED alone left exactly that
     /// state unreachable: the row said "fix this in Settings" and Settings
     /// offered no way to.
-    var storedRemoteAgentRefSet: Set<RemoteAgentRef> = []
+    var removableRemoteAgentRefSet: Set<RemoteAgentRef> = []
 
     /// Whether the first `loadRemoteAgentState()` has completed. The Personal AI
     /// screen's empty-state hero is gated on this: `configuredRemoteAgentRefSet`
@@ -1721,10 +1735,7 @@ final class SettingsViewModel {
         defaultRemoteAgentRef = await SettingsManager.shared.defaultRemoteAgentRef()
         watchDefaultOverrideRef = await SettingsManager.shared.watchDefaultOverrideRef()
         watchSessionPolicyOverride = await SettingsManager.shared.watchSessionContinuationPolicyOverride()
-        configuredRemoteAgentRefSet = Set(
-            await SettingsManager.shared.configuredRemoteAgentRefs()
-        )
-        storedRemoteAgentRefSet = await SettingsManager.shared.storedRemoteAgentRefs()
+        await refreshRemoteAgentReadinessSnapshots()
 
         // Cache the custom roster. A reload drops any unsaved in-memory draft
         // (the persisted roster is the source of truth) — backing out of an
@@ -1875,11 +1886,34 @@ final class SettingsViewModel {
         configuredRemoteAgentRefSet.contains(ref)
     }
 
+    /// Whether `ref`'s setup was started here but can't be used as it stands.
+    /// Drives the list's "Needs setup" mark. Cached snapshot — no actor hop.
+    func isRemoteAgentIncomplete(_ ref: RemoteAgentRef) -> Bool {
+        incompleteRemoteAgentRefSet.contains(ref)
+    }
+
     /// Whether `ref` holds ANY stored state on this device — i.e. whether there
-    /// is something for Forget to remove. True for every configured ref, plus
-    /// the half-configured ones Diagnostics reports.
+    /// is something for Forget to remove. True for every configured ref, every
+    /// half-configured one Diagnostics reports, and refs left holding only
+    /// auxiliary residue.
+    /// The `configured ||` half is defensive, not redundant: a send-able gateway
+    /// always has state worth erasing, so if any future removability rule ever
+    /// fails to see it, the destructive section must still be reachable rather
+    /// than silently vanishing from a working gateway's editor.
     func hasStoredRemoteAgentState(_ ref: RemoteAgentRef) -> Bool {
-        configuredRemoteAgentRefSet.contains(ref) || storedRemoteAgentRefSet.contains(ref)
+        configuredRemoteAgentRefSet.contains(ref) || removableRemoteAgentRefSet.contains(ref)
+    }
+
+    /// Re-read the three gateway-state snapshots from ONE inventory pass.
+    ///
+    /// One hop, not three: read separately, an iCloud change landing between the
+    /// calls could leave the list marking a gateway "Needs setup" while the
+    /// editor it opens offers no Forget — the two describing different moments.
+    private func refreshRemoteAgentReadinessSnapshots() async {
+        let inventory = await SettingsManager.shared.remoteAgentInventory()
+        configuredRemoteAgentRefSet = Set(inventory.configuredRefs)
+        incompleteRemoteAgentRefSet = Set(inventory.incompleteRefs)
+        removableRemoteAgentRefSet = inventory.removableRefs
     }
 
     /// Whether ANY gateway is currently configured (cached set; no actor hop).
@@ -2041,7 +2075,8 @@ final class SettingsViewModel {
                 ref: ref,
                 displayName: metadata.displayName,
                 configured: configuredRemoteAgentRefSet.contains(ref),
-                isDefault: defaultRemoteAgentRef == ref
+                isDefault: defaultRemoteAgentRef == ref,
+                incomplete: incompleteRemoteAgentRefSet.contains(ref)
             ))
         }
         for gateway in customGateways {
@@ -2052,7 +2087,8 @@ final class SettingsViewModel {
                     ? String(localized: "New gateway")
                     : gateway.name,
                 configured: configuredRemoteAgentRefSet.contains(ref),
-                isDefault: defaultRemoteAgentRef == ref
+                isDefault: defaultRemoteAgentRef == ref,
+                incomplete: incompleteRemoteAgentRefSet.contains(ref)
             ))
         }
         return rows
@@ -2886,10 +2922,7 @@ final class SettingsViewModel {
         remoteAgentLiveValidated.remove(ref)
         remoteAgentProbeReportedNoModels.remove(ref)
         customGateways = await SettingsManager.shared.customGateways()
-        configuredRemoteAgentRefSet = Set(
-            await SettingsManager.shared.configuredRemoteAgentRefs()
-        )
-        storedRemoteAgentRefSet = await SettingsManager.shared.storedRemoteAgentRefs()
+        await refreshRemoteAgentReadinessSnapshots()
 
         // First gateway ever configured becomes the default (parity with the
         // pairing-import bootstrap). Without it the default pointer stays unset
@@ -2991,10 +3024,7 @@ final class SettingsViewModel {
         // out File transfer and labelling Quick connect "Set up" on a gateway
         // that was already set up. Whole-set (not a per-ref insert) because
         // `configuredRemoteAgentRefs()` is the single authority on the predicate.
-        configuredRemoteAgentRefSet = Set(
-            await SettingsManager.shared.configuredRemoteAgentRefs()
-        )
-        storedRemoteAgentRefSet = await SettingsManager.shared.storedRemoteAgentRefs()
+        await refreshRemoteAgentReadinessSnapshots()
     }
 
     /// The tuple a live verdict is a claim ABOUT: change any of it and a previous
@@ -3358,10 +3388,7 @@ final class SettingsViewModel {
         // disown any probe still in flight against the wiped config.
         invalidateLiveValidation(for: ref)
         customGateways = await SettingsManager.shared.customGateways()
-        configuredRemoteAgentRefSet = Set(
-            await SettingsManager.shared.configuredRemoteAgentRefs()
-        )
-        storedRemoteAgentRefSet = await SettingsManager.shared.storedRemoteAgentRefs()
+        await refreshRemoteAgentReadinessSnapshots()
         defaultRemoteAgentRef = await SettingsManager.shared.defaultRemoteAgentRef()
     }
 

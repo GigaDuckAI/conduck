@@ -65,19 +65,20 @@ final class GatewayStaleStateTests: XCTestCase {
         XCTAssertTrue(hasEvidence,
                       "A stored URL IS evidence — otherwise there is no way to reach the leftover.")
 
-        let stored = await manager.storedRemoteAgentRefs()
-        XCTAssertTrue(stored.contains(.builtin(.openclaw)),
-                      "storedRemoteAgentRefs drives the editor's Forget button; it must include the partial.")
+        let removable = await manager.removableRemoteAgentRefs()
+        XCTAssertTrue(removable.contains(.builtin(.openclaw)),
+                      "removableRemoteAgentRefs drives the editor's Forget button; it must include the partial.")
 
         let partial = await manager.partiallyConfiguredRemoteAgentRefs()
         XCTAssertEqual(partial, [.builtin(.openclaw)],
-                       "The Diagnostics partial count and the Forget gate must agree — one predicate, both callers.")
+                       "The Diagnostics row and the Forget gate must agree about this gateway — "
+                       + "incomplete implies removable (see RemoteAgentInventoryTests).")
     }
 
     func testUnconfiguredGatewayWithNoStoredStateIsNotEvidence() async {
         let manager = makeManager()
-        let stored = await manager.storedRemoteAgentRefs()
-        XCTAssertTrue(stored.isEmpty,
+        let removable = await manager.removableRemoteAgentRefs()
+        XCTAssertTrue(removable.isEmpty,
                       "A fresh install stores nothing — a Forget button on every built-in would be noise.")
     }
 
