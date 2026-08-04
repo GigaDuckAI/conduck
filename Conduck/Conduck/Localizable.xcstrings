@@ -2683,17 +2683,6 @@
         }
       }
     },
-    "diagnostics.voice.setup.needsSetup" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Needs setup — finish this provider in Voice settings."
-          }
-        }
-      }
-    },
     "diagnostics.voice.setup.keyUnreadable" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2701,6 +2690,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "A key is saved for this provider but can't be read back — re-enter it in Voice settings."
+          }
+        }
+      }
+    },
+    "diagnostics.voice.setup.needsSetup" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Needs setup — finish this provider in Voice settings."
           }
         }
       }
@@ -4420,17 +4420,6 @@
         }
       }
     },
-    "fileTransfer.status.needsAttention.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Server test failed"
-          }
-        }
-      }
-    },
     "fileTransfer.status.needsAttention.short" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4438,6 +4427,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Needs attention"
+          }
+        }
+      }
+    },
+    "fileTransfer.status.needsAttention.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server test failed"
           }
         }
       }
@@ -4486,17 +4486,6 @@
         }
       }
     },
-    "fileTransfer.status.optional.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "File transfer not set up"
-          }
-        }
-      }
-    },
     "fileTransfer.status.optional.short" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4504,6 +4493,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Optional"
+          }
+        }
+      }
+    },
+    "fileTransfer.status.optional.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File transfer not set up"
           }
         }
       }
@@ -4530,17 +4530,6 @@
         }
       }
     },
-    "fileTransfer.status.ready.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "File server tested"
-          }
-        }
-      }
-    },
     "fileTransfer.status.ready.short" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4548,6 +4537,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Server tested"
+          }
+        }
+      }
+    },
+    "fileTransfer.status.ready.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File server tested"
           }
         }
       }
@@ -4563,17 +4563,6 @@
         }
       }
     },
-    "fileTransfer.status.recommended.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Set up file transfer"
-          }
-        }
-      }
-    },
     "fileTransfer.status.recommended.short" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4581,6 +4570,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Recommended"
+          }
+        }
+      }
+    },
+    "fileTransfer.status.recommended.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set up file transfer"
           }
         }
       }
@@ -4596,17 +4596,6 @@
         }
       }
     },
-    "fileTransfer.status.saved.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "File server not tested"
-          }
-        }
-      }
-    },
     "fileTransfer.status.saved.short" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4614,6 +4603,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Not tested yet"
+          }
+        }
+      }
+    },
+    "fileTransfer.status.saved.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File server not tested"
           }
         }
       }
@@ -6309,17 +6309,6 @@
     "Personal AI" : {
 
     },
-    "popover.answering" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Answering…"
-          }
-        }
-      }
-    },
     "popover.cancel" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -7681,6 +7670,9 @@
           }
         }
       }
+    },
+    "Sending…" : {
+
     },
     "Set Action to Control" : {
 
@@ -9260,17 +9252,6 @@
         }
       }
     },
-    "settings.pairing.review.warning.trust" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Only continue if you trust the person who shared this code."
-          }
-        }
-      }
-    },
     "settings.pairing.review.warning.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9278,6 +9259,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Before you connect"
+          }
+        }
+      }
+    },
+    "settings.pairing.review.warning.trust" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only continue if you trust the person who shared this code."
           }
         }
       }

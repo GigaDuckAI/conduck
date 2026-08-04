@@ -247,10 +247,18 @@ enum Constants {
     /// Feedback email address
     static let feedbackEmail = "feedback@gigaduck.ai"
 
-    /// GigaDuck community Discord invite (org-wide, shared across all products).
-    /// Permanent / never-expiring invite — a `discord.gg` universal link, so a
-    /// tap opens the Discord app if installed, else the web join page.
-    static let discordInviteURL = "https://discord.gg/HqVwTmM7"
+    /// Community landing page on conduck.com, which carries the button through to
+    /// Discord. Deliberately NOT a raw `discord.gg` invite code.
+    ///
+    /// Discord invite codes die — they expire, they can be revoked, and once dead
+    /// the code string is claimable by anyone else as their server's vanity URL
+    /// (a documented malware-delivery route). A raw code baked in here can only be
+    /// corrected by shipping a new build through App Review, so every installed
+    /// copy keeps pointing at the dead link for as long as users take to update.
+    /// Pointing at a page we control makes rotating the invite a website deploy.
+    ///
+    /// The code itself lives in exactly one place: `website/src/lib/community.ts`.
+    static let discordCommunityURL = "https://conduck.com/discord/"
 
     // MARK: - User Identity
 

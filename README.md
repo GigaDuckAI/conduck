@@ -2,7 +2,7 @@
 
 Conduck is a native Swift/SwiftUI chat and voice client for your own AI. It talks directly to a gateway you run yourself — or to hosted models under your own key — from iPhone, iPad, Mac, Apple Watch, and CarPlay. There is no backend, no account, and no telemetry: you bring your own keys, and nothing you say or send ever passes through our servers, because there are none.
 
-[Get the official app](https://apps.apple.com/app/id6773045286) · [Build from source](#build-from-source) · [Architecture](docs/ai-context/spec.md) · [conduck.com](https://conduck.com) · [Join the Discord](https://discord.gg/HqVwTmM7)
+[Get the official app](https://apps.apple.com/app/id6773045286) · [Build from source](#build-from-source) · [Architecture](docs/ai-context/spec.md) · [conduck.com](https://conduck.com) · [Join the Discord](https://conduck.com/discord/)
 
 ## How your data flows
 
@@ -81,7 +81,7 @@ per-file header comments and a large test suite, is the detailed documentation.
 
 ## Community and contributing
 
-- Chat, questions, and setup help: [Discord](https://discord.gg/HqVwTmM7).
+- Chat, questions, and setup help: [Discord](https://conduck.com/discord/).
 - Bugs and feature requests: GitHub issues.
 - Contributions are welcome from day one under the Developer Certificate of Origin (`git commit -s`, no CLA) — see [CONTRIBUTING.md](CONTRIBUTING.md).
 - Security vulnerabilities: please report privately as described in [SECURITY.md](SECURITY.md) — not via public issues.

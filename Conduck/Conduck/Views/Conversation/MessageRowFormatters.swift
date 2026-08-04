@@ -199,35 +199,47 @@ enum ThinkingStage {
     }
 }
 
-// MARK: - Watch "thinking" indicator label (pure, unit-testable)
+// MARK: - In-flight "thinking" indicator label (pure, unit-testable)
 
-/// The two in-flight phases the Watch chat indicator can show. The Watch thread
-/// view maps its recording state machine onto this (`.uploading` →
-/// `.transcribing`, `.waiting` → `.answering`); kept free of any watch-only
-/// type so the label logic is unit-testable from the cross-target test bundle
-/// (mirrors `WatchAutoSpeakVerdict`).
-enum WatchThinkingPhase: Equatable {
+/// The in-flight phases a chat indicator can show, on any surface. Kept free of
+/// any per-platform type so the label logic is unit-testable from the
+/// cross-target test bundle (mirrors `WatchAutoSpeakVerdict`).
+///
+/// Not every surface shows every phase: the Watch maps its recording state
+/// machine onto `.transcribing`/`.answering`, the phone/Mac thread shows only
+/// `.answering` (its pre-dispatch window is carried by the user bubble's own
+/// sending dot), and the menu-bar popover is the one surface that shows all
+/// three.
+enum ThinkingPhase: Equatable {
     /// Speech-to-text in flight — the dictated text doesn't exist yet, so no
     /// user bubble and no elapsed clock (the phase is brief).
     case transcribing
-    /// The agent request is in flight — the user bubble is on screen; the view
-    /// pairs this with an elapsed `m:ss` clock from the turn's start.
+    /// The turn exists locally but has not reached its gateway dispatch phase —
+    /// attachments, the durable write, history assembly, credential resolution.
+    /// Deliberately distinct from `.answering`: nothing has been sent yet, so
+    /// claiming the gateway is working would be a lie.
+    case sending
+    /// The agent request is in flight — the user bubble is on screen; surfaces
+    /// pair this with an elapsed `m:ss` clock from the turn's start.
     case answering
 }
 
-/// Pure label resolver for the Watch agent-side "thinking" row. Foundation-only
-/// + watch-safe (the file is a member of both targets), so `WatchThinkingIndicatorTests`
-/// covers the empty-name fallback without referencing watch UI.
-enum WatchThinkingIndicator {
-    /// The agent-side indicator label for a phase. During `.answering` the bound
-    /// gateway's name leads ("OpenClaw is answering…"); an EMPTY name (the brief
-    /// draft-adoption / list-cache-refresh window where `threadBackendName` is
-    /// not yet resolved) falls back to a bare "Answering…" — NEVER
-    /// " is answering…".
-    static func label(phase: WatchThinkingPhase, backendName: String) -> String {
+/// Pure label resolver for the agent-side "thinking" row. Foundation-only +
+/// watch-safe (the file is a member of both targets), so
+/// `ThinkingIndicatorTests` covers the empty-name fallback without
+/// referencing any UI.
+enum ThinkingIndicator {
+    /// The indicator label for a phase. During `.answering` the bound gateway's
+    /// name leads ("OpenClaw is answering…"); an EMPTY or whitespace name (the
+    /// brief window before the bound ref resolves — draft adoption, list-cache
+    /// refresh, a freshly minted VM still on its default name) falls back to a
+    /// bare "Answering…" — NEVER " is answering…".
+    static func label(phase: ThinkingPhase, backendName: String) -> String {
         switch phase {
         case .transcribing:
             return String(localized: "Transcribing…")  // xcstrings: chat-ui
+        case .sending:
+            return String(localized: "Sending…")  // xcstrings: chat-ui
         case .answering:
             let name = backendName.trimmingCharacters(in: .whitespacesAndNewlines)
             if name.isEmpty {

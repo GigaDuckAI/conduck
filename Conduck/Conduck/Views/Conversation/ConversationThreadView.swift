@@ -261,6 +261,11 @@ struct ConversationThreadView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 12) {
+                    // Deliberately the CLAIM, not `showsGatewayWaitIndicator`:
+                    // this suppresses the empty-thread hint from the instant a
+                    // send is claimed, so a first turn on macOS can't flash the
+                    // empty state during the pre-dispatch window. Don't "fix"
+                    // this to match the rows below it.
                     if viewModel.messages.isEmpty && !viewModel.isAwaitingReply
                         && viewModel.hasLoadedInitialMessages {
                         emptyThreadHint
@@ -269,7 +274,7 @@ struct ConversationThreadView: View {
                     ForEach(viewModel.messages) { message in
                         MessageBubble(
                             message: message,
-                            isAwaitingReply: viewModel.isAwaitingReply,
+                            showsGatewayWaitIndicator: viewModel.showsGatewayWaitIndicator,
                             boundRef: viewModel.boundRef,
                             speakState: speaker.speakState(for: message.id),
                             usedFallbackVoice: speaker.usedFallbackVoice(for: message.id),
@@ -306,7 +311,12 @@ struct ConversationThreadView: View {
                         }
                     }
 
-                    if viewModel.isAwaitingReply {
+                    // Gated on the DISPATCH flag, never on `isAwaitingReply`:
+                    // on macOS the latter is claimed several awaits before the
+                    // user's turn is written, which rendered this row ABOVE the
+                    // bubble that provoked it. The pre-dispatch window is
+                    // carried by the user bubble's own sending dot instead.
+                    if viewModel.showsGatewayWaitIndicator {
                         thinkingIndicator
                             .id(Self.thinkingAnchorID)
                     }
@@ -331,7 +341,7 @@ struct ConversationThreadView: View {
             .onChange(of: viewModel.messages.count) { _, newCount in
                 handleMessageCountChange(newCount, proxy: proxy)
             }
-            .onChange(of: viewModel.isAwaitingReply) { _, awaiting in
+            .onChange(of: viewModel.showsGatewayWaitIndicator) { _, awaiting in
                 if awaiting {
                     // macOS: NON-animated — the synchronous NSView markdown layout
                     // beachballs if an animated scroll re-drives layout every frame.
@@ -345,7 +355,7 @@ struct ConversationThreadView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .scrollThreadToBottom)) { _ in
-                // macOS: NON-animated (see isAwaitingReply above) — animated scroll
+                // macOS: NON-animated (see showsGatewayWaitIndicator above) — animated scroll
                 // compounds the synchronous markdown-layout cost.
                 #if os(macOS)
                 proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
@@ -375,7 +385,7 @@ struct ConversationThreadView: View {
         #endif
         guard newCount > lastMessageCount else { return }
         if isAtBottom {
-            // macOS: NON-animated (see `.onChange(of: isAwaitingReply)`) — a reply
+            // macOS: NON-animated (see `.onChange(of: showsGatewayWaitIndicator)`) — a reply
             // landing drives synchronous NSView markdown layout; an animated scroll
             // re-drives it every frame and beachballs on longer threads.
             #if os(macOS)
@@ -403,7 +413,12 @@ struct ConversationThreadView: View {
                 .progressViewStyle(.circular)
                 .scaleEffect(0.8)
 
-            Text(String(localized: "\(viewModel.backendDisplayName) is answering…"))  // xcstrings: chat-ui
+            // Shared resolver, so an unresolved gateway name falls back to a
+            // bare "Answering…" rather than rendering " is answering…".
+            Text(ThinkingIndicator.label(
+                phase: .answering,
+                backendName: viewModel.backendDisplayName
+            ))
                 .font(.callout)
                 .foregroundStyle(AppColors.textSecondary)
 
@@ -418,6 +433,11 @@ struct ConversationThreadView: View {
                         .transition(.opacity)
                 }
             }
+            // Hidden from VoiceOver: the clock's text changes every second, and
+            // an accessible label that rewrites itself on a timer produces a
+            // stream of repeated announcements over the whole wait. The label
+            // beside it already says a reply is in flight.
+            .accessibilityHidden(true)
 
             Spacer(minLength: 0)
         }
@@ -856,7 +876,7 @@ struct ConversationThreadView: View {
 
 /// Isolated agent-reply Markdown surface. `Equatable` on `(messageID, text)` so
 /// SwiftUI skips re-rendering it (and re-touching Textual's selection/layout layer)
-/// when the parent `MessageBubble` rebuilds for unrelated state (`isAwaitingReply`,
+/// when the parent `MessageBubble` rebuilds for unrelated state (`showsGatewayWaitIndicator`,
 /// the read-aloud `speakState`). Load-bearing for macOS trackpad selection: Textual's
 /// whole-document selection overlay keeps its in-drag state in an `NSView`, which a
 /// parent-driven re-render of the `StructuredText` resets mid-drag (the "sticky,
@@ -897,10 +917,13 @@ private struct AgentMarkdownBody: View, Equatable {
 
 private struct MessageBubble: View, Equatable {
     let message: MessageRecord
-    /// True while an agent turn is in flight. When true, the per-message
-    /// `sending` spinner is suppressed so the borderless thread "answering…"
-    /// indicator is the SOLE in-flight signal (Retry on failure is unaffected).
-    let isAwaitingReply: Bool
+    /// True once the turn has reached its gateway dispatch phase. When true, the
+    /// per-message `sending` spinner is suppressed so the borderless thread
+    /// "answering…" indicator is the SOLE in-flight signal (Retry on failure is
+    /// unaffected). Deliberately NOT the VM's `isAwaitingReply`: that is claimed
+    /// several awaits earlier on macOS, which would suppress this dot for the
+    /// entire pre-dispatch window — exactly the window it exists to cover.
+    let showsGatewayWaitIndicator: Bool
     /// The conversation's bound gateway ref — resolves the file-server snapshot
     /// for an assistant-bubble download-chip tap. Nil before the VM resolves it
     /// (a download falls back to the Settings default ref).
@@ -957,7 +980,7 @@ private struct MessageBubble: View, Equatable {
     /// `Hashable` so its `==` covers text/status/attachments.
     static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
         lhs.message == rhs.message
-            && lhs.isAwaitingReply == rhs.isAwaitingReply
+            && lhs.showsGatewayWaitIndicator == rhs.showsGatewayWaitIndicator
             && lhs.boundRef == rhs.boundRef
             && lhs.speakState == rhs.speakState
             && lhs.usedFallbackVoice == rhs.usedFallbackVoice
@@ -1321,7 +1344,7 @@ private struct MessageBubble: View, Equatable {
         } else {
             // Agent role = Markdown (GFM via Textual `StructuredText`), left-aligned.
             // Rendered through the Equatable `AgentMarkdownBody` leaf + `.equatable()`
-            // so unrelated parent re-renders (read-aloud `speakState`, `isAwaitingReply`
+            // so unrelated parent re-renders (read-aloud `speakState`, `showsGatewayWaitIndicator`
             // turn boundaries) can't re-touch Textual's selection layer mid-drag — the
             // macOS trackpad-selection fix. See `AgentMarkdownBody`.
             AgentMarkdownBody(messageID: message.id, text: message.text)
@@ -1452,11 +1475,14 @@ private struct MessageBubble: View, Equatable {
         if isUser {
             switch message.status {
             case "sending":
-                // Suppress the per-message sending spinner while a reply is in
-                // flight — the borderless "answering…" indicator is the single
-                // in-flight signal. Show it only when NOT awaiting (e.g. a brief
-                // window before the indicator appears).
-                if !isAwaitingReply {
+                // Suppress the per-message sending spinner once the turn is
+                // dispatched — the borderless "answering…" indicator is the
+                // single in-flight signal from then on. This dot owns the window
+                // BEFORE that: attachment processing, the durable write, history
+                // assembly, credential resolution. On macOS that window is the
+                // long one, so this is the user's only "it went through" cue
+                // until the gateway hop actually starts.
+                if !showsGatewayWaitIndicator {
                     ProgressView()
                         .progressViewStyle(.circular)
                         .controlSize(.mini)

@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for filing a bug. For questions or setup help, the [Discord](https://discord.gg/HqVwTmM7) is usually faster.
+        Thanks for filing a bug. For questions or setup help, the [Discord](https://conduck.com/discord/) is usually faster.
 
         **Do not report security vulnerabilities here.** See [SECURITY.md](https://github.com/gigaduckai/conduck/blob/main/SECURITY.md) — a public issue discloses the problem before a fix exists.
   - type: textarea

@@ -21,14 +21,17 @@
 //
 // The `content` router resolves state in this PRIORITY:
 //   1. service `.recording`  → `recordingStatusView` (timer + a compact Cancel X)
-//   2. `isWorking`           → `workingView` — ONE view for the WHOLE turn: STT
-//                              (`.processing` → "Transcribing…"), the brief
-//                              hand-off gap (`coordinator.turnStarting`), and the
-//                              agent wait (`isAwaitingReply` → "{gateway} is
+//   2. `isWorking`           → `workingView` — ONE view for the WHOLE turn,
+//                              with `workingPhase` choosing the copy: STT
+//                              (`.processing` → "Transcribing…"), the local
+//                              pre-dispatch window (`turnStarting` / the claim →
+//                              "Sending…"), and the agent wait
+//                              (`showsGatewayWaitIndicator` → "{gateway} is
 //                              answering…"). Identical layout + size across all
 //                              three (spinner + label, Cancel-X space always
-//                              reserved) so transcribing → answering NEVER resizes
-//                              the popover.
+//                              reserved) so the phases NEVER resize the popover.
+//                              The X is live only in the answering phase — it
+//                              is the only one with a task to cancel.
 //   3. !isRemoteAgentConfigured → `unconfiguredEmptyState` (gear → Settings)
 //   4. VM `sendError` (idle)  → `sendErrorView` — the AGENT turn failed (gateway
 //                              unreachable / auth / timeout). Rendered in the
@@ -324,14 +327,29 @@ struct DictationPopoverView: View {
         }
     }
 
-    /// True for the whole "turn in progress" phase so transcribing and answering
-    /// render the SAME `workingView` at the SAME size: STT running
-    /// (`.processing`), the brief hand-off gap before the send Task claims the
-    /// flag (`coordinator.turnStarting`), and the agent wait (`isAwaitingReply`).
+    /// True for the whole "turn in progress" phase so all three sub-phases render
+    /// the SAME `workingView` at the SAME size: STT running (`.processing`), the
+    /// hand-off gap before the send Task claims the flag
+    /// (`coordinator.turnStarting`), and the claimed turn (`isAwaitingReply`).
+    ///
+    /// Stays on the CLAIM, not the dispatch flag — the popover must not resize or
+    /// blink between phases, and something genuinely is happening throughout.
+    /// Which of the three the user is told about is `workingPhase`'s job.
     private var isWorking: Bool {
         if service.state == .processing { return true }
         if coordinator.turnStarting { return true }
         return coordinator.quickViewModel?.isAwaitingReply == true
+    }
+
+    /// Which of the three in-flight phases the working view is describing.
+    ///
+    /// Order matters: `.answering` is checked BEFORE `turnStarting`, because
+    /// `turnStarting` stays armed across the whole send and would otherwise pin
+    /// the copy to "Sending…" for the entire agent wait.
+    private var workingPhase: ThinkingPhase {
+        if service.state == .processing { return .transcribing }
+        if coordinator.quickViewModel?.showsGatewayWaitIndicator == true { return .answering }
+        return .sending
     }
 
     // MARK: - Recording view (clean — no stale reply, no mascot)
@@ -528,11 +546,11 @@ struct DictationPopoverView: View {
     /// ONE view for the entire turn — STT, the hand-off gap, and the agent wait
     /// (see `isWorking`). The layout is IDENTICAL in every phase (a centered
     /// spinner + status label, with the Cancel-X's space ALWAYS reserved below),
-    /// so the popover does not resize when "Transcribing…" becomes "{gateway} is
-    /// answering…" — only the label crossfades. The X is interactive only once
-    /// there's an in-flight reply to cancel (hidden-but-space-reserved during STT,
-    /// since STT isn't cleanly cancellable); tapping it aborts the reply AND
-    /// closes (mirrors Esc).
+    /// so the popover does not resize as "Transcribing…" becomes "Sending…"
+    /// becomes "{gateway} is answering…" — only the label crossfades. The X is
+    /// interactive only once there's an in-flight reply to cancel
+    /// (hidden-but-space-reserved through STT and the pre-dispatch window);
+    /// tapping it aborts the reply AND closes (mirrors Esc).
     private var workingView: some View {
         VStack(spacing: 16) {
             HStack(spacing: 10) {
@@ -552,8 +570,13 @@ struct DictationPopoverView: View {
                 coordinator.cancelActiveCapture()
                 dismiss()
             })
-            .opacity(service.state == .processing ? 0 : 1)
-            .allowsHitTesting(service.state != .processing)
+            // Interactive ONLY in `.answering`. STT isn't cleanly cancellable,
+            // and during `.sending` there is no task to cancel yet — an X there
+            // would dismiss the popover while the send carried on underneath,
+            // which reads as "cancelled" and isn't. Space stays reserved in all
+            // three phases so the popover never resizes.
+            .opacity(workingPhase == .answering ? 1 : 0)
+            .allowsHitTesting(workingPhase == .answering)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 20)
@@ -563,19 +586,16 @@ struct DictationPopoverView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: workingLabel)
     }
 
-    /// "Transcribing…" while STT runs, else "{gateway} is answering…". During the
-    /// hand-off gap the VM may be momentarily nil (a fresh conversation being
-    /// minted) — fall back to a plain "Answering…" so the label never blanks.
+    /// "Transcribing…" → "Sending…" → "{gateway} is answering…", through the
+    /// shared resolver. During the hand-off gap the VM may be momentarily nil (a
+    /// fresh conversation being minted); an absent or unresolved name falls back
+    /// to a plain "Answering…" so the label never blanks and never renders a
+    /// leading-space " is answering…".
     private var workingLabel: String {
-        if service.state == .processing {
-            return String(localized: LocalizedStringResource(
-                "popover.transcribing", defaultValue: "Transcribing…"))
-        }
-        if let name = coordinator.quickViewModel?.backendDisplayName {
-            return String(localized: "\(name) is answering…")  // xcstrings: chat-ui
-        }
-        return String(localized: LocalizedStringResource(
-            "popover.answering", defaultValue: "Answering…"))
+        ThinkingIndicator.label(
+            phase: workingPhase,
+            backendName: coordinator.quickViewModel?.backendDisplayName ?? ""
+        )
     }
 
     // MARK: - Reply view (settled answer — the hero)

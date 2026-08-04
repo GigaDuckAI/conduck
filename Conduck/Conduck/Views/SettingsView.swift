@@ -260,7 +260,7 @@ struct SettingsView: View {
     /// app identity now live one tap deeper in `AboutDetailView`.
     private var communitySection: some View {
         Section {
-            Link(destination: URL(string: Constants.discordInviteURL)!) {
+            Link(destination: URL(string: Constants.discordCommunityURL)!) {
                 HStack {
                     Label {
                         Text(verbatim: "Discord") // brand name — not localized

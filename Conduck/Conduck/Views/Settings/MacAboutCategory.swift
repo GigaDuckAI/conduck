@@ -133,7 +133,7 @@ struct MacAboutCategory: View {
 
     private var communitySection: some View {
         SettingsCard {
-            Link(destination: URL(string: Constants.discordInviteURL)!) {
+            Link(destination: URL(string: Constants.discordCommunityURL)!) {
                 HStack {
                     Label {
                         Text(verbatim: "Discord") // brand name — not localized
