@@ -1769,15 +1769,17 @@ private struct ServerFileDownloadChip: View {
                     Spacer(minLength: 4)
                     trailingGlyph
                 }
-                // Padding/background live on the outer HStack now — keep the
-                // whole label (Spacer included) tappable.
+                // Padding/background live on the outer HStack — keep the whole
+                // label (Spacer included) tappable.
                 .contentShape(Rectangle())
             }
-            // The chip's own fill + padding ring live on the OUTER HStack (it
-            // also holds the macOS Save As… button), so the wash is drawn on the
-            // label box inset inside that ring — hence the tighter radius rather
-            // than the card's own 10.
-            .choiceCardButton(cornerRadius: 8)
+            // `.plain`, and deliberately NO per-half style: this half and the
+            // chip's padding ring are ONE action (preview), so the wash belongs
+            // to the whole chip and arrives once, from `.pointerHoverWash` below.
+            // A style here could only paint the label box inset inside the ring
+            // and cut short by the Save As… button — a highlight in the shape of
+            // something the user is not aiming at.
+            .buttonStyle(.plain)
             .disabled(!acceptsTap)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(([
@@ -1800,6 +1802,16 @@ private struct ServerFileDownloadChip: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(isUserBubble ? AppColors.background.opacity(0.18) : AppColors.cardBackground)
         )
+        // The chip is ONE target on the pointer, so the wash traces the chip's
+        // own fill (radius 10) rather than a box floating inside it, and the
+        // padding ring the sub-`Button`s cannot reach previews too instead of
+        // lighting up and swallowing the click. Split-action shape — see
+        // `.pointerHoverWash(cornerRadius:action:)`. No-op off macOS.
+        .pointerHoverWash(cornerRadius: 10) { download(route: .preview) }
+        // OUTSIDE the wash so its `isEnabled` read sees this: a chip mid-download
+        // or holding a terminal refusal stays unlit and inert, exactly as the
+        // sub-`Button`s do.
+        .disabled(!acceptsTap)
         #if os(macOS)
         // Redundant shortcut for the visible Save As… button (HIG: a context
         // menu may only mirror a visible control, never be the sole path).

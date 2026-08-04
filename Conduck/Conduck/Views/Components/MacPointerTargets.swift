@@ -906,14 +906,31 @@ extension View {
         #endif
     }
 
-    /// Hover + pressed feedback for something that is NOT a `Button` and cannot
-    /// become one (a row that owns a `.onTapGesture` for a non-activation
-    /// reason, a custom-drawn cell). Prefer converting to a `Button` — this only
-    /// paints the wash, so it gives no keyboard or VoiceOver activation.
+    /// Hover feedback, and optionally the tap, for a control whose own drawn
+    /// shape a `ButtonStyle` cannot reach: a fixed-size tile or chip that would
+    /// be stretched by `.choiceCardButton`'s full-width frame, a custom-drawn
+    /// cell, a row that owns a `.onTapGesture` for a non-activation reason.
+    ///
+    /// Pass `action` for a SPLIT-ACTION composite — a chip whose padding ring
+    /// sits outside every sub-`Button`, so the wash would otherwise light a band
+    /// that answers nothing. This is `.settingsCardRowControl()`'s shape for a
+    /// container that is not a card row: same `RowActionTap`, same measured
+    /// contract (a click on a child fires only that child, a click on the bare
+    /// band only this action), without the full-width frame and squared wash a
+    /// card row needs. The one-same-action rule carries over — the action a bare
+    /// click lands on must be the composite's PRIMARY one, and a sub-`Button`
+    /// with a DIFFERENT action keeps its own affordance (`.pointerIconButton()`).
+    ///
+    /// Without `action` this paints the wash and nothing else, so it gives no
+    /// keyboard or VoiceOver activation — the content must already carry that
+    /// (wrap a `Button`, as the image-grid tile and the thread's file chips do).
     /// No-op off macOS.
-    func pointerHoverWash(cornerRadius: CGFloat = MacPointer.rowCornerRadius) -> some View {
+    func pointerHoverWash(
+        cornerRadius: CGFloat = MacPointer.rowCornerRadius,
+        action: (() -> Void)? = nil
+    ) -> some View {
         #if os(macOS)
-        modifier(PointerHoverWash(cornerRadius: cornerRadius))
+        modifier(PointerHoverWash(cornerRadius: cornerRadius, action: action))
         #else
         self
         #endif
@@ -1004,6 +1021,11 @@ private struct PointerLink: ViewModifier {
 private struct PointerHoverWash: ViewModifier {
     let cornerRadius: CGFloat
 
+    /// The composite's primary action, for a SPLIT-ACTION call site whose
+    /// sub-`Button`s cannot reach the padding ring this wash covers. Nil where
+    /// the content already hit-tests everything the wash lights.
+    var action: (() -> Void)? = nil
+
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
 
@@ -1015,6 +1037,9 @@ private struct PointerHoverWash: ViewModifier {
                     .allowsHitTesting(false)
             }
             .contentShape(Rectangle())
+            // AFTER `contentShape`, so the tap covers everything the wash lights.
+            // Sits UNDER the sub-`Button`s — see `settingsCardRowControl`.
+            .modifier(RowActionTap(action: action))
             .onHover { hovering = $0 }
             .animation(MacPointer.highlightAnimation, value: hovering)
     }
