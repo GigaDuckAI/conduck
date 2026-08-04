@@ -496,9 +496,12 @@ struct RemoteAgentConfigBody: View {
     /// that also drops the user's file-server password.
     private var forgetAlertMessage: Text {
         if isCustom {
+            // A NEW key, not an edit of the one below it. Rewording an existing
+            // `defaultValue:` is inert — the string catalog's stored value wins
+            // and extraction never overwrites it.
             return Text(LocalizedStringResource(
-                "settings.remoteAgent.forgetAlert.message.custom",
-                defaultValue: "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). Conversations bound to it stay readable but can't send new turns."
+                "settings.remoteAgent.forgetAlert.message.custom.retained",
+                defaultValue: "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). Conversations bound to it stay readable but can't send new turns. They keep this gateway's colour tag so you can still tell them apart; its name is not kept."
             ))
         }
         return Text(LocalizedStringResource(

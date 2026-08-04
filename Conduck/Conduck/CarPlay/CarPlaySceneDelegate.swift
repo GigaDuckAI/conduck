@@ -445,7 +445,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
 
             // Custom roster (for labeling built-in vs custom refs in the
             // switcher + chooser). Fetched once per refresh.
-            let customs = await SettingsManager.shared.customGateways()
+            let customs = await SettingsManager.shared.gatewayBadgeRoster()
 
             // Default-gateway switcher (idle list ONLY — the picker is the root
             // and no voice modal is up while idle). Shown only when ≥2 gateways

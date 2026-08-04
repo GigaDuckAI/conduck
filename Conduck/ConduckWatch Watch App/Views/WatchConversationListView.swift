@@ -263,7 +263,10 @@ struct WatchConversationListView: View {
         return RemoteAgentRefMetadata.shouldShowBadges(
             configured: reader.remoteAgentURLs.keys.compactMap(RemoteAgentRef.init(rawString:)),
             conversationBackends: viewModel.conversations.lazy.map(\.backend),
-            customs: reader.customGateways
+            // The BADGE roster — the same one `WatchGatewayBadge` renders from,
+            // so "should this list badge" and "can this row draw one" stay the
+            // same question once forgotten gateways are in play.
+            customs: reader.gatewayBadgeRoster
         )
     }
 

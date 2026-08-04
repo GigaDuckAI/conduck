@@ -23,6 +23,12 @@ import SwiftUI
 /// supplied `[CustomGateway]` snapshot (no actor hop inside a SwiftUI `body`).
 enum RemoteAgentRefMetadata {
 
+    /// The label a custom gateway carries when its own name is unavailable —
+    /// a deleted, forgotten or not-yet-synced roster entry. One definition, so
+    /// "no name we can show" reads identically whether the entry is missing
+    /// outright or present only as a retired badge.
+    static var genericCustomName: String { String(localized: "Custom gateway") }
+
     /// The user-facing gateway name. Built-in → its `displayName`; custom →
     /// its roster `name` (falls back to a generic label if the roster entry
     /// is missing — e.g. a deleted / not-yet-synced custom).
@@ -31,7 +37,7 @@ enum RemoteAgentRefMetadata {
         case .builtin(let backend):
             return backend.displayName
         case .custom(let id):
-            return customs.first(where: { $0.id == id })?.name ?? String(localized: "Custom gateway")
+            return customs.first(where: { $0.id == id })?.name ?? genericCustomName
         }
     }
 

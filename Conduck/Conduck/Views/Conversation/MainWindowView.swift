@@ -513,7 +513,7 @@ struct MainWindowView: View {
 
     private func refreshConfiguredBackends() async {
         configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
-        customGateways = await SettingsManager.shared.customGateways()
+        customGateways = await SettingsManager.shared.gatewayBadgeRoster()
         if !newChatGatewaySelectionLocked {
             selectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
         }

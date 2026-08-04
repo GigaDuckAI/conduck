@@ -1086,6 +1086,30 @@ enum Constants {
     /// index for clearing dropped per-ref slots).
     static let customGatewaysRegistryKey = "remoteAgent.customGateways"
 
+    /// App Groups UserDefaults key holding the JSON-encoded
+    /// `[RetiredGatewayBadge]` — the monogram + colour of custom gateways the
+    /// user has forgotten, so their conversations keep the tag that told them
+    /// apart. The Watch reuses this key in its OWN App Group.
+    ///
+    /// **App Group ONLY — deliberately never iCloud KVS**, unlike
+    /// `customGatewaysRegistryKey` beside it. A monogram can carry organization
+    /// or personal identity and `retiredAt` carries timing, so syncing would
+    /// republish them into the next iCloud account the device signs into, and a
+    /// restored backup would resurrect records the user believed erased. Peers
+    /// stay consistent by DERIVING the same tombstone from a synced event they
+    /// already receive — a custom vanishing from the roster — rather than by
+    /// replicating the tombstone itself.
+    static let retiredGatewayBadgesKey = "remoteAgent.retiredGatewayBadges"
+
+    /// How many forgotten-gateway badges to keep. Deliberately NOT
+    /// `maxCustomGateways`, which caps SIMULTANEOUSLY ACTIVE gateways: this is
+    /// lifetime history, so reusing that value would silently start dropping
+    /// badges on the sixth gateway a user ever forgets. Generous because each
+    /// record is a uuid, two characters and a date, and the oldest is dropped
+    /// first — so a conversation older than the last `maxRetiredGatewayBadges`
+    /// forgotten gateways can still lose its badge.
+    static let maxRetiredGatewayBadges = 32
+
     /// UserDefaults key for the DEFAULT backend pointer — which gateway a
     /// freshly-minted conversation binds to, and the sole router for the
     /// picker-less surfaces (Watch headless / CarPlay / Action Button).
@@ -1120,6 +1144,30 @@ enum Constants {
     /// Default backend for fresh installs / when no default pointer is stored.
     /// `.openclaw` is the reference gateway (mirrors `sttActivePresetIDDefault`).
     static let remoteAgentDefaultBackendDefault: RemoteAgentBackend = .openclaw
+
+    /// App Groups flag recording that the user EXPLICITLY forgot their last
+    /// gateway on THIS device — the sole authority for broadcasting a Watch
+    /// teardown envelope (`RemoteAgentMultiBroadcastEnvelope.clearAll`).
+    ///
+    /// It exists because "no gateway is configured" is NOT evidence of deletion.
+    /// `configuredRemoteAgentRefs()` fails closed on an unreadable token, a
+    /// restored / reinstalled device reads empty until iCloud KVS finishes its
+    /// first download, and `PhoneSessionManager.activate()` broadcasts without
+    /// awaiting `performInitialSync`. Inferring teardown from an empty read
+    /// would therefore destroy the credentials of a Watch that is working fine.
+    /// Only a user action sets this.
+    ///
+    /// **App-Group ONLY — never iCloud KVS.** It describes an action taken on
+    /// the phone that couriers this Watch, not a synced fact; mirroring it would
+    /// let a peer device's Forget tear down a pairing this phone still serves.
+    /// Consequence: a Forget performed on iPad/Mac does not reach the wrist
+    /// (the paired iPhone is the only courier, and it never saw the intent).
+    ///
+    /// Set in `SettingsViewModel.clearRemoteAgent(for:)` once the wipe leaves no
+    /// stored evidence behind; cleared by `currentRemoteAgentMultiEnvelope()`
+    /// the moment it can build a non-empty envelope again — the one composition
+    /// site that always knows the phone has gateways to courier.
+    static let remoteAgentUserClearedAllKey = "remoteAgent.userClearedAll"
 
     /// App Groups flag set once after the one-time single-slot → per-backend
     /// remote-agent migration completes

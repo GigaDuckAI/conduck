@@ -24,13 +24,6 @@ import SwiftUI
 struct WatchGatewayBadge: View {
     let backendRawValue: String
 
-    /// The custom-gateway roster the Watch received via the multi-envelope —
-    /// source of a custom's monogram + badge color. Read from the shared reader;
-    /// pure (no actor hop) since `customGateways` is a plain published value.
-    private var customs: [CustomGateway] {
-        WatchSettingsReader.shared.customGateways
-    }
-
     private var ref: RemoteAgentRef? {
         RemoteAgentRef(rawString: backendRawValue)
     }
@@ -38,8 +31,21 @@ struct WatchGatewayBadge: View {
     /// Monogram + tint + accessibility label for the resolved ref, or nil when
     /// the ref is unparseable OR a custom missing from the roster (deleted /
     /// never-synced) — both render nothing.
+    ///
+    /// Reads the BADGE roster, not the live one: a conversation outlives the
+    /// gateway that created it, so a row bound to a forgotten custom must still
+    /// draw the colour tag that told it apart. The live roster stays the routing
+    /// and Ask-chooser index — a forgotten gateway is never a send target.
+    ///
+    /// Snapshotted ONCE into a local. Every read of it composes the reader's two
+    /// stored rosters, and the custom branch below needs it four times — on a
+    /// long wrist list that is four compositions per badge per body pass, on the
+    /// slowest device in the fleet. Pure otherwise (no actor hop): both
+    /// underlying properties are `@Observable`-tracked stored values, so the
+    /// badge also re-renders when either changes.
     private var resolved: (monogram: String, tint: Color, label: String)? {
         guard let ref else { return nil }
+        let customs = WatchSettingsReader.shared.gatewayBadgeRoster
         switch ref {
         case .builtin(let backend):
             return (backend.shortCode, RemoteAgentBadgePalette.color(for: ref, customs: customs), backend.displayName)

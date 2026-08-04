@@ -367,6 +367,39 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
     /// posture, like the per-backend optional fields).
     let sessionPolicy: String?
 
+    /// EXPLICIT teardown flag: the user forgot their LAST gateway, so the Watch
+    /// must purge every per-ref slot AND every stored token rather than keep
+    /// serving a gateway the user believes they disconnected.
+    ///
+    /// This is a dedicated field and NOT `backends.isEmpty` for one decisive
+    /// reason: `decode` drops malformed sub-dicts (forward-compat), so a future
+    /// per-backend schema change an older Watch cannot parse ALSO decodes to an
+    /// empty `backends` array. Treating that as teardown would turn a
+    /// compatibility gap into credential destruction. Destruction requires this
+    /// flag to be present and true — nothing else.
+    ///
+    /// Optional for back-compat, same omit-nil posture as `sessionPolicy`: an
+    /// old iPhone never sends it, an old Watch ignores it. Encoded only when
+    /// true, so a normal envelope carries no extra key.
+    let clearAll: Bool?
+
+    /// Explicit memberwise init so `clearAll` can default to nil — every
+    /// existing construction site (and every test) predates the field and must
+    /// keep compiling as a normal, non-destructive envelope.
+    init(
+        backends: [RemoteAgentBroadcastEnvelope],
+        defaultBackendRef: String,
+        timestamp: TimeInterval,
+        sessionPolicy: String?,
+        clearAll: Bool? = nil
+    ) {
+        self.backends = backends
+        self.defaultBackendRef = defaultBackendRef
+        self.timestamp = timestamp
+        self.sessionPolicy = sessionPolicy
+        self.clearAll = clearAll
+    }
+
     /// Plist-compatible dict for `WCSession.transferUserInfo`. `backends` is
     /// encoded as an array of per-backend dicts (each via the single
     /// envelope's `encodedDict()`), preserving its omit-nil-keys posture.
@@ -377,6 +410,7 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
             "timestamp": timestamp,
         ]
         if let sessionPolicy { dict["sessionPolicy"] = sessionPolicy }
+        if clearAll == true { dict["clearAll"] = true }
         return dict
     }
 
@@ -406,11 +440,20 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
         // Watch. A non-empty string round-trips verbatim; the Watch validates it
         // against `SessionContinuationPolicy(rawValue:)` at apply time.
         let sessionPolicy = (dict["sessionPolicy"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        // Teardown is honored ONLY as an explicit `true` alongside an empty RAW
+        // array. Requiring `rawBackends.isEmpty` (not `backends.isEmpty`) is the
+        // point: a sender that claims teardown while shipping sub-envelopes is
+        // self-contradictory, and a receiver that dropped every sub-dict as
+        // malformed must not read its own parse failure as an instruction to
+        // destroy credentials. Either contradiction resolves to the
+        // non-destructive reading.
+        let clearAll: Bool? = (dict["clearAll"] as? Bool) == true && rawBackends.isEmpty ? true : nil
         return RemoteAgentMultiBroadcastEnvelope(
             backends: backends,
             defaultBackendRef: defaultBackendRef,
             timestamp: timestamp,
-            sessionPolicy: sessionPolicy
+            sessionPolicy: sessionPolicy,
+            clearAll: clearAll
         )
     }
 }
