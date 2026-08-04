@@ -2571,6 +2571,26 @@ final class ConversationDetailViewModel {
         currentFileLaneSignature = signature
     }
 
+    /// Whether this thread ends on a user turn that never got a reply — i.e.
+    /// whether cloning it produces a turn someone could choose to send on the
+    /// new gateway, which is the only case where the clone sheet asks.
+    ///
+    /// MUST agree with `ConversationStore.cloneConversation`'s trailing-turn
+    /// rule, which is the thing actually producing (or not producing) a
+    /// `continuationMessageID`. Disagreement is silent in both directions: ask
+    /// without a continuation and "Send now" does nothing; skip the ask and the
+    /// user is never offered a send that was available. Hence the same two
+    /// clauses, and hence `status != "sent"` rather than a `failed` test —
+    /// `sending` and a legacy nil both mean unanswered here.
+    ///
+    /// Reads the VM's loaded snapshot rather than re-fetching: this is a view
+    /// predicate evaluated while the sheet is up, and `messages` is the same
+    /// array the thread is already rendering.
+    var hasUnansweredTrailingTurn: Bool {
+        guard let last = messages.last else { return false }
+        return last.role == "user" && last.status != "sent"
+    }
+
     /// Clone this conversation onto `ref` (a chosen configured gateway): create
     /// a new conversation bound to it, copying the history INCLUDING attachments,
     /// and return the new conversation id so the caller can make it active.
@@ -2583,14 +2603,19 @@ final class ConversationDetailViewModel {
     /// Connection verdict must not detach references to blobs the lane still
     /// physically owns (same posture as `retry`'s `currentRawLane`).
     ///
-    /// Arms the auto-continuation BEFORE returning — the caller navigates
-    /// immediately, and arming first is what lets the destination suppress the
-    /// failed-row treatment on its very first render instead of racing it. Only
-    /// a source turn that had already FAILED is armed: one still `sending` may
-    /// yet land on the old gateway, and firing it here too would run the same
-    /// (possibly action-taking) request on two gateways at once — `beginRetry`'s
-    /// CAS de-duplicates within a thread, never across them.
-    func cloneConversation(to ref: RemoteAgentRef) async -> UUID? {
+    /// `continueImmediately` is the user's OWN answer, collected in the clone
+    /// sheet before this runs (`hasUnansweredTrailingTurn` decides whether the
+    /// question is even asked). It is deliberately not inferred from the source
+    /// row's status: both answers are legitimate, and which one a person wants
+    /// depends on what they were in the middle of, which the app cannot read.
+    ///
+    /// When true, the continuation is armed BEFORE returning — the caller
+    /// navigates immediately, and arming first is what lets the destination
+    /// suppress the failed-row treatment on its very first render instead of
+    /// racing it. When false nothing is armed and the cloned turn simply waits
+    /// as an ordinary un-replied turn: Try Again fires it on demand, and it
+    /// rides along in the history of whatever the user types next.
+    func cloneConversation(to ref: RemoteAgentRef, continueImmediately: Bool) async -> UUID? {
         do {
             let targetLaneID = await SettingsManager.shared
                 .fileTransferSnapshot(for: ref)?.durableLaneID
@@ -2599,8 +2624,7 @@ final class ConversationDetailViewModel {
                 toBackend: ref.rawString,
                 targetFileLaneID: targetLaneID
             )
-            if let continuationID = cloned.continuationMessageID,
-               cloned.trailingSourceStatus == "failed" {
+            if continueImmediately, let continuationID = cloned.continuationMessageID {
                 PendingCloneContinuation.shared.arm(
                     conversationID: cloned.conversation.id,
                     messageID: continuationID

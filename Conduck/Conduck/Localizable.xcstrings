@@ -15116,6 +15116,72 @@
     "This week" : {
 
     },
+    "thread.clone.sendLast.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your last message hasn't been answered yet. If you just clone, it stays in the chat and goes along with your next message."
+          }
+        }
+      }
+    },
+    "thread.clone.sendLast.cancel" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "thread.clone.sendLast.later" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Just clone"
+          }
+        }
+      }
+    },
+    "thread.clone.sendLast.send" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send now"
+          }
+        }
+      }
+    },
+    "thread.clone.sendLast.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send the last message on %@?"
+          }
+        }
+      }
+    },
+    "thread.clone.sendLast.title.generic" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send the last message there?"
+          }
+        }
+      }
+    },
     "thread.copyAll.agentLabel" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

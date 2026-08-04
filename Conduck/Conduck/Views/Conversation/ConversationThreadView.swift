@@ -97,6 +97,12 @@ struct ConversationThreadView: View {
     /// sheet open (the view instance persists across presentations) so a curious
     /// title tap never lands directly on clone-on-tap rows.
     @State private var showingCloneTargets = false
+    /// The gateway the user picked while this thread ends on an un-replied turn
+    /// — held (not acted on) until they say whether to send that turn there.
+    /// Non-nil IS the dialog's presentation state, so dismissing clears it and
+    /// nothing is cloned: Cancel has to mean nothing happened, which is only
+    /// true while the clone is still ahead of the question.
+    @State private var pendingCloneTarget: RemoteAgentRef?
 
     /// Shared speaker (one synthesizer for the whole thread; restarting a new
     /// utterance stops the prior one cleanly). The cross-platform `ThreadSpeaker`
@@ -687,8 +693,60 @@ struct ConversationThreadView: View {
             }
             // Always open collapsed: the view instance persists across sheet
             // presentations, so reset the reveal each time the sheet appears.
-            .onAppear { showingCloneTargets = false }
+            .onAppear {
+                showingCloneTargets = false
+                pendingCloneTarget = nil
+            }
+            .confirmationDialog(
+                Text(cloneSendPromptTitle),
+                isPresented: Binding(
+                    get: { pendingCloneTarget != nil },
+                    set: { if !$0 { pendingCloneTarget = nil } }
+                ),
+                titleVisibility: .visible,
+                // `presenting` (not a read of the state inside the action) —
+                // SwiftUI holds this value for the presentation's lifetime, so
+                // the chosen gateway survives the dismissal that clears the
+                // binding on its way to running the action.
+                presenting: pendingCloneTarget
+            ) { ref in
+                Button(LocalizedStringResource(
+                    "thread.clone.sendLast.send", defaultValue: "Send now"
+                )) {
+                    cloneTo(ref, continueImmediately: true)
+                }
+                Button(LocalizedStringResource(
+                    "thread.clone.sendLast.later", defaultValue: "Just clone"
+                )) {
+                    cloneTo(ref, continueImmediately: false)
+                }
+                Button(LocalizedStringResource(
+                    "thread.clone.sendLast.cancel", defaultValue: "Cancel"
+                ), role: .cancel) { }
+            } message: { _ in
+                Text(LocalizedStringResource(
+                    "thread.clone.sendLast.body",
+                    defaultValue: "Your last message hasn't been answered yet. If you just clone, it stays in the chat and goes along with your next message."
+                ))
+            }
         }
+    }
+
+    /// Title for the send-the-last-turn question, naming the gateway the user
+    /// picked. Falls back to the un-named phrasing rather than an empty
+    /// interpolation for the frame between the state clearing and the dialog
+    /// finishing its dismissal, where the title is still read but the target
+    /// is already gone.
+    private var cloneSendPromptTitle: String {
+        guard let ref = pendingCloneTarget else {
+            return String(localized: "thread.clone.sendLast.title.generic",
+                          defaultValue: "Send the last message there?")
+        }
+        return String(
+            format: String(localized: "thread.clone.sendLast.title",
+                           defaultValue: "Send the last message on %@?"),
+            RemoteAgentRefMetadata.displayName(for: ref, customs: viewModel.customGateways)
+        )
     }
 
     /// The "Clone & continue on" header + one row per OTHER configured gateway.
@@ -745,7 +803,15 @@ struct ConversationThreadView: View {
         let name = RemoteAgentRefMetadata.displayName(for: ref, customs: viewModel.customGateways)
         let color = RemoteAgentBadgePalette.color(for: ref, customs: viewModel.customGateways)
         return Button {
-            cloneTo(ref)
+            // A thread ending on an un-replied turn poses a real question the
+            // app can't answer for the user: send it on the new gateway now, or
+            // let it wait. Everything else clones straight through — asking
+            // when there is nothing to send would be a prompt with one answer.
+            if viewModel.hasUnansweredTrailingTurn {
+                pendingCloneTarget = ref
+            } else {
+                cloneTo(ref, continueImmediately: false)
+            }
         } label: {
             HStack(spacing: 10) {
                 Circle().fill(color).frame(width: 12, height: 12)
@@ -813,9 +879,10 @@ struct ConversationThreadView: View {
 
     /// Clone this thread onto `ref`, then make the new conversation active by
     /// posting the shared deep-link notification every host already observes.
-    private func cloneTo(_ ref: RemoteAgentRef) {
+    private func cloneTo(_ ref: RemoteAgentRef, continueImmediately: Bool) {
         Task {
-            let newID = await viewModel.cloneConversation(to: ref)
+            let newID = await viewModel.cloneConversation(
+                to: ref, continueImmediately: continueImmediately)
             // Dismiss on failure too — `cloneConversation` surfaces its error
             // via `sendError`, which renders in the THREAD's banner; leaving
             // the sheet presented hid that banner and made the tap read as a
