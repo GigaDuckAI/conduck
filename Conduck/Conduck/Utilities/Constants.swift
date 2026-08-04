@@ -1355,6 +1355,14 @@ enum Constants {
     /// against an accidental giant attachment.
     static let fileTransferSoftConfirmBytes = 100 * 1024 * 1024
 
+    /// How long the macOS pane-drop target waits for ONE dragged item to
+    /// resolve before failing that item and letting the rest of the batch
+    /// through (seconds). FOUNDER-TUNABLE. Generous because the source may be a
+    /// slow promise (a web-page image) or a file on a network / not-yet-
+    /// downloaded iCloud volume, but bounded: an item that never calls back
+    /// would otherwise hold Send disabled indefinitely.
+    static let dropProviderLoadTimeoutSeconds = 60
+
     /// Fixed basic-auth username sent on every file-server request and named in
     /// the setup guide ("Conduck signs in as conduck"). The PASSWORD is the
     /// client-minted secret (Keychain) — the username is non-secret and constant

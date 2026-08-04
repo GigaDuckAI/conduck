@@ -873,6 +873,17 @@
         }
       }
     },
+    "composer.drop.prompt" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Drop files to attach"
+          }
+        }
+      }
+    },
     "composer.locked.a11yHint" : {
       "localizations" : {
         "en" : {
