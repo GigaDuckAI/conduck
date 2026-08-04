@@ -303,7 +303,7 @@ struct MainWindowView: View {
                 showsToolbarActions: false,
                 externalSearchText: $sidebarSearch,
                 customGateways: customGateways,
-                showsGatewayBadge: configuredRefs.count >= 2,
+                configuredRefs: configuredRefs,
                 // Persistent window sidebar: highlight the active thread's row.
                 selectedConversationID: selectedConversationID
             )
@@ -513,7 +513,7 @@ struct MainWindowView: View {
 
     private func refreshConfiguredBackends() async {
         configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
-        customGateways = await SettingsManager.shared.customGateways()
+        customGateways = await SettingsManager.shared.gatewayBadgeRoster()
         if !newChatGatewaySelectionLocked {
             selectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
         }

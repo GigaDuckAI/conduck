@@ -221,6 +221,24 @@ On iPhone, the Action Button route runs headless: it records and sends without e
 
 The headless route has real ceilings, surfaced to the user rather than hidden: recording stops if the screen locks or dims, low-power mode cuts it short, and there is no voice-activity detection, so stopping is manual. The in-app composer exists for long or reliability-critical captures.
 
+### Forgetting a gateway erases the credentials and keeps the colour tag
+
+Conversation rows carry a small coloured badge naming the gateway that created them, and rows only carry it once a list could show two different gateways — one gateway means a badge that says nothing. Crucially the count spans the gateways the *conversations* were created with, not the gateways configured right now: a conversation stays bound to its gateway for life, and forgetting that gateway does not merge it with the others. Counting only live gateways would blank every badge the moment a user is down to one, which is exactly when a mixed history is hardest to read.
+
+Forgetting a gateway destroys its address, token, certificate pin and file-transfer setup. What survives is two characters and a palette colour, so the conversations it created keep the tag that told them apart. The name does not survive: a forgotten gateway reads under the same generic label as one whose roster entry is missing for any other reason, because the badge is what tells conversations apart and a name invented at the moment of forgetting would only put a placeholder everywhere the interface expects a real one. This makes custom gateways behave like the built-in ones, which keep their badge for free because their letters and colours are compiled in.
+
+**Rejected:** erasing the badge with the credentials. It only ever applied to custom gateways, so the same user action gave opposite outcomes depending on which kind you forgot, and half an archive went permanently blank. **Also rejected:** a neutral grey chip for anything forgotten, which cannot tell two forgotten gateways apart and so does not solve the problem it exists for.
+
+These records never leave the device — they are the one part of the gateway roster that is deliberately not synced. A monogram can carry a company or a person's name and the timestamp discloses when, so publishing them would carry both into whatever iCloud account the device is signed into next, and a restored backup would resurrect records the user believed erased. Other devices stay consistent by *deriving* the same record from something they already receive — the gateway disappearing from the synced roster — rather than by copying the record itself. Retention is bounded by `Constants.maxRetiredGatewayBadges`, oldest dropped first, so a conversation old enough can still lose its badge.
+
+### Forgetting your last gateway has to reach the Watch
+
+The Watch holds its own copy of every gateway's address and token, and forgetting is a local act on the phone: the token stays valid at the server. So a forget that never reaches the wrist leaves a working route to a gateway the user believes they disconnected — surviving reboots, because the Watch rebuilds that state from durable storage at launch. The phone therefore sends an explicit teardown instruction.
+
+The hard part is not sending it, it is knowing when not to. "No gateway is configured" is also what a restored device reads before iCloud finishes downloading, what a locked keychain reads before its first unlock, and what a device with an unsynced roster reads — and the phone broadcasts to the Watch without waiting for any of those to settle. Inferring a teardown from that reading would destroy the credentials of a Watch that is working perfectly. So the teardown is authorised by a *recorded user action* and by nothing else, and it travels as its own explicit flag rather than as an empty list of gateways — an empty list is also what a Watch too old to parse a future message sees, and a compatibility gap must never read as an instruction to erase.
+
+**Residual, accepted:** a forget performed on iPad or Mac does not reach the wrist, because the paired iPhone is the only courier and it never witnessed the intent.
+
 ---
 
 ## What one turn does

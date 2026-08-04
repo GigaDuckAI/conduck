@@ -58,9 +58,13 @@ struct WatchConversationListView: View {
                         emptyState
                     }
                 } else {
+                    // Resolved ONCE per list build, not once per row — the rule
+                    // scans the whole conversation array, and the single-gateway
+                    // case (where it can't bail early) is the common one.
+                    let showsBadge = showsGatewayBadge
                     ForEach(filtered) { conversation in
                         NavigationLink(value: conversation.id) {
-                            row(for: conversation)
+                            row(for: conversation, showsBadge: showsBadge)
                         }
                     }
                     .onDelete { indexSet in
@@ -229,18 +233,57 @@ struct WatchConversationListView: View {
 
     // MARK: - Row
 
+    /// Whether rows carry the gateway badge — the same rule the phone, iPad,
+    /// Mac and CarPlay lists apply (`RemoteAgentRefMetadata.shouldShowBadges`),
+    /// so a single-gateway user sees a badge-free list on the wrist too, and a
+    /// mixed history keeps its badges even once only one gateway is still
+    /// configured.
+    ///
+    /// The configured half comes from `remoteAgentURLs.keys`, NOT
+    /// `configuredBackendRefs()`. That function is the ROUTING question ("can
+    /// this Watch send to this ref"), and answering it costs a synchronous
+    /// `SecItemCopyMatching` per ref — `remoteAgentConfig(for:)` reads the Watch
+    /// Keychain to prove the token landed. This is the IDENTITY question ("did
+    /// the user ever have this gateway"), which the URL map already answers: it
+    /// is rebuilt from the multi-envelope's sub-envelopes, one per ref the phone
+    /// has configured. A plain dictionary read, so `body` stays free of Keychain
+    /// I/O on the slowest device in the fleet — and the wrist counts a gateway
+    /// as soon as its envelope lands rather than waiting on the token write.
+    ///
+    /// It still trails the phone by one envelope: a gateway configured on the
+    /// phone seconds ago is not yet an identity here. That window is inherent to
+    /// a mirrored surface, not a difference in the rule.
+    ///
+    /// Computed from `viewModel.conversations` (the whole list), never
+    /// `filtered` — otherwise badges would appear and vanish as a search
+    /// narrows. Reads `WatchSettingsReader.shared` directly, as
+    /// `WatchGatewayBadge` does; both values are plain `@Observable` properties.
+    private var showsGatewayBadge: Bool {
+        let reader = WatchSettingsReader.shared
+        return RemoteAgentRefMetadata.shouldShowBadges(
+            configured: reader.remoteAgentURLs.keys.compactMap(RemoteAgentRef.init(rawString:)),
+            conversationBackends: viewModel.conversations.lazy.map(\.backend),
+            // The BADGE roster — the same one `WatchGatewayBadge` renders from,
+            // so "should this list badge" and "can this row draw one" stay the
+            // same question once forgotten gateways are in play.
+            customs: reader.gatewayBadgeRoster
+        )
+    }
+
     // ACCEPTED V1 DECISION (reviewer-confirmed): rows show title + relative date
     // but NO last-message preview. Deriving a preview means an N-message fetch
     // per visible row on the wrist — not worth the perf cost. The thread view
     // shows the bodies. Keep this.
-    private func row(for conversation: ConversationRecord) -> some View {
+    private func row(for conversation: ConversationRecord, showsBadge: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(Self.displayTitle(for: conversation))
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                WatchGatewayBadge(backendRawValue: conversation.backend)
+                if showsBadge {
+                    WatchGatewayBadge(backendRawValue: conversation.backend)
+                }
             }
             Text(Self.relativeFormatter.localizedString(
                 for: conversation.lastActivityAt,

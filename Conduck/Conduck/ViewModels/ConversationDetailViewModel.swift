@@ -2446,7 +2446,7 @@ final class ConversationDetailViewModel {
     /// popping in after the fetch, never a wrong name.
     static func warmHeaderMemo() async {
         guard let records = try? await ConversationStore.shared.fetchConversations() else { return }
-        let customs = await SettingsManager.shared.customGateways()
+        let customs = await SettingsManager.shared.gatewayBadgeRoster()
         let configured = await SettingsManager.shared.configuredRemoteAgentRefs()
         let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
         // Availability once per unique backend raw, not per row.
@@ -2508,7 +2508,7 @@ final class ConversationDetailViewModel {
     /// (e.g. a legacy row with an unknown raw value), then "Personal AI".
     private func resolveBackendDisplayName() async {
         // Cache the roster + configured refs for the thread badge / Clone sheet.
-        let customs = await SettingsManager.shared.customGateways()
+        let customs = await SettingsManager.shared.gatewayBadgeRoster()
         customGateways = customs
         configuredRefsForClone = await SettingsManager.shared.configuredRemoteAgentRefs()
 

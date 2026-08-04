@@ -221,6 +221,13 @@ final class WatchSettingsReader {
     /// dropped per-ref slots. Empty for a built-ins-only install.
     private(set) var customGateways: [CustomGateway] = []
 
+    /// Forgotten-gateway badges this Watch has DERIVED, newest first — never
+    /// couriered by the iPhone, never in KVS (`RetiredGatewayBadge` carries why).
+    /// Hydrated from the App Group at init and rewritten only through
+    /// `persistRetiredGatewayBadges`, so it stays `@Observable`-tracked for the
+    /// badge surfaces that read it every body pass.
+    private(set) var retiredGatewayBadges: [RetiredGatewayBadge] = []
+
     /// Default ref a freshly-minted (Watch-originated) conversation binds to when
     /// no per-conversation backend is known, as a `rawString`. Hydrated from KVS
     /// / App Group on cold launch, refreshed by the multi-envelope. Falls back to
@@ -356,6 +363,17 @@ final class WatchSettingsReader {
     /// queued envelope is applied) and re-persisted whenever an envelope is
     /// accepted — the discard guard then compares against the persisted value.
     private static let lastRemoteAgentEnvelopeTimestampKey = "watch.lastRemoteAgentEnvelopeTimestamp"
+
+    /// Watch App Group flag: an accepted TEARDOWN envelope (`clearAll`) has
+    /// purged this Watch's gateway state. Device-local, and durable because the
+    /// thing it defends against outlives the process — `hydrateRemoteAgentFromDurableStores`
+    /// rebuilds per-ref URLs from iCloud KVS on a cold launch, and KVS on
+    /// watchOS is a laggy eventually-consistent mirror (`ubiquityIdentityToken`
+    /// is always nil there). Without this flag a relaunch shortly after a
+    /// teardown would re-read the iPhone's not-yet-propagated KVS deletion and
+    /// resurrect the URL of a gateway the user forgot. Cleared the moment a
+    /// normal envelope carrying real backends is accepted.
+    private static let remoteAgentTornDownKey = "watch.remoteAgentTornDown"
 
     /// Atomic update for { activePresetID, apiKey, activeCustomModel, the TTS
     /// triple, lastEnvelopeTimestamp } triggered by an incoming
@@ -550,6 +568,12 @@ final class WatchSettingsReader {
     func updateRemoteAgents(multi envelope: RemoteAgentMultiBroadcastEnvelope) -> Bool {
         guard envelope.timestamp > lastRemoteAgentEnvelopeTimestamp else { return false }
 
+        // EXPLICIT teardown — the user forgot their last gateway on the iPhone.
+        // Read from the dedicated flag, never inferred from `backends.isEmpty`,
+        // because the decoder drops malformed sub-dicts and an unparseable
+        // future schema would otherwise read as "destroy everything".
+        let isTeardown = envelope.clearAll == true
+
         // Rebuild the per-ref caches from this envelope (authoritative snapshot of
         // "all configured refs"). A ref dropped from the configured set on iPhone
         // disappears from these caches + its App-Group slots, so a Watch route to
@@ -621,7 +645,17 @@ final class WatchSettingsReader {
             appGroupDefaults.removeObject(forKey: Constants.fileTransferAvailableKey(for: oldGateway.ref))
             appGroupDefaults.removeObject(forKey: Constants.fileServerLaneIDKey(for: oldGateway.ref))
             Task { await WatchIdentityResolver.shared.clearRemoteAgentToken(for: ref) }
+            // Freeze this gateway's badge before its roster entry goes. This
+            // loop IS the wrist's view of "the user forgot a custom on the
+            // iPhone", so it is also where the wrist derives the tombstone —
+            // the iPhone never ships one. Conversations bound to the gateway
+            // sync here via CloudKit and would otherwise lose their colour tag.
+            retireGatewayBadge(from: oldGateway)
         }
+        // …and drop any record whose gateway the envelope names again, so a
+        // retirement derived from a roster that only looked shrunken releases
+        // its retention slot.
+        pruneRetiredBadges(liveIDs: Set(newCustoms.map(\.id)))
 
         // Persist per-BUILT-IN url + cert to the Watch App Group (cold-launch
         // durability). Walk ALL built-in cases so a built-in removed from
@@ -725,7 +759,13 @@ final class WatchSettingsReader {
         let oldDefaultRef = remoteAgentDefaultBackendRef
         remoteAgentDefaultBackendRef = envelope.defaultBackendRef
         appGroupDefaults.set(envelope.defaultBackendRef, forKey: Constants.remoteAgentDefaultBackendKVSKey)
-        if oldDefaultRef != envelope.defaultBackendRef {
+        // A teardown clears the pointer UNCONDITIONALLY. The comparison above is
+        // the wrong test here: a teardown carries the iPhone's fallback default,
+        // which is usually the SAME ref the wrist already stored, so the pointer
+        // would survive — and a later reconfigure of that reused built-in ref
+        // could revive the old thread and ship its history to a different
+        // server.
+        if isTeardown || oldDefaultRef != envelope.defaultBackendRef {
             clearActiveConversation()
         }
 
@@ -752,6 +792,28 @@ final class WatchSettingsReader {
             remoteAgentBackendRef = dSub.backendRef
             remoteAgentURL = dSub.url
             remoteAgentCertFingerprint = dSub.certFingerprintHex
+        } else if isTeardown {
+            // Nothing to point at. Nil the in-memory mirror AND remove its
+            // App-Group slots — `hydrateRemoteAgentFromDurableStores` rebuilds
+            // these three from those exact keys on a cold launch, so clearing
+            // only the properties would let the forgotten gateway's URL walk
+            // straight back in at the next relaunch.
+            remoteAgentBackendRef = nil
+            remoteAgentURL = nil
+            remoteAgentCertFingerprint = nil
+            appGroupDefaults.removeObject(forKey: Constants.remoteAgentBackendKey)
+            appGroupDefaults.removeObject(forKey: Constants.remoteAgentURLKey)
+            appGroupDefaults.removeObject(forKey: Constants.remoteAgentCertFingerprintKey)
+        }
+
+        // Latch / release the durable teardown marker. Armed by a teardown so a
+        // cold launch does not re-hydrate per-ref URLs from a KVS mirror that
+        // has not yet seen the iPhone's deletions; released as soon as a normal
+        // envelope carrying real backends is accepted.
+        if isTeardown {
+            appGroupDefaults.set(true, forKey: Self.remoteAgentTornDownKey)
+        } else if !envelope.backends.isEmpty {
+            appGroupDefaults.removeObject(forKey: Self.remoteAgentTornDownKey)
         }
 
         lastRemoteAgentEnvelopeTimestamp = envelope.timestamp
@@ -759,6 +821,49 @@ final class WatchSettingsReader {
         // so a relaunch rejects an OLD queued multi-envelope replay.
         appGroupDefaults.set(envelope.timestamp, forKey: Self.lastRemoteAgentEnvelopeTimestampKey)
         return true
+    }
+
+    /// Badge identity for every gateway a wrist row may need to draw: the live
+    /// roster plus the forgotten ones. Display surfaces ONLY — routing, the Ask
+    /// chooser and the known-customs reconciliation index keep reading
+    /// `customGateways`, so a forgotten gateway can never become a send target.
+    ///
+    /// Composes two `@Observable`-tracked stored properties, so a row's `body`
+    /// re-renders when either changes and pays no decode to read them.
+    /// `retiredGatewayBadges` is deliberately STORED rather than computed off
+    /// `appGroupDefaults`: a per-access `UserDefaults` read plus a JSON decode
+    /// would run several times per badge, per row, per body pass on the slowest
+    /// device in the fleet, and SwiftUI cannot observe a defaults read at all —
+    /// so a write not accompanied by a roster change would leave stale monograms
+    /// on screen with nothing to invalidate them.
+    var gatewayBadgeRoster: [CustomGateway] {
+        customGateways.unioningRetired(retiredGatewayBadges)
+    }
+
+    /// Freeze a departing custom's monogram + colour. Idempotent and a no-op
+    /// when the entry resolves to no monogram, since nothing could ever draw it.
+    private func retireGatewayBadge(from gateway: CustomGateway) {
+        guard let badge = RetiredGatewayBadge.freeze(gateway, at: Date()),
+              let updated = retiredGatewayBadges.retiring(badge)
+        else { return }
+        persistRetiredGatewayBadges(updated)
+    }
+
+    /// Drop records for gateways that are live again — the wrist's copy of the
+    /// iPhone's prune, for the same reason: a record derived from a roster that
+    /// merely looked shrunken must not hold a retention slot for the life of the
+    /// install.
+    private func pruneRetiredBadges(liveIDs: Set<UUID>) {
+        let pruned = retiredGatewayBadges.pruning(liveIDs: liveIDs)
+        guard pruned.count != retiredGatewayBadges.count else { return }
+        persistRetiredGatewayBadges(pruned)
+    }
+
+    private func persistRetiredGatewayBadges(_ list: [RetiredGatewayBadge]) {
+        retiredGatewayBadges = list
+        if let data = try? JSONEncoder().encode(list) {
+            appGroupDefaults.set(data, forKey: Constants.retiredGatewayBadgesKey)
+        }
     }
 
     /// Persist the received custom-gateway roster to the Watch App Group under
@@ -1129,8 +1234,26 @@ final class WatchSettingsReader {
         // rehydrate below, because both share the `== 0` guard — bumping the
         // high-water first would make this branch see a non-zero value and skip
         // cold-launch config resolution.
-        if lastRemoteAgentEnvelopeTimestamp == 0 {
+        //
+        // SUPPRESSED after an accepted teardown: the per-ref rebuild reads
+        // iCloud KVS first, and KVS on watchOS lags badly, so a relaunch soon
+        // after the user forgot their last gateway would re-read URLs the
+        // iPhone has already deleted and hand a forgotten gateway back its
+        // address. The marker is released by the next real envelope.
+        if lastRemoteAgentEnvelopeTimestamp == 0,
+           !appGroupDefaults.bool(forKey: Self.remoteAgentTornDownKey) {
             hydrateRemoteAgentFromDurableStores()
+        }
+
+        // Retirement records hydrate UNCONDITIONALLY — outside the teardown
+        // suppression above and outside its `== 0` guard. They hand back no
+        // address and no credential, only two characters and a colour, so they
+        // cannot resurrect anything; and a teardown is precisely the moment they
+        // matter most, since every gateway that could name a conversation is now
+        // forgotten.
+        if let data = appGroupDefaults.data(forKey: Constants.retiredGatewayBadgesKey),
+           let list = try? JSONDecoder().decode([RetiredGatewayBadge].self, from: data) {
+            retiredGatewayBadges = list
         }
 
         // Persisted high-water hydration: rehydrate the remote-agent monotonic

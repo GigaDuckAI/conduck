@@ -638,6 +638,66 @@ final class RemoteAgentBroadcastEnvelopeTests: XCTestCase {
         let decoded = try XCTUnwrap(RemoteAgentMultiBroadcastEnvelope.decode(from: dict))
         XCTAssertTrue(decoded.backends.isEmpty)
         XCTAssertEqual(decoded.defaultBackendRef, "openclaw")
+        XCTAssertNil(decoded.clearAll,
+                     "An empty array on its own is NOT a teardown — only the explicit flag is.")
+    }
+
+    // MARK: - Teardown flag (`clearAll`)
+
+    func testMultiEnvelopeClearAllRoundTrips() throws {
+        let envelope = RemoteAgentMultiBroadcastEnvelope(
+            backends: [],
+            defaultBackendRef: "openclaw",
+            timestamp: 42.0,
+            sessionPolicy: nil,
+            clearAll: true
+        )
+        let decoded = try XCTUnwrap(RemoteAgentMultiBroadcastEnvelope.decode(from: envelope.encodedDict()))
+        XCTAssertEqual(decoded.clearAll, true)
+        XCTAssertTrue(decoded.backends.isEmpty)
+    }
+
+    func testMultiEnvelopeOmitsClearAllKeyWhenNotTearingDown() throws {
+        let envelope = RemoteAgentMultiBroadcastEnvelope(
+            backends: [],
+            defaultBackendRef: "openclaw",
+            timestamp: 1.0,
+            sessionPolicy: nil
+        )
+        XCTAssertNil(envelope.encodedDict()["clearAll"],
+                     "Omit-nil posture: a normal envelope carries no teardown key at all, so an old Watch sees exactly what it saw before.")
+    }
+
+    func testMultiEnvelopeAllSubDictsMalformedIsNotATeardown() throws {
+        // THE landmine this flag exists to defuse. `decode` drops malformed
+        // sub-dicts for forward-compat, so a future per-backend schema an older
+        // Watch cannot parse also decodes to `backends == []`. If emptiness meant
+        // teardown, a compatibility gap would silently destroy credentials.
+        let dict: [String: Any] = [
+            "backends": [["totally": "unparseable"], ["also": "junk"]],
+            "defaultBackend": "openclaw",
+            "timestamp": 1.0,
+        ]
+        let decoded = try XCTUnwrap(RemoteAgentMultiBroadcastEnvelope.decode(from: dict))
+        XCTAssertTrue(decoded.backends.isEmpty, "Every sub-dict was dropped as malformed.")
+        XCTAssertNil(decoded.clearAll,
+                     "A receiver must never read its OWN parse failure as an instruction to wipe the user's gateways.")
+    }
+
+    func testMultiEnvelopeClearAllAlongsideBackendsIsRefused() throws {
+        // Self-contradictory sender ("destroy everything" + here are gateways).
+        // Resolve to the NON-destructive reading.
+        let sub = try makeSub(ref: "openclaw", urlString: "https://gw.example.test",
+                              token: nil, cert: nil, session: nil)
+        let dict: [String: Any] = [
+            "backends": [sub.encodedDict()],
+            "defaultBackend": "openclaw",
+            "timestamp": 1.0,
+            "clearAll": true,
+        ]
+        let decoded = try XCTUnwrap(RemoteAgentMultiBroadcastEnvelope.decode(from: dict))
+        XCTAssertNil(decoded.clearAll)
+        XCTAssertEqual(decoded.backends.count, 1)
     }
 
     // MARK: - legacy single envelope still decodes (compat)

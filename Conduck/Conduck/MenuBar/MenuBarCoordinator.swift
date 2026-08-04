@@ -828,7 +828,7 @@ final class MenuBarCoordinator {
         // so the `armQuickCapture` force-resolve-while-latched path keeps them
         // fresh too.
         let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
-        let customs = await SettingsManager.shared.customGateways()
+        let customs = await SettingsManager.shared.gatewayBadgeRoster()
         quickCustomGateways = customs
         quickDefaultGatewayName = RemoteAgentRefMetadata.displayName(for: defaultRef, customs: customs)
         quickRecents = (try? await conversationStore.fetchRecentForPicker(limit: 6)) ?? []

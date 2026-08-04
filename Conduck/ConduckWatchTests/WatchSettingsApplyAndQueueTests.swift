@@ -27,6 +27,25 @@ import XCTest
 @MainActor
 final class WatchSettingsApplyAndQueueTests: XCTestCase {
 
+    /// `WatchSettingsReader` is a process singleton over ONE in-memory
+    /// App-Group double shared by every test in the run, so the gateway cases
+    /// below have to restore clean the way the rest of this file does per-test.
+    /// Chief offender: the teardown marker, which permanently suppresses
+    /// cold-launch config hydration for every test that follows.
+    ///
+    /// This clears the DURABLE side only. The reader caches its roster and its
+    /// retirement records in memory, and nothing here reaches those — so a case
+    /// asserting about retirement must scope its assertions to its own uuid
+    /// rather than to a count or an `isEmpty`.
+    override func tearDown() {
+        let appGroup = TestStores.defaults
+        appGroup.removeObject(forKey: Constants.retiredGatewayBadgesKey)
+        appGroup.removeObject(forKey: Constants.customGatewaysRegistryKey)
+        // Mirrors `WatchSettingsReader.remoteAgentTornDownKey`, which is private.
+        appGroup.removeObject(forKey: "watch.remoteAgentTornDown")
+        super.tearDown()
+    }
+
     // MARK: - iPhone→Watch settings APPLY contract (+ monotonic stale guard)
 
     func testSTTEnvelopeApplyHydratesNonSecretFieldsAndAdvancesHighWaterMark() async {
@@ -364,5 +383,231 @@ final class WatchSettingsApplyAndQueueTests: XCTestCase {
                        "A nil sessionPolicy must not wipe the cached policy (back-compat).")
 
         reader.clearActiveConversation()
+    }
+
+    // MARK: - Teardown (`clearAll`)
+
+    /// A teardown envelope is what "the user forgot their last gateway on the
+    /// iPhone" looks like on the wire. Before it existed the iPhone sent NOTHING
+    /// in that state, so the wrist kept a live route — URL, auth scheme, roster
+    /// and Keychain token — to a gateway the user believed they had
+    /// disconnected, indefinitely and across relaunches.
+    func testTeardownEnvelopePurgesEveryPerRefRouteAndTheRoster() {
+        let reader = WatchSettingsReader.shared
+        let base = reader.lastRemoteAgentEnvelopeTimestamp + 6000
+        let customID = UUID()
+        let customRef = RemoteAgentRef.custom(customID).rawString
+        func sub(_ ref: String, name: String?, _ ts: TimeInterval) -> RemoteAgentBroadcastEnvelope {
+            RemoteAgentBroadcastEnvelope(
+                backendRef: ref, url: URL(string: "https://\(ref.replacingOccurrences(of: "_", with: "-")).example.test")!,
+                name: name, model: nil, colorID: "indigo", monogram: "LI", token: "t",
+                certFingerprintHex: nil, activeSessionID: nil, timestamp: ts
+            )
+        }
+
+        // A populated wrist: one built-in + one custom.
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub("openclaw", name: nil, base), sub(customRef, name: "LiteLLM", base)],
+            defaultBackendRef: "openclaw", timestamp: base, sessionPolicy: nil)))
+        XCTAssertNotNil(reader.remoteAgentURLs["openclaw"])
+        XCTAssertNotNil(reader.remoteAgentURLs[customRef])
+        XCTAssertEqual(reader.customGateways.count, 1)
+
+        // Teardown.
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [], defaultBackendRef: "openclaw", timestamp: base + 1,
+            sessionPolicy: nil, clearAll: true)))
+
+        XCTAssertTrue(reader.remoteAgentURLs.isEmpty,
+                      "Routing dies here: `remoteAgentConfig(for:)` gates on this map, so an emptied map is what makes a forgotten gateway unreachable from the wrist.")
+        XCTAssertTrue(reader.customGateways.isEmpty)
+        XCTAssertNil(reader.remoteAgentURL,
+                     "The legacy single-config mirror must go too — it is a second, older path to the same forgotten address.")
+        XCTAssertNil(reader.remoteAgentBackendRef)
+        XCTAssertNil(reader.remoteAgentCertFingerprint)
+    }
+
+    /// The teardown must clear the active-conversation pointer UNCONDITIONALLY.
+    /// The ordinary rule only clears it when the effective default CHANGES — and
+    /// a teardown carries the iPhone's fallback default, which is usually the
+    /// same ref already stored. Left behind, a later reconfigure of that reused
+    /// built-in ref could revive the old thread against a different server.
+    func testTeardownClearsActiveConversationEvenWhenTheDefaultRefIsUnchanged() {
+        let reader = WatchSettingsReader.shared
+        let base = reader.lastRemoteAgentEnvelopeTimestamp + 7000
+        let sub = RemoteAgentBroadcastEnvelope(
+            backendRef: "openclaw", url: URL(string: "https://openclaw.example.test")!,
+            name: nil, model: nil, colorID: nil, monogram: nil, token: "t",
+            certFingerprintHex: nil, activeSessionID: nil, timestamp: base
+        )
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub], defaultBackendRef: "openclaw", timestamp: base, sessionPolicy: nil)))
+        reader.recordActiveConversation(UUID())
+        XCTAssertNotNil(reader.resolveActiveConversationID())
+
+        // Same defaultBackendRef as before — only `clearAll` differs.
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [], defaultBackendRef: "openclaw", timestamp: base + 1,
+            sessionPolicy: nil, clearAll: true)))
+
+        XCTAssertNil(reader.resolveActiveConversationID(),
+                     "A teardown leaves no thread to continue.")
+    }
+
+    /// An empty `backends` array WITHOUT the flag must be inert. The decoder
+    /// drops malformed sub-dicts for forward-compat, so this is also what a
+    /// future per-backend schema looks like to an older Watch — reading it as
+    /// teardown would turn a compatibility gap into credential destruction.
+    func testEmptyBackendsWithoutTheFlagDoesNotPurge() {
+        let reader = WatchSettingsReader.shared
+        let base = reader.lastRemoteAgentEnvelopeTimestamp + 8000
+        let sub = RemoteAgentBroadcastEnvelope(
+            backendRef: "hermes", url: URL(string: "https://hermes.example.test")!,
+            name: nil, model: nil, colorID: nil, monogram: nil, token: "t",
+            certFingerprintHex: nil, activeSessionID: nil, timestamp: base
+        )
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub], defaultBackendRef: "hermes", timestamp: base, sessionPolicy: nil)))
+
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [], defaultBackendRef: "hermes", timestamp: base + 1, sessionPolicy: nil)))
+
+        XCTAssertNotNil(reader.remoteAgentURL,
+                        "No flag, no destruction — the legacy mirror survives an unflagged empty envelope.")
+    }
+
+    /// Staleness still wins. A teardown that lost the race to a newer envelope
+    /// must be rejected BEFORE it destroys anything — which is why the session
+    /// manager commits this call first and only clears Keychain tokens if it
+    /// returned true.
+    func testStaleTeardownIsRejected() {
+        let reader = WatchSettingsReader.shared
+        let base = reader.lastRemoteAgentEnvelopeTimestamp + 9000
+        let sub = RemoteAgentBroadcastEnvelope(
+            backendRef: "openclaw", url: URL(string: "https://openclaw.example.test")!,
+            name: nil, model: nil, colorID: nil, monogram: nil, token: "t",
+            certFingerprintHex: nil, activeSessionID: nil, timestamp: base + 5
+        )
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub], defaultBackendRef: "openclaw", timestamp: base + 5, sessionPolicy: nil)))
+
+        XCTAssertFalse(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [], defaultBackendRef: "openclaw", timestamp: base + 1,
+            sessionPolicy: nil, clearAll: true)),
+            "An out-of-order teardown must be refused.")
+        XCTAssertNotNil(reader.remoteAgentURLs["openclaw"],
+                        "…and must leave the newer envelope's routing untouched.")
+
+        reader.clearActiveConversation()
+    }
+
+    // MARK: - Retired gateway badges (derived, never couriered)
+
+    /// The wrist learns a custom was forgotten the same way it learns anything
+    /// else about gateways — the ref stops appearing in the envelope. That
+    /// reconciliation loop is therefore also where it DERIVES the badge
+    /// tombstone: the iPhone never ships one, because a monogram can carry
+    /// personal or organization identity and syncing it would follow the user
+    /// into their next iCloud account.
+    func testADroppedCustomLeavesItsBadgeBehind() {
+        let reader = WatchSettingsReader.shared
+        let base = reader.lastRemoteAgentEnvelopeTimestamp + 11000
+        let customID = UUID()
+        let customRef = RemoteAgentRef.custom(customID).rawString
+        func sub(_ ref: String, name: String?, _ ts: TimeInterval) -> RemoteAgentBroadcastEnvelope {
+            RemoteAgentBroadcastEnvelope(
+                backendRef: ref, url: URL(string: "https://gw.example.test")!,
+                name: name, model: nil, colorID: "green", monogram: nil, token: "t",
+                certFingerprintHex: nil, activeSessionID: nil, timestamp: ts
+            )
+        }
+
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub("openclaw", name: nil, base), sub(customRef, name: "LiteLLM", base)],
+            defaultBackendRef: "openclaw", timestamp: base, sessionPolicy: nil)))
+        XCTAssertEqual(
+            RemoteAgentRefMetadata.monogram(for: .custom(customID), customs: reader.gatewayBadgeRoster),
+            "LI"
+        )
+
+        // The custom is gone from the next envelope — a Forget on the iPhone.
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub("openclaw", name: nil, base + 1)],
+            defaultBackendRef: "openclaw", timestamp: base + 1, sessionPolicy: nil)))
+
+        XCTAssertFalse(reader.customGateways.contains { $0.id == customID },
+                       "The live roster is the routing + Ask-chooser index — a forgotten gateway must leave it.")
+        XCTAssertEqual(
+            RemoteAgentRefMetadata.monogram(for: .custom(customID), customs: reader.gatewayBadgeRoster),
+            "LI",
+            "…but its conversations, which sync here via CloudKit, keep the tag that told them apart."
+        )
+        XCTAssertNil(reader.remoteAgentConfig(for: customRef),
+                     "Keeping the badge must not keep a route.")
+    }
+
+    /// A gateway that comes BACK is not a forgotten one. A retirement can be
+    /// derived from a roster that only looked shrunken, and without this the
+    /// record would hold one of `Constants.maxRetiredGatewayBadges` slots for
+    /// the life of the install even though nothing could ever render it.
+    func testARestoredCustomReleasesItsRetirementRecord() {
+        let reader = WatchSettingsReader.shared
+        let base = reader.lastRemoteAgentEnvelopeTimestamp + 12000
+        let customID = UUID()
+        let customRef = RemoteAgentRef.custom(customID).rawString
+        func sub(_ ref: String, name: String?, _ ts: TimeInterval) -> RemoteAgentBroadcastEnvelope {
+            RemoteAgentBroadcastEnvelope(
+                backendRef: ref, url: URL(string: "https://gw.example.test")!,
+                name: name, model: nil, colorID: "green", monogram: nil, token: "t",
+                certFingerprintHex: nil, activeSessionID: nil, timestamp: ts
+            )
+        }
+
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub(customRef, name: "LiteLLM", base)],
+            defaultBackendRef: "openclaw", timestamp: base, sessionPolicy: nil)))
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub("openclaw", name: nil, base + 1)],
+            defaultBackendRef: "openclaw", timestamp: base + 1, sessionPolicy: nil)))
+        // Scoped to THIS uuid, never a count: the reader is a process singleton
+        // and its retirement list is in-memory, so records from earlier tests in
+        // the run are still there.
+        XCTAssertTrue(reader.retiredGatewayBadges.contains { $0.id == customID })
+
+        // It reappears — a stale roster caught up, or the user re-added it.
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub(customRef, name: "LiteLLM", base + 2)],
+            defaultBackendRef: "openclaw", timestamp: base + 2, sessionPolicy: nil)))
+
+        XCTAssertFalse(reader.retiredGatewayBadges.contains { $0.id == customID },
+                       "The record must be released, not merely masked by the live entry.")
+        XCTAssertEqual(
+            reader.gatewayBadgeRoster.filter { $0.id == customID }.count, 1,
+            "…and the roster must not carry the gateway twice."
+        )
+    }
+
+    /// A custom sub-envelope with no name is dropped from the ROSTER as
+    /// malformed, yet its per-ref route is still installed. That gap is why a
+    /// teardown cannot enumerate the roster to find what to purge: it would
+    /// leave this ref's bearer token on the wrist behind a Forget the user
+    /// believes wiped everything. `remoteAgentURLs` is the complete index.
+    func testANamelessCustomRoutesWithoutJoiningTheRoster() {
+        let reader = WatchSettingsReader.shared
+        let base = reader.lastRemoteAgentEnvelopeTimestamp + 13000
+        let customRef = RemoteAgentRef.custom(UUID()).rawString
+
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [RemoteAgentBroadcastEnvelope(
+                backendRef: customRef, url: URL(string: "https://nameless.example.test")!,
+                name: nil, model: nil, colorID: nil, monogram: nil, token: "t",
+                certFingerprintHex: nil, activeSessionID: nil, timestamp: base
+            )],
+            defaultBackendRef: "openclaw", timestamp: base, sessionPolicy: nil)))
+
+        XCTAssertFalse(reader.customGateways.contains { $0.ref.rawString == customRef },
+                       "A nameless custom is malformed for display purposes and stays out of the roster.")
+        XCTAssertNotNil(reader.remoteAgentURLs[customRef],
+                        "…but it IS routable, so any purge that enumerates only the roster misses it.")
     }
 }
