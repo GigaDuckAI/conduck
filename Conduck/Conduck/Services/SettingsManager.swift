@@ -3282,11 +3282,187 @@ actor SettingsManager {
         postSettingsDidChangeRemotely()
     }
 
-    /// Return the backends that are fully configured = have BOTH a stored token
-    /// AND a stored URL (a token-without-url half-state is not
-    /// offered). Ordered by `RemoteAgentBackend.allCases`. Mirrors
-    /// `presetIDsWithStoredKey()` (the "which are set up" query) but returns an
-    /// ordered array, not a set, because the picker renders in a stable order.
+    /// ONE classification pass over every gateway this device knows about — the
+    /// built-ins plus the custom roster — inside a single actor turn.
+    ///
+    /// This is the canonical gateway-state query; `configuredRemoteAgentRefs()`,
+    /// `partiallyConfiguredRemoteAgentRefs()` and `removableRemoteAgentRefs()`
+    /// are projections of it. They used to be independent passes, which meant a
+    /// caller reading two of them took two actor hops with unrelated awaits in
+    /// between — an iCloud change landing in the gap could show the SAME ref as
+    /// both configured and incomplete, or as neither. Deriving every answer from
+    /// one set of slot reads makes that unrepresentable rather than unlikely.
+    ///
+    /// The roster travels WITH the entries for the same reason: resolving a
+    /// display name or a canonical `custom-gateway#N` ordinal from a separately
+    /// fetched roster can describe a different moment than the classification.
+    func remoteAgentInventory() -> RemoteAgentInventory {
+        // Migrations FIRST: they can seed per-ref slots from the retired
+        // single-config keys, and classifying against pre-migration storage would
+        // report a gateway as untouched for exactly one pass.
+        ensureKeychainMigrated()
+        ensureRemoteAgentMigrated()
+        let roster = customGateways()
+        #if DEBUG
+        // QA overrides are complete by construction — nothing on a QA rig is
+        // half-configured, and the override's own slots are synthetic.
+        if QAMode.isActive, !QAMode.gatewayOverrides.isEmpty || QAMode.customGatewayOverride != nil {
+            var entries = RemoteAgentBackend.allCases.map { backend -> RemoteAgentInventoryEntry in
+                let ref = RemoteAgentRef.builtin(backend)
+                let overridden = QAMode.gatewayOverrides[backend] != nil
+                return RemoteAgentInventoryEntry(
+                    ref: ref,
+                    readiness: overridden ? .configured : .untouched,
+                    // Removability stays HONEST even under a QA override: it is a
+                    // storage fact, not a readiness verdict. Hardcoding it false
+                    // for non-overridden refs hid the editor's Forget section on a
+                    // gateway that really did hold state, during the exact runs
+                    // used to screenshot that editor.
+                    hasRemovableState: overridden || hasRemovableRemoteAgentSlots(ref)
+                )
+            }
+            if let override = QAMode.customGatewayOverride {
+                // built-ins first, custom last (production order)
+                entries.append(RemoteAgentInventoryEntry(
+                    ref: .custom(override.gateway.id),
+                    readiness: .configured,
+                    hasRemovableState: true
+                ))
+            }
+            return RemoteAgentInventory(customGateways: roster, entries: entries)
+        }
+        #endif
+        var entries = RemoteAgentBackend.allCases.map { classifyRemoteAgent(.builtin($0)) }
+        // Only ROSTER customs are enumerated: a per-uuid slot whose roster entry
+        // is gone has no name, no editor and no way to be repaired, so surfacing
+        // it as a gateway would be a dead end. `scripts/cleanup-orphan-slots.sh`
+        // owns that litter.
+        entries.append(contentsOf: roster.map { classifyRemoteAgent(.custom($0.id), rosterMember: true) })
+        return RemoteAgentInventory(customGateways: roster, entries: entries)
+    }
+
+    /// Classify ONE gateway. Every slot is read exactly once at the top and all
+    /// three answers are derived from those same values — the property that
+    /// makes readiness and removability describe one moment.
+    private func classifyRemoteAgent(
+        _ ref: RemoteAgentRef,
+        rosterMember: Bool = false
+    ) -> RemoteAgentInventoryEntry {
+        // Send-ability comes from the SHARED predicate, so the cheap
+        // `configuredRemoteAgentRefs()` path and this pass can never disagree
+        // about what "configured" means.
+        let configured = isRemoteAgentSendable(ref)
+
+        // --- Evidence of a setup attempt --------------------------------------
+        // Everything here is a defaults/KVS read. The RAW url/scheme slots are
+        // deliberately unfiltered: `getRemoteAgentURL` drops a value
+        // `EndpointURLPolicy` rejects, so a malformed URL the user really did save
+        // reads as "never touched" through the resolved getter — and Diagnostics
+        // then stays silent about a gateway that cannot work.
+        //
+        // For a fixed-endpoint built-in (OpenRouter) the app SYNTHESIZES the URL,
+        // so URL presence proves nothing — which is why the raw slot, not the
+        // resolved one, is what counts. Without that, every fresh install would
+        // read "OpenRouter setup incomplete" forever.
+        let cheapEvidence = rosterMember
+            || rawStoredString(Constants.remoteAgentURLKey(for: ref)) != nil
+            || rawStoredString(Constants.remoteAgentAuthSchemeKey(for: ref)) != nil
+            || (getRemoteAgentModel(for: ref)?.isEmpty == false)
+            || getRemoteAgentCertFingerprint(for: ref) != nil
+
+        // A token with NO other slot is real evidence — the cross-device case
+        // where the iCloud Keychain landed before KVS. But it is the ONLY reason
+        // to pay for a Keychain query here, so it is asked last and only when
+        // nothing cheaper already settled the answer.
+        let hasToken = cheapEvidence ? false : (getRemoteAgentToken(for: ref)?.isEmpty == false)
+        let evidence = cheapEvidence || hasToken
+
+        let readiness: RemoteAgentReadiness = configured
+            ? .configured
+            : (evidence ? .incomplete : .untouched)
+
+        return RemoteAgentInventoryEntry(
+            ref: ref,
+            readiness: readiness,
+            // `cheapEvidence` implies a probed prefix is present (roster
+            // membership short-circuits; every other disjunct IS one of the
+            // probed keys), so the token never has to be re-read to answer this.
+            hasRemovableState: rosterMember
+                || hasToken
+                || cheapEvidence
+                || hasRemovableRemoteAgentSlots(ref)
+        )
+    }
+
+    /// The ONE send-ability predicate (keyless-aware, FAILS CLOSED).
+    ///
+    /// A URL is always required. `.none` (keyless) is send-able on URL alone;
+    /// `.bearer` also needs a non-empty token — and a Keychain read that failed
+    /// (locked device, unsigned build) returns nil, which reads as
+    /// not-configured rather than as a silent keyless downgrade.
+    ///
+    /// A descriptor-REQUIRED model (OpenRouter) is required too: cross-device the
+    /// model (KVS) and the token (Keychain) sync on SEPARATE channels, so the
+    /// token can land first and momentarily make a model-less OpenRouter look
+    /// send-able when a send would fail.
+    ///
+    /// Reads are ordered cheapest-first and SHORT-CIRCUIT, so an untouched
+    /// gateway costs zero Keychain queries. That matters: this runs for every ref
+    /// on `configuredRemoteAgentRefs()`, which is consulted from warm paths
+    /// (window appear, conversation open, menu-bar arm, CarPlay, share-target
+    /// snapshot) — an unconditional per-ref `SecItem` query there would put
+    /// several serialized Keychain round-trips on each of them.
+    private func isRemoteAgentSendable(_ ref: RemoteAgentRef) -> Bool {
+        guard getRemoteAgentURL(for: ref) != nil else { return false }
+        if case .builtin(let backend) = ref,
+           RemoteAgentBackendRegistry.lookup(id: backend).requiresModel,
+           (getRemoteAgentModel(for: ref) ?? "").isEmpty {
+            return false
+        }
+        if getRemoteAgentAuthScheme(for: ref) == .none { return true }
+        guard let token = getRemoteAgentToken(for: ref), !token.isEmpty else { return false }
+        return true
+    }
+
+    /// Whether any probed per-ref SLOT survives for `ref` — the defaults/KVS half
+    /// of "would Forget erase anything", deliberately WIDER than setup evidence
+    /// (see `RemoteAgentInventory.swift`'s header for why the two differ).
+    /// Callers add roster membership and the Keychain token themselves.
+    private func hasRemovableRemoteAgentSlots(_ ref: RemoteAgentRef) -> Bool {
+        let suffix = ref.storageKeySuffix
+        for key in Self.gatewayUserStateKeyPrefixes.map({ $0 + suffix }) {
+            if defaults.object(forKey: key) != nil { return true }
+            if iCloudAvailable, iCloudStore.object(forKey: key) != nil { return true }
+        }
+        return false
+    }
+
+    /// A stored string from either store, WITHOUT the admissibility filtering
+    /// the typed getters apply — "is there a value here" rather than "is the
+    /// value usable". App Groups first, iCloud KVS second, matching every other
+    /// durable read's order.
+    private func rawStoredString(_ key: String) -> String? {
+        if let local = defaults.string(forKey: key), !local.isEmpty { return local }
+        guard iCloudAvailable, let remote = iCloudStore.string(forKey: key), !remote.isEmpty else {
+            return nil
+        }
+        return remote
+    }
+
+    /// Every gateway that can SEND right now, built-ins (in
+    /// `RemoteAgentBackend.allCases` order) first, then customs in roster order.
+    /// An ordered array rather than a set because the picker renders in a stable
+    /// order. `isRemoteAgentSendable` is the predicate — a resolvable URL, plus a
+    /// required model, plus a readable token unless the ref is explicitly keyless.
+    ///
+    /// Deliberately NOT a projection of `remoteAgentInventory()`: this is a warm
+    /// path (window appear, conversation open, menu-bar arm, CarPlay, share-target
+    /// snapshot) and only needs send-ability, whose reads short-circuit before the
+    /// Keychain for an untouched gateway. The inventory additionally classifies
+    /// evidence and removability, which can cost a `SecItem` query per ref — right
+    /// for Diagnostics and the Settings load, wasteful here. The two share
+    /// `isRemoteAgentSendable`, so they cannot disagree about what counts as
+    /// configured (locked by `testCheapConfiguredQueryMatchesTheInventory`).
     func configuredRemoteAgentRefs() -> [RemoteAgentRef] {
         #if DEBUG
         if QAMode.isActive, !QAMode.gatewayOverrides.isEmpty || QAMode.customGatewayOverride != nil {
@@ -3294,23 +3470,20 @@ actor SettingsManager {
                 .filter { QAMode.gatewayOverrides[$0] != nil }
                 .map(RemoteAgentRef.builtin)
             if let override = QAMode.customGatewayOverride {
-                qaRefs.append(.custom(override.gateway.id))   // built-ins first, custom last (production order)
+                qaRefs.append(.custom(override.gateway.id))   // built-ins first, custom last
             }
             return qaRefs
         }
         #endif
         ensureKeychainMigrated()
         ensureRemoteAgentMigrated()
-        var refs: [RemoteAgentRef] = RemoteAgentBackend.allCases
+        var refs = RemoteAgentBackend.allCases
             .map(RemoteAgentRef.builtin)
-            .filter { isRemoteAgentConfigured($0) }
-        for gateway in customGateways() {
-            let ref = RemoteAgentRef.custom(gateway.id)
-            if isRemoteAgentConfigured(ref) {
-                refs.append(ref)
-            }
+            .filter { isRemoteAgentSendable($0) }
+        for gateway in customGateways() where isRemoteAgentSendable(.custom(gateway.id)) {
+            refs.append(.custom(gateway.id))
         }
-        return refs   // built-ins (allCases order) first, then customs (registry order)
+        return refs
     }
 
     /// Gateways that are PARTIALLY configured on this device — user-stored
@@ -3327,87 +3500,44 @@ actor SettingsManager {
     /// model is the evidence there; else every fresh install would read
     /// "OpenRouter partial" forever. Same ordering as the configured query.
     func partiallyConfiguredRemoteAgentRefs() -> [RemoteAgentRef] {
-        #if DEBUG
-        // Mirrors the configured-refs QA branch: overrides are complete by
-        // construction, so nothing is "partial" on a QA rig.
-        if QAMode.isActive, !QAMode.gatewayOverrides.isEmpty || QAMode.customGatewayOverride != nil {
-            return []
-        }
-        #endif
-        ensureKeychainMigrated()
-        ensureRemoteAgentMigrated()
-        var partial: [RemoteAgentRef] = RemoteAgentBackend.allCases
-            .map(RemoteAgentRef.builtin)
-            .filter { hasStoredRemoteAgentEvidence($0) && !isRemoteAgentConfigured($0) }
-        for gateway in customGateways() {
-            let ref = RemoteAgentRef.custom(gateway.id)
-            if hasStoredRemoteAgentEvidence(ref), !isRemoteAgentConfigured(ref) {
-                partial.append(ref)
-            }
-        }
-        return partial
+        remoteAgentInventory().incompleteRefs
     }
 
-    /// Every ref this device holds stored state for — the configured ones plus
-    /// the half-configured. What the Settings UI needs to decide whether to
-    /// offer Forget; computed here so it shares
-    /// `hasStoredRemoteAgentEvidence` with the Diagnostics count.
-    func storedRemoteAgentRefs() -> Set<RemoteAgentRef> {
-        ensureKeychainMigrated()
-        ensureRemoteAgentMigrated()
-        var refs = Set(
-            RemoteAgentBackend.allCases
-                .map(RemoteAgentRef.builtin)
-                .filter(hasStoredRemoteAgentEvidence)
-        )
-        for gateway in customGateways() where hasStoredRemoteAgentEvidence(.custom(gateway.id)) {
-            refs.insert(.custom(gateway.id))
-        }
-        return refs
-    }
-
-    /// Whether this device holds any USER-STORED state for a gateway — the
-    /// predicate behind both the Diagnostics partial count and the Settings
-    /// Forget affordance, so the two can never disagree about whether there is
-    /// something to remove.
+    /// Every ref holding something Forget would erase — what the editor's
+    /// destructive section keys on.
     ///
-    /// For a fixed-endpoint (hosted-model) built-in, `getRemoteAgentURL` returns
-    /// the app-fixed descriptor URL unconditionally, so URL presence proves
-    /// nothing — a stored token or model is the evidence there; else every fresh
-    /// install would read "OpenRouter partial" forever.
+    /// Deliberately NOT the same question as "is this gateway's setup
+    /// incomplete": auxiliary residue (a transport hint, an image-history
+    /// policy) is worth offering to remove without implying the gateway is
+    /// broken. The one-way implication that MUST hold — incomplete ⇒ removable,
+    /// so the row that says "go remove it" always finds a Forget button waiting
+    /// — is locked by `RemoteAgentInventoryTests`.
+    func removableRemoteAgentRefs() -> Set<RemoteAgentRef> {
+        remoteAgentInventory().removableRefs
+    }
+
+    /// Whether this device holds evidence that setup was ever ATTEMPTED for a
+    /// gateway — i.e. its readiness is anything but `.untouched`. Used by the
+    /// default-pointer self-heal to tell a real (if broken) gateway from a slot
+    /// that was never filled in.
+    ///
+    /// Classifies the ONE ref rather than projecting the whole inventory: the
+    /// self-heal runs on `defaultRemoteAgentRef()`, which every send consults,
+    /// and a full pass would turn one Keychain read into one per gateway.
+    ///
+    /// Evidence remains App-Group-backed. The token contributes only as one
+    /// disjunct, so a locked Keychain can never make evidence read ABSENT for a
+    /// gateway whose URL/model/scheme slot exists — the property the self-heal
+    /// depends on to avoid deleting a default pointer during a transient
+    /// pre-first-unlock failure.
     func hasStoredRemoteAgentEvidence(_ ref: RemoteAgentRef) -> Bool {
-        if case .builtin(let backend) = ref,
-           RemoteAgentBackendRegistry.lookup(id: backend).fixedURL != nil {
-            let token = getRemoteAgentToken(for: ref)
-            let model = getRemoteAgentModel(for: ref)
-            return (token?.isEmpty == false) || ((model ?? "").isEmpty == false)
-        }
-        return getRemoteAgentURL(for: ref) != nil
-    }
-
-    /// The single "is this gateway usable" predicate (keyless-aware):
-    /// a URL is always required; then `.none` (keyless) is configured on URL
-    /// alone, while `.bearer` ALSO requires a non-empty stored token. The bearer
-    /// branch FAILS CLOSED — a transient Keychain read failure (nil token) reads
-    /// as not-configured, never as a silent keyless downgrade. Keyless is honored
-    /// only when the auth scheme is the EXPLICIT persisted `.none`.
-    ///
-    /// A descriptor-REQUIRED model (OpenRouter) is ALSO required. `saveRemoteAgent`
-    /// enforces the model at save, so a locally-saved gateway always has one — but
-    /// cross-device the model (iCloud KVS) and the token (iCloud Keychain) sync on
-    /// SEPARATE channels, so the token can land first and momentarily make a
-    /// model-less OpenRouter read "configured" → a send would fail. Gating on the
-    /// model closes that skew (and applies regardless of auth scheme).
-    private func isRemoteAgentConfigured(_ ref: RemoteAgentRef) -> Bool {
-        guard getRemoteAgentURL(for: ref) != nil else { return false }
-        if case .builtin(let backend) = ref,
-           RemoteAgentBackendRegistry.lookup(id: backend).requiresModel,
-           (getRemoteAgentModel(for: ref) ?? "").isEmpty {
+        ensureKeychainMigrated()
+        ensureRemoteAgentMigrated()
+        let rosterMember: Bool = {
+            if case .custom(let id) = ref { return customGateways().contains { $0.id == id } }
             return false
-        }
-        if getRemoteAgentAuthScheme(for: ref) == .none { return true }
-        guard let token = getRemoteAgentToken(for: ref), !token.isEmpty else { return false }
-        return true
+        }()
+        return classifyRemoteAgent(ref, rosterMember: rosterMember).readiness != .untouched
     }
 
     /// Built-in-only view of configured refs (forwards). Kept for callers not
@@ -4568,7 +4698,7 @@ actor SettingsManager {
     /// from matching the legacy single-slot key it was derived from
     /// (`remoteAgent.url` is not `remoteAgent.url.`). Dropping a trailing dot
     /// here would put the migration-read slots in scope for deletion.
-    private static let gatewayOwnedKeyPrefixes = [
+    static let gatewayOwnedKeyPrefixes = [
         "remoteAgent.url.", "remoteAgent.authScheme.", "remoteAgent.model.",
         "remoteAgent.certFingerprint.", "remoteAgent.transportHint.",
         "remoteAgent.lastChatSuccess.",
@@ -4576,6 +4706,31 @@ actor SettingsManager {
         "fileServer.certFingerprint.", "fileServer.testedLocally.",
         "fileServer.folderProbeRevision.", "fileServer.folderProbeAttempt.",
         "fileServer.keepImagesInline.",
+        Constants.imageHistoryPolicyKeyPrefix
+    ]
+
+    /// The subset of `gatewayOwnedKeyPrefixes` whose PRESENCE means the user
+    /// really has something stored — what `hasRemovableRemoteAgentState` probes.
+    /// Kept beside the wipe's own list so the two cannot drift; the subset
+    /// relation is asserted in `RemoteAgentInventoryTests`.
+    ///
+    /// The excluded five (`available`, `folderCapable`, `testedLocally` and the
+    /// two `folderProbe*` counters) are DERIVED probe results, and — decisively —
+    /// a built-in Forget WRITES them (`available = false`, `folderCapable =
+    /// true`) rather than removing them. Probing those would leave every
+    /// once-configured built-in permanently "removable", pinning a destructive
+    /// button onto a gateway the user already forgot.
+    ///
+    /// `keepImagesInline.` is excluded for the same reason from the other
+    /// direction: it is the RETIRED legacy bool, and only the custom-gateway
+    /// prefix sweep erases it — `clearFileTransferConfig` (the built-in path)
+    /// never does. A device upgraded from a build that wrote it would otherwise
+    /// keep offering Forget on a built-in with nothing left to remove.
+    static let gatewayUserStateKeyPrefixes = [
+        "remoteAgent.url.", "remoteAgent.authScheme.", "remoteAgent.model.",
+        "remoteAgent.certFingerprint.", "remoteAgent.transportHint.",
+        "remoteAgent.lastChatSuccess.",
+        "fileServer.url.", "fileServer.certFingerprint.",
         Constants.imageHistoryPolicyKeyPrefix
     ]
 

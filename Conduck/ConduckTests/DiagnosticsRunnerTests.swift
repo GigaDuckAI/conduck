@@ -234,18 +234,24 @@ final class DiagnosticsRunnerTests: XCTestCase {
 
     // MARK: - v1.3: no-send-able-gateway row
 
-    /// The "No Personal AI configured" row appears EXACTLY when
-    /// `configuredRemoteAgentRefs()` is empty — making the all-green-but-broken
-    /// Connection section honest (and catching cross-device token skew, since the
-    /// refs set is fail-closed). Invariant-based so it's robust to whatever gateway
-    /// state the sim happens to carry.
-    func testGatewayNoneRowAppearsIffNoConfiguredGateway() async {
+    /// The "No Personal AI configured" row appears EXACTLY when the device holds
+    /// no gateway state at all — nothing send-able AND nothing half-configured.
+    ///
+    /// The second half is the point: with half-configured gateways present, each
+    /// gets its own named red row and this generic one stands down. "Finish
+    /// OpenClaw" is a better instruction than "add a gateway" for a user who
+    /// already started one, and emitting both would count one outage plus its
+    /// causes as several findings. Invariant-based so it's robust to whatever
+    /// gateway state the sim happens to carry.
+    func testGatewayNoneRowAppearsIffNoGatewayStateAtAll() async {
         let runner = DiagnosticsRunner()
         await runner.runAutoReads()
-        let refs = await SettingsManager.shared.configuredRemoteAgentRefs()
+        let inventory = await SettingsManager.shared.remoteAgentInventory()
         let hasNoneRow = runner.checks.contains { $0.id == "connection.gateway.none" }
-        XCTAssertEqual(hasNoneRow, refs.isEmpty,
-                       "the 'no Personal AI' row appears exactly when no gateway is configured")
+        XCTAssertEqual(hasNoneRow,
+                       inventory.configuredRefs.isEmpty && inventory.incompleteRefs.isEmpty,
+                       "the generic 'no Personal AI' row appears exactly when there is neither a "
+                       + "send-able gateway nor a half-configured one to name instead")
     }
 
     // MARK: - v1.3: mic-visibility fix (pure gate)
@@ -469,35 +475,54 @@ final class DiagnosticsRunnerTests: XCTestCase {
         }
     }
 
-    /// The standalone partial-config row appears exactly when the fail-closed
-    /// configured set dropped a URL-bearing ref AND a send-able gateway still
-    /// exists to contrast it with. With NO configured gateway the count folds
-    /// into the red `connection.gateway.none` row instead — two rows about the
-    /// same nothing contradict each other, which is the bug this suite guards.
-    ///
-    /// The `!refs.isEmpty` half is not optional decoration: without it this
-    /// assertion encodes the PRE-FIX rule, and stays green only for as long as
-    /// nothing seeds a gateway (both sides empty, `false == false`). Seed a
-    /// leftover built-in URL — the founder's reported state — and it fails while
-    /// production is correct.
-    func testPartialGatewayRowMatchesSettingsQuery() async {
+    /// ONE ROW PER incomplete gateway — never an aggregate. The header counts
+    /// findings, so a single row saying "2 leftover gateways" produced the
+    /// reported contradiction ("1 item needs attention" above "2 leftover
+    /// gateways"). Per-ref rows make the two agree by construction.
+    func testEachIncompleteGatewayGetsItsOwnRow() async {
         let runner = DiagnosticsRunner()
         await runner.runAutoReads()
-        let partial = await SettingsManager.shared.partiallyConfiguredRemoteAgentRefs()
-        let configured = await SettingsManager.shared.configuredRemoteAgentRefs()
-        let hasRow = runner.checks.contains { $0.id == "connection.gateway.partial" }
-        XCTAssertEqual(hasRow, !partial.isEmpty && !configured.isEmpty,
-                       "the standalone partial row appears exactly when a URL-without-key ref exists "
-                       + "alongside at least one send-able gateway")
+        let incomplete = await SettingsManager.shared.partiallyConfiguredRemoteAgentRefs()
+
+        let rows = runner.checks.filter { $0.id.hasPrefix("connection.gateway.incomplete.") }
+        XCTAssertEqual(rows.count, incomplete.count,
+                       "one row per half-configured gateway, no aggregate row")
+        for ref in incomplete {
+            XCTAssertTrue(runner.checks.contains { $0.id == DiagnosticsRunner.incompleteCheckID(for: ref) },
+                          "\(ref.rawString) has no row of its own")
+        }
+        XCTAssertFalse(runner.checks.contains { $0.id == "connection.gateway.partial" },
+                       "the aggregate row is retired")
+    }
+
+    /// Every incomplete gateway is nameable on screen, and the name lives ONLY in
+    /// the UI-side list — the `checks` row keeps the copy-safe kind title so the
+    /// pasted report can never carry a user's own gateway label.
+    func testIncompleteRowsAreNamedOnScreenButNotInChecks() async {
+        let runner = DiagnosticsRunner()
+        await runner.runAutoReads()
+
+        let rowIDs = Set(runner.checks
+            .filter { $0.id.hasPrefix("connection.gateway.incomplete.") }
+            .map(\.id))
+        let displayIDs = Set(runner.incompleteGatewayDisplay.map(\.connectionCheckID))
+        XCTAssertEqual(rowIDs, displayIDs,
+                       "every incomplete row must have exactly one display entry, and vice versa")
+        for entry in runner.incompleteGatewayDisplay {
+            XCTAssertFalse(entry.displayName.isEmpty, "a named row with no name defeats the purpose")
+        }
     }
 
     /// THE REPORTED BUG, as a test. Diagnostics showed a red "No Personal AI
     /// configured" AND an amber "2 gateways … missing their key or model" for
     /// gateways the user had already removed — two rows disagreeing about the
-    /// same nothing, neither actionable. With nothing configured there must be
-    /// exactly ONE connection-status row, and it must still account for whatever
-    /// is left over rather than pretending the device is clean.
-    func testLeftoverGatewayFoldsIntoTheSingleNoneRowInsteadOfContradictingIt() async throws {
+    /// same nothing, neither actionable.
+    ///
+    /// The fix is no longer a fold into one anonymous row: with nothing
+    /// send-able, the half-configured gateways ARE the outage, so each gets its
+    /// own RED named row and the generic "none" row stands down. "Finish
+    /// OpenClaw" beats "add a gateway" for someone who already started one.
+    func testLeftoverGatewayReplacesTheNoneRowWithItsOwnNamedRow() async throws {
         defaults.set("https://gateway.example.test",
                      forKey: Constants.remoteAgentURLKey(for: .openclaw))
         defer { defaults.removeObject(forKey: Constants.remoteAgentURLKey(for: .openclaw)) }
@@ -505,34 +530,69 @@ final class DiagnosticsRunnerTests: XCTestCase {
         let runner = DiagnosticsRunner()
         await runner.runAutoReads()
 
-        let configured = await SettingsManager.shared.configuredRemoteAgentRefs()
-        try XCTSkipIf(!configured.isEmpty,
-                      "another suite left a fully-configured gateway behind; the fold only applies at zero")
+        let inventory = await SettingsManager.shared.remoteAgentInventory()
+        try XCTSkipIf(!inventory.configuredRefs.isEmpty,
+                      "another suite left a fully-configured gateway behind; this rule applies at zero")
+        // …and the one-finding assertion below counts ALL incomplete gateways, so
+        // a leftover from a sibling suite would fail it for the wrong reason.
+        try XCTSkipIf(inventory.incompleteRefs != [.builtin(.openclaw)],
+                      "shared stores carry another half-configured gateway: \(inventory.incompleteRefs)")
 
-        let none = runner.checks.first { $0.id == "connection.gateway.none" }
-        XCTAssertNotNil(none, "a URL with no token is not configured — the red row must render")
-        XCTAssertFalse(runner.checks.contains { $0.id == "connection.gateway.partial" },
-                       "the amber row must NOT also render — that is the contradiction being fixed")
-        XCTAssertTrue((none?.detail ?? "").contains("leftover"),
-                      "the surviving row must still account for the leftover, not silently drop it:\n"
-                      + (none?.detail ?? "<no detail>"))
+        let row = runner.checks.first {
+            $0.id == DiagnosticsRunner.incompleteCheckID(for: .builtin(.openclaw))
+        }
+        XCTAssertNotNil(row, "a URL with no token is a half-configured gateway — it must get a row")
+        if case .failed = row?.status {} else {
+            XCTFail("with nothing send-able the row is RED, not amber: \(String(describing: row?.status))")
+        }
+        XCTAssertFalse(runner.checks.contains { $0.id == "connection.gateway.none" },
+                       "the generic 'add a gateway' row stands down when a named one says it better")
+        XCTAssertTrue(runner.showsNoSendableGatewayNotice,
+                      "…but the section footer still states that nothing can send")
+        let gatewayAttentionRows = runner.checks.filter { check in
+            guard check.id.hasPrefix("connection.gateway.") else { return false }
+            switch check.status {
+            case .warning, .failed: return true
+            default: return false
+            }
+        }
+        XCTAssertEqual(gatewayAttentionRows.count, 1,
+                       "one outage, one finding — not a 'none' row PLUS a per-gateway row")
     }
 
-    /// Code-review HIGH catch: a fixed-endpoint (hosted-model) built-in's URL
-    /// is app-fixed, so URL presence is NOT user evidence — an UNTOUCHED
-    /// OpenRouter (no stored token, no stored model) must never read as
-    /// "partially configured", else every fresh install shows a permanent
-    /// amber "Gateway missing its key" row.
-    func testUntouchedFixedEndpointGatewayIsNeverPartial() async throws {
-        let ref = RemoteAgentRef.builtin(.openrouter)
-        let token = await SettingsManager.shared.getRemoteAgentToken(for: ref)
-        let model = await SettingsManager.shared.getRemoteAgentModel(for: ref)
-        guard (token ?? "").isEmpty, (model ?? "").isEmpty else {
-            throw XCTSkip("sim carries OpenRouter state — the untouched invariant doesn't apply")
-        }
-        let partial = await SettingsManager.shared.partiallyConfiguredRemoteAgentRefs()
-        XCTAssertFalse(partial.contains(ref),
-                       "an untouched fixed-endpoint built-in must never be 'partial'")
+    /// A half-configured gateway BESIDE a healthy one is amber, not red: the
+    /// device works, but conversations bound to the broken gateway do not, and a
+    /// healthy sibling is exactly what used to mask that.
+    func testIncompleteGatewayIsAmberWhenASiblingWorks() async throws {
+        let hermes = RemoteAgentRef.builtin(.hermes)
+        // Written straight to the App Group (no Keychain, no actor setters) so the
+        // whole fixture is synchronous and tears down deterministically: a healthy
+        // KEYLESS OpenClaw beside a leftover Hermes URL with no key.
+        let keys = [
+            Constants.remoteAgentURLKey(for: .openclaw): "https://ok.example.test",
+            Constants.remoteAgentAuthSchemeKey(for: .openclaw): "none",
+            Constants.remoteAgentURLKey(for: .hermes): "https://hermes.example.test:8642"
+        ]
+        keys.forEach { defaults.set($0.value, forKey: $0.key) }
+        defer { keys.keys.forEach { defaults.removeObject(forKey: $0) } }
+
+        let runner = DiagnosticsRunner()
+        await runner.runAutoReads()
+
+        let inventory = await SettingsManager.shared.remoteAgentInventory()
+        try XCTSkipIf(inventory.configuredRefs.isEmpty,
+                      "the keyless sibling didn't register; the amber rule needs one")
+        // Guard the SUBJECT too: if the shared stores already carry a token for
+        // Hermes it reads as configured, `row` is nil, and the assertion below
+        // would fail with a message pointing at severity rather than at fixture.
+        try XCTSkipIf(!inventory.incompleteRefs.contains(hermes),
+                      "Hermes is not half-configured in the shared stores: \(inventory.readiness(for: hermes))")
+
+        let row = runner.checks.first { $0.id == DiagnosticsRunner.incompleteCheckID(for: hermes) }
+        XCTAssertEqual(row?.status, .warning,
+                       "amber while a sibling can still send — red is reserved for a total outage")
+        XCTAssertFalse(runner.showsNoSendableGatewayNotice,
+                       "something CAN send, so the 'nothing can send' footer must stay hidden")
     }
 
     // MARK: - v1.4: per-gateway Connection display order + capabilities regroup

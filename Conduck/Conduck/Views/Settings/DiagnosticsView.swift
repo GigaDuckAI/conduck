@@ -452,9 +452,21 @@ struct DiagnosticsContent: View {
                     fileServerSubRow(lane)
                 }
             }
+            // Half-configured gateways, one row each, TITLED WITH THE REAL NAME —
+            // the whole point of the row. The status (red when nothing else can
+            // send, amber when a healthy sibling exists) is read live from
+            // `checks`; only the name comes from this UI-only list, so the pasted
+            // report still shows the gateway KIND and never a user's own label.
+            ForEach(runner.incompleteGatewayDisplay) { entry in
+                if let check = runner.checks.first(where: { $0.id == entry.connectionCheckID }) {
+                    DiagnosticCheckRow(check: check, titleOverride: entry.displayName)
+                        .settingsCardPassiveRow()
+                }
+            }
             ForEach(runner.checks.filter {
                 $0.category == .connection
                     && !$0.id.hasPrefix("gateway.")
+                    && !$0.id.hasPrefix("connection.gateway.incomplete.")
                     && ($0.id != "connection.network" || runner.showsNetworkConnectionIssue)
             }) {
                 DiagnosticCheckRow(check: $0)
@@ -462,6 +474,17 @@ struct DiagnosticsContent: View {
             }
         } header: {
             Text(LocalizedStringResource("diagnostics.section.connection", defaultValue: "Connection"))
+        } footer: {
+            // Shown only when every gateway on the device is half-configured, so
+            // the named rows above have replaced "No Personal AI configured".
+            // A footer, not a row: it states the consequence the rows share,
+            // without counting as a finding of its own.
+            if runner.showsNoSendableGatewayNotice {
+                Text(LocalizedStringResource(
+                    "diagnostics.connection.gateway.noneSendable.footer",
+                    defaultValue: "No gateway can send on this device until you finish one above, or connect another in Personal AI."
+                ))
+            }
         }
     }
 

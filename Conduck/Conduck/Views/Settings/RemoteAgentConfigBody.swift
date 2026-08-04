@@ -489,21 +489,28 @@ struct RemoteAgentConfigBody: View {
         )
     }
 
-    /// Forget copy must enumerate EVERY slot the action wipes. `clearRemoteAgent`
-    /// is the terminal per-ref wipe and takes the file-transfer lane with it
-    /// (server address + generated password + pin), so the alert names it — an
-    /// alert that lists only URL/token/pin would understate a destructive action
-    /// that also drops the user's file-server password.
+    /// Forget copy must enumerate EVERY slot the action wipes — and say WHERE.
+    /// `clearRemoteAgent` is the terminal per-ref wipe and takes the file-transfer
+    /// lane with it (server address + generated password + pin), so the alert
+    /// names it; an alert that lists only URL/token/pin would understate a
+    /// destructive action that also drops the user's file-server password.
+    ///
+    /// The scope sentence is not decoration. The token is a SYNCHRONIZABLE
+    /// Keychain item and the URL is dual-written to iCloud KVS, so deleting either
+    /// removes it from every device signed into the same Apple Account — not just
+    /// this one. Only the certificate pin is per-device. A user reaching this
+    /// alert from a Diagnostics row that says "on this device" would otherwise
+    /// reasonably read the wipe as local.
     private var forgetAlertMessage: Text {
         if isCustom {
             return Text(LocalizedStringResource(
                 "settings.remoteAgent.forgetAlert.message.custom",
-                defaultValue: "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). Conversations bound to it stay readable but can't send new turns."
+                defaultValue: "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). The URL and token are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns."
             ))
         }
         return Text(LocalizedStringResource(
             "settings.remoteAgent.forgetAlert.message",
-            defaultValue: "Conduck will erase the saved URL, token, and pin, plus any file-transfer setup for this gateway (server address and generated password). You'll re-enter them next time."
+            defaultValue: "Conduck will erase the saved URL, token, and pin, plus any file-transfer setup for this gateway (server address and generated password). The URL and token are removed from all your devices signed in to iCloud; the pin is only on this one. You'll re-enter them next time."
         ))
     }
 

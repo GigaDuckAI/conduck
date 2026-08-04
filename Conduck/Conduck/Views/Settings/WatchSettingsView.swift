@@ -145,7 +145,8 @@ struct WatchSettingsView: View {
                 ref: row.ref,
                 displayName: row.displayName,
                 configured: row.configured,
-                isDefault: viewModel.watchDefaultOverrideRef == row.ref
+                isDefault: viewModel.watchDefaultOverrideRef == row.ref,
+                incomplete: row.incomplete
             )
         }
     }

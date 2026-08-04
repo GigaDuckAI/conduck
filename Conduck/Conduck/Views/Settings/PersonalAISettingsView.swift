@@ -199,8 +199,9 @@ struct PersonalAISettingsView: View {
     private func gatewayRow(_ row: PersonalAIRow) -> some View {
         // Single tap → config detail. Status is DISCRETE: a configured gateway
         // gets a quiet green check (+ a tertiary "Default" caption when it's the
-        // default pick); an un-set gateway gets nothing + a dimmed name. The
-        // default is CHOSEN in the top selector, not by a secret row-body tap;
+        // default pick); a half-configured one gets a quiet "Needs setup"; an
+        // un-set gateway gets nothing. Both non-configured states dim the name.
+        // The default is CHOSEN in the top selector, not by a secret row-body tap;
         // file-transfer readiness moved into the detail (Advanced).
         let configured = row.configured
         Button {
@@ -216,6 +217,7 @@ struct PersonalAISettingsView: View {
 
                 SettingsStatusMark(
                     configured: configured,
+                    incomplete: row.incomplete,
                     caption: row.isDefault
                         ? LocalizedStringResource("settings.remoteAgent.list.pill.default", defaultValue: "Default")
                         : nil
