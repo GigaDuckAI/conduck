@@ -240,6 +240,93 @@ final class WatchSettingsApplyAndQueueTests: XCTestCase {
                        "an OMITTED ref must not retain a stale value (absent → false)")
     }
 
+    /// The per-ref file-LANE IDENTITY rides each sub-envelope's
+    /// `fileTransferLaneID` and is replaced atomically per multi-envelope, same
+    /// as readiness. This identity is the ONLY thing that makes a wrist turn
+    /// recoverable: the wrist stamps it onto the reply it persists, and the
+    /// retroactive output scan a capable device runs on thread-open revisits
+    /// only rows that carry one. It cannot be derived here — the file-server
+    /// credential never syncs to the wrist — so a dropped courier means a turn
+    /// that is invisible to the scan forever, not merely late.
+    func testPerRefFileLaneIdentityCouriersAndReplacesAtomically() async {
+        let reader = WatchSettingsReader.shared
+        let base = reader.lastRemoteAgentEnvelopeTimestamp + 4000
+        let laneA = String(repeating: "ab", count: 32)   // 64 lowercase hex
+        let laneB = String(repeating: "cd", count: 32)
+        func sub(_ ref: String, lane: String?, _ ts: TimeInterval) -> RemoteAgentBroadcastEnvelope {
+            RemoteAgentBroadcastEnvelope(
+                backendRef: ref, url: URL(string: "https://\(ref).example.test")!,
+                name: nil, model: nil, colorID: nil, monogram: nil, token: "t",
+                certFingerprintHex: nil, fileTransferAvailable: lane != nil,
+                fileTransferLaneID: lane, activeSessionID: nil, timestamp: ts
+            )
+        }
+
+        // Two gateways, each with its OWN lane.
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub("openclaw", lane: laneA, base), sub("hermes", lane: laneB, base)],
+            defaultBackendRef: "openclaw", timestamp: base, sessionPolicy: nil)))
+        XCTAssertEqual(reader.remoteAgentFileLane(for: "openclaw").laneID, laneA,
+                       "each ref must resolve ITS OWN couriered lane")
+        XCTAssertEqual(reader.remoteAgentFileLane(for: "hermes").laneID, laneB,
+                       "refs must never borrow each other's lane identity")
+
+        // openclaw is repointed (new lane), hermes drops out entirely.
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub("openclaw", lane: laneB, base + 1)],
+            defaultBackendRef: "openclaw", timestamp: base + 1, sessionPolicy: nil)))
+        XCTAssertEqual(reader.remoteAgentFileLane(for: "openclaw").laneID, laneB,
+                       "a repointed lane must overwrite, not merge — a stale id would stamp turns wrong")
+        XCTAssertNil(reader.remoteAgentFileLane(for: "hermes").laneID,
+                     "an OMITTED ref must lose its lane (the map is replaced, not merged)")
+
+        // Readiness withdrawn while an id is still on the wire: the pair is torn,
+        // so the wrist refuses the identity. A turn that doesn't carry the
+        // file-delivery instruction must not be stamped as if it did.
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [RemoteAgentBroadcastEnvelope(
+                backendRef: "openclaw", url: URL(string: "https://openclaw.example.test")!,
+                name: nil, model: nil, colorID: nil, monogram: nil, token: "t",
+                certFingerprintHex: nil, fileTransferAvailable: false,
+                fileTransferLaneID: laneA, activeSessionID: nil, timestamp: base + 2)],
+            defaultBackendRef: "openclaw", timestamp: base + 2, sessionPolicy: nil)))
+        let lane = reader.remoteAgentFileLane(for: "openclaw")
+        XCTAssertFalse(lane.ready)
+        XCTAssertNil(lane.laneID,
+                     "readiness false must suppress the identity — instruction and stamp describe one lane")
+    }
+
+    /// OLD iPHONE (single envelope only) → NEW WATCH. A pre-multi sender can
+    /// neither vouch for a file lane nor announce that one went away, so
+    /// accepting its envelope must RETIRE any lane a newer sender had couriered.
+    /// Provenance fails closed: a missing lane costs a chip, a stale one would
+    /// authorize a probe the current sender knows nothing about.
+    func testLegacySingleEnvelopeClearsCourieredLaneIdentity() async {
+        let reader = WatchSettingsReader.shared
+        let base = reader.lastRemoteAgentEnvelopeTimestamp + 5000
+        let laneA = String(repeating: "ef", count: 32)
+
+        XCTAssertTrue(reader.updateRemoteAgents(multi: RemoteAgentMultiBroadcastEnvelope(
+            backends: [RemoteAgentBroadcastEnvelope(
+                backendRef: "openclaw", url: URL(string: "https://openclaw.example.test")!,
+                name: nil, model: nil, colorID: nil, monogram: nil, token: "t",
+                certFingerprintHex: nil, fileTransferAvailable: true,
+                fileTransferLaneID: laneA, activeSessionID: nil, timestamp: base)],
+            defaultBackendRef: "openclaw", timestamp: base, sessionPolicy: nil)))
+        XCTAssertEqual(reader.remoteAgentFileLane(for: "openclaw").laneID, laneA,
+                       "precondition: a multi-gateway sender couriered a lane")
+
+        XCTAssertTrue(reader.updateRemoteAgent(
+            backend: .openclaw,
+            url: URL(string: "https://openclaw.example.test")!,
+            fingerprint: nil,
+            sessionID: nil,
+            timestamp: base + 1
+        ))
+        XCTAssertNil(reader.remoteAgentFileLane(for: "openclaw").laneID,
+                     "a legacy single envelope must retire every couriered lane identity")
+    }
+
     /// The Watch-effective `SessionContinuationPolicy` rides the multi-envelope's
     /// `sessionPolicy` slot (replacing the old live-KVS courier). On accepting a
     /// newer envelope carrying it, `sessionContinuationPolicy()` must read it back

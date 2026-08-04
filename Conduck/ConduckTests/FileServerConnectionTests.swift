@@ -561,7 +561,7 @@ final class FileServerConnectionTests: XCTestCase {
 
     // MARK: - Non-mutating reach+auth probe (Diagnostics "Test connections")
 
-    /// The status classifier is INVERTED vs `parseProbeOutcome`: a 404 is the
+    /// The status classifier is INVERTED vs `probeStatusPrefilter`: a 404 is the
     /// intended PASS (the server answered our impossible-key GET past the auth
     /// gate), a 200 is SUSPICIOUS, a 401/403 is auth-failed, and 405/other fails
     /// closed (NOT auth). Codex catch 2 — "404 = auth OK" is not protocol-universal,

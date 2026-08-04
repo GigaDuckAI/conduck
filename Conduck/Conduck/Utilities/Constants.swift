@@ -1290,6 +1290,17 @@ enum Constants {
     /// HEAD-free GET probes where the user is waiting, NOT a bulk transfer.
     static let fileServerProbeTimeout: TimeInterval = 15
 
+    /// How many LEADING body bytes an existence probe reads before it cancels
+    /// the underlying task and decides. 1 KiB, because the decision the prefix
+    /// feeds is made at the DOCUMENT START — a login page's doctype/root element
+    /// sits inside the first few hundred bytes even behind a BOM, a comment
+    /// banner, and an XML declaration — and because the cap is what stops a BYO
+    /// server that ignores `Range: bytes=0-0` from streaming a multi-GB file into
+    /// memory on a probe the user never asked for. Larger buys nothing the
+    /// verdict can use; smaller starts losing real login pages behind a long
+    /// preamble.
+    static let fileServerProbeBodySniffBytes = 1024
+
     /// Soft-confirm threshold (bytes, ~100 MB). Above this the composer shows a
     /// "this is a large file" confirmation before staging the upload. There is
     /// NO hard cap (the user owns the server) — this is purely a courtesy guard
@@ -1333,6 +1344,25 @@ enum Constants {
     /// composer on another device knows the file affordance is enabled.
     static func fileTransferAvailableKey(for ref: RemoteAgentRef) -> String {
         "fileServer.available." + ref.storageKeySuffix
+    }
+
+    /// **Watch App Group only** (NO KVS, and the iPhone never writes it) key for
+    /// a SPECIFIC ref's couriered file-lane identity — the iPhone's
+    /// `FileTransferSnapshot.durableLaneID`, delivered in that ref's
+    /// `RemoteAgentBroadcastEnvelope.fileTransferLaneID`. Format
+    /// `fileServer.laneID.<suffix>`. Absent = no READY lane known for this ref,
+    /// so a Watch turn dispatched against it is persisted WITHOUT an
+    /// output-scan owner (exactly the pre-courier behavior).
+    ///
+    /// Exists purely for COLD-LAUNCH durability: a ControlWidget-launched wrist
+    /// process may dispatch a turn before any envelope arrives, and a turn
+    /// stamped from a hydrated lane is the difference between "recoverable by
+    /// the retro scan" and "permanently invisible to it". Never KVS-synced —
+    /// this is a courier cache of the iPhone's live state, not a fact about the
+    /// account, and the iPhone recomputes its own lane from URL + credential.
+    /// The value is a one-way digest and is never logged.
+    static func fileServerLaneIDKey(for ref: RemoteAgentRef) -> String {
+        "fileServer.laneID." + ref.storageKeySuffix
     }
 
     /// Keychain account slot for a SPECIFIC ref's client-minted file-server

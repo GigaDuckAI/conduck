@@ -38,6 +38,23 @@
 // goes further (reachability → auth → write → read → delete) precisely because
 // a bare read-only 200 is not trustworthy on its own.
 //
+// AND A GET IS ONLY THE PRECONDITION — NO VERDICT COMES FROM A STATUS ALONE.
+// Choosing GET buys the ability to read a body; reading it is the actual rule
+// (see the spec's networking invariants). An SSO portal parked in front of a
+// file server answers EVERY path with its login page at 200, so a status-only
+// existence check mints a convincing download chip for a file that was never
+// written, and tapping it hands the user an HTML login page named `report.pdf`.
+// Every positive existence verdict in this file is therefore backed by evidence
+// the wall cannot manufacture:
+//   - `classifyProbe` (the per-file existence probe) reads range semantics,
+//     content type, and a BOUNDED body prefix, and on the one status a wall can
+//     imitate — a bare `200` — demands the lane first DEMONSTRATE it can say
+//     "no" (`negativeControlKey` / `negativeControlProvesNotFound`).
+//   - `runConnectionTest`'s read stage and `probeFolderCapability` each require
+//     an EXACT byte-echo of bytes they just wrote, which is strictly stronger.
+// `probeStatusPrefilter` is a status map, and its name says so: it is legal only
+// where one of those byte-echoes decides immediately after it.
+//
 // Privacy invariants (see the spec's Privacy & Security section): the storedKey, the base
 // URL, the basic-auth credential, and filenames are NEVER logged, printed, or
 // echoed into a thrown `AppError`. The credential appears ONLY in the
@@ -48,11 +65,14 @@
 import Foundation
 
 /// Outcome of a single existence probe (GET, never HEAD) against a stored file.
-/// Maps a raw HTTP status into the four states the output-download path
-/// and the orphan/retry checks care about; anything unexpected
-/// collapses to `.unknown` so callers fail closed rather than guess.
+/// The states the output-download path and the orphan/retry checks care about;
+/// anything the evidence cannot settle collapses to `.unknown` so callers fail
+/// closed rather than guess. Produced by `classifyProbe`, which reads the
+/// response BODY — never by a status on its own.
 enum FileProbeOutcome: Equatable, Sendable {
-    /// File is present (HTTP 200 or 206 — rclone answers a ranged GET with 206).
+    /// File is present. NEVER on a status, and never on this response alone: the
+    /// server must also have DEMONSTRATED, on a random key that cannot exist,
+    /// that it is capable of answering "not found". See `classifyProbe`.
     case exists
     /// File is absent (HTTP 404).
     case missing
@@ -72,8 +92,92 @@ enum FileProbeOutcome: Equatable, Sendable {
     /// app changes". Only the evaluator's own verdicts can tell them apart —
     /// every refusal arrives as the same bare `-999` a benign cancellation does.
     case certRefused
-    /// Any other status (3xx redirect, 4xx other, transport-mapped) — fail closed.
+    /// The server answered ABOUT THIS KEY and the answer proves nothing: a body
+    /// that contradicts its own `Content-Range`, an HTML document served under a
+    /// name that is not HTML, a `416` that does not describe an empty file, a
+    /// response that came back from a differently-named resource.
+    ///
+    /// Its own case, not `.unknown`, because the two have opposite SCOPES and
+    /// therefore opposite instructions. `.unknown` is lane-wide — the tunnel is
+    /// down, the credential is wrong, the endpoint answers nothing sensibly — so
+    /// firing the remaining probes at the same server learns nothing and the
+    /// pass abandons the turn. This one says the lane is FINE and this one
+    /// candidate's answer was not usable, so the pass keeps going: the next
+    /// filename in the same reply may be a real deliverable, and collapsing the
+    /// two would let one unreadable name starve every file behind it.
+    ///
+    /// Non-definitive either way: the turn stays open for a later pass.
+    case ambiguous
+    /// Any other status (3xx redirect, 4xx other, transport-mapped) — fail
+    /// closed, and LANE-WIDE (see `.ambiguous`).
     case unknown
+}
+
+/// Everything ONE existence probe learned off the wire, reduced to a pure value
+/// so `classifyProbe`'s rules are unit-testable without a network. Collected by
+/// `BackgroundFileTransfer.collectProbeEvidence`, which is the half that owns
+/// the bounded read.
+///
+/// PRIVACY (see the spec's Privacy & Security section): this value carries the
+/// storedKey and up to `Constants.fileServerProbeBodySniffBytes` of file
+/// content, so it is a LOCAL value only — never logged, never thrown, never
+/// stored, and never folded into an `AppError`. Everything downstream of
+/// `classifyProbe` is an enum case.
+struct FileProbeEvidence: Equatable, Sendable {
+    /// Status of the FINAL response (`URLSession` follows redirects for us).
+    let status: Int
+    /// `Content-Range` verbatim, or nil when absent.
+    let contentRange: String?
+    /// `Content-Length` verbatim, or nil when absent.
+    let contentLength: String?
+    /// `Content-Type` verbatim, or nil when absent.
+    let contentType: String?
+    /// `Content-Encoding` verbatim, or nil when absent. The probe ASKS for
+    /// `identity`; an intermediary that ignores that and compresses anyway makes
+    /// every byte count in this value describe encoded bytes while `URLSession`
+    /// hands us decoded ones, so both the range arithmetic and the size are void.
+    let contentEncoding: String?
+    /// Leading body bytes, capped at `Constants.fileServerProbeBodySniffBytes`.
+    let bodyPrefix: Data
+    /// Bytes actually pulled off the wire before EOF or the cap — the honest
+    /// count, which is why the probe asks for `Accept-Encoding: identity`
+    /// (transparent decompression would make "the server sent one byte"
+    /// unverifiable).
+    let deliveredBytes: Int64
+    /// The body ran PAST the sniff cap and the client cancelled the task. On a
+    /// `206` that is a contradiction — the server promised one byte and streamed
+    /// a file — and the verdict refuses it.
+    let bodyExceededSniffCap: Bool
+    /// Last path component of the URL the response actually came from,
+    /// percent-decoded, or nil when the response carried no URL.
+    let finalPathComponent: String?
+    /// The storedKey this probe asked for.
+    let requestedKey: String
+}
+
+/// What `classifyProbe` can conclude from ONE response.
+///
+/// Note what the second case is NOT: it is not "the odd case that needs a bit
+/// more". EVERY positive existence verdict lands there, because no single
+/// response can establish that the file we NAMED is the file we were served.
+/// A response's headers describe the representation the server SELECTED, not
+/// how it chose it — so an ordinary `try_files $uri /index.html` SPA fallback
+/// answers a range request for a `report.pdf` that does not exist with a
+/// textbook `206` + `Content-Range: bytes 0-0/N`, entirely internally, with no
+/// redirect the client can see. Range machinery proves the server has range
+/// machinery. It proves nothing about routing.
+///
+/// The discriminator is therefore never in the response at all — it is whether
+/// this namespace is CAPABLE of saying no.
+enum FileProbeVerdict: Equatable, Sendable {
+    /// Settled by this response alone — every NEGATIVE and every failure.
+    /// `byteLength` is always nil here; a size only accompanies existence.
+    case settled(FileProbeOutcome, byteLength: Int64?)
+    /// This response is consistent with the file existing, and may become
+    /// `.exists` only once the negative control comes back 404
+    /// (`negativeControlKey` → `negativeControlProvesNotFound`). Otherwise
+    /// `.unknown` — a server that cannot say no has told us nothing.
+    case needsNegativeControl(byteLength: Int64?)
 }
 
 /// Outcome of the NON-MUTATING reach+auth probe (`probeReachability`) — a single
@@ -534,17 +638,26 @@ enum FileServerClient {
     /// false-positives; a GET against rclone serve webdav returns the bytes on
     /// 200/206 and 404 on miss, the only reliable existence signal).
     ///
-    /// Ranged to `bytes=0-0` so the probe stays an O(1) existence check and can
-    /// NEVER pull the whole file into memory: `rclone serve webdav` honours the
-    /// range and answers a present file with `206` + 1 byte, a missing file with
-    /// `404`, and an empty file with `416` — all mapped by `parseProbeOutcome`. A
-    /// server that ignores `Range` still returns `200` + the full body (no worse
-    /// than an unranged GET), so the range is a strict safety cap, never a
-    /// correctness dependency. Without it, probing a reply that names a large
-    /// existing output (e.g. `export.zip`) would download the entire file into a
-    /// single in-memory `Data` on every reply, before the user taps anything —
-    /// an OOM/jetsam risk on iOS. The real chip download stays a full-range GET
-    /// (`buildDownloadRequest`).
+    /// Ranged to `bytes=0-0` so the probe stays an O(1) existence check on a
+    /// well-behaved server: `rclone serve webdav` honours the range and answers a
+    /// present file with `206` + 1 byte and a missing one with `404`; `dufs`
+    /// additionally answers an empty file with `416` + `bytes` `*`/`0`. The range
+    /// is a BANDWIDTH courtesy, never the safety mechanism and never a
+    /// correctness dependency — a server that ignores it (nginx `max_ranges 0`,
+    /// Apache `MaxRanges none`, or Go's `ServeContent`, which deliberately drops
+    /// the range for a zero-length file) answers `200` + the full body, which is
+    /// perfectly legitimate. What actually bounds the probe is the CLIENT-side
+    /// cap in `BackgroundFileTransfer.collectProbeEvidence`, which stops reading
+    /// and cancels the task past `Constants.fileServerProbeBodySniffBytes`.
+    /// Without that, probing a reply naming a large existing output (e.g.
+    /// `export.zip`) would pull the entire file into memory on every reply,
+    /// before the user taps anything — an OOM/jetsam risk on iOS. The real chip
+    /// download stays a full-range GET (`buildDownloadRequest`).
+    ///
+    /// `Accept-Encoding: identity` because two of the verdict's inputs are byte
+    /// counts. Transparent decompression would make "the server delivered one
+    /// byte for a one-byte range" and "`Content-Length` is this file's size"
+    /// both unverifiable, and `identity` is always an acceptable coding.
     ///
     /// Identical wire shape to the download request EXCEPT the short
     /// `fileServerProbeTimeout` (15 s — interactive, the user is waiting; this
@@ -561,9 +674,10 @@ enum FileServerClient {
             basicAuthHeaderValue(username: snapshot.username, password: snapshot.credential),
             forHTTPHeaderField: "Authorization"
         )
-        // Existence-only: cap the body at a single byte. A server that ignores
-        // Range degrades to a full-body 200 (parsed identically as `.exists`).
+        // Existence-only: ask for a single byte. A server that ignores Range
+        // degrades to a full-body 200 — legitimate, and bounded client-side.
         request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         return request
     }
 
@@ -613,16 +727,27 @@ enum FileServerClient {
 
     // MARK: - Response parsers (pure)
 
-    /// Map a raw HTTP status code to a `FileProbeOutcome`:
-    ///   - 200 / 206 / 416 → `.exists` (rclone answers a ranged GET with 206;
-    ///     416 Range-Not-Satisfiable means the resource EXISTS but is shorter
-    ///     than the `bytes=0-0` probe range — i.e. an empty file — a missing
-    ///     file 404s, so 416 is unambiguously "exists")
+    /// A STATUS PRE-FILTER — never a verdict. Maps a raw HTTP status to the
+    /// `FileProbeOutcome` shape so a caller can branch on the obvious failures
+    /// (auth, server sick, absent) before it does the work that actually
+    /// decides.
+    ///
+    ///   - 200 / 206 / 416 → `.exists`  ← THE LIE. A uniform-200 SSO wall lands
+    ///     here for every path on the server, which is exactly the false
+    ///     positive this file exists to prevent.
     ///   - 404       → `.missing`
     ///   - 401 / 403 → `.unauthorized`
     ///   - 5xx       → `.serverError`
     ///   - anything else → `.unknown` (fail closed)
-    static func parseProbeOutcome(status: Int) -> FileProbeOutcome {
+    ///
+    /// ONLY TWO CALL SITES MAY USE THIS, and both immediately require an EXACT
+    /// byte-echo of a payload they just PUT (`runConnectionTest`'s read stage,
+    /// `probeFolderCapability`). That echo is what turns the `.exists` above
+    /// into a real verdict; the wall fails it because it serves its own HTML.
+    /// The per-file existence probe has nothing it can echo — it never wrote the
+    /// file — so it uses `classifyProbe`, which reads the body instead. Do not
+    /// add a third caller without one of those two.
+    static func probeStatusPrefilter(status: Int) -> FileProbeOutcome {
         switch status {
         case 200, 206, 416:
             return .exists
@@ -637,9 +762,371 @@ enum FileServerClient {
         }
     }
 
+    // MARK: - Existence verdict (reads the body)
+
+    /// THE existence verdict for a file this device did not write, from one
+    /// probe response. Pure — the network half is
+    /// `BackgroundFileTransfer.collectProbeEvidence`.
+    ///
+    /// THE THING THIS EXISTS TO PREVENT: an endpoint that answers convincingly
+    /// for a file that is not there. Read as a status, `report.pdf` gets a
+    /// download chip, and tapping it hands the user an SSO login page wearing
+    /// that filename. Two ordinary (NOT adversarial) deployments produce it:
+    ///
+    ///   - An SSO portal or control-panel UI in front of the server, answering
+    ///     every path with `200` + its own HTML.
+    ///   - A static host with an SPA fallback — `try_files $uri /index.html` is
+    ///     the canonical nginx form. A GET for a missing `report.pdf` is
+    ///     INTERNALLY rewritten to a file that does exist, so the client sees
+    ///     the URL it asked for and a textbook `206` + `Content-Range: bytes
+    ///     0-0/N`. No redirect is visible; nothing in that response is malformed.
+    ///
+    /// The second case is why the rule below is uniform rather than graded by
+    /// how "strong" a status looks. A response's headers describe the
+    /// representation the server SELECTED; they say nothing about how it chose
+    /// it. Range machinery proves the server has range machinery — never that
+    /// the key we NAMED is the thing we were handed. So:
+    ///
+    /// **NO POSITIVE VERDICT COMES FROM THE CANDIDATE'S RESPONSE ALONE.** Every
+    /// path to `.exists` returns `.needsNegativeControl`, and the caller must
+    /// see a `404` for a random key that cannot exist before the candidate is
+    /// believed. Both deployments above fail that: the wall 200s the control,
+    /// and the SPA fallback serves the control `index.html` too.
+    ///
+    /// What the per-status rules do, then, is not establish existence — it is
+    /// reject responses that are internally inconsistent or visibly wrong,
+    /// before spending a second request:
+    ///
+    ///   - `206`: the response must be coherent with itself. A `Content-Range`
+    ///     of `bytes <first>-<last>/<total>` with `first == 0`, a body of
+    ///     EXACTLY `last - first + 1` bytes (a 206 that claims one byte and
+    ///     streams a file is broken or lying), and no content coding, since a
+    ///     coding makes every byte count here describe something other than what
+    ///     was delivered. Then the provenance vetoes, then the control.
+    ///   - `416`: only `bytes` `*`/`0` — the empty-file answer (`dufs`). RFC 9110
+    ///     lets a server 416 because it rejected the range SET rather than
+    ///     because the file is short, and a WAF or range-hostile proxy can 416
+    ///     everything. The HTML veto is deliberately NOT applied: a 416 body is
+    ///     an error representation, so an HTML one says nothing about a wall.
+    ///   - `200`: the range was ignored, which is legitimate (nginx
+    ///     `max_ranges 0`, Apache `MaxRanges none`, Go's `ServeContent` on a
+    ///     zero-length file) and also exactly what a wall does. Provenance
+    ///     vetoes, then the control.
+    ///   - `404`: `.missing`, on the server's own not-found semantics. Its body
+    ///     is an error page and reading it teaches nothing — there is no
+    ///     portable body shape that proves absence. Sound because absence mints
+    ///     nothing: a wrong `.missing` costs a chip that never appears, while a
+    ///     wrong `.exists` costs the user a downloaded login page. This is the
+    ///     one place the two directions are graded differently, on purpose.
+    ///
+    /// A rejected response is `.ambiguous`, never `.unknown`: it is a fact about
+    /// ONE key, so the pass keeps scanning the rest of the reply (see the enum).
+    ///
+    /// PRIVACY: pure; takes `FileProbeEvidence` (which carries the key and body
+    /// bytes) and returns an enum. Nothing here logs, and nothing downstream
+    /// carries content.
+    static func classifyProbe(_ evidence: FileProbeEvidence) -> FileProbeVerdict {
+        switch evidence.status {
+        case 401, 403:
+            return .settled(.unauthorized, byteLength: nil)
+        case 500...599:
+            return .settled(.serverError, byteLength: nil)
+        case 404:
+            return .settled(.missing, byteLength: nil)
+        case 206:
+            guard responseCodingIsIdentity(evidence.contentEncoding),
+                  let range = satisfiedRange(evidence.contentRange),
+                  !evidence.bodyExceededSniffCap,
+                  evidence.deliveredBytes == range.last - range.first + 1,
+                  passesProvenanceVetoes(evidence) else {
+                return .settled(.ambiguous, byteLength: nil)
+            }
+            return .needsNegativeControl(byteLength: range.total)
+        case 416:
+            guard emptyRepresentationRange(evidence.contentRange),
+                  responseCameFromRequestedName(evidence) else {
+                return .settled(.ambiguous, byteLength: nil)
+            }
+            return .needsNegativeControl(byteLength: 0)
+        case 200:
+            guard passesProvenanceVetoes(evidence) else {
+                return .settled(.ambiguous, byteLength: nil)
+            }
+            return .needsNegativeControl(byteLength: wholeRepresentationLength(evidence))
+        default:
+            return .settled(.unknown, byteLength: nil)
+        }
+    }
+
+    /// The two free rejections a candidate response must survive before it is
+    /// worth spending a control request on: it must have come back from the
+    /// resource we named, and it must not be an HTML document wearing a name
+    /// that is not HTML.
+    ///
+    /// Neither is proof of anything on its own — an internal rewrite is
+    /// invisible to the first, and a wall is free to serve `application/pdf` —
+    /// which is exactly why the control still runs afterwards. They are here to
+    /// catch the common shapes without a round trip.
+    static func passesProvenanceVetoes(_ evidence: FileProbeEvidence) -> Bool {
+        responseCameFromRequestedName(evidence) && !servesHTMLDocumentForNonHTMLKey(evidence)
+    }
+
+    /// The storedKey for the NEGATIVE CONTROL: a key that cannot exist, carrying
+    /// the same extension as the candidate. The caller GETs it with the same
+    /// request shape and session posture; `negativeControlProvesNotFound` reads
+    /// the answer.
+    ///
+    /// The extension is copied because servers route on it — an extension-to-
+    /// handler map, a `location ~ \.php$` block, an SSO rule that exempts static
+    /// assets, an SPA fallback that only catches extensionless paths — so a
+    /// control with a different suffix can take a different code path and answer
+    /// a question nobody asked.
+    ///
+    /// Root-relative with NO `/`, like every other key this client mints, so the
+    /// control cannot express a path or escape the served root.
+    static func negativeControlKey(forExtension ext: String) -> String {
+        let nonce = String(
+            UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(16)
+        )
+        let stem = "__conduck_absent_\(nonce)"
+        return ext.isEmpty ? stem : stem + "." + ext
+    }
+
+    /// Whether the negative control's answer shows this namespace has credible
+    /// not-found semantics — i.e. whether the server is CAPABLE of saying no.
+    ///
+    /// ONLY a `404` counts. The control names a random key that provably does
+    /// not exist, so a real file server has exactly one honest answer; anything
+    /// else (a `200` login page, a `206` off an SPA fallback, a redirect, a
+    /// `403` from a rule covering the whole namespace) means this endpoint's
+    /// answer for the candidate carries no information, and the candidate stays
+    /// unbelieved.
+    ///
+    /// RESIDUAL, stated rather than papered over: this is a credibility check,
+    /// not a proof. A deliberately hostile file server can 404 the control and
+    /// fabricate a clean answer for the candidate, and no generic HTTP client
+    /// can tell that from a real static file handler. The app's answer to a
+    /// hostile SERVER is the staged Test Connection's write-then-byte-echo,
+    /// which the user runs against a server they own; this is the answer to a
+    /// server that CHANGED under a lane that once passed it.
+    static func negativeControlProvesNotFound(status: Int) -> Bool {
+        status == 404
+    }
+
+    /// Lowercased extension of a storedKey (after the last `.` of the last path
+    /// component), or `""` when it has none. Shared by the HTML veto and the
+    /// negative-control key so the two can never disagree about what was asked
+    /// for.
+    static func probeKeyExtension(_ storedKey: String) -> String {
+        let name = storedKey.split(separator: "/").last.map(String.init) ?? storedKey
+        guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return "" }
+        return name[name.index(after: dot)...].lowercased()
+    }
+
+    /// Extensions whose legitimate content IS an HTML document, so an HTML body
+    /// under one of these names is evidence of nothing. Deliberately tiny: only
+    /// `html` is on the output allowlist, and the other two exist because the
+    /// retry path probes keys minted from user filenames.
+    static let htmlBearingExtensions: Set<String> = ["html", "htm", "xhtml"]
+
+    /// The size to report for a whole-representation `200`, or nil when the
+    /// headers cannot support one.
+    ///
+    /// `Content-Length` is the whole file here precisely BECAUSE the server
+    /// ignored the range — the full body is what it is describing. (On a `206`
+    /// it is the range's size, which is why that arm reads the total out of
+    /// `Content-Range` instead; reporting 1 byte would sail a multi-GB download
+    /// straight past the large-download confirm.)
+    ///
+    /// Gated on the response coding: under a content coding the header counts
+    /// ENCODED bytes while `URLSession` hands the app decoded ones, so the
+    /// number would be a wrong size on a real file. No size is better than a
+    /// wrong one — the chip renders without it and the confirm gate stands down.
+    static func wholeRepresentationLength(_ evidence: FileProbeEvidence) -> Int64? {
+        guard responseCodingIsIdentity(evidence.contentEncoding),
+              let raw = evidence.contentLength,
+              let total = httpDecimal(raw.trimmingCharacters(in: .whitespaces)) else {
+            return nil
+        }
+        return total
+    }
+
+    /// Whether the response arrived unencoded. The probe asks for
+    /// `Accept-Encoding: identity`; absent header or a literal `identity` both
+    /// mean it was honoured, and anything else means an intermediary compressed
+    /// the body regardless.
+    static func responseCodingIsIdentity(_ contentEncoding: String?) -> Bool {
+        guard let contentEncoding else { return true }
+        let coding = contentEncoding.trimmingCharacters(in: .whitespaces).lowercased()
+        return coding.isEmpty || coding == "identity"
+    }
+
+    /// The `(first, last, total)` of a `Content-Range` on a SATISFIED range
+    /// response, or nil when the header is absent, malformed, or refuses to name
+    /// a total.
+    ///
+    /// Requires `bytes <first>-<last>/<total>` with `first == 0` (we asked from
+    /// byte 0; an answer about another offset is not answering our request),
+    /// `first <= last < total`, and `total >= 1`. A `*` total
+    /// ("complete-length unknown") is rejected: legal HTTP, but it names no size
+    /// for the chip and leaves the caller unable to check the body against the
+    /// range. `last` is not pinned to 0 — a proxy may widen a range — but the
+    /// caller MUST then require exactly `last - first + 1` delivered bytes,
+    /// which is the actual integrity check.
+    static func satisfiedRange(_ header: String?) -> (first: Int64, last: Int64, total: Int64)? {
+        guard let parts = rangeHeaderParts(header),
+              let total = httpDecimal(parts.total), total >= 1 else {
+            return nil
+        }
+        let bounds = parts.range.split(separator: "-", omittingEmptySubsequences: false)
+        guard bounds.count == 2,
+              let first = httpDecimal(bounds[0]), first == 0,
+              let last = httpDecimal(bounds[1]), last >= first, last < total else {
+            return nil
+        }
+        return (first, last, total)
+    }
+
+    /// Whether a `Content-Range` says "the representation is zero bytes long" —
+    /// `bytes` `*`/`0`, the only 416 that means "this file exists and is empty".
+    static func emptyRepresentationRange(_ header: String?) -> Bool {
+        guard let parts = rangeHeaderParts(header), parts.range == "*" else { return false }
+        return httpDecimal(parts.total) == 0
+    }
+
+    /// Split a `Content-Range` into its range and complete-length halves, after
+    /// checking the unit is `bytes`. Returns nil on anything that is not exactly
+    /// `<unit> <range>/<total>`.
+    private static func rangeHeaderParts(_ header: String?) -> (range: String, total: String)? {
+        guard let header else { return nil }
+        let fields = header.trimmingCharacters(in: .whitespaces)
+            .split(separator: " ", omittingEmptySubsequences: true)
+        guard fields.count == 2, fields[0].lowercased() == "bytes" else { return nil }
+        let halves = fields[1].split(separator: "/", omittingEmptySubsequences: false)
+        guard halves.count == 2 else { return nil }
+        return (String(halves[0]), String(halves[1]))
+    }
+
+    /// HTTP's `1*DIGIT` — ASCII digits only, at least one. Stricter than
+    /// `Int64.init` on purpose: that accepts signed forms (`+0`, `-1`) and
+    /// non-ASCII digit scalars, none of which any server should be sending and
+    /// all of which would feed the range arithmetic something it did not read.
+    private static func httpDecimal(_ text: some StringProtocol) -> Int64? {
+        guard !text.isEmpty, text.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+        return Int64(text)
+    }
+
+    /// Whether the response arrived from the resource we NAMED. A same-host
+    /// redirect to `/login` is the cheapest form of the wall — `URLSession`
+    /// follows it, so the app sees a clean 200 and only the final URL remembers
+    /// the detour.
+    ///
+    /// Compares LAST PATH COMPONENTS, not whole URLs: a server is entitled to
+    /// rewrite the host, add a signed-download query, or move the file under a
+    /// different prefix, and none of that changes which file came back. A nil
+    /// final URL is not evidence of anything, so it passes.
+    ///
+    /// LIMIT, and the reason this is a cheap pre-filter rather than the
+    /// mechanism: it can only see redirects the CLIENT was told about. An nginx
+    /// `try_files` fallback rewrites internally and the response still carries
+    /// the requested URL. Only the negative control catches that.
+    static func responseCameFromRequestedName(_ evidence: FileProbeEvidence) -> Bool {
+        guard let final = evidence.finalPathComponent else { return true }
+        let requested = evidence.requestedKey.split(separator: "/").last.map(String.init)
+            ?? evidence.requestedKey
+        return final == requested
+    }
+
+    /// Whether this response served an HTML DOCUMENT under a key that is not
+    /// supposed to be one — the login-page / control-panel / SPA-fallback /
+    /// directory-index signature. Two independent readings, either of which
+    /// vetoes:
+    ///
+    ///   - the server LABELLED it HTML (`Content-Type`), or
+    ///   - the body OPENS as an HTML document (`bodySniffsAsHTMLDocument`).
+    ///
+    /// Both are kept even though a misconfigured origin can mislabel a genuine
+    /// file (`AddType text/html .pdf`, a location-wide `default_type`, a proxy
+    /// or NAS middleware overwriting the header), because the two failures are
+    /// not symmetric: a mislabelled real file costs a missing chip on one server
+    /// until its owner fixes the header, while a trusted login page costs every
+    /// user of every wall a downloaded HTML file wearing a real filename.
+    ///
+    /// EXTENSION-AWARE, NOT A BLANKET REJECT: `html` is on the output allowlist,
+    /// so a real deliverable CAN be an HTML document and "body contains
+    /// `<html>` → not a file" would silently lose every one of them. The veto
+    /// fires only when the served content and the requested name DISAGREE; when
+    /// they agree, the negative control is what decides.
+    ///
+    /// KNOWN COST, stated as a decision: a `README.md` that genuinely OPENS with
+    /// an HTML document, or an `.xml` whose root element is `<html>`, is vetoed
+    /// and never chips. Anchoring the sniff to the document start keeps that to
+    /// files that open as HTML rather than merely mention it, and `.ambiguous`
+    /// leaves both the turn open and the rest of the reply still being scanned.
+    static func servesHTMLDocumentForNonHTMLKey(_ evidence: FileProbeEvidence) -> Bool {
+        guard !htmlBearingExtensions.contains(probeKeyExtension(evidence.requestedKey)) else {
+            return false
+        }
+        return contentTypeIsHTMLDocument(evidence.contentType)
+            || bodySniffsAsHTMLDocument(evidence.bodyPrefix)
+    }
+
+    /// Whether a `Content-Type` declares an HTML document. Media type only —
+    /// parameters (`; charset=utf-8`) are stripped, and the comparison is exact
+    /// so `text/html-ish` inventions do not match.
+    static func contentTypeIsHTMLDocument(_ contentType: String?) -> Bool {
+        guard let contentType else { return false }
+        let media = contentType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        return media == "text/html" || media == "application/xhtml+xml"
+    }
+
+    /// Whether a bounded body prefix OPENS an HTML document.
+    ///
+    /// ANCHORED to the document start, after a BOM, whitespace, at most one XML
+    /// declaration (the XHTML login-page shape), and any leading comments (a
+    /// generated banner above the doctype is ordinary). That anchor is the whole
+    /// safety margin: an unanchored "contains `<html>`" would veto any Markdown,
+    /// log, source file or CSV that merely mentions the tag, and those are
+    /// ordinary legitimate outputs.
+    ///
+    /// The opening token must END where the token ends — whitespace, `>`, `/`,
+    /// or end of input. Without that, `<htmlReport>` (a perfectly ordinary XML
+    /// root element) reads as an HTML document and a real file is refused.
+    ///
+    /// Decoded leniently — binary file bytes yield replacement characters and
+    /// simply fail to match, which is the correct answer for them.
+    static func bodySniffsAsHTMLDocument(_ prefix: Data) -> Bool {
+        guard !prefix.isEmpty else { return false }
+        var text = Substring(String(decoding: prefix, as: UTF8.self))
+        if text.first == "\u{FEFF}" { text = text.dropFirst() }
+        text = text.drop(while: { $0.isWhitespace })
+        if text.prefix(5).lowercased() == "<?xml", let close = text.range(of: "?>") {
+            text = text[close.upperBound...].drop(while: { $0.isWhitespace })
+        }
+        // Bounded: a prefix full of `<!--` with no terminator must not spin, and
+        // no real document opens with a dozen banners.
+        var skipped = 0
+        while skipped < 8, text.hasPrefix("<!--"), let close = text.range(of: "-->") {
+            text = text[close.upperBound...].drop(while: { $0.isWhitespace })
+            skipped += 1
+        }
+        return opensWithToken(text, "<!doctype html") || opensWithToken(text, "<html")
+    }
+
+    /// `token` at the very start of `text`, followed by a character that ENDS
+    /// it (whitespace, `>`, `/`) or by nothing at all. See
+    /// `bodySniffsAsHTMLDocument` for why the boundary is load-bearing.
+    private static func opensWithToken(_ text: Substring, _ token: String) -> Bool {
+        guard text.prefix(token.count).lowercased() == token else { return false }
+        guard let next = text.dropFirst(token.count).first else { return true }
+        return next.isWhitespace || next == ">" || next == "/"
+    }
+
     /// Map a raw HTTP status from the NON-MUTATING reach+auth probe (a GET of a
     /// key that cannot exist) to a `FileReachabilityOutcome`. Inverted vs
-    /// `parseProbeOutcome` (see the enum): `404` is the intended PASS.
+    /// `probeStatusPrefilter` (see the enum): `404` is the intended PASS.
     ///   - `404`                    → `.reachAuthOK`
     ///   - `401` / `403`            → `.authFailed`
     ///   - `200` / `206` / `416`    → `.suspicious` (a real WebDAV 404-probe never
@@ -962,7 +1449,7 @@ enum FileServerClient {
         do {
             let (data, response) = try await session.data(for: readRequest)
             if let http = response as? HTTPURLResponse {
-                switch parseProbeOutcome(status: http.statusCode) {
+                switch probeStatusPrefilter(status: http.statusCode) {
                 case .exists:
                     // Byte-echo: the returned body must be EXACTLY what we PUT.
                     readOK = (data == probeBody)
@@ -972,11 +1459,12 @@ enum FileServerClient {
                     readFailure = .fileTransferAuthFailed
                 case .serverError:
                     readFailure = .fileTransferServerError
-                case .missing, .certRefused, .unknown:
-                    // Stays `.fileTransferNotAFileServer`. `.certRefused` is
-                    // listed for exhaustiveness only — it is a TRANSPORT verdict
-                    // and `parseProbeOutcome` reads a status, so a response we
-                    // are holding here cannot carry it.
+                case .missing, .certRefused, .ambiguous, .unknown:
+                    // Stays `.fileTransferNotAFileServer`. `.certRefused` and
+                    // `.ambiguous` are listed for exhaustiveness only — the
+                    // first is a TRANSPORT verdict and the second a
+                    // `classifyProbe` one, while `probeStatusPrefilter` reads a
+                    // status, so a response we are holding here carries neither.
                     break
                 }
             } else {
@@ -1260,7 +1748,7 @@ enum FileServerClient {
         let outcome: FolderProbeOutcome
         do {
             let (data, response) = try await probeSession.data(for: getRequest)
-            if let http = response as? HTTPURLResponse, parseProbeOutcome(status: http.statusCode) == .exists {
+            if let http = response as? HTTPURLResponse, probeStatusPrefilter(status: http.statusCode) == .exists {
                 outcome = (data == body) ? .capable : .rejected
             } else {
                 outcome = .rejected

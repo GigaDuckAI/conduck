@@ -60,8 +60,8 @@ final class MacForegroundReplyLandingTests: XCTestCase {
                     XCTAssertEqual(persisted.id, id)
                     events.append("after-persist")
                 },
-                reconcileOutputs: { messageID in
-                    XCTAssertEqual(messageID, id)
+                reconcileOutputs: { persisted in
+                    XCTAssertEqual(persisted.id, id)
                     events.append("probe-start")
                     probeStarted.fulfill()
                     await gate.wait()
@@ -145,8 +145,8 @@ final class MacForegroundReplyLandingTests: XCTestCase {
                     return record
                 },
                 afterPersistBeforeRelease: { _ in },
-                reconcileOutputs: { messageID in
-                    XCTAssertEqual(messageID, id)
+                reconcileOutputs: { persisted in
+                    XCTAssertEqual(persisted.id, id)
                     XCTAssertTrue(
                         OutputScanClaimRegistry.shared.isClaimed(id),
                         "the claim must remain held through reconciliation"

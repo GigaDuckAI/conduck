@@ -449,7 +449,15 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         // file-lane readiness itself (the credential never syncs to it), so it
         // reads the iPhone-couriered per-ref value; a ready lane also splices
         // the delivery instruction first (delivery → spoken).
-        let fileServerReady = WatchSettingsReader.shared.remoteAgentFileTransferReady(for: ref)
+        // Readiness AND lane identity in ONE resolve. The identity is captured
+        // HERE, at dispatch, and carried on the task — it is a dispatch-time fact
+        // that cannot be reconstructed when the reply lands (a wrist turn can run
+        // for minutes, and the user can repoint the file server on the iPhone
+        // meanwhile). Re-reading at landing would credit the reply to whatever
+        // lane happens to be current, which is the one genuinely unsafe move
+        // available here.
+        let fileLane = WatchSettingsReader.shared.remoteAgentFileLane(for: ref)
+        let fileServerReady = fileLane.ready
 
         // `model` is threaded through for customs (built-ins pass nil → the
         // `"model"` key is OMITTED from JSON, byte-identical to today's wire).
@@ -473,7 +481,12 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             bodyPath: bodyURL.path,
             conversationID: conversationID.uuidString,
             backendRawValue: ref,
-            stampsActiveConversation: stampsActiveConversation
+            stampsActiveConversation: stampsActiveConversation,
+            // Rides the task so the identity survives suspension, a cross-launch
+            // process recycle, and any settings edit between now and the reply.
+            // Nil (no ready lane, or a pre-courier iPhone) → the reply lands
+            // unstamped, exactly as before: no scan, but also no wrong scan.
+            fileTransferLaneID: fileLane.laneID
         )
         let metadataString: String
         do {
@@ -924,7 +937,18 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                         role: "agent",
                         text: reply,
                         conversationID: cid,
-                        sourceDevice: "watch"
+                        sourceDevice: "watch",
+                        // Stamp the DISPATCH-time lane so this turn is eligible
+                        // for the retroactive output scan a capable device runs
+                        // when the thread is next opened. The wrist itself never
+                        // probes, downloads, or renders a chip — files are an
+                        // iPhone/iPad/Mac capability — it only records which lane
+                        // the request invited a file into. Without this the turn
+                        // is invisible to the scan permanently, even though its
+                        // request carried the file-delivery instruction.
+                        // Nil (no ready lane at dispatch, pre-courier iPhone, or
+                        // an in-flight pre-upgrade task) → unstamped, as before.
+                        outputScanLaneID: metadata?.fileTransferLaneID
                     ).id
                 } catch {
                     // Append failed (e.g. the conversation was deleted on another

@@ -74,6 +74,146 @@ final class RemoteAgentBroadcastEnvelopeTests: XCTestCase {
                        "A dict missing the key must decode fileTransferAvailable as false (back-compat).")
     }
 
+    // MARK: - File-lane identity courier
+
+    /// The lane identity the wrist stamps onto its replies rides the envelope.
+    /// Without it a Watch-originated turn is permanently ineligible for the
+    /// retroactive output scan, so this key is the whole mechanism.
+    func testEnvelopeFileTransferLaneIDRoundTrips() throws {
+        let url = try XCTUnwrap(URL(string: "https://gateway.local:18789"))
+        let laneID = String(repeating: "a1b2c3d4", count: 8)   // 64 lowercase hex
+        let original = RemoteAgentBroadcastEnvelope(
+            backendRef: "openclaw", url: url, name: nil, model: nil, colorID: nil,
+            monogram: nil, token: "t", certFingerprintHex: nil,
+            fileTransferAvailable: true, fileTransferLaneID: laneID,
+            activeSessionID: nil, timestamp: 1.0
+        )
+        let dict = original.encodedDict()
+        XCTAssertEqual(dict["fileTransferLaneID"] as? String, laneID,
+                       "A ready lane must courier its durable identity on the wire.")
+        let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: dict))
+        XCTAssertEqual(decoded.fileTransferLaneID, laneID,
+                       "The lane identity must round-trip byte-exact — it is compared for equality.")
+    }
+
+    /// No ready lane → the key is ABSENT, not an empty-string sentinel: "key
+    /// missing" is exactly what an un-upgraded sender produces, so both roads
+    /// must decode to the same "no lane" answer.
+    func testEnvelopeNilFileTransferLaneIDOmitsKey() throws {
+        let url = try XCTUnwrap(URL(string: "https://gateway.local:18789"))
+        let env = RemoteAgentBroadcastEnvelope(
+            backendRef: "openclaw", url: url, name: nil, model: nil, colorID: nil,
+            monogram: nil, token: "t", certFingerprintHex: nil,
+            fileTransferAvailable: false, fileTransferLaneID: nil,
+            activeSessionID: nil, timestamp: 1.0
+        )
+        XCTAssertNil(env.encodedDict()["fileTransferLaneID"],
+                     "A laneless envelope must omit the key entirely (no empty-string sentinel).")
+    }
+
+    /// OLD iPhONE → NEW WATCH. A sender that predates the courier writes no
+    /// `fileTransferLaneID` key; the envelope must still decode (readiness and
+    /// every other field intact) with the lane simply absent. The wrist then
+    /// behaves exactly as it did before the courier existed: instruction sent,
+    /// reply unstamped, no scan — never a stranded envelope or a lost turn.
+    func testEnvelopeMissingFileTransferLaneIDDecodesNil() throws {
+        let dict: [String: Any] = [
+            "backend": "openclaw",
+            "url": "https://legacy.local",
+            "timestamp": 5.0,
+            "fileTransferAvailable": true,
+        ]
+        let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: dict))
+        XCTAssertNil(decoded.fileTransferLaneID,
+                     "A dict missing the key must decode the lane as nil (back-compat).")
+        XCTAssertTrue(decoded.fileTransferAvailable,
+                      "The missing lane key must not disturb the readiness flag.")
+    }
+
+    /// NEW iPHONE → OLD WATCH is the mirror case, and it is safe for a
+    /// structural reason: the decoder reads only the keys it knows, so an
+    /// envelope carrying the new key still decodes on a build that has never
+    /// heard of it. `testEnvelopeDecodeIgnoresUnknownKeys` locks that rule
+    /// generally; this asserts it for THIS key by decoding a dict that also
+    /// carries a future field alongside it.
+    func testEnvelopeLaneIDSurvivesAlongsideUnknownFutureKeys() throws {
+        let laneID = String(repeating: "f0", count: 32)
+        let dict: [String: Any] = [
+            "backend": "openclaw",
+            "url": "https://gateway.local",
+            "timestamp": 9.0,
+            "fileTransferAvailable": true,
+            "fileTransferLaneID": laneID,
+            "somethingFromTheFuture": ["nested": 1],
+        ]
+        let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: dict))
+        XCTAssertEqual(decoded.fileTransferLaneID, laneID)
+    }
+
+    /// The id is an OPAQUE digest that is only ever compared for equality, so
+    /// anything off-shape is already useless — rejecting it at the boundary
+    /// bounds what a malformed or hostile payload can push into Watch
+    /// `UserDefaults`, task metadata, and Core Data.
+    func testEnvelopeMalformedLaneIDDecodesNil() throws {
+        let malformed = [
+            String(repeating: "a", count: 63),          // too short
+            String(repeating: "a", count: 65),          // too long
+            String(repeating: "A", count: 64),          // uppercase hex
+            String(repeating: "z", count: 64),          // non-hex
+            String(repeating: "\u{FF10}", count: 64),   // full-width digit look-alike
+            "../../etc/passwd",                          // path-shaped
+            "",                                          // empty
+        ]
+        for raw in malformed {
+            let dict: [String: Any] = [
+                "backend": "openclaw",
+                "url": "https://gateway.local",
+                "timestamp": 3.0,
+                "fileTransferAvailable": true,
+                "fileTransferLaneID": raw,
+            ]
+            let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: dict))
+            XCTAssertNil(decoded.fileTransferLaneID,
+                         "An off-shape lane id must decode as no-lane, not be stored verbatim.")
+            XCTAssertTrue(decoded.fileTransferAvailable,
+                          "Rejecting the lane must not strand the envelope or its other fields.")
+        }
+    }
+
+    /// Each sub-envelope carries ITS OWN ref's lane, so a wrist turn bound to
+    /// gateway B can never be stamped with gateway A's lane.
+    func testMultiEnvelopePerSubLaneIdentity() throws {
+        let laneA = String(repeating: "ab", count: 32)
+        let laneB = String(repeating: "cd", count: 32)
+        func sub(_ ref: String, lane: String?) throws -> RemoteAgentBroadcastEnvelope {
+            RemoteAgentBroadcastEnvelope(
+                backendRef: ref,
+                url: try XCTUnwrap(URL(string: "https://\(ref).example.test")),
+                name: nil, model: nil, colorID: nil, monogram: nil, token: "t",
+                certFingerprintHex: nil, fileTransferAvailable: lane != nil,
+                fileTransferLaneID: lane, activeSessionID: nil, timestamp: 7.0
+            )
+        }
+        let multi = RemoteAgentMultiBroadcastEnvelope(
+            backends: [
+                try sub("openclaw", lane: laneA),
+                try sub("hermes", lane: laneB),
+                try sub("custom_\(UUID().uuidString)", lane: nil),
+            ],
+            defaultBackendRef: "openclaw",
+            timestamp: 7.0,
+            sessionPolicy: nil
+        )
+        let decoded = try XCTUnwrap(
+            RemoteAgentMultiBroadcastEnvelope.decode(from: multi.encodedDict())
+        )
+        XCTAssertEqual(decoded.backends.count, 3)
+        XCTAssertEqual(decoded.backends[0].fileTransferLaneID, laneA)
+        XCTAssertEqual(decoded.backends[1].fileTransferLaneID, laneB)
+        XCTAssertNil(decoded.backends[2].fileTransferLaneID,
+                     "A ref with no ready lane carries none — refs never borrow each other's.")
+    }
+
     // MARK: - Optional-field round-trip (token nil)
 
     func testEnvelopeNilTokenOmitsKeyInDict() throws {

@@ -405,22 +405,95 @@ final class BackgroundFileTransfer: NSObject {
     /// Runs on an ephemeral, cert-pinned session with the short probe timeout —
     /// existence probes are interactive (chip-tap / retry-gate), not background
     /// work. Returns an outcome rather than throwing.
+    ///
+    /// The length-returning variant IS the implementation: one probe path means
+    /// the retry gate and the output detector can never reach opposite verdicts
+    /// about one file on one server, which is the only thing worse than either
+    /// of them being wrong.
     func probeExists(snapshot: SettingsManager.FileTransferSnapshot,
                      storedKey: String) async -> FileProbeOutcome {
-        let request = FileServerClient.buildProbeRequest(snapshot: snapshot, storedKey: storedKey)
+        await probeExistsWithLength(snapshot: snapshot, storedKey: storedKey).0
+    }
+
+    /// Existence probe that also returns the file's TOTAL byte length, so the
+    /// download chip can render a size and gate a soft-confirm on a very large
+    /// file. Never throws; size is `nil` when the evidence names none (caller
+    /// treats nil as "unknown" → no size, no gate).
+    ///
+    /// THE VERDICT READS THE BODY — see `FileServerClient.classifyProbe` for the
+    /// rules and why each one is shaped the way it is. This half owns the two
+    /// things the pure classifier cannot do: the BOUNDED read
+    /// (`collectProbeEvidence`), and the second request the classifier asks for
+    /// when a bare `200` is all the server offered.
+    ///
+    /// THE NEGATIVE CONTROL, and what it costs. EVERY path to `.exists` goes
+    /// through it: one more GET — same request shape, same session, a random key
+    /// that cannot exist — and the candidate is refused unless the server 404s
+    /// it. That is deliberately not reserved for suspicious-looking responses,
+    /// because the response that needs it most looks perfect (see
+    /// `FileServerClient.classifyProbe` on the `try_files` fallback).
+    ///
+    /// The cost lands only where a file is actually FOUND: a missing candidate
+    /// 404s and pays nothing, so the common shape — a reply naming several files
+    /// of which one exists — spends one extra round trip per CHIP, not per
+    /// probe. A uniform-200 wall spends exactly one and then stops the pass:
+    /// a failed control is `.unknown`, which is lane-wide, so
+    /// `FileTransferOutputDetector.detect` abandons the turn's window.
+    ///
+    /// PRIVACY (see the spec's Privacy & Security section): the evidence value
+    /// carries the storedKey and up to a kilobyte of file content and is
+    /// LOCAL — never logged, never thrown, never persisted. Only the enum
+    /// escapes this function.
+    func probeExistsWithLength(snapshot: SettingsManager.FileTransferSnapshot,
+                               storedKey: String) async -> (FileProbeOutcome, Int64?) {
         let (session, evaluator) = Self.makeEphemeralSession(snapshot: snapshot)
         defer { session.finishTasksAndInvalidate() }
+        return await Self.probeExistsWithLength(
+            snapshot: snapshot, storedKey: storedKey, session: session, evaluator: evaluator)
+    }
+
+    /// The probe's whole decision procedure on a CALLER-SUPPLIED session —
+    /// `internal static` so a `URLProtocol`-stubbed session can drive the real
+    /// two-request sequence (candidate, then negative control) without a live
+    /// file-server, the same seam shape as `streamBounded`.
+    ///
+    /// `evaluator` is nil for an injected session: a mock raises no server-trust
+    /// challenge, so there are no verdicts to read and a transport failure can
+    /// only be `.unknown`. Production always passes the evaluator that answered
+    /// this attempt, because a certificate refusal and a benign cancellation are
+    /// both a bare `-999` and only the evaluator can tell them apart.
+    static func probeExistsWithLength(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        storedKey: String,
+        session: URLSession,
+        evaluator: RemoteAgentTrustEvaluator?
+    ) async -> (FileProbeOutcome, Int64?) {
         do {
-            // `bytes(for:)` (NOT `data(for:)`): the response headers arrive
-            // before the body, and the outcome is fully determined by the status
-            // — so cancel the underlying task the instant we have the response,
-            // BEFORE iterating the stream. A BYO server that ignores our
-            // `Range: bytes=0-0` and answers a full 200 would otherwise have
-            // `data(for:)` buffer the ENTIRE file into memory.
-            let (bytes, response) = try await session.bytes(for: request)
-            bytes.task.cancel()
-            guard let http = response as? HTTPURLResponse else { return .unknown }
-            return FileServerClient.parseProbeOutcome(status: http.statusCode)
+            let evidence = try await Self.collectProbeEvidence(
+                session: session,
+                request: FileServerClient.buildProbeRequest(snapshot: snapshot, storedKey: storedKey),
+                requestedKey: storedKey)
+            switch FileServerClient.classifyProbe(evidence) {
+            case let .settled(outcome, byteLength):
+                return (outcome, byteLength)
+            case let .needsNegativeControl(byteLength):
+                let controlKey = FileServerClient.negativeControlKey(
+                    forExtension: FileServerClient.probeKeyExtension(storedKey))
+                let control = try await Self.collectProbeEvidence(
+                    session: session,
+                    request: FileServerClient.buildProbeRequest(snapshot: snapshot, storedKey: controlKey),
+                    requestedKey: controlKey)
+                guard FileServerClient.negativeControlProvesNotFound(status: control.status) else {
+                    // The server answers a key that cannot exist with something
+                    // other than "not found", so its 200 for the candidate says
+                    // nothing about the candidate. `.unknown`, never `.missing`:
+                    // we learned about the SERVER, not about the file, and a
+                    // `.missing` here would close the turn on evidence we do not
+                    // have.
+                    return (.unknown, nil)
+                }
+                return (.exists, byteLength)
+            }
         } catch {
             // A transport failure is never a definitive "missing", so no arm
             // here can produce one — callers must not false-delete. The split is
@@ -428,74 +501,70 @@ final class BackgroundFileTransfer: NSObject {
             // ask the evaluator that answered this attempt's challenge, because
             // the code alone cannot say (a refusal and a benign cancellation are
             // both -999).
-            return Self.certificateRefusal(error, evaluator: evaluator) == nil ? .unknown : .certRefused
+            let refusal = evaluator.flatMap { Self.certificateRefusal(error, evaluator: $0) }
+            return (refusal == nil ? .unknown : .certRefused, nil)
         }
     }
 
-    /// Existence probe variant that ALSO returns the file's total byte length.
-    /// Used ONLY by the output-download detector so the chip can render the size
-    /// and gate a soft-confirm on very large downloads. Issues the SAME ranged
-    /// GET as `probeExists` and parses the total length from the SAME headers,
-    /// but streams via `bytes(for:)` and cancels on the response so a
-    /// `Range`-ignoring server's full 200 never buffers the whole file into
-    /// memory. Never throws — mirrors `probeExists` on the outcome; size is `nil`
-    /// when the length can't be determined (caller treats nil as "unknown" → no
-    /// size, no gate).
-    func probeExistsWithLength(snapshot: SettingsManager.FileTransferSnapshot,
-                               storedKey: String) async -> (FileProbeOutcome, Int64?) {
-        let request = FileServerClient.buildProbeRequest(snapshot: snapshot, storedKey: storedKey)
-        let (session, evaluator) = Self.makeEphemeralSession(snapshot: snapshot)
-        defer { session.finishTasksAndInvalidate() }
-        do {
-            // See `probeExists`: `bytes(for:)` + immediate task cancel — the
-            // total length comes from the response HEADERS (Content-Range on a
-            // 206 / Content-Length on a 200), so the body is never needed.
-            let (bytes, response) = try await session.bytes(for: request)
+    /// Issue one probe request and reduce its response to the pure
+    /// `FileProbeEvidence` the verdict runs on. `internal static` so a
+    /// `URLProtocol`-stubbed session can drive it without a live file-server —
+    /// same seam shape as `streamBounded`.
+    ///
+    /// `bytes(for:)` (NOT `data(for:)`): the response headers arrive before the
+    /// body, so the read can be stopped mid-stream. THE CAP IS THE WHOLE POINT —
+    /// a BYO server that ignores `Range: bytes=0-0` and answers a full 200 would
+    /// have `data(for:)` buffer the ENTIRE file into memory on a probe the user
+    /// never asked for (a jetsam kill on iOS for a large enough output). One byte
+    /// past `maxPrefixBytes` and the task is cancelled.
+    ///
+    /// CANCELLATION ORDER IS LOAD-BEARING: cancel, then leave the loop, and never
+    /// touch the iterator again. `URLSessionTask.cancel()` returns immediately and
+    /// completes the task later with `NSURLErrorCancelled`; asking the stream for
+    /// another element after cancelling would surface that as a thrown `-999` —
+    /// the same code a certificate refusal throws — and the caller's evaluator
+    /// split would then have to tell our own cancellation apart from a real trust
+    /// rejection. Not touching the stream means it never has to.
+    ///
+    /// A body that fails MID-STREAM throws rather than returning partial
+    /// evidence. The bytes already in hand may look like a complete verdict
+    /// (`<!doctype html` arrives in the first 15 of them), and a half-read
+    /// response is exactly the case where the app knows least.
+    static func collectProbeEvidence(
+        session: URLSession,
+        request: URLRequest,
+        requestedKey: String,
+        maxPrefixBytes: Int = Constants.fileServerProbeBodySniffBytes
+    ) async throws -> FileProbeEvidence {
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
             bytes.task.cancel()
-            guard let http = response as? HTTPURLResponse else { return (.unknown, nil) }
-            let outcome = FileServerClient.parseProbeOutcome(status: http.statusCode)
-            // Only a present file carries a meaningful length; other outcomes → nil.
-            let size = outcome == .exists ? Self.parseProbeTotalLength(from: http) : nil
-            return (outcome, size)
-        } catch {
-            // Same fail-closed contract as `probeExists` — transport failure is
-            // not a definitive "missing", and it carries no size — including the
-            // refusal split, so the two probes cannot tell a caller two
-            // different stories about one server.
-            let outcome: FileProbeOutcome =
-                Self.certificateRefusal(error, evaluator: evaluator) == nil ? .unknown : .certRefused
-            return (outcome, nil)
+            throw URLError(.badServerResponse)
         }
-    }
-
-    /// Parse a file's TOTAL byte length from a ranged-probe (`bytes=0-0`) response.
-    /// Prefers `Content-Range: bytes 0-0/<total>` (a 206 — rclone's answer to the
-    /// range) and takes the total AFTER the slash; falls back to `Content-Length`
-    /// (a 200, when the server ignored `Range` and returned the whole body — then
-    /// Content-Length IS the full size). Returns `nil` when neither is parseable
-    /// (e.g. a `*` total in Content-Range, or no length header at all).
-    private static func parseProbeTotalLength(from http: HTTPURLResponse) -> Int64? {
-        // 206: total is the segment after the final `/` in `bytes 0-0/<total>`.
-        // NOTE: on a 206 the body is 1 byte, so `Content-Length` here is NOT the
-        // total — Content-Range is the only correct source; check it first. A `*`
-        // total (`bytes 0-0/*`, "complete-length unknown") or an absent
-        // Content-Range on a 206 yields nil, NOT the 1-byte Content-Length below.
-        if let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
-           let slash = contentRange.lastIndex(of: "/") {
-            let totalPart = contentRange[contentRange.index(after: slash)...]
-                .trimmingCharacters(in: .whitespaces)
-            if let total = Int64(totalPart) { return total }
+        var prefix = Data()
+        prefix.reserveCapacity(maxPrefixBytes)
+        var delivered: Int64 = 0
+        var exceededCap = false
+        for try await byte in bytes {
+            delivered += 1
+            guard prefix.count < maxPrefixBytes else {
+                exceededCap = true
+                bytes.task.cancel()
+                break
+            }
+            prefix.append(byte)
         }
-        // Content-Length is the whole-file total ONLY on a 200 (server ignored the
-        // Range → the FULL body came back). It must NEVER be trusted on a 206 (it
-        // is the 1-byte range size) — gating on the status is what stops a large
-        // ranged file being reported as 1 byte and bypassing the download confirm.
-        if http.statusCode == 200,
-           let contentLength = http.value(forHTTPHeaderField: "Content-Length"),
-           let total = Int64(contentLength.trimmingCharacters(in: .whitespaces)) {
-            return total
-        }
-        return nil
+        return FileProbeEvidence(
+            status: http.statusCode,
+            contentRange: http.value(forHTTPHeaderField: "Content-Range"),
+            contentLength: http.value(forHTTPHeaderField: "Content-Length"),
+            contentType: http.value(forHTTPHeaderField: "Content-Type"),
+            contentEncoding: http.value(forHTTPHeaderField: "Content-Encoding"),
+            bodyPrefix: prefix,
+            deliveredBytes: delivered,
+            bodyExceededSniffCap: exceededCap,
+            finalPathComponent: http.url?.lastPathComponent,
+            requestedKey: requestedKey)
     }
 
     /// Bounded best-effort download of `storedKey`'s LEADING bytes for preview

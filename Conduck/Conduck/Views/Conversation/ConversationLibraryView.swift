@@ -582,7 +582,7 @@ struct ConversationLibraryView: View {
             unconfiguredEmptyState
         } else if let vm = detailVM {
             // Cap + center bubbles on the same 720pt axis as the composer card.
-            ConversationThreadView(viewModel: vm, contentMaxWidth: Constants.Layout.chatContentWidth, emptyMascot: hostMascot)
+            ConversationThreadView(viewModel: vm, settingsVM: settingsVM, contentMaxWidth: Constants.Layout.chatContentWidth, emptyMascot: hostMascot)
                 .id(vm.conversationID)
         } else {
             startEmptyState

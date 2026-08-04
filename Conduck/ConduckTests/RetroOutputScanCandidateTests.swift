@@ -13,9 +13,34 @@
 //     newest-first and capped. A partial-success turn (already carrying a
 //     server-ref chip while still pending) is STILL selected so its missing
 //     candidates can retry.
-//   • `FileTransferOutputDetector.probeIsConclusive(_:)` — the probe-outcome →
-//     scan-completeness mapping that decides whether a pass may stamp
-//     `outputScanDone` (only a definitive present/absent verdict does).
+//   • `FileTransferOutputDetector.probeIsConclusive(_:)` — the per-outcome
+//     DEFINITIVENESS predicate (did the server answer at all?).
+//   • `FileTransferOutputDetector.scanMayClose(...)` — the pass-level verdict
+//     that actually decides whether `outputScanDone` may be stamped: every
+//     probe definitive AND the turn's age gate open. Closing is permanent, so
+//     a definitive-but-too-early 404 must not be allowed to do it.
+//   • `ConversationDetailViewModel.holdVerdict(...)` — when a turn left PENDING
+//     by a pass may be probed again: at its age gate, immediately (the pass
+//     confirmed a file, so the window has walked on), or after a stalled
+//     interval (nothing closed, nothing found — re-running the identical window
+//     against the identical lane learns nothing and spends the user's server).
+//     The stalled interval WIDENS with the turn's consecutive-stall streak
+//     (`retroStallBackoff`), which is what bounds a turn no pass can ever close.
+//   • `retroScanParkSet` / `parkedRetroScanState` / `releasedRetroScanState` —
+//     the ownership arithmetic behind the lane breaker's saving: which
+//     candidates a suppressed pass must park, that a park moves attempt
+//     ownership AND a dated hold together, and that a release hands back exactly
+//     the held ids. An id dropped here is one a reload echo re-selects at once,
+//     which is the difference between a bounded pass and an unbounded one.
+//   • `FileLaneScanBreaker.laneKey(for:)` — that every repair a user can make
+//     (URL, credential, certificate pin) lands on a clean lane, while the
+//     mutable readiness/capability verdicts do not.
+//   • `ConversationDetailViewModel.earliestHoldDeadline(in:)` /
+//     `dueHoldIDs(in:asOf:)` — the one-timer, per-id scheduling policy for
+//     turns whose attempt ownership is held: the timer wakes for the soonest
+//     deadline and releases only the ids that are actually due, which is what
+//     keeps a re-probe from asking the user's file server a question it has
+//     already answered.
 //
 // Deterministic + headless: no network, no Core Data, no Keychain. Synthetic
 // fixtures only; no real filenames/keys.
@@ -195,6 +220,28 @@ final class RetroOutputScanCandidateTests: XCTestCase {
             in: [m], attempted: [m.id], cap: 20
         )
         XCTAssertTrue(out.isEmpty, "a turn already attempted this instance is skipped")
+    }
+
+    /// The recovery case the lane breaker must never eat. Attempt ownership —
+    /// including the parking a suppressed lane applies — is PER PRESENTATION,
+    /// and the durable marker stays pending, so a turn whose file genuinely
+    /// arrived late is selected again by the next thread open. A breaker that
+    /// silenced a lane across presentations would show up here.
+    func testPendingTurnIsSelectedAgainByAFreshPresentation() {
+        let m = pendingAgent(sourceDevice: "watch")
+        XCTAssertTrue(
+            ConversationDetailViewModel.retroScanCandidates(
+                in: [m], attempted: [m.id], cap: 20
+            ).isEmpty,
+            "parked or already-probed inside the presentation that parked it"
+        )
+        XCTAssertEqual(
+            ConversationDetailViewModel.retroScanCandidates(
+                in: [m], attempted: [], cap: 20
+            ).map(\.id),
+            [m.id],
+            "a new presentation starts with no attempt ownership and re-selects it"
+        )
     }
 
     /// A suffixed `sourceDevice` (`watch-voice`) remains eligible when the turn
@@ -430,18 +477,489 @@ final class RetroOutputScanCandidateTests: XCTestCase {
                        "without a durable dispatch-time lane, no server may be probed")
     }
 
-    // MARK: - probeIsConclusive
+    // MARK: - probeIsConclusive (per-outcome DEFINITIVENESS)
 
-    func testConclusiveOutcomes() {
+    /// `probeIsConclusive` answers only "did the server give a real answer about
+    /// this key?". A `.missing` does — but a definitive answer is not on its own
+    /// SUFFICIENT to close a turn; `scanMayClose` below owns that decision,
+    /// because a 404 collected milliseconds after the reply may simply have
+    /// arrived before the agent's file did.
+    func testDefinitiveOutcomes() {
         XCTAssertTrue(FileTransferOutputDetector.probeIsConclusive(.exists))
         XCTAssertTrue(FileTransferOutputDetector.probeIsConclusive(.missing),
-                      "a definitive not-found still completes the scan")
+                      "a not-found IS a real answer about this instant")
     }
 
-    func testInconclusiveOutcomes() {
+    func testNonDefinitiveOutcomes() {
         XCTAssertFalse(FileTransferOutputDetector.probeIsConclusive(.unauthorized))
         XCTAssertFalse(FileTransferOutputDetector.probeIsConclusive(.serverError))
+        XCTAssertFalse(FileTransferOutputDetector.probeIsConclusive(.certRefused))
         XCTAssertFalse(FileTransferOutputDetector.probeIsConclusive(.unknown),
                        "a transient/inconclusive probe must NOT let the pass mark scanned")
+    }
+
+    // MARK: - scanMayClose (pass-level AGE gate)
+
+    private var grace: TimeInterval { FileTransferOutputDetector.outputScanGrace }
+    private var truncatedHorizon: TimeInterval { FileTransferOutputDetector.truncatedScanHorizon }
+
+    /// WHY this gate exists: the landing probe fires in the same async call as
+    /// reply persistence, so without it an agent whose file lands a second late
+    /// — or an rclone VFS directory cache that has not settled — closes the turn
+    /// on a definitive 404 and loses that file forever.
+    func testDefinitiveMissInsideGraceLeavesTheTurnPending() {
+        let createdAt = Date()
+        XCTAssertFalse(
+            FileTransferOutputDetector.scanMayClose(
+                turnCreatedAt: createdAt,
+                scanStartedAt: createdAt,           // the landing probe: immediate
+                everyProbeDefinitive: true,
+                truncated: false
+            ),
+            "an instant, definitive pass must not be able to permanently close the turn"
+        )
+    }
+
+    func testScanStartedJustBeforeTheDeadlineStillLeavesTheTurnPending() {
+        let createdAt = Date()
+        XCTAssertFalse(
+            FileTransferOutputDetector.scanMayClose(
+                turnCreatedAt: createdAt,
+                scanStartedAt: createdAt.addingTimeInterval(grace - 1),
+                everyProbeDefinitive: true,
+                truncated: false
+            )
+        )
+    }
+
+    func testDefinitivePassAfterTheGraceWindowClosesTheTurn() {
+        let createdAt = Date()
+        XCTAssertTrue(
+            FileTransferOutputDetector.scanMayClose(
+                turnCreatedAt: createdAt,
+                scanStartedAt: createdAt.addingTimeInterval(grace),
+                everyProbeDefinitive: true,
+                truncated: false
+            ),
+            "once the window has elapsed a definitive verdict is final"
+        )
+    }
+
+    /// The gate reads when the pass STARTED, never the clock afterwards. Ten
+    /// sequential probes against a slow server can outlive the grace window on
+    /// their own; if the check ran after the loop, a 404 from the first
+    /// millisecond would close the turn purely because the pass took a while.
+    func testASlowPassThatBeganInsideGraceStillCannotClose() {
+        let createdAt = Date()
+        XCTAssertFalse(
+            FileTransferOutputDetector.scanMayClose(
+                turnCreatedAt: createdAt,
+                scanStartedAt: createdAt.addingTimeInterval(1),   // started at +1s
+                everyProbeDefinitive: true,
+                truncated: false
+            ),
+            "the anchor is the pass's start, not however long its probes ran"
+        )
+    }
+
+    /// A truncated examination is not a finished one: the pass never looked at
+    /// the tail of the candidate list, so it holds the turn open far past the
+    /// ordinary grace window while later passes walk the window forward.
+    func testTruncatedPassDoesNotCloseAtTheOrdinaryGraceDeadline() {
+        let createdAt = Date()
+        XCTAssertFalse(
+            FileTransferOutputDetector.scanMayClose(
+                turnCreatedAt: createdAt,
+                scanStartedAt: createdAt.addingTimeInterval(grace + 1),
+                everyProbeDefinitive: true,
+                truncated: true
+            ),
+            "a cut candidate list must not count as a completed scan"
+        )
+        XCTAssertTrue(
+            FileTransferOutputDetector.scanMayClose(
+                turnCreatedAt: createdAt,
+                scanStartedAt: createdAt.addingTimeInterval(truncatedHorizon),
+                everyProbeDefinitive: true,
+                truncated: true
+            ),
+            "the extended window is a horizon, not 'forever' — re-probing an "
+            + "identical all-miss window on every thread open learns nothing"
+        )
+    }
+
+    /// A non-definitive probe outranks the clock: no amount of age makes an
+    /// unauthorized/unreachable server into evidence about the file.
+    func testNonDefinitiveProbeBlocksClosureAtAnyAge() {
+        let createdAt = Date(timeIntervalSince1970: 0)
+        XCTAssertFalse(
+            FileTransferOutputDetector.scanMayClose(
+                turnCreatedAt: createdAt,
+                scanStartedAt: Date(),
+                everyProbeDefinitive: false,
+                truncated: false
+            )
+        )
+    }
+
+    // MARK: - hold policy (when a pending turn may be asked again)
+
+    private let holdBase = Date(timeIntervalSince1970: 1_000_000)
+
+    /// Inside the grace window nothing the pass finds can close the turn, so
+    /// the only instant worth waking for is the gate itself.
+    func testTooYoungHoldsUntilTheAgeGate() {
+        XCTAssertEqual(
+            ConversationDetailViewModel.holdVerdict(
+                passStartedAt: holdBase,
+                turnCreatedAt: holdBase,
+                confirmedAnything: false,
+                consecutiveStalls: 1
+            ),
+            .untilAgeGate(holdBase.addingTimeInterval(grace))
+        )
+    }
+
+    /// The age gate outranks a confirmed file: a young turn is held even when
+    /// the pass chipped something, because it still cannot be closed.
+    func testTooYoungHoldsEvenAfterConfirmingAFile() {
+        guard case .untilAgeGate = ConversationDetailViewModel.holdVerdict(
+            passStartedAt: holdBase.addingTimeInterval(grace - 1),
+            turnCreatedAt: holdBase,
+            confirmedAnything: true,
+            consecutiveStalls: 1
+        ) else {
+            return XCTFail("the age gate decides before anything else")
+        }
+    }
+
+    /// A confirmed file is excluded from the next window, so the window walks
+    /// onto candidates nothing has probed — that pass is worth running now.
+    func testConfirmedFileReleasesImmediately() {
+        XCTAssertEqual(
+            ConversationDetailViewModel.holdVerdict(
+                passStartedAt: holdBase.addingTimeInterval(grace),
+                turnCreatedAt: holdBase,
+                confirmedAnything: true,
+                consecutiveStalls: 4
+            ),
+            .release,
+            "a confirmed file walks the window on, whatever the turn's stall history"
+        )
+    }
+
+    /// THE case this policy exists for: an aged turn that closed nothing and
+    /// confirmed nothing would otherwise re-run its identical window on every
+    /// coalesced store echo — up to `maxCandidates` requests against the user's
+    /// own file server, for as long as `truncatedScanHorizon` keeps it open.
+    func testAgedPassThatFoundNothingIsStalled() {
+        XCTAssertEqual(
+            ConversationDetailViewModel.holdVerdict(
+                passStartedAt: holdBase.addingTimeInterval(grace),
+                turnCreatedAt: holdBase,
+                confirmedAnything: false,
+                consecutiveStalls: 1
+            ),
+            .stalled(retryAfter: ConversationDetailViewModel.retroStalledRetryInterval),
+            "one stall costs the ordinary interval — a transient failure must not be punished"
+        )
+    }
+
+    /// THE unbounded case, and why the interval widens at all. A probe that is
+    /// non-definitive but NOT lane-wide (`.ambiguous`) leaves `scanMayClose`
+    /// shut with no horizon that can ever close the turn, while the lane breaker
+    /// measures the lane HEALTHY — it can answer `404`, the failure is about one
+    /// key. A hostile gateway mints that deterministically (a `.pdf` whose bytes
+    /// open as HTML), so without the ladder the turn is re-probed twelve times an
+    /// hour for the mounted lifetime of the thread, learning nothing every time.
+    func testAStallThatKeepsRepeatingIsAskedEverMoreSlowly() {
+        var intervals: [TimeInterval] = []
+        for stalls in 1...5 {
+            let verdict = ConversationDetailViewModel.holdVerdict(
+                passStartedAt: holdBase.addingTimeInterval(grace),
+                turnCreatedAt: holdBase,
+                confirmedAnything: false,
+                consecutiveStalls: stalls
+            )
+            guard case .stalled(let retryAfter) = verdict else {
+                return XCTFail("an aged pass that found nothing stalls, at every rung")
+            }
+            intervals.append(retryAfter)
+        }
+        let expected: [TimeInterval] = [5 * 60, 15 * 60, 30 * 60, 60 * 60, 60 * 60]
+        XCTAssertEqual(
+            intervals,
+            expected,
+            "the ladder widens to a ceiling and stays there — never latching shut"
+        )
+    }
+
+    /// The ladder is anchored on the STREAK, never on the turn's age, and this
+    /// is the case that decides it: a turn synced from another device can be
+    /// months old and suffer its FIRST transient probe failure today. An
+    /// age-keyed rule would meet that with the slowest cadence and leave a file
+    /// that exists undiscovered for an hour.
+    func testAnOldTurnStallingForTheFirstTimeGetsTheFastCadence() {
+        XCTAssertEqual(
+            ConversationDetailViewModel.holdVerdict(
+                passStartedAt: holdBase.addingTimeInterval(90 * 24 * 60 * 60),
+                turnCreatedAt: holdBase,
+                confirmedAnything: false,
+                consecutiveStalls: 1
+            ),
+            .stalled(retryAfter: ConversationDetailViewModel.retroStalledRetryInterval)
+        )
+    }
+
+    /// One ladder for both halves of the pair. The lane breaker widens how often
+    /// a WALLED LANE is re-measured and this widens how often a going-nowhere
+    /// TURN is re-probed; they answer the same question, and two ladders that
+    /// must stay in step is a drift waiting to happen.
+    func testTheStallLadderIsTheBreakerLadder() {
+        for stalls in 0...6 {
+            XCTAssertEqual(
+                ConversationDetailViewModel.retroStallBackoff(forConsecutiveStalls: stalls),
+                FileLaneScanBreaker.backoff(forConsecutiveFaults: stalls)
+            )
+        }
+    }
+
+    /// One timer, for the SOONEST held turn. An earlier wake is never wrong —
+    /// it releases only what is due and re-arms for the rest — so the timer
+    /// always tracks the first thing that can change.
+    func testEarliestHoldDeadlineIsTheSoonestHold() {
+        let holds = [
+            UUID(): holdBase.addingTimeInterval(90),
+            UUID(): holdBase.addingTimeInterval(60),
+            UUID(): holdBase.addingTimeInterval(120)
+        ]
+        XCTAssertEqual(
+            ConversationDetailViewModel.earliestHoldDeadline(in: holds),
+            holdBase.addingTimeInterval(60)
+        )
+    }
+
+    func testNoHoldsScheduleNothing() {
+        XCTAssertNil(
+            ConversationDetailViewModel.earliestHoldDeadline(in: [:]),
+            "nothing waiting on the clock ⇒ no timer"
+        )
+    }
+
+    /// WHY the deadlines are per id. One shared deadline releases every held
+    /// turn at the soonest one, so a turn still inside its own window goes back
+    /// to the reload path and re-asks the user's file server a question it
+    /// answered moments ago. Only the due id is released here.
+    func testWakeReleasesOnlyTheHoldsThatAreDue() {
+        let due = UUID()
+        let notYet = UUID()
+        let holds = [
+            due: holdBase.addingTimeInterval(60),
+            notYet: holdBase.addingTimeInterval(300)
+        ]
+        XCTAssertEqual(
+            ConversationDetailViewModel.dueHoldIDs(
+                in: holds,
+                asOf: holdBase.addingTimeInterval(60)
+            ),
+            [due],
+            "a hold whose own window has not elapsed stays held"
+        )
+    }
+
+    /// The deadline itself is inclusive: at the instant the window closes the
+    /// question can have a different answer, which is the whole point of it.
+    func testHoldIsDueAtItsDeadline() {
+        let held = UUID()
+        let holds = [held: holdBase]
+        XCTAssertEqual(
+            ConversationDetailViewModel.dueHoldIDs(in: holds, asOf: holdBase),
+            [held]
+        )
+    }
+
+    /// A wake that finds nothing due — the shape a backward wall-clock step
+    /// produces — releases nothing and runs no pass; the caller re-arms.
+    func testNothingIsDueBeforeAnyDeadline() {
+        let holds = [UUID(): holdBase, UUID(): holdBase.addingTimeInterval(300)]
+        XCTAssertTrue(
+            ConversationDetailViewModel.dueHoldIDs(
+                in: holds,
+                asOf: holdBase.addingTimeInterval(-10)
+            ).isEmpty
+        )
+    }
+
+    // MARK: - park / release arithmetic (what makes the breaker's saving real)
+
+    private func reconciliation(
+        _ messageID: UUID,
+        markScanned: Bool,
+        drafts: [AttachmentDraft] = []
+    ) -> ConversationStore.OutputScanReconciliation {
+        .init(
+            messageID: messageID,
+            drafts: drafts,
+            markScanned: markScanned,
+            expectedLaneID: ownedLaneID
+        )
+    }
+
+    /// THE arithmetic the request reduction rests on. A suppressed pass has to
+    /// park every candidate it did not SETTLE — including the ones the loop
+    /// never reached, which is the easy half to get wrong because they produced
+    /// no result to iterate. An id left out here is an id the next
+    /// `.conversationsDidChange` echo re-selects immediately, and the pass that
+    /// was supposed to stop fans out again at a lane already shown to be unable
+    /// to answer.
+    func testParkSetIsEveryCandidateTheSuppressedPassDidNotSettle() {
+        let closedLocally = UUID()      // filename-free reply, no network needed
+        let closedByProbe = UUID()      // probed and definitively finished
+        let probedButOpen = UUID()      // probed, came back non-definitive
+        let neverReached = UUID()       // the loop stopped before it
+
+        XCTAssertEqual(
+            ConversationDetailViewModel.retroScanParkSet(
+                candidateIDs: [closedLocally, closedByProbe, probedButOpen, neverReached],
+                localResults: [reconciliation(closedLocally, markScanned: true)],
+                probedResults: [
+                    reconciliation(closedByProbe, markScanned: true),
+                    reconciliation(probedButOpen, markScanned: false)
+                ]
+            ),
+            [probedButOpen, neverReached]
+        )
+    }
+
+    /// A probed turn that CONFIRMED a file but stayed open is still unsettled —
+    /// its window has more to say. Parking is about whether the turn is finished,
+    /// never about whether the pass got something out of it.
+    func testAConfirmedButStillOpenTurnIsParked() {
+        let confirmedStillOpen = UUID()
+        XCTAssertEqual(
+            ConversationDetailViewModel.retroScanParkSet(
+                candidateIDs: [confirmedStillOpen],
+                localResults: [],
+                probedResults: [
+                    reconciliation(
+                        confirmedStillOpen,
+                        markScanned: false,
+                        drafts: [serverRef("out.pdf")]
+                    )
+                ]
+            ),
+            [confirmedStillOpen]
+        )
+    }
+
+    func testNothingIsParkedWhenEveryCandidateSettled() {
+        let a = UUID()
+        let b = UUID()
+        XCTAssertTrue(
+            ConversationDetailViewModel.retroScanParkSet(
+                candidateIDs: [a, b],
+                localResults: [reconciliation(a, markScanned: true)],
+                probedResults: [reconciliation(b, markScanned: true)]
+            ).isEmpty
+        )
+    }
+
+    /// A park moves BOTH halves or it is silently ineffective: the hold is what
+    /// the wake reads, and the attempt ownership is what stops a reload echo
+    /// from re-selecting the turn in the meantime.
+    func testParkTakesOwnershipAndHoldsEveryParkedID() {
+        let alreadyOwned = UUID()
+        let parkedA = UUID()
+        let parkedB = UUID()
+        let deadline = holdBase.addingTimeInterval(900)
+
+        let next = ConversationDetailViewModel.parkedRetroScanState(
+            attempted: [alreadyOwned],
+            holds: [:],
+            parking: [parkedA, parkedB],
+            until: deadline
+        )
+        XCTAssertEqual(next.attempted, [alreadyOwned, parkedA, parkedB])
+        XCTAssertEqual(next.holds, [parkedA: deadline, parkedB: deadline])
+    }
+
+    /// The latest decision wins for an id already held — every hold is a fresh
+    /// verdict from the pass that just examined that turn, and a widening lane
+    /// backoff has to be able to push a deadline OUT.
+    func testParkOverwritesAnEarlierHoldForTheSameID() {
+        let held = UUID()
+        let widened = holdBase.addingTimeInterval(3600)
+        let next = ConversationDetailViewModel.parkedRetroScanState(
+            attempted: [held],
+            holds: [held: holdBase.addingTimeInterval(300)],
+            parking: [held],
+            until: widened
+        )
+        XCTAssertEqual(next.holds[held], widened)
+    }
+
+    /// A release hands back EXACTLY the held ids. An id that was attempted but
+    /// never held belongs to a pass still deciding about it — handing that one
+    /// back would let two passes probe one turn.
+    func testReleaseHandsBackExactlyTheHeldIDs() {
+        let held = UUID()
+        let attemptedNotHeld = UUID()
+        let next = ConversationDetailViewModel.releasedRetroScanState(
+            attempted: [held, attemptedNotHeld],
+            holds: [held: holdBase]
+        )
+        XCTAssertEqual(next.attempted, [attemptedNotHeld])
+        XCTAssertTrue(next.holds.isEmpty, "the map empties — nothing is left waiting on a timer")
+    }
+
+    // MARK: - lane key derivation
+
+    private func snapshot(
+        base: String = "https://files.example.test",
+        credential: String = "deadbeefdeadbeefdeadbeefdeadbeef",
+        fingerprint: String? = nil
+    ) -> SettingsManager.FileTransferSnapshot {
+        SettingsManager.FileTransferSnapshot(
+            baseURL: URL(string: base)!,
+            username: Constants.fileServerUsername,
+            credential: credential,
+            certFingerprintHex: fingerprint,
+            available: true,
+            folderCapable: true
+        )
+    }
+
+    /// The breaker is keyed on URL + credential AND the device-local certificate
+    /// pin, so every repair a user can make lands on a brand-new key with a clean
+    /// slate. A pin fix is the one that would otherwise move no tracked value and
+    /// leave the lane suppressed after the user had already fixed it.
+    func testLaneKeyMovesWithEitherHalfOfTheIdentity() {
+        let base = snapshot()
+        let key = FileLaneScanBreaker.laneKey(for: base)
+
+        XCTAssertEqual(key, FileLaneScanBreaker.laneKey(for: snapshot()),
+                       "an unchanged lane keeps its history")
+        XCTAssertNotEqual(key, FileLaneScanBreaker.laneKey(for: snapshot(base: "https://other.example.test")))
+        XCTAssertNotEqual(key, FileLaneScanBreaker.laneKey(for: snapshot(credential: "0123456789abcdef0123456789abcdef")))
+        XCTAssertNotEqual(key, FileLaneScanBreaker.laneKey(for: snapshot(fingerprint: "AA:BB:CC")),
+                          "a pin-only repair must reopen the lane")
+    }
+
+    /// Readiness and folder-capability are VERDICTS about a lane, not its
+    /// identity — they move on their own as probes land, and letting them mint a
+    /// new key would silently discard a backoff mid-window.
+    func testLaneKeyIgnoresTheMutableVerdictFields() {
+        let stable = SettingsManager.FileTransferSnapshot(
+            baseURL: URL(string: "https://files.example.test")!,
+            username: Constants.fileServerUsername,
+            credential: "deadbeefdeadbeefdeadbeefdeadbeef",
+            certFingerprintHex: nil,
+            available: false,
+            folderCapable: false
+        )
+        XCTAssertEqual(
+            FileLaneScanBreaker.laneKey(for: stable),
+            FileLaneScanBreaker.laneKey(for: snapshot())
+        )
     }
 }
