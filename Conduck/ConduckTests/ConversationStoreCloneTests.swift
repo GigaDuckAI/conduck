@@ -24,8 +24,11 @@
 //     isn't configured"; it would also pollute the retro-output detector's
 //     token set, which matches inbound keys WITHOUT a lane check)
 //   - normalizes mid-thread status to nil, and stamps a TRAILING user turn
-//     `failed` (the affordance-bearing state) while reporting what that row's
-//     status WAS, so the caller can auto-continue only a genuinely failed turn
+//     `failed` — the state BOTH clone answers need (it arms `beginRetry`'s CAS
+//     for "send it now", and leaves an actionable Try Again for "just clone").
+//     The store does NOT decide between them: the user answers in the sheet,
+//     and a turn left unsent is not lost — history assembly has no status
+//     filter, so it rides along with whatever they type next
 //   - never copies `failureCode` / `failureWireCode` / `failureHadHistoryImages`
 //     (a verdict from the OLD gateway must not govern the new one)
 //   - leaves the ORIGINAL conversation + its turns untouched
@@ -407,16 +410,14 @@ final class ConversationStoreCloneTests: XCTestCase {
                      "A verdict rendered by the OLD gateway must not govern the new one — `retry` re-asserts a stored terminal code and would refuse to dispatch forever.")
         XCTAssertNil(cloned.failureWireCode)
         XCTAssertEqual(clone.continuationMessageID, cloned.id,
-                       "The caller needs the cloned row's id to continue it.")
-        XCTAssertEqual(clone.trailingSourceStatus, "failed",
-                       "The SOURCE row's status decides whether continuing is safe.")
+                       "The caller needs the cloned row's id to continue it — whether it DOES is the user's answer in the clone sheet, not a property of this row.")
     }
 
-    func testCloneReportsInFlightSourceStatusSoCallerCanRefuseToAutoContinue() async throws {
-        // A source turn still `sending` may yet land on the old gateway. The
-        // clone still normalizes it to `failed` (the user needs an affordance),
-        // but reports `sending` so the caller does NOT fire it automatically —
-        // that would run the same action on two gateways at once.
+    func testCloneNormalizesAnInFlightSourceTurnToTheSameActionableState() async throws {
+        // A source turn still `sending` produces the same `failed` clone as one
+        // that already failed. The two are NOT distinguished here: which of them
+        // the user wants sent on the new gateway depends on what they were doing,
+        // so the sheet asks and this stays one uniform, actionable state.
         let store = makeStore()
         let source = try await store.createConversation(backend: "openclaw")
         _ = try await store.appendMessage(
@@ -425,11 +426,12 @@ final class ConversationStoreCloneTests: XCTestCase {
         )
 
         let clone = try await store.cloneConversation(id: source.id, toBackend: "hermes")
-        XCTAssertEqual(clone.trailingSourceStatus, "sending")
         let clonedRows = try await store.fetchMessages(for: clone.conversation.id)
         let cloned = try XCTUnwrap(clonedRows.first)
         XCTAssertEqual(cloned.status, "failed",
-                       "Still surfaced as actionable — the user may fire it deliberately.")
+                       "Surfaced as actionable either way — Try Again is the escape hatch when the user declined to send it now.")
+        XCTAssertEqual(clone.continuationMessageID, cloned.id,
+                       "Offered as continuable regardless of how the source turn ended.")
     }
 
     func testCloneLeavesTrailingAgentTurnUnmarked() async throws {

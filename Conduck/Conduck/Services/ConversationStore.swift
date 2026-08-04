@@ -107,8 +107,8 @@ struct SyncEventSummary: Sendable {
     }
 }
 
-/// What `cloneConversation` hands back: the new conversation plus the two facts
-/// the caller needs to decide whether to continue the thread automatically.
+/// What `cloneConversation` hands back: the new conversation plus the id of the
+/// turn a caller may continue.
 ///
 /// CROSS-TARGET: declared here (in `ConversationStore.swift`, already a Watch
 /// membership exception) alongside the store, and deliberately pure Foundation —
@@ -118,12 +118,12 @@ struct CloneResult: Sendable {
     let conversation: ConversationRecord
     /// The cloned trailing user turn (stamped `failed`), or nil when the thread
     /// ends on an agent reply — i.e. nothing is awaiting a continuation.
+    ///
+    /// WHETHER to dispatch it is not decided here and is not derived from the
+    /// source row's status: the user answers that question in the clone sheet
+    /// before any of this runs. The store's job is to leave the turn in a state
+    /// where BOTH answers work — see the `failed` rule on `cloneConversation`.
     let continuationMessageID: UUID?
-    /// That row's status in the SOURCE thread. `"failed"` means the original
-    /// attempt is definitively over and continuing is safe; `"sending"` means it
-    /// may still land on the old gateway, so firing it again elsewhere would run
-    /// the same action twice.
-    let trailingSourceStatus: String?
 }
 
 /// A to-be-persisted attachment carrying the FULL bytes for the write. Built
@@ -734,10 +734,13 @@ actor ConversationStore {
     ///
     /// A trailing user turn with no reply after it lands `failed` — the one
     /// structural rule covering a source turn that failed, one still `sending`,
-    /// and a legacy nil — so the thread offers an actionable Try Again instead
-    /// of a delivered-looking dead row. `trailingSourceStatus` reports what that
-    /// row's status WAS, so the caller can auto-continue a genuinely failed turn
-    /// while leaving an in-flight one for the user to fire deliberately.
+    /// and a legacy nil. It is the state BOTH clone answers need: continue-now
+    /// arms `beginRetry`'s `failed` → `sending` compare-and-set, and clone-only
+    /// leaves an actionable Try Again instead of a delivered-looking dead row.
+    /// It also stays in the thread either way, so a user who simply keeps typing
+    /// carries it along in the next request's history (no status filter exists
+    /// in `ConversationHistoryAssembler`) — the turn is never lost by declining
+    /// to send it now.
     ///
     /// CloudKit-store-compatible: uses the same `insertNewObject` +
     /// background-context save pattern as the existing CRUD (the mirror exports
@@ -753,7 +756,7 @@ actor ConversationStore {
         let now = Date()
         let sessionID = UUID().uuidString
 
-        let outcome: (snippet: String?, continuationMessageID: UUID?, trailingSourceStatus: String?)
+        let outcome: (snippet: String?, continuationMessageID: UUID?)
         outcome = try await context.perform { [context] in
             // Source conversation + its text turns (createdAt-ascending).
             let convoRequest = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
@@ -880,7 +883,6 @@ actor ConversationStore {
             // Again). Mid-thread rows stay nil: an un-actionable Retry chip
             // above an existing agent reply would be nonsense.
             var continuationMessageID: UUID?
-            var trailingSourceStatus: String?
             if lastInsertedRole == "user", let lastInserted, lastSourceStatus != "sent" {
                 // `sent` is excluded: that turn provably REACHED its gateway
                 // (the status is only written when the reply lands), so a
@@ -889,11 +891,10 @@ actor ConversationStore {
                 // message wasn't delivered" under a message that was.
                 lastInserted.setValue("failed", forKey: "status")
                 continuationMessageID = lastInsertedID
-                trailingSourceStatus = lastSourceStatus
             }
 
             try context.save()
-            return (sourceTitleSnippet, continuationMessageID, trailingSourceStatus)
+            return (sourceTitleSnippet, continuationMessageID)
         }
 
         await postDidChange()
@@ -908,8 +909,7 @@ actor ConversationStore {
                 backend: rawString,
                 titleSnippet: outcome.snippet
             ),
-            continuationMessageID: outcome.continuationMessageID,
-            trailingSourceStatus: outcome.trailingSourceStatus
+            continuationMessageID: outcome.continuationMessageID
         )
     }
 
