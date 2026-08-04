@@ -214,6 +214,10 @@ struct ConversationThreadView: View {
         // macOS multi-window register independently (Set<UUID> in the tracker).
         .onAppear {
             ActiveViewTracker.track(viewModel.conversationID)
+            // Clone continuation: claimed only AFTER the line above, so the
+            // reply that comes back is suppressed as an on-screen thread rather
+            // than banner-and-sound at a user already reading it.
+            claimCloneContinuation()
             #if os(iOS)
             // Auto-speak hook 1/3: the deep-link navigation just mounted this
             // thread (warm launch — messages typically already loaded). The
@@ -280,6 +284,7 @@ struct ConversationThreadView: View {
                             usedFallbackVoice: speaker.usedFallbackVoice(for: message.id),
                             showsMissingOutputNotice: viewModel.missingOutputNoticeIDs.contains(message.id),
                             outputRecheckState: viewModel.outputRecheckStates[message.id],
+                            awaitsCloneContinuation: awaitsCloneContinuation(message),
                             filePreview: filePreview,
                             onCopy: { viewModel.copy(message) },
                             onSpeak: { speaker.speak(message.text, messageID: message.id) },
@@ -826,6 +831,46 @@ struct ConversationThreadView: View {
         }
     }
 
+    // MARK: - Clone continuation
+
+    /// True while `message` is a cloned trailing turn whose first delivery has
+    /// not been attempted yet — armed (before `.onAppear` claims it) or claimed
+    /// and in flight. The answer is SHARED, not per-view, so a second window on
+    /// the same conversation cannot render a Try Again for a turn this one is
+    /// already dispatching.
+    private func awaitsCloneContinuation(_ message: MessageRecord) -> Bool {
+        PendingCloneContinuation.shared.isSuppressed(
+            conversationID: viewModel.conversationID,
+            messageID: message.id
+        )
+    }
+
+    /// Claim this thread's pending clone continuation, if any, and fire it once.
+    ///
+    /// Prefers the VM's already-loaded messages and falls back to the store: on
+    /// a cold launch this view can mount before the initial fetch lands, and
+    /// `retry` needs only the record itself (it re-reads everything else and
+    /// reloads afterwards). No polling, no ordering assumption.
+    private func claimCloneContinuation() {
+        let conversationID = viewModel.conversationID
+        guard let messageID = PendingCloneContinuation.shared
+            .take(conversationID: conversationID) else { return }
+        Task {
+            // Cleared however this ends — including the not-found arm below. A
+            // suppression that outlived its attempt would hide the delivery row
+            // (and its Try Again) for a turn nothing is going to deliver.
+            defer { PendingCloneContinuation.shared.finish(conversationID: conversationID) }
+            var record = viewModel.messages.first { $0.id == messageID }
+            if record == nil {
+                record = try? await ConversationStore.shared
+                    .fetchMessages(for: conversationID)
+                    .first { $0.id == messageID }
+            }
+            guard let record else { return }
+            await viewModel.retry(record)
+        }
+    }
+
     // MARK: - Copy conversation
 
     private func copyAllTapped() {
@@ -945,6 +990,14 @@ private struct MessageBubble: View, Equatable {
     let showsMissingOutputNotice: Bool
     /// Outcome of the user's last "Check again" on this turn, if any.
     let outputRecheckState: ConversationDetailViewModel.OutputRecheckState?
+    /// This turn is a freshly cloned trailing turn whose automatic continuation
+    /// has not been attempted yet. The row is genuinely `failed` in the store —
+    /// the correct fail-safe if the dispatch never happens — but "No reply / this
+    /// message wasn't delivered" would be a lie in the window before the first
+    /// delivery is even attempted, so the delivery row waits. Suppression ends
+    /// the moment the claim resolves: a continuation that really fails shows the
+    /// row with its real verdict.
+    let awaitsCloneContinuation: Bool
     /// The thread's single Quick Look presenter — download chips hand their
     /// adopted file up to it. A stable `@State`-owned reference (excluded from
     /// `==` alongside the closures).
@@ -986,6 +1039,7 @@ private struct MessageBubble: View, Equatable {
             && lhs.usedFallbackVoice == rhs.usedFallbackVoice
             && lhs.showsMissingOutputNotice == rhs.showsMissingOutputNotice
             && lhs.outputRecheckState == rhs.outputRecheckState
+            && lhs.awaitsCloneContinuation == rhs.awaitsCloneContinuation
     }
 
     private var isUser: Bool { message.role == "user" }
@@ -1021,7 +1075,7 @@ private struct MessageBubble: View, Equatable {
         // assistant bubble and never part of outbound history.
         VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
             bubbleRow
-            if isUser, message.status == "failed" {
+            if isUser, message.status == "failed", !awaitsCloneContinuation {
                 deliveryErrorRow
             }
             // Handback diagnostic: sits UNDER the agent bubble, outside its
@@ -1736,11 +1790,24 @@ private struct ServerFileDownloadChip: View {
     /// macOS Save As… button and its context-menu mirror can never disagree
     /// about whether this file is still reachable.
     private var acceptsTap: Bool {
+        // Unaddressable rows are inert forever — there is no blob to GET, so a
+        // tap could only produce a misleading refusal.
+        guard isAddressable else { return false }
         switch state {
         case .downloading: return false
         case .failed(_, let retryable): return retryable
         case .idle: return true
         }
+    }
+
+    /// Whether this row names bytes that can be fetched at all — a non-empty
+    /// `storedKey` AND a provable owning lane. False for a cross-lane clone's
+    /// tombstone (key cleared) and for a legacy row with no lane owner.
+    private var isAddressable: Bool {
+        ServerFileChipAvailability.isAddressable(
+            storedKey: attachment.storedKey,
+            ownerLaneID: expectedLaneID
+        )
     }
 
     /// The refusal text under the chip name, when the last attempt failed.
@@ -1783,10 +1850,17 @@ private struct ServerFileDownloadChip: View {
             .disabled(!acceptsTap)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(([
+                // An inert chip must not be announced as a download action —
+                // VoiceOver reads the chip as one element, so the label is the
+                // ONLY signal that this row is passive.
                 String(
-                    format: String(localized: LocalizedStringResource(
-                        "fileTransfer.preview.accessibility",
-                        defaultValue: "Download and preview file %@ from your gateway")),
+                    format: String(localized: isAddressable
+                        ? LocalizedStringResource(
+                            "fileTransfer.preview.accessibility",
+                            defaultValue: "Download and preview file %@ from your gateway")
+                        : LocalizedStringResource(
+                            "fileTransfer.detachedReference.accessibility",
+                            defaultValue: "File %@, unavailable here")),
                     name
                 ),
                 failureMessage
@@ -1857,9 +1931,18 @@ private struct ServerFileDownloadChip: View {
                 .font(.system(size: 16))
                 .foregroundStyle(AppColors.error)
         case .idle:
-            // No idle glyph — the whole chip is the Quick Look tap target;
-            // an extra affordance would crowd the chip.
-            EmptyView()
+            if isAddressable {
+                // No idle glyph — the whole chip is the Quick Look tap target;
+                // an extra affordance would crowd the chip.
+                EmptyView()
+            } else {
+                // The one idle case that DOES need a glyph: without it an inert
+                // chip is visually identical to a live one, so the only signal
+                // that a tap does nothing would be the tap doing nothing.
+                Image(systemName: "slash.circle")
+                    .font(.system(size: 15))
+                    .foregroundStyle(secondaryTint)
+            }
         }
     }
 
@@ -1880,10 +1963,17 @@ private struct ServerFileDownloadChip: View {
         .pointerIconButton()
         .disabled(!acceptsTap)
         .help(saveAsTitle)
+        // Same rule as the chip's own label: an unaddressable row must not be
+        // announced as a save action. This is a SEPARATE accessibility element,
+        // so VoiceOver would otherwise convey only "dimmed", never why.
         .accessibilityLabel(Text(String(
-            format: String(localized: LocalizedStringResource(
-                "fileTransfer.saveAs.accessibility",
-                defaultValue: "Save file %@ from your gateway")),
+            format: String(localized: isAddressable
+                ? LocalizedStringResource(
+                    "fileTransfer.saveAs.accessibility",
+                    defaultValue: "Save file %@ from your gateway")
+                : LocalizedStringResource(
+                    "fileTransfer.detachedReference.accessibility",
+                    defaultValue: "File %@, unavailable here")),
             name
         )))
     }
@@ -1906,7 +1996,17 @@ private struct ServerFileDownloadChip: View {
                 .foregroundStyle(AppColors.error)
                 .fixedSize(horizontal: false, vertical: true)
         case .idle:
-            if attachment.byteSize > 0 {
+            if !isAddressable {
+                // "Unavailable here" — NOT "not on this gateway". A legacy or
+                // partially-synced row cannot prove where its bytes are; all
+                // this thread can honestly say is that it cannot reach them.
+                Text(LocalizedStringResource(
+                    "fileTransfer.detachedReference",
+                    defaultValue: "Unavailable here"
+                ))
+                    .font(.caption2)
+                    .foregroundStyle(secondaryTint)
+            } else if attachment.byteSize > 0 {
                 Text(AttachmentChipStyle.formattedSize(attachment.byteSize))
                     .font(.caption2)
                     .foregroundStyle(secondaryTint)

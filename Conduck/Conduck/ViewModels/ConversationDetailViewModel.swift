@@ -2572,18 +2572,41 @@ final class ConversationDetailViewModel {
     }
 
     /// Clone this conversation onto `ref` (a chosen configured gateway): create
-    /// a new conversation bound to it, copying the text-turn history, and return
-    /// the new conversation id so the caller can make it active. Honors the
-    /// no-silent-reroute invariant — this is an explicit user action, NOT a
-    /// rebind of the existing thread (which would hand a different agent a
-    /// history it never produced). Attachments are V1-skipped (text-only clone).
+    /// a new conversation bound to it, copying the history INCLUDING attachments,
+    /// and return the new conversation id so the caller can make it active.
+    /// Honors the no-silent-reroute invariant — this is an explicit user action,
+    /// NOT a rebind of the existing thread (which would hand a different agent a
+    /// history it never produced).
+    ///
+    /// Resolves the TARGET's durable file lane from the RAW snapshot, not the
+    /// ready one: readiness gates NEW uploads, and a stale/failed Test
+    /// Connection verdict must not detach references to blobs the lane still
+    /// physically owns (same posture as `retry`'s `currentRawLane`).
+    ///
+    /// Arms the auto-continuation BEFORE returning — the caller navigates
+    /// immediately, and arming first is what lets the destination suppress the
+    /// failed-row treatment on its very first render instead of racing it. Only
+    /// a source turn that had already FAILED is armed: one still `sending` may
+    /// yet land on the old gateway, and firing it here too would run the same
+    /// (possibly action-taking) request on two gateways at once — `beginRetry`'s
+    /// CAS de-duplicates within a thread, never across them.
     func cloneConversation(to ref: RemoteAgentRef) async -> UUID? {
         do {
+            let targetLaneID = await SettingsManager.shared
+                .fileTransferSnapshot(for: ref)?.durableLaneID
             let cloned = try await ConversationStore.shared.cloneConversation(
                 id: conversationID,
-                toBackend: ref.rawString
+                toBackend: ref.rawString,
+                targetFileLaneID: targetLaneID
             )
-            return cloned.id
+            if let continuationID = cloned.continuationMessageID,
+               cloned.trailingSourceStatus == "failed" {
+                PendingCloneContinuation.shared.arm(
+                    conversationID: cloned.conversation.id,
+                    messageID: continuationID
+                )
+            }
+            return cloned.conversation.id
         } catch {
             setSendNotice(String(localized: "remoteAgent.clone.failed",
                                defaultValue: "Couldn't clone this conversation. Try again."))
@@ -3577,6 +3600,22 @@ final class ConversationDetailViewModel {
             capturedLaneID: existingInputLane?.durableLaneID,
             omittingPhotos: omittingPhotos
         )
+        // This turn's server-backed files that the dispatch canNOT reach —
+        // either a clone tombstone (key cleared because it was minted on
+        // another lane) or a key the resolver refused for lane mismatch. The
+        // newest turn is assembled OUTSIDE `ConverseRequest.priorTurns`, which
+        // is where the honest "not available in the current file-transfer lane"
+        // note is normally emitted, so without this count the first dispatch
+        // after a cross-lane clone would drop the file in silence and let the
+        // model answer as though nothing had ever been attached.
+        let resolvedServerKeys = Set(retryReferences.serverFiles.map(\.storedKey))
+        let unavailableFileCount = message.attachments
+            .filter(\.isServerFile)
+            .filter { attachment in
+                guard let key = attachment.storedKey, !key.isEmpty else { return true }
+                return !resolvedServerKeys.contains(key)
+            }
+            .count
         if let fileSnapshot = existingInputLane {
             for storedKey in retryReferences.storedKeys {
                 let outcome = await BackgroundFileTransfer.shared.probeExists(
@@ -3722,6 +3761,7 @@ final class ConversationDetailViewModel {
                     newUserServerFileRefs: serverRefs,
                     newUserImageFileRefs: newUserImageFileRefs,
                     newUserTextFileServerRefs: newUserTextFileServerRefs,
+                    newUserUnavailableFileCount: unavailableFileCount,
                     fileServerReady: readyOutputLane != nil,
                     transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
                 )
@@ -3773,6 +3813,7 @@ final class ConversationDetailViewModel {
                 newUserServerFileRefs: serverRefs,
                 newUserImageFileRefs: newUserImageFileRefs,
                 newUserTextFileServerRefs: newUserTextFileServerRefs,
+                newUserUnavailableFileCount: unavailableFileCount,
                 inputFileTransferSnapshot: existingInputLane,
                 fileTransferSnapshot: readyOutputLane,
                 conversationID: conversationID,

@@ -292,6 +292,12 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         newUserServerFileRefs: [(originalName: String, storedKey: String)] = [],
         newUserImageFileRefs: [(storedKey: String, filename: String)] = [],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)] = [],
+        // Count of this turn's server files whose bytes this dispatch cannot
+        // reach (cross-lane clone) — see `RemoteAgentClient.assembleMessages`.
+        // Threaded here too: on iOS the clone's auto-continuation dispatches
+        // through the background session, so omitting it would drop the
+        // disclosure on exactly the surface the reported bug happened on.
+        newUserUnavailableFileCount: Int = 0,
         // Exact configured lane that owns any storedKeys/history references on
         // this request. Unlike `fileTransferSnapshot` below, it need not be
         // READY: an existing blob remains usable after a failed re-test. It is
@@ -354,6 +360,7 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
                 newUserServerFileRefs: newUserServerFileRefs,
                 newUserImageFileRefs: newUserImageFileRefs,
                 newUserTextFileServerRefs: newUserTextFileServerRefs,
+                newUserUnavailableFileCount: newUserUnavailableFileCount,
                 fileServerReady: fileServerReady
             ),
             stream: false,

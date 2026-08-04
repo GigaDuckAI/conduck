@@ -107,6 +107,25 @@ struct SyncEventSummary: Sendable {
     }
 }
 
+/// What `cloneConversation` hands back: the new conversation plus the two facts
+/// the caller needs to decide whether to continue the thread automatically.
+///
+/// CROSS-TARGET: declared here (in `ConversationStore.swift`, already a Watch
+/// membership exception) alongside the store, and deliberately pure Foundation —
+/// no `RemoteAgentRef` / `SettingsManager`, which the Watch target cannot see.
+/// The caller resolves lane identity and passes a plain `String?`.
+struct CloneResult: Sendable {
+    let conversation: ConversationRecord
+    /// The cloned trailing user turn (stamped `failed`), or nil when the thread
+    /// ends on an agent reply — i.e. nothing is awaiting a continuation.
+    let continuationMessageID: UUID?
+    /// That row's status in the SOURCE thread. `"failed"` means the original
+    /// attempt is definitively over and continuing is safe; `"sending"` means it
+    /// may still land on the old gateway, so firing it again elsewhere would run
+    /// the same action twice.
+    let trailingSourceStatus: String?
+}
+
 /// A to-be-persisted attachment carrying the FULL bytes for the write. Built
 /// by the VM (from `ImageProcessor` / `TextFileExtractor`) and handed to
 /// `appendMessage`. Distinct from `AttachmentRecord` (the read snapshot, which
@@ -682,28 +701,60 @@ actor ConversationStore {
 
     /// Clone an existing conversation onto a different gateway: create a NEW
     /// conversation bound to `toBackend` (a ref `rawString`) and copy the
-    /// source conversation's TEXT turns (role / text / createdAt order). The
-    /// original is left untouched as a read-only archive.
+    /// source conversation's turns (role / text / createdAt order) together
+    /// with their attachments. The original is left untouched as a read-only
+    /// archive.
     ///
     /// This is the "Clone & continue on <gateway>" recovery action (per the
     /// no-silent-reroute invariant — a thread's binding locks after its first
     /// turn, so switching gateways is a CLEAN CUT into a new thread, never a
     /// rebind that would hand a different agent a history it never produced).
     ///
-    /// V1 is TEXT-ONLY: attachments (image bytes / extracted text blocks) are
-    /// NOT copied — a future pass can deep-copy `Attachment` rows. The cloned
-    /// turns carry their original `role` / `text` / `sourceDevice` and a fresh
-    /// `createdAt` sequence preserving order. CloudKit-store-compatible: uses
-    /// the same `insertNewObject` + background-context save pattern as the
-    /// existing CRUD (the mirror exports the new rows on the next sync).
-    func cloneConversation(id: UUID, toBackend rawString: String) async throws -> ConversationRecord {
+    /// Attachments are DEEP-COPIED. Inline bytes (image JPEGs, extracted text)
+    /// live in `Attachment.data` and re-encode on any gateway, so they always
+    /// carry. A SERVER reference carries only when `targetFileLaneID` equals the
+    /// lane that minted its `storedKey` — the lane is `SHA256(file-server URL +
+    /// credential)`, NOT a gateway identity, so two gateways pointed at one
+    /// WebDAV share a lane and the file genuinely still resolves. Otherwise the
+    /// row is DETACHED: kept as a byte-less tombstone (`storedKey` nil, previews
+    /// dropped) so the bubble still names the file and
+    /// `ConverseRequest.spliceFileUnavailableNote` can tell the new gateway the
+    /// file is unreachable rather than letting it silently vanish.
+    ///
+    /// INVARIANT: a cloned message never carries a `storedKey` without its
+    /// owning lane, in either direction. A key with a nil/foreign lane fails
+    /// `canAccessExistingBlob` closed and would refuse the user's Try Again with
+    /// a bogus "file transfer isn't configured"; a foreign key also pollutes the
+    /// retro-output detector's token set, which matches inbound keys WITHOUT a
+    /// lane check and would suppress a legitimate output chip on the new
+    /// gateway. `failureCode` / `failureWireCode` / `failureHadHistoryImages`
+    /// are always dropped: `retry` re-asserts a stored terminal verdict, so a
+    /// verdict rendered by the OLD gateway would make Try Again permanently
+    /// self-refusing against a gateway that never issued it.
+    ///
+    /// A trailing user turn with no reply after it lands `failed` — the one
+    /// structural rule covering a source turn that failed, one still `sending`,
+    /// and a legacy nil — so the thread offers an actionable Try Again instead
+    /// of a delivered-looking dead row. `trailingSourceStatus` reports what that
+    /// row's status WAS, so the caller can auto-continue a genuinely failed turn
+    /// while leaving an in-flight one for the user to fire deliberately.
+    ///
+    /// CloudKit-store-compatible: uses the same `insertNewObject` +
+    /// background-context save pattern as the existing CRUD (the mirror exports
+    /// the new rows on the next sync).
+    func cloneConversation(
+        id: UUID,
+        toBackend rawString: String,
+        targetFileLaneID: String? = nil
+    ) async throws -> CloneResult {
         try await ensureLoaded()
         let context = newWriteContext()
         let newID = UUID()
         let now = Date()
         let sessionID = UUID().uuidString
 
-        let snippet: String? = try await context.perform { [context] in
+        let outcome: (snippet: String?, continuationMessageID: UUID?, trailingSourceStatus: String?)
+        outcome = try await context.perform { [context] in
             // Source conversation + its text turns (createdAt-ascending).
             let convoRequest = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             convoRequest.predicate = NSPredicate(format: "id == %@", id as CVarArg)
@@ -713,9 +764,15 @@ actor ConversationStore {
             }
             let sourceTitleSnippet = source.value(forKey: "titleSnippet") as? String
 
+            let sourceHideEarlierPhotos = source.value(forKey: "hideEarlierPhotos") as? Bool ?? false
+
             let msgRequest = NSFetchRequest<NSManagedObject>(entityName: "Message")
             msgRequest.predicate = NSPredicate(format: "conversation.id == %@", id as CVarArg)
             msgRequest.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
+            // The copy reads every message's attachments; without this the
+            // relationship (and then each blob) faults one message at a time
+            // inside the write transaction.
+            msgRequest.relationshipKeyPathsForPrefetching = ["attachments"]
             let sourceMessages = try context.fetch(msgRequest)
 
             // New conversation bound to the target gateway.
@@ -731,43 +788,205 @@ actor ConversationStore {
             conversation.setValue(sessionID, forKey: "sessionID")
             conversation.setValue(rawString, forKey: "backend")
             conversation.setValue(sourceTitleSnippet, forKey: "titleSnippet")
+            // "Keep chatting without photos" is a SAFETY switch the user threw
+            // after a gateway choked on this thread's image history, and it must
+            // survive the fork. Load-bearing now that attachments deep-copy: the
+            // clone carries every image blob AND may auto-continue, so a reset
+            // flag would replay the exact payload the user suppressed, on the
+            // first request, unprompted.
+            conversation.setValue(sourceHideEarlierPhotos, forKey: "hideEarlierPhotos")
 
-            // Copy TEXT turns in order, preserving relative timing via a small
+            // Copy turns in order, preserving relative timing via a small
             // increasing offset so `createdAt`-ascending render order matches
-            // the original. Attachments are intentionally skipped (V1 text-only).
+            // the original.
             var offset: TimeInterval = 0
+            var lastInserted: NSManagedObject?
+            var lastInsertedID: UUID?
+            var lastInsertedRole: String?
+            var lastSourceStatus: String?
             for sourceMessage in sourceMessages {
-                guard let text = sourceMessage.value(forKey: "text") as? String,
-                      let role = sourceMessage.value(forKey: "role") as? String else { continue }
+                // `Message.text` is optional in the model, so a partially-synced
+                // CloudKit row can arrive with nil text. Coalesce (as
+                // `MessageRecord` does on read) rather than skip: skipping would
+                // silently drop that turn's ATTACHMENTS too, and — if it were the
+                // trailing user turn — would leave the fork missing the user's
+                // actual last message while mis-targeting the continuation at
+                // the agent reply before it.
+                let text = sourceMessage.value(forKey: "text") as? String ?? ""
+                guard let role = sourceMessage.value(forKey: "role") as? String else { continue }
+                let messageID = UUID()
+                let createdAt = now.addingTimeInterval(offset)
                 let message = NSEntityDescription.insertNewObject(
                     forEntityName: "Message", into: context
                 )
-                message.setValue(UUID(), forKey: "id")
+                message.setValue(messageID, forKey: "id")
                 message.setValue(role, forKey: "role")
                 message.setValue(text, forKey: "text")
-                message.setValue(now.addingTimeInterval(offset), forKey: "createdAt")
+                message.setValue(createdAt, forKey: "createdAt")
                 message.setValue(sourceMessage.value(forKey: "sourceDevice"), forKey: "sourceDevice")
                 // Cloned turns are historical — never `sending` (no in-flight).
+                // The trailing user turn is re-stamped `failed` after the loop.
                 message.setValue(nil, forKey: "status")
                 message.setValue(conversation, forKey: "conversation")
+
+                // Ownership grain matches the wire's exactly
+                // (`ConverseRequest.fileLaneID(for:)`): a user row owns its
+                // handed-off keys via `fileTransferLaneID`, an agent row owns
+                // its scanned outputs via `outputScanLaneID`. Do not invent a
+                // second grain — the two must agree or a row the wire trusts
+                // could be detached here (or worse, the reverse).
+                let sourceLaneKey = role == "agent" ? "outputScanLaneID" : "fileTransferLaneID"
+                let sourceLaneID = sourceMessage.value(forKey: sourceLaneKey) as? String
+                let laneCarries = sourceLaneID != nil && sourceLaneID == targetFileLaneID
+
+                let copiedKeyCount = Self.copyAttachments(
+                    from: sourceMessage,
+                    to: message,
+                    into: context,
+                    laneCarries: laneCarries,
+                    at: createdAt
+                )
+                // The lane rides along ONLY when a key actually did. Writing it
+                // otherwise would leave a lane with nothing to own; omitting it
+                // when a key carried would strand that key unusable.
+                if copiedKeyCount > 0 {
+                    message.setValue(targetFileLaneID, forKey: sourceLaneKey)
+                    if role == "agent" {
+                        // Preserved outputs are already scanned — re-arming would
+                        // re-probe the file server for files it already adopted.
+                        message.setValue(true, forKey: "outputScanDone")
+                    }
+                }
+
+                lastInserted = message
+                lastInsertedID = messageID
+                lastInsertedRole = role
+                lastSourceStatus = sourceMessage.value(forKey: "status") as? String
                 offset += 0.001
+
+                // Release the SOURCE row's blobs as soon as they are copied.
+                // Everything here runs in one transaction, so without this an
+                // image-heavy thread holds both sides — every faulted source
+                // blob AND every dirty destination blob — resident until the
+                // save. Re-faulting the source halves the peak; the destination
+                // half is inherent to a single atomic save, which is the right
+                // trade against a half-written clone.
+                context.refresh(sourceMessage, mergeChanges: false)
+            }
+
+            // A trailing user turn has no reply in the clone and never will
+            // unless something acts, so `failed` is true by construction — and
+            // it is the affordance-bearing state (`deliveryErrorRow` + Try
+            // Again). Mid-thread rows stay nil: an un-actionable Retry chip
+            // above an existing agent reply would be nonsense.
+            var continuationMessageID: UUID?
+            var trailingSourceStatus: String?
+            if lastInsertedRole == "user", let lastInserted, lastSourceStatus != "sent" {
+                // `sent` is excluded: that turn provably REACHED its gateway
+                // (the status is only written when the reply lands), so a
+                // missing agent row is a lost/partially-synced reply, not an
+                // undelivered message. Stamping it `failed` would put "this
+                // message wasn't delivered" under a message that was.
+                lastInserted.setValue("failed", forKey: "status")
+                continuationMessageID = lastInsertedID
+                trailingSourceStatus = lastSourceStatus
             }
 
             try context.save()
-            return sourceTitleSnippet
+            return (sourceTitleSnippet, continuationMessageID, trailingSourceStatus)
         }
 
         await postDidChange()
 
-        return ConversationRecord(
-            id: newID,
-            title: nil,
-            createdAt: now,
-            lastActivityAt: now,
-            sessionID: sessionID,
-            backend: rawString,
-            titleSnippet: snippet
+        return CloneResult(
+            conversation: ConversationRecord(
+                id: newID,
+                title: nil,
+                createdAt: now,
+                lastActivityAt: now,
+                sessionID: sessionID,
+                backend: rawString,
+                titleSnippet: outcome.snippet
+            ),
+            continuationMessageID: outcome.continuationMessageID,
+            trailingSourceStatus: outcome.trailingSourceStatus
         )
+    }
+
+    /// Deep-copy `source`'s `Attachment` rows onto `destination`. Returns the
+    /// number of copied rows that kept a non-empty `storedKey`, which is what
+    /// tells the caller whether the owning lane may ride along.
+    ///
+    /// Routed through `applyDraft` rather than a hand-rolled `setValue` loop so
+    /// the draft→column mapping stays at ONE site and can never drift between
+    /// the append paths and this one.
+    private static func copyAttachments(
+        from source: NSManagedObject,
+        to destination: NSManagedObject,
+        into context: NSManagedObjectContext,
+        laneCarries: Bool,
+        at now: Date
+    ) -> Int {
+        // The relationship is an unordered `NSSet` (CloudKit rejects
+        // `NSOrderedSet`) — `sequence` is the render/wire order, same as
+        // `MessageRecord.init(managedObject:)`.
+        guard let rows = source.value(forKey: "attachments") as? Set<NSManagedObject> else {
+            return 0
+        }
+        let ordered = rows.sorted {
+            ($0.value(forKey: "sequence") as? Int16 ?? 0) < ($1.value(forKey: "sequence") as? Int16 ?? 0)
+        }
+
+        var keptKeys = 0
+        for row in ordered {
+            let isServerReference = (row.value(forKey: "isServerReference") as? NSNumber)?.boolValue ?? false
+            // TWO different consequences of a lane that does not carry, and
+            // conflating them is a live bug:
+            //
+            //  - The KEY dies on EVERY row, not just server references. A
+            //    dual-route inline image is an ordinary image row (bytes
+            //    present, `isServerReference` false) that ALSO persisted an
+            //    upload key, and `RetryFileReferenceResolver.hasRequiredStoredKeys`
+            //    looks at ANY non-empty key. Leaving one on a lane-less clone
+            //    makes the whole turn refuse Try Again with a bogus "file
+            //    transfer isn't configured".
+            //  - The BYTES are only unreachable for a server reference, whose
+            //    `data` lives on the file server. An inline image keeps its
+            //    bytes and rides the wire exactly as before; it just loses a key
+            //    that no longer addresses anything.
+            let keyDetached = !laneCarries
+            let bytesUnreachable = isServerReference && !laneCarries
+
+            var draft = AttachmentDraft(
+                mimeType: row.value(forKey: "mimeType") as? String ?? "application/octet-stream",
+                filename: row.value(forKey: "filename") as? String,
+                data: bytesUnreachable ? Data() : (row.value(forKey: "data") as? Data ?? Data()),
+                thumbnailData: bytesUnreachable ? nil : row.value(forKey: "thumbnailData") as? Data,
+                width: Int(row.value(forKey: "width") as? Int32 ?? 0),
+                height: Int(row.value(forKey: "height") as? Int32 ?? 0),
+                byteSize: Int(row.value(forKey: "byteSize") as? Int64 ?? 0),
+                sequence: Int(row.value(forKey: "sequence") as? Int16 ?? 0)
+            )
+            draft.isServerReference = isServerReference
+            draft.storedKey = keyDetached ? nil : row.value(forKey: "storedKey") as? String
+            draft.previewData = bytesUnreachable ? nil : row.value(forKey: "previewData") as? Data
+            draft.previewKind = bytesUnreachable ? nil : row.value(forKey: "previewKind") as? String
+
+            if draft.storedKey?.isEmpty == false { keptKeys += 1 }
+
+            let attachment = NSEntityDescription.insertNewObject(
+                forEntityName: "Attachment", into: context
+            )
+            applyDraft(
+                draft,
+                to: attachment,
+                on: destination,
+                id: UUID(),
+                sequence: draft.sequence,
+                at: now
+            )
+        }
+        return keptKeys
     }
 
     /// Fetch every conversation, most-recently-active first (`lastActivityAt`
@@ -2012,6 +2231,23 @@ actor ConversationStore {
             request.fetchLimit = 1
             guard let conversation = try context.fetch(request).first else { return }
             conversation.setValue(nil, forKey: "titleSnippet")
+            try context.save()
+        }
+    }
+
+    /// Test-only: clear a message's `text` to simulate a partially-synced
+    /// CloudKit row (`Message.text` is `optional="YES"` in the model, so this is
+    /// a shape the store really can be handed). `#if DEBUG` so it never ships.
+    /// Not used by app code.
+    func debugClearMessageText(messageID: UUID) async throws {
+        try await ensureLoaded()
+        let context = newWriteContext()
+        try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+            guard let message = try context.fetch(request).first else { return }
+            message.setValue(nil, forKey: "text")
             try context.save()
         }
     }
