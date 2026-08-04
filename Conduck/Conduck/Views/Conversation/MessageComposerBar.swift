@@ -16,13 +16,25 @@
 // pointing at a torn-down mount, so the transcript was silently dropped — the
 // bug this convergence onto `InAppAudioRecorder` fixes.)
 //
-// Attachments (macOS): library + files + DRAG-DROP (no camera). Layout is
-// `[mic][paperclip][field][send]` with the `AttachmentPreviewStrip` above. The
-// drop target uses RAW `NSItemProvider` (`.onDrop`, NOT typed
-// `.dropDestination` — Safari image drags are file-promises) and routes image +
-// text-file UTTypes into staging; an amber drop-target highlight animates while
-// a drag hovers. Send enables when there's a draft OR a staged attachment, and
-// is disabled while any item is still loading.
+// Attachments (macOS): library + files + drag-drop (no camera). Layout is
+// `[mic][paperclip][field][send]` with the `AttachmentPreviewStrip` above.
+//
+// The DROP TARGET is not here — it spans the whole conversation pane and lives
+// on `MainWindowView`, because the useful target is the transcript, not this
+// bar. The window materialises every dropped item (a provider's bytes must be
+// read inside the drop callback, which outlives no view), stamps the batch with
+// the mount that was on screen, and parks it; `drainPendingDropBatch` claims
+// only batches stamped for THIS mount, so a file dropped on one conversation
+// can never surface in the composer that replaced it.
+//
+// Picked and dropped files meet at `stageOneFile`, the one classifier: image →
+// inline/dual, text → planner, binary → server upload or a blocking
+// `.needsSetup` tile. It runs inside ONE ordered task per batch so tiles append
+// in the user's selection/drop order.
+//
+// Send enables when there's a draft OR a staged attachment that can actually
+// carry something, and is disabled while any item is still loading — including
+// while the window is resolving a drop this composer has not claimed yet.
 //
 // Typed sends go through the injected `onSendText` closure (the host wires it
 // to `MenuBarCoordinator.handleTypedText`, which mints the conversation on the
@@ -50,6 +62,65 @@ private struct MacPendingLargeFile: Identifiable, Equatable {
     /// a newly configured lane while the alert is open.
     let ref: RemoteAgentRef
     let snapshot: SettingsManager.FileTransferSnapshot?
+}
+
+/// One file on its way through the classifier, plus what the app may do with
+/// its bytes.
+///
+/// WHY `originalName` is carried rather than read back off `url`: a source the
+/// app already copied into temp has a `conduck-ftstage-<uuid>-` prefix on its
+/// leaf, and that prefixed leaf would otherwise become the name the user sees
+/// on the tile and the name the agent is told to open.
+private struct MacStagingSource {
+    let url: URL
+    let originalName: String
+    /// True when `url` is an app-owned copy (staging adopts it and owns its
+    /// deletion) rather than a user-owned file the picker vended.
+    let isAppOwned: Bool
+
+    /// A file the user picked through the importer: user-owned, and its own
+    /// leaf IS its name.
+    init(pickedURL: URL) {
+        self.url = pickedURL
+        self.originalName = pickedURL.lastPathComponent
+        self.isAppOwned = false
+    }
+
+    /// A file the WINDOW already materialised out of a drop. The window copied
+    /// it because a dropped `file://` URL is only a reference to content the
+    /// drag source owns; staging adopts that copy instead of making a second
+    /// one, which matters when the file is a multi-gigabyte video.
+    init(adopting source: DroppedFileSource) {
+        self.url = source.url
+        self.originalName = source.originalName
+        self.isAppOwned = source.isAppOwned
+    }
+
+    /// Delete the source if the app owns it. Safe to call on a user-owned
+    /// pick, where it is a no-op — a picked file is never ours to delete.
+    func disposeIfAppOwned() {
+        guard isAppOwned else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Re-stamp an extraction with the source's true name. `TextFileExtractor`
+    /// derives `filename` from the URL leaf, which is wrong for an adopted copy.
+    func renaming(_ extracted: TextFileExtractor.ExtractedFile) -> TextFileExtractor.ExtractedFile {
+        guard extracted.filename != originalName else { return extracted }
+        return TextFileExtractor.ExtractedFile(
+            filename: originalName,
+            mimeType: extracted.mimeType,
+            text: extracted.text
+        )
+    }
+}
+
+/// What the ordered staging loop should do after one source.
+private enum MacStageSourceOutcome {
+    /// Staged, or skipped as unstageable — either way, keep draining.
+    case next
+    /// The batch is being torn down; stop without touching later sources.
+    case cancelled
 }
 
 struct MessageComposerBar: View {
@@ -90,6 +161,30 @@ struct MessageComposerBar: View {
     /// is sent) and resets the binding to nil. Optional/default-nil so the iOS-
     /// parity new-chat and active-chat sites that don't bridge can omit it.
     var pendingStagedImage: Binding<Data?>? = nil
+    /// Which mount this is. The window stamps a drop with the identity that was
+    /// on screen when it landed, and only the composer wearing that identity
+    /// drains it — so a file dropped on conversation A can never surface in the
+    /// composer that replaced it.
+    let mountIdentity: ComposerMountIdentity
+    /// Drop bridge: the WINDOW owns the pane-wide drop target and materialises
+    /// every dropped item (a provider's bytes must be read inside the drop
+    /// callback, which outlives no view), then parks the resolved batch here.
+    /// The composer claims it, stages it in drop order, and owns its temp files
+    /// from that moment. Optional/default-nil so a site that doesn't bridge can
+    /// omit it.
+    var pendingDropBatch: Binding<PendingDropBatch?>? = nil
+    /// Raised with THIS composer's identity while a dispatch owns staging, so
+    /// the window can refuse a drop outright rather than accept one that
+    /// staging would silently discard.
+    var dispatchingIdentity: Binding<ComposerMountIdentity?>? = nil
+    /// True while the window is still resolving a drop, or holds a resolved
+    /// batch this composer has not claimed yet. Gates Send across a window the
+    /// composer's own counters cannot see — the files exist, but no tile does.
+    var isDropResolving: Bool = false
+    /// How many items the window's in-flight drop carries. Mirrored as
+    /// `.loading` tiles so the disabled Send has something on screen accounting
+    /// for it while a slow item resolves.
+    var resolvingDropCount: Int = 0
 
     @FocusState private var fieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -101,7 +196,6 @@ struct MessageComposerBar: View {
     @State private var showingPhotosPicker = false
     /// Unified "Choose Files…" importer (accepts any file; classifier routes).
     @State private var showingFileImporter = false
-    @State private var isDropTargeted = false
     /// File-transfer setup guide sheet (menu item or a `.needsSetup` tile's
     /// "Set Up" button). On dismiss: refresh + promote.
     @State private var showingSetupGuide = false
@@ -131,6 +225,16 @@ struct MessageComposerBar: View {
     /// dropped url so the async upload + send both read a plain file). Cleaned up
     /// on remove / after a turn clears.
     @State private var serverStagingFiles: [UUID: URL] = [:]
+    /// App-owned drop sources handed to a tile that RETAINS the URL (an
+    /// inline-only text attachment reads it at send). Tracked separately from
+    /// `serverStagingFiles` because deletability follows OWNERSHIP, not the
+    /// path: the importer's picks live at the same kind of URL and are never
+    /// ours to delete. Expires with the tile.
+    @State private var adoptedSourceFiles: [UUID: URL] = [:]
+    /// Tiles standing in for a drop the window is still resolving. Purely
+    /// presentational — they are replaced by real tiles the moment the batch is
+    /// claimed, and never reach a dispatch.
+    @State private var dropPlaceholderIDs: [UUID] = []
     /// The minted storedKey per staged server item (keyed by item id), so a
     /// Retry re-uploads under the SAME key — overwriting the failed partial blob
     /// rather than orphaning it under a fresh key. In-memory only.
@@ -200,8 +304,12 @@ struct MessageComposerBar: View {
         viewModel?.showsGatewayWaitIndicator ?? false
     }
 
+    /// A `.failed` tile carries NO payload, so a strip holding only failures is
+    /// not sendable — counting it would light up Send for a turn that then does
+    /// nothing. Rare from the picker; routine once a whole pane accepts drops,
+    /// where a load can time out.
     private var hasSendableContent: Bool {
-        !trimmedDraft.isEmpty || !attachments.isEmpty
+        !trimmedDraft.isEmpty || attachments.contains { !$0.isFailed }
     }
 
     private var isSendDisabled: Bool {
@@ -214,6 +322,9 @@ struct MessageComposerBar: View {
             || activeGatewayStages > 0
             || !preparationTasks.isEmpty
             || attachmentDispatchInProgress
+            || isDropResolving                // a dropped file is on its way but has
+                                              // no tile yet — sending now would ship
+                                              // the turn without it
             || captureActive                  // Part 1f: mic now POPULATES the field —
     }                                         // block Send + onSubmit during capture
 
@@ -229,9 +340,7 @@ struct MessageComposerBar: View {
         composerStack
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .overlay(dropHighlight)
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: attachments)
-        .animation(.easeInOut(duration: 0.18), value: isDropTargeted)
         .onAppear {
             fieldFocused = true
             newChatGatewaySelectionLocked?.wrappedValue = shouldLockNewChatGateway
@@ -313,11 +422,16 @@ struct MessageComposerBar: View {
                 AttachmentChipStyle.formattedSize(file.byteSize)
             ))
         }
-        // Raw NSItemProvider drop (Safari drags are file-promises — typed
-        // `.dropDestination` would miss them). `.fileURL` already catches any
-        // dropped file (incl. videos/binaries → `.needsSetup` / server route).
-        .onDrop(of: [.image, .fileURL, .plainText, .commaSeparatedText, .json, .rtf, .sourceCode], isTargeted: $isDropTargeted) { providers in
-            handleDrop(providers)
+        // Drops land on the WHOLE conversation pane, not this bar — the window
+        // owns that target and parks the resolved batch here. Drain on appear
+        // (a batch stamped for a mount that had not appeared yet) and on change
+        // (this mount already on screen when the drop landed).
+        .onAppear { drainPendingDropBatch() }
+        .onChange(of: pendingDropBatch?.wrappedValue?.id) { _, id in
+            if id != nil { drainPendingDropBatch() }
+        }
+        .onChange(of: resolvingDropCount) { _, count in
+            syncDropPlaceholders(to: count)
         }
         .task(id: viewModel?.conversationID) {
             await refreshFileTransfer()
@@ -542,81 +656,121 @@ struct MessageComposerBar: View {
         }
     }
 
-    // MARK: - Drop highlight
+    // MARK: - Drop batch drain (the window owns the target; this owns staging)
 
-    @ViewBuilder
-    private var dropHighlight: some View {
-        if isDropTargeted {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(AppColors.brandAmber, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(AppColors.brandAmber.opacity(0.08))
-                )
-                .padding(4)
-                .allowsHitTesting(false)
-                .transition(.opacity)
+    /// Claim a batch the window parked for THIS mount, if any.
+    ///
+    /// The claim is main-actor atomic and happens before any suspension: read
+    /// the value, check the stamp, take it out, clear the binding. Two mounts
+    /// can briefly observe the same binding during a SwiftUI transition, and
+    /// whichever one runs first must leave nothing for the other to also claim.
+    /// A composer whose identity does NOT match leaves the binding alone — the
+    /// window owns discarding a batch whose destination has gone away.
+    private func drainPendingDropBatch() {
+        guard let binding = pendingDropBatch,
+              let batch = binding.wrappedValue,
+              batch.destination == mountIdentity else { return }
+        binding.wrappedValue = nil
+        stageDropBatch(batch)
+    }
+
+    /// Stage a claimed batch in DROP order through the same classifier the
+    /// importer uses. One ordered task for the whole batch — per-item tasks
+    /// would let a small file overtake a large one, which is the bug the
+    /// old per-provider drop path shipped.
+    private func stageDropBatch(_ batch: PendingDropBatch) {
+        // Real tiles take over from here. Removed explicitly rather than left to
+        // the count's `onChange`, which lands a render later and would show the
+        // placeholders alongside the tiles that replaced them.
+        removeDropPlaceholders()
+        guard !attachmentDispatchInProgress else {
+            // Staging would refuse every item; reclaim rather than accept the
+            // drop and drop it on the floor.
+            disposeDropSources(batch.items[...])
+            return
+        }
+        activeGatewayStages += 1
+        let preparationID = UUID()
+        let task = Task { @MainActor in
+            defer {
+                activeGatewayStages -= 1
+                preparationTasks[preparationID] = nil
+            }
+            // Resolve the gateway AUTHORITATIVELY (the conversation's persisted
+            // backend), exactly as the screenshot bridge does. A just-mounted
+            // composer's `effectiveRef` is still the default for a beat, so a
+            // drop drained in that window would otherwise pick the wrong
+            // gateway's file server.
+            guard let ref = await authoritativeComposerRef(), !Task.isCancelled else {
+                disposeDropSources(batch.items[...])
+                return
+            }
+            // ONE lane snapshot for every binary in this batch.
+            let capturedLane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
+            guard !Task.isCancelled else {
+                disposeDropSources(batch.items[...])
+                return
+            }
+            for (index, item) in batch.items.enumerated() {
+                guard !Task.isCancelled else {
+                    disposeDropSources(batch.items[index...])
+                    return
+                }
+                switch item {
+                case .image(let data):
+                    await stageImage(data, ref: ref)
+                case .file(let source):
+                    let outcome = await stageOneFile(
+                        MacStagingSource(adopting: source),
+                        ref: ref,
+                        capturedBinaryLane: capturedLane
+                    )
+                    if case .cancelled = outcome {
+                        disposeDropSources(batch.items[(index + 1)...])
+                        return
+                    }
+                case .failed:
+                    // A load that errored or timed out. Shown as a failed tile
+                    // rather than omitted — the user watched the app accept
+                    // this item and is owed an explanation.
+                    attachments.append(StagedAttachment(kind: .failed))
+                }
+            }
+        }
+        preparationTasks[preparationID] = task
+    }
+
+    /// Mirror the window's in-flight drop as `.loading` tiles. They gate Send
+    /// through the ordinary `hasLoadingItem` path and, unlike a bare disabled
+    /// button, say WHY. Cleared when the batch is claimed or the drop is
+    /// abandoned (count returns to zero).
+    private func syncDropPlaceholders(to count: Int) {
+        guard count != dropPlaceholderIDs.count else { return }
+        guard count > 0 else {
+            removeDropPlaceholders()
+            return
+        }
+        while dropPlaceholderIDs.count < count {
+            let tile = StagedAttachment(kind: .loading)
+            dropPlaceholderIDs.append(tile.id)
+            attachments.append(tile)
         }
     }
 
-    // MARK: - Drop handling (raw NSItemProvider)
+    private func removeDropPlaceholders() {
+        guard !dropPlaceholderIDs.isEmpty else { return }
+        let ids = Set(dropPlaceholderIDs)
+        dropPlaceholderIDs.removeAll()
+        attachments.removeAll { ids.contains($0.id) }
+    }
 
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        var handled = false
-        for provider in providers {
-            // Image data (incl. Safari file-promise drags).
-            if provider.canLoadObject(ofClass: NSImage.self) {
-                handled = true
-                let ref = effectiveRef
-                let preparationID = UUID()
-                activeGatewayStages += 1
-                let progress = provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
-                    Task { @MainActor in
-                        defer {
-                            activeGatewayStages -= 1
-                            providerLoadProgresses[preparationID] = nil
-                        }
-                        guard providerLoadProgresses[preparationID] != nil else { return }
-                        guard let data else { return }
-                        // DUAL route (inline vision + editable file copy) via
-                        // `stageImage`; falls back to inline-only when no
-                        // file-server is configured.
-                        await stageImage(data, ref: ref)
-                    }
-                }
-                providerLoadProgresses[preparationID] = progress
-            } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                handled = true
-                let ref = effectiveRef
-                let preparationID = UUID()
-                activeGatewayStages += 1
-                let progress = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
-                    let resolvedURL = data.flatMap {
-                        URL(dataRepresentation: $0, relativeTo: nil)
-                    }
-                    Task { @MainActor in
-                        defer {
-                            activeGatewayStages -= 1
-                            providerLoadProgresses[preparationID] = nil
-                        }
-                        guard providerLoadProgresses[preparationID] != nil else { return }
-                        guard let resolvedURL else { return }
-                        // ONE classifier for every dropped file — identical to the
-                        // "Choose Files…" importer: image → DUAL/inline via
-                        // `stageImage`; text/code → planner via `stageTextFile`
-                        // (size/type-guarded probe, no whole-file read for
-                        // binaries); binary → `.serverFile` upload on a configured
-                        // gateway, or a blocking `.needsSetup` tile on an
-                        // unconfigured one (no more silent doomed `.file(url)`
-                        // that failed at send with a misleading "couldn't be
-                        // read" banner). >100 MB → soft-confirm.
-                        stageServerFiles([resolvedURL], ref: ref)
-                    }
-                }
-                providerLoadProgresses[preparationID] = progress
-            }
+    /// Reclaim the app-owned temp behind every not-yet-staged item. Once
+    /// staging adopts a source, its tile owns it and it must NOT be swept here.
+    private func disposeDropSources(_ items: ArraySlice<ResolvedDropItem>) {
+        for item in items {
+            guard case .file(let source) = item, source.isAppOwned else { continue }
+            try? FileManager.default.removeItem(at: source.url)
         }
-        return handled
     }
 
     private func isImageURL(_ url: URL) -> Bool {
@@ -792,6 +946,9 @@ struct MessageComposerBar: View {
               !isSendDisabled,
               attachments.serverOwnershipMatches(dispatchRef) else { return }
         attachmentDispatchInProgress = true
+        // Tell the window SYNCHRONOUSLY (an observed report would be a render
+        // late, and a drop that lands in that gap gets accepted then discarded).
+        dispatchingIdentity?.wrappedValue = mountIdentity
         Task {
             defer { finishAttachmentDispatch() }
             await awaitPreferredUploads()
@@ -816,6 +973,11 @@ struct MessageComposerBar: View {
 
     private func finishAttachmentDispatch() {
         attachmentDispatchInProgress = false
+        // Release only OUR claim: a composer that replaced us may already have
+        // raised its own, and clearing that would let a drop through mid-send.
+        if dispatchingIdentity?.wrappedValue == mountIdentity {
+            dispatchingIdentity?.wrappedValue = nil
+        }
         if deferredAttachmentTeardown.consume() {
             clearDiscardedAttachments()
         }
@@ -845,94 +1007,161 @@ struct MessageComposerBar: View {
     /// (brand-new chat): the binary route still uploads eagerly — under a FLAT
     /// storedKey, since no conversation folder exists yet.
     private func stageServerFiles(_ urls: [URL], ref stagedRef: RemoteAgentRef? = nil) {
+        stageSources(urls.map(MacStagingSource.init(pickedURL:)), ref: stagedRef)
+    }
+
+    /// Drain an ordered list of sources through the classifier, sequentially.
+    ///
+    /// ONE ordered task drains them so tiles append in the user's SELECTION /
+    /// DROP order — per-source concurrent tasks let a fast small file overtake a
+    /// slow large one (which reordered a multi-file drop — see code-review). The
+    /// blocking file I/O still hops off-main per source (the UI never beachballs
+    /// on an iCloud-not-downloaded / external / network volume); the sources are
+    /// just no longer raced against each other.
+    ///
+    /// The counter is raised BEFORE the first suspension and one task is
+    /// registered for the WHOLE loop — both are load-bearing for Send gating.
+    private func stageSources(_ sources: [MacStagingSource], ref stagedRef: RemoteAgentRef? = nil) {
         guard !attachmentDispatchInProgress else { return }
         let ref = stagedRef ?? effectiveRef
         activeGatewayStages += 1
         let preparationID = UUID()
-        // ONE ordered task drains the urls SEQUENTIALLY so tiles append in the
-        // user's SELECTION order — per-url concurrent tasks let a fast small file
-        // overtake a slow large one (which reordered a multi-file drop — see
-        // code-review). The blocking file I/O still hops off-main per url (the UI
-        // never beachballs on an iCloud-not-downloaded / external / network
-        // volume); the urls are just no longer raced against each other.
         let task = Task { @MainActor in
             defer {
                 activeGatewayStages -= 1
                 preparationTasks[preparationID] = nil
             }
+            // ONE lane snapshot for every binary in this batch — refetching per
+            // source could mix physical lanes within a single selection.
             let capturedLane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
             guard !Task.isCancelled else { return }
-            for url in urls {
+            for source in sources {
                 guard !Task.isCancelled else { return }
-                // FOLDERS are unstageable (the staging copy would recursively
-                // duplicate the whole tree into tmp; the upload can't send one) —
-                // skip defensively; the importer's type set already excludes them.
-                if isDirectoryURL(url) { continue }
-
-                // Image → DUAL route (inline vision + editable file copy) via
-                // `stageImage`; inline-only fallback when no file-server / no VM.
-                // The inline route NEEDS the bytes in memory (vision processing),
-                // so an image over the soft-confirm threshold falls through to the
-                // BINARY branch instead (streamed server upload, soft-confirm) — a
-                // 500 MB TIFF must not be heap-loaded for a thumbnail. The size
-                // guard is metadata-only (stays on main); only the up-to-100 MB
-                // byte READ hops off-main (scope is process-wide → correct in one
-                // detached call).
-                if isImageURL(url), scopedFileByteSize(url) <= Constants.fileTransferSoftConfirmBytes {
-                    let data = await Task.detached { () -> Data? in
-                        let scoped = url.startAccessingSecurityScopedResource()
-                        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                        return try? Data(contentsOf: url)
-                    }.value
-                    guard !Task.isCancelled else { return }
-                    if let data { await stageImage(data, ref: ref) }
-                    continue
-                }
-
-                // TEXT/code file → the SAME planner as the importer
-                // (`TextFileExtractor.extract` is the text-vs-binary discriminator).
-                // GUARDED by a cheap pre-check (type + `textProbeMaxBytes`). WHY
-                // off-main: the extract is a WHOLE-FILE read that BLOCKS on a remote
-                // volume; run it ONCE here and thread the result into `stageTextFile`
-                // so the file is never read twice.
-                if shouldAttemptTextProbe(url) {
-                    let extracted = await Task.detached { try? TextFileExtractor.extract(from: url) }.value
-                    guard !Task.isCancelled else { return }
-                    if let extracted {
-                        await stageTextFile(url, extracted: extracted, ref: ref)
-                        continue
-                    }
-                }
-
-                // BINARY: file-to-file copy under scope OFF-main (no whole-file
-                // memory read; the copy BLOCKS on a remote volume), then route by
-                // gateway file-server presence + size. Order preserved: copy →
-                // byteSize check → soft-confirm / finalize.
-                guard let stagingURL = await Task.detached(
-                    operation: { AttachmentStagingFile.copyUnderScope(url) }
-                ).value else { continue }
-                guard !Task.isCancelled else {
-                    try? FileManager.default.removeItem(at: stagingURL)
-                    return
-                }
-                let originalName = url.lastPathComponent
-                let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                    ?? "application/octet-stream"
-                let byteSize = fileByteSize(stagingURL)
-                if byteSize > Constants.fileTransferSoftConfirmBytes {
-                    pendingLargeFiles.append(MacPendingLargeFile(
-                        stagingURL: stagingURL, originalName: originalName,
-                        mimeType: mimeType, byteSize: byteSize, ref: ref,
-                        snapshot: capturedLane))
-                    continue
-                }
-                finalizeBinaryStage(
-                    stagingURL: stagingURL, originalName: originalName,
-                    mimeType: mimeType, byteSize: byteSize,
-                    snapshot: capturedLane, ref: ref)
+                let outcome = await stageOneFile(
+                    source, ref: ref, capturedBinaryLane: capturedLane)
+                if case .cancelled = outcome { return }
             }
         }
         preparationTasks[preparationID] = task
+    }
+
+    /// Classify and stage ONE source. Runs inside `stageSources`' single ordered
+    /// task and must never spawn a task of its own — doing so would reintroduce
+    /// the cross-source reordering this loop exists to prevent.
+    private func stageOneFile(
+        _ source: MacStagingSource,
+        ref: RemoteAgentRef,
+        capturedBinaryLane: SettingsManager.FileTransferSnapshot?
+    ) async -> MacStageSourceOutcome {
+        let url = source.url
+        // FOLDERS are unstageable (the staging copy would recursively duplicate
+        // the whole tree into tmp; the upload can't send one) — skip defensively;
+        // the importer's type set already excludes them. An adopted folder is
+        // reclaimed here: nothing downstream will ever own it.
+        if isDirectoryURL(url) {
+            source.disposeIfAppOwned()
+            return .next
+        }
+
+        // Image → DUAL route (inline vision + editable file copy) via
+        // `stageImage`; inline-only fallback when no file-server / no VM.
+        // The inline route NEEDS the bytes in memory (vision processing),
+        // so an image over the soft-confirm threshold falls through to the
+        // BINARY branch instead (streamed server upload, soft-confirm) — a
+        // 500 MB TIFF must not be heap-loaded for a thumbnail. The size
+        // guard is metadata-only (stays on main); only the up-to-100 MB
+        // byte READ hops off-main (scope is process-wide → correct in one
+        // detached call).
+        if isImageURL(url), scopedFileByteSize(url) <= Constants.fileTransferSoftConfirmBytes {
+            let data = await Task.detached { () -> Data? in
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                return try? Data(contentsOf: url)
+            }.value
+            // The bytes are in memory and `stageImage` makes its own upload
+            // copy, so an adopted source is redundant the moment it is read —
+            // reclaim it now rather than let a ~100 MB temp sit until teardown.
+            source.disposeIfAppOwned()
+            guard !Task.isCancelled else { return .cancelled }
+            guard let data else {
+                // The read failed AFTER the drop was accepted (memory pressure
+                // on a large image, a volume that went away). A dropped item
+                // the user watched land is owed a tile; a picked one keeps the
+                // importer's historical silent skip.
+                if source.isAppOwned { attachments.append(StagedAttachment(kind: .failed)) }
+                return .next
+            }
+            await stageImage(data, ref: ref)
+            return .next
+        }
+
+        // TEXT/code file → the SAME planner as the importer
+        // (`TextFileExtractor.extract` is the text-vs-binary discriminator).
+        // GUARDED by a cheap pre-check (type + `textProbeMaxBytes`). WHY
+        // off-main: the extract is a WHOLE-FILE read that BLOCKS on a remote
+        // volume; run it ONCE here and thread the result into `stageTextFile`
+        // so the file is never read twice.
+        if shouldAttemptTextProbe(url) {
+            let extracted = await Task.detached { try? TextFileExtractor.extract(from: url) }.value
+            guard !Task.isCancelled else {
+                source.disposeIfAppOwned()
+                return .cancelled
+            }
+            if let extracted {
+                let stagedID = await stageTextFile(
+                    url, extracted: source.renaming(extracted), ref: ref)
+                // An inline-only text tile RETAINS this exact URL (the VM reads
+                // it at send), so an adopted source cannot be reclaimed here —
+                // hand it to the tile's lifetime instead. When the planner made
+                // its own server copy ours is merely redundant, and expiring it
+                // with the tile is still correct, just later.
+                if source.isAppOwned {
+                    if let stagedID {
+                        adoptedSourceFiles[stagedID] = url
+                    } else {
+                        source.disposeIfAppOwned()
+                    }
+                }
+                return .next
+            }
+        }
+
+        // BINARY: file-to-file copy under scope OFF-main (no whole-file
+        // memory read; the copy BLOCKS on a remote volume), then route by
+        // gateway file-server presence + size. Order preserved: copy →
+        // byteSize check → soft-confirm / finalize.
+        // An adopted source IS already an app-owned copy — adopt it in place.
+        // Copying again would double the disk cost of every dropped binary (a
+        // 2 GB video copied twice) for no gain, and the staging leaf's
+        // `conduck-ftstage-` prefix would compound.
+        let stagingURL: URL
+        if source.isAppOwned {
+            stagingURL = url
+        } else {
+            guard let copied = await Task.detached(
+                operation: { AttachmentStagingFile.copyUnderScope(url) }
+            ).value else { return .next }
+            stagingURL = copied
+        }
+        guard !Task.isCancelled else {
+            try? FileManager.default.removeItem(at: stagingURL)
+            return .cancelled
+        }
+        let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+            ?? "application/octet-stream"
+        let byteSize = fileByteSize(stagingURL)
+        if byteSize > Constants.fileTransferSoftConfirmBytes {
+            pendingLargeFiles.append(MacPendingLargeFile(
+                stagingURL: stagingURL, originalName: source.originalName,
+                mimeType: mimeType, byteSize: byteSize, ref: ref,
+                snapshot: capturedBinaryLane))
+            return .next
+        }
+        finalizeBinaryStage(
+            stagingURL: stagingURL, originalName: source.originalName,
+            mimeType: mimeType, byteSize: byteSize,
+            snapshot: capturedBinaryLane, ref: ref)
+        return .next
     }
 
     /// Stage a (size-cleared) binary: READY gateway (Test Connection passed) →
@@ -1103,12 +1332,17 @@ struct MessageComposerBar: View {
     /// `.file(url)` (today's behavior); server + small → `.dualText` (inline +
     /// eager upload, never gates Send); server + large/over-budget → `.serverFile`
     /// (file-only). Routed by EXTRACTED UTF-8 byte count, not raw file size.
+    ///
+    /// Returns the id of the tile it appended, or nil when nothing was staged.
+    /// The caller needs it to tie an ADOPTED drop source to that tile's
+    /// lifetime — the inline-only route retains the passed `url` itself.
+    @discardableResult
     private func stageTextFile(
         _ url: URL,
         extracted precomputed: TextFileExtractor.ExtractedFile? = nil,
         ref stagedRef: RemoteAgentRef? = nil
-    ) async {
-        guard !attachmentDispatchInProgress else { return }
+    ) async -> UUID? {
+        guard !attachmentDispatchInProgress else { return nil }
         activeGatewayStages += 1
         defer { activeGatewayStages -= 1 }
         // Capture the effective gateway before any suspension. A brand-new chat
@@ -1116,7 +1350,7 @@ struct MessageComposerBar: View {
         // storedKey + eager upload.
         let ref = stagedRef ?? effectiveRef
         let lane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return nil }
         let fileServerReady = lane != nil
 
         // Extract ONCE. The caller (`stageServerFiles`) already ran it OFF-main as
@@ -1131,10 +1365,11 @@ struct MessageComposerBar: View {
         } else {
             resolved = await Task.detached { try? TextFileExtractor.extract(from: url) }.value
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return nil }
         guard let extracted = resolved else {
-            attachments.append(StagedAttachment(kind: .file(url)))
-            return
+            let fallback = StagedAttachment(kind: .file(url))
+            attachments.append(fallback)
+            return fallback.id
         }
         let folderCapable = lane?.folderCapable ?? false
         let prepared = await TextAttachmentStagePreparer.prepare(
@@ -1149,7 +1384,7 @@ struct MessageComposerBar: View {
             if let upload = prepared.uploadRequest {
                 try? FileManager.default.removeItem(at: upload.localURL)
             }
-            return
+            return nil
         }
         var item = prepared.attachment
         if prepared.uploadRequest != nil {
@@ -1159,7 +1394,7 @@ struct MessageComposerBar: View {
         attachments.append(item)
 
         guard let upload = prepared.uploadRequest, let lane else {
-            return
+            return item.id
         }
         let id = item.id
         serverStagingFiles[id] = upload.localURL
@@ -1182,6 +1417,7 @@ struct MessageComposerBar: View {
                 snapshot: lane
             )
         }
+        return id
     }
 
     /// Running remaining inline-text budget (per-turn cap) — `.dualText` tiles
@@ -1513,6 +1749,7 @@ struct MessageComposerBar: View {
     /// on the gateway.
     private func removeAttachment(_ id: UUID) {
         guard !attachmentDispatchInProgress else { return }
+        dropPlaceholderIDs.removeAll { $0 == id }
         providerLoadProgresses.removeValue(forKey: id)?.cancel()
         releaseServerResources(for: id, wasHandedOff: false)
         attachments.removeAll { $0.id == id }
@@ -1532,6 +1769,11 @@ struct MessageComposerBar: View {
         // Reclaim any not-yet-confirmed large-file staging temps too.
         for file in pendingLargeFiles { try? FileManager.default.removeItem(at: file.stagingURL) }
         pendingLargeFiles.removeAll()
+        // Sweep any adopted drop source whose tile never materialised (staging
+        // lost a race with teardown), which the per-id pass above cannot see.
+        for url in adoptedSourceFiles.values { try? FileManager.default.removeItem(at: url) }
+        adoptedSourceFiles.removeAll()
+        dropPlaceholderIDs.removeAll()
         attachments.removeAll()
         pickerSelection.removeAll()
     }
@@ -1559,6 +1801,13 @@ struct MessageComposerBar: View {
         if let url = serverStagingFiles[id] {
             try? FileManager.default.removeItem(at: url)
             serverStagingFiles[id] = nil
+        }
+        // An adopted drop source the tile retained. Distinct from the staging
+        // copy above: for an inline-only text tile this IS the file the turn
+        // reads, and nothing else in the app knows it exists.
+        if let adopted = adoptedSourceFiles[id] {
+            try? FileManager.default.removeItem(at: adopted)
+            adoptedSourceFiles[id] = nil
         }
     }
 
