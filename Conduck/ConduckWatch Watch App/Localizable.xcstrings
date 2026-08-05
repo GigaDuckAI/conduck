@@ -931,24 +931,24 @@
         }
       }
     },
-    "remoteAgent.error.authFailed" : {
+    "remoteAgent.error.authFailed.recovery.v2" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Could not authenticate with your personal AI."
+            "value" : "Check this gateway's token if it has one, and check anything in front of it — a proxy or tunnel can forward the request in a form your server refuses."
           }
         }
       }
     },
-    "remoteAgent.error.authFailed.recovery" : {
+    "remoteAgent.error.authFailed.v2" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Open Settings and verify the bearer token for your gateway."
+            "value" : "The request to your personal AI was refused."
           }
         }
       }
@@ -1469,6 +1469,9 @@
           }
         }
       }
+    },
+    "Sending…" : {
+
     },
     "Sent to iPhone. Your transcript will arrive when it reconnects." : {
       "extractionState" : "manual",
