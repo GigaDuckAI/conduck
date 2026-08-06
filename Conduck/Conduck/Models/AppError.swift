@@ -456,9 +456,9 @@ enum AppError: LocalizedError {
         case .fileTransferServerError:
             return String(localized: "fileTransfer.error.serverError", defaultValue: "Your file-server reported an error.")
         case .fileTransferUploadFailed:
-            return String(localized: "fileTransfer.error.uploadFailed", defaultValue: "Couldn't upload the file to your gateway.")
+            return String(localized: "fileTransfer.error.uploadFailed", defaultValue: "Couldn't upload the file to your file server.")
         case .fileTransferFileUnavailable:
-            return String(localized: "fileTransfer.error.fileUnavailable", defaultValue: "That file is no longer on your gateway.")
+            return String(localized: "fileTransfer.error.fileUnavailable", defaultValue: "That file is no longer on your file server.")
         case .fileTransferNotAFileServer:
             return String(localized: "fileTransfer.error.notAFileServer", defaultValue: "That address answered, but it isn't serving your files.")
 

@@ -3029,7 +3029,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Attached file %@ for your gateway"
+            "value" : "Attached file %@ for your file server"
           }
         }
       }
@@ -3062,7 +3062,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Uploaded to your gateway"
+            "value" : "Uploaded to your file server"
           }
         }
       }
@@ -3073,7 +3073,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Uploading to your gateway"
+            "value" : "Uploading to your file server"
           }
         }
       }
@@ -3491,7 +3491,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "That file is no longer on your gateway."
+            "value" : "That file is no longer on your file server."
           }
         }
       }
@@ -3612,7 +3612,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Couldn't upload the file to your gateway."
+            "value" : "Couldn't upload the file to your file server."
           }
         }
       }
@@ -15266,6 +15266,39 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "You:"
+          }
+        }
+      }
+    },
+    "thread.fileDelivered.action.reviewSetup" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Review file setup"
+          }
+        }
+      }
+    },
+    "thread.fileDelivered.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck uploaded it and included its location in the request to your gateway, but can't tell whether the agent opened it."
+          }
+        }
+      }
+    },
+    "thread.fileDelivered.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File delivered to your file server"
           }
         }
       }

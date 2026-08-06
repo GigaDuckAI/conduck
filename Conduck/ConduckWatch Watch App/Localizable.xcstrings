@@ -526,7 +526,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "That file is no longer on your gateway."
+            "value" : "That file is no longer on your file server."
           }
         }
       }
@@ -636,7 +636,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Couldn't upload the file to your gateway."
+            "value" : "Couldn't upload the file to your file server."
           }
         }
       }

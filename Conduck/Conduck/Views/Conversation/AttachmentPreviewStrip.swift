@@ -340,7 +340,7 @@ struct AttachmentPreviewStrip: View {
             String(
                 format: String(localized: LocalizedStringResource(
                     "fileTransfer.attach.serverTile",
-                    defaultValue: "Attached file %@ for your gateway"
+                    defaultValue: "Attached file %@ for your file server"
                 )),
                 originalName
             ),
@@ -364,7 +364,7 @@ struct AttachmentPreviewStrip: View {
                 .frame(width: 110)
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "fileTransfer.attach.uploading",
-                    defaultValue: "Uploading to your gateway"
+                    defaultValue: "Uploading to your file server"
                 )))
         case .failed:
             Button {
@@ -407,7 +407,7 @@ struct AttachmentPreviewStrip: View {
                 .foregroundStyle(AppColors.success)
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "fileTransfer.attach.uploaded",
-                    defaultValue: "Uploaded to your gateway"
+                    defaultValue: "Uploaded to your file server"
                 )))
         }
     }
