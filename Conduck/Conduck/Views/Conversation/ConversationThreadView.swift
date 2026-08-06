@@ -2002,11 +2002,19 @@ private struct ServerFileDownloadChip: View {
                 // An inert chip must not be announced as a download action —
                 // VoiceOver reads the chip as one element, so the label is the
                 // ONLY signal that this row is passive.
+                // Neither form names where the bytes live. The label's job is to
+                // say what a tap does; the source only matters once a tap FAILS,
+                // and `failureMessage` below appends whatever diagnostic that
+                // failure carries — which is where a service belongs, named or
+                // not according to whether this particular refusal knows one. A
+                // source named up here is one more place for the gateway /
+                // file-server split to be got wrong, and a longer label to sit
+                // through before the verb arrives.
                 String(
                     format: String(localized: isAddressable
                         ? LocalizedStringResource(
                             "fileTransfer.preview.accessibility",
-                            defaultValue: "Download and preview file %@ from your gateway")
+                            defaultValue: "Download and preview file %@")
                         : LocalizedStringResource(
                             "fileTransfer.detachedReference.accessibility",
                             defaultValue: "File %@, unavailable here")),
@@ -2114,12 +2122,13 @@ private struct ServerFileDownloadChip: View {
         .help(saveAsTitle)
         // Same rule as the chip's own label: an unaddressable row must not be
         // announced as a save action. This is a SEPARATE accessibility element,
-        // so VoiceOver would otherwise convey only "dimmed", never why.
+        // so VoiceOver would otherwise convey only "dimmed", never why. Naming
+        // no source, for the same reason as the chip label above.
         .accessibilityLabel(Text(String(
             format: String(localized: isAddressable
                 ? LocalizedStringResource(
                     "fileTransfer.saveAs.accessibility",
-                    defaultValue: "Save file %@ from your gateway")
+                    defaultValue: "Save file %@")
                 : LocalizedStringResource(
                     "fileTransfer.detachedReference.accessibility",
                     defaultValue: "File %@, unavailable here")),

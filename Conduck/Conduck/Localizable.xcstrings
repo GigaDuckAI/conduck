@@ -3353,17 +3353,6 @@
         }
       }
     },
-    "fileTransfer.download.accessibility" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Download file %@ from your gateway"
-          }
-        }
-      }
-    },
     "fileTransfer.download.failed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4030,7 +4019,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Download and preview file %@ from your gateway"
+            "value" : "Download and preview file %@"
           }
         }
       }
@@ -4283,7 +4272,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Save file %@ from your gateway"
+            "value" : "Save file %@"
           }
         }
       }
