@@ -90,8 +90,12 @@ struct STTStatusMap: Sendable {
 
     /// OpenRouter hosted transcription. 429 is a transient rate-limit
     /// (retryable). 402 is billing-fatal (account out of credits) — mapped to
-    /// `sttQuotaExceeded` (NON-retryable; mirrors the gateway's
-    /// `remoteAgentOutOfCredits` posture without a new STT error case). 400/404
+    /// `sttQuotaExceeded` (NON-retryable, so no new STT error case is needed).
+    /// Deliberately NOT the gateway's `remoteAgentOutOfCredits` posture, because
+    /// the flag answers a different question on each lane: here `isRetryable`
+    /// drives `STTClient`'s automatic loop, which would re-ask a question the
+    /// account cannot answer, while on the gateway it draws a button the user
+    /// taps once they have added credits. 400/404
     /// from this endpoint mean a bad request/model (OpenRouter rejects an
     /// unknown model ID), NOT bad audio — so they must NOT inherit the shared
     /// `400 → audioInvalid` mapping that would wrongly blame the recording;

@@ -1351,11 +1351,17 @@ final class CarPlayRecordingService {
             // xcstrings: carplay-terminal
             phrase = String(localized: "Your speech provider sent an unexpected response. Pick another provider in Conduck on your iPhone.")
 
-        // ── Terminal gateway verdicts (all `isRetryable == false`) ──────────
+        // ── Gateway verdicts with no lever at the wheel ─────────────────────
         // Each arm below exists for the SAME reason the certificate arms above
         // give: `default:` would speak "Something went wrong. Try again." at a
         // driver whose next ask reaches the identical refusal — the cause
-        // dropped AND a retry invited, on a loop that cannot end. Reached from
+        // dropped AND a retry invited, on a loop that cannot end. Most are
+        // terminal (`isRetryable == false`). The 402 and 429 arms are the
+        // exception and are named here deliberately: they ARE retryable on the
+        // surfaces that own a Retry control, but the car owns none, and neither
+        // topping up an account nor sitting out a daily cap is a thing the
+        // driver can do at the wheel — so the honest line here is the cause and
+        // no invitation. Reached from
         // `CarPlayConverseUploader` via `RemoteAgentStatusMap` (402/429) and
         // `RemoteAgentClient.classifyBodyError` (adapter wire codes + the
         // 400/404/413 heuristics).

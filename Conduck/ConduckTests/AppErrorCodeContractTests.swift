@@ -222,10 +222,34 @@ final class AppErrorCodeContractTests: XCTestCase {
         // the same text won't pass; fall straight to the Apple voice.
         XCTAssertFalse(AppError.ttsContentBlocked.isRetryable,
                        ".ttsContentBlocked (41) must NOT auto-retry — the safety filter won't change its verdict.")
-        // remoteAgentOutOfCredits (52): HTTP 402; retrying without adding
-        // credits is pointless.
-        XCTAssertFalse(AppError.remoteAgentOutOfCredits.isRetryable,
-                       ".remoteAgentOutOfCredits (52) must NOT auto-retry — out of credits won't self-heal.")
+        // remoteAgentOutOfCredits (52) / remoteAgentRateLimited (57): the test
+        // for terminal is "the identical request meets the identical refusal",
+        // and neither of these passes it. What refused is an account balance and
+        // a rate-limit window — state OUTSIDE the request, which each code's own
+        // copy instructs the user to change ("Add credits with your provider,
+        // then try again"; "Wait a moment, then try again"). Withholding the
+        // button gives that instruction and denies the means to obey it, and the
+        // user pays in a stranded turn: every attachment re-picked and the prompt
+        // retyped to send a request the provider accepts. Do NOT move these back
+        // alongside 55/56 to tidy the block up.
+        XCTAssertTrue(AppError.remoteAgentOutOfCredits.isRetryable,
+                      ".remoteAgentOutOfCredits (52) must offer retry — a topped-up account answers the same request differently.")
+        XCTAssertTrue(AppError.remoteAgentRateLimited.isRetryable,
+                      ".remoteAgentRateLimited (57) must offer retry — a rate-limit window expires on its own.")
+        // Retryable is not auto-retried. Both fall through `maxAttempts` to 1,
+        // so the retry is the user's own tap and a premature one cannot burn
+        // budget: 402 means there is no balance to spend, and 429 doesn't bill.
+        XCTAssertEqual(AppError.remoteAgentOutOfCredits.maxAttempts, 1,
+                       ".remoteAgentOutOfCredits (52) must stay at one attempt — the affordance is a tap, not a loop.")
+        XCTAssertEqual(AppError.remoteAgentRateLimited.maxAttempts, 1,
+                       ".remoteAgentRateLimited (57) must stay at one attempt — an automatic re-fire deepens the rate limit.")
+        // Their neighbours in the same 55-57 block are the contrast: a wrong
+        // model name and an overflowing history are facts OF the request, so
+        // re-firing it unchanged reaches the identical answer.
+        XCTAssertFalse(AppError.remoteAgentModelUnavailable.isRetryable,
+                       ".remoteAgentModelUnavailable (55) is terminal — the same model name is still wrong.")
+        XCTAssertFalse(AppError.remoteAgentContextTooLong.isRetryable,
+                       ".remoteAgentContextTooLong (56) is terminal — the same history still overflows the window.")
         // Vision 32/33: same image bytes + same model = same verdict.
         XCTAssertFalse(AppError.remoteAgentVisionUnsupported.isRetryable,
                        ".remoteAgentVisionUnsupported (32) must NOT auto-retry.")

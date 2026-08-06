@@ -137,8 +137,11 @@ enum AppError: LocalizedError {
     case speechPermissionDenied      // 51 — Speech Recognition TCC off; Apple on-device STT can't run
 
     // Remote Agent — hosted-provider billing (52). HTTP 402 Payment Required,
-    // returned by OpenRouter when the account is out of credits. Non-retryable
-    // (retrying without adding credits won't help); actionable recovery copy.
+    // returned by OpenRouter when the account is out of credits. Retryable, and
+    // its own copy says why: the verdict rides an account balance the user is
+    // told to top up, so the same request succeeds once they have. Retry is
+    // an explicit tap, never a loop (`maxAttempts` 1), and an early one costs
+    // nothing — 402 means there is no balance to spend.
     case remoteAgentOutOfCredits     // 52 — HTTP 402; hosted provider out of credits
 
     // macOS mic exclusivity (53) — the in-window composer mic and the menu-bar
@@ -157,11 +160,12 @@ enum AppError: LocalizedError {
     // never fires by default. Crosses the Watch relay wire (errorCode 54).
     case appleSpeechLanguageUnsupported  // 54 — language not supported on-device
 
-    // Remote Agent gateway, body/status-aware (55-57). All three are
+    // Remote Agent gateway, body/status-aware (55-57). 55 and 56 are
     // non-retryable config/usage problems — retrying the same request against
-    // the same model won't change the verdict (the chat Retry chip is always
-    // available regardless, so the user can still re-send after fixing the
-    // model / shortening the chat / waiting out the rate limit).
+    // the same model won't change the verdict, so the user fixes the model name
+    // or shortens the chat first. 57 is retryable: a rate-limit window is
+    // external state that expires on its own, and its recovery copy tells the
+    // user to wait it out, so the affordance to act on that has to exist.
     //   55 — model name invalid / delisted / not a chat model (body-aware:
     //        `RemoteAgentClient.mapBodyError`, 400/404).
     //   56 — conversation exceeds the model's context window (body-aware, 400).
@@ -675,6 +679,17 @@ enum AppError: LocalizedError {
              // gateway that is down or moved can come back. Both still retry
              // only on an explicit user tap (`maxAttempts` 1 below).
              .remoteAgentServiceUnavailable, .remoteAgentNotEstablished,
+             // 52/57 turn on state OUTSIDE the request — an account balance and
+             // a rate-limit window — and each one's shipped copy instructs the
+             // user to change exactly that ("Add credits with your provider,
+             // then try again"; "Wait a moment, then try again"). Calling them
+             // terminal gives an instruction and withholds the means to follow
+             // it, and the user pays for that in a stranded turn: re-attaching
+             // every file and retyping the prompt to send a request the provider
+             // accepts. An early tap costs nothing — 402 means there is no
+             // balance to spend, and 429 doesn't bill. Retry stays an explicit
+             // user tap, never a loop (`maxAttempts` 1 below).
+             .remoteAgentOutOfCredits, .remoteAgentRateLimited,
              .ttsProviderUnreachable, .ttsEmptyAudio, .ttsRateLimited,
              .fileTransferUploadFailed, .fileTransferUnreachable,
              .fileTransferServerError:
@@ -690,9 +705,7 @@ enum AppError: LocalizedError {
              .remoteAgentNotConfigured, .remoteAgentAuthFailed,
              .remoteAgentCertMismatch, .remoteAgentInvalidResponse,
              .remoteAgentVisionUnsupported, .remoteAgentImageTooLarge,
-             .remoteAgentOutOfCredits,
              .remoteAgentModelUnavailable, .remoteAgentContextTooLong,
-             .remoteAgentRateLimited,
              // Route problems — the AI endpoint isn't there / isn't usable.
              // Retrying the same request against the same URL cannot change
              // the verdict; the user has to fix the server or the URL.

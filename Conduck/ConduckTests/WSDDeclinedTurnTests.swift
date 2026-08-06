@@ -270,6 +270,28 @@ final class WSDDeclinedTurnTests: XCTestCase {
             XCTAssertFalse(refused.offersRetry, "\(terminal) is terminal — no Try again")
             XCTAssertEqual(refused.body, terminal.descriptionWithRecovery)
         }
+
+        // The counterweight to that loop, and the reason it names only
+        // certificate and credential verdicts. Out-of-credits and rate-limited
+        // read like refusals too, but what refused is an account balance and a
+        // rate-limit window — state outside the request, and state the row's own
+        // body tells the user to change. Re-firing the stored turn once they
+        // have reaches a DIFFERENT verdict, which is the whole test the terminal
+        // bucket applies. Withhold the button and the user re-composes the turn
+        // from nothing, re-picking every attachment, to send a request the
+        // provider accepts. Do not fold these into the loop above.
+        for recoverable in [AppError.remoteAgentOutOfCredits, .remoteAgentRateLimited] {
+            let refused = DeclinedTurnPresentation.classify(
+                failureCode: recoverable.errorCode,
+                failureWireCode: nil,
+                turnHasOwnImages: false,
+                hadHistoryImages: nil,
+                hasResendableNonPhotoContent: true
+            )
+            XCTAssertTrue(refused.offersRetry,
+                          "\(recoverable) turns on state the row instructs the user to change — Try again is how they act on it")
+            XCTAssertEqual(refused.body, recoverable.descriptionWithRecovery)
+        }
     }
 
     // MARK: - 4. Store transitions

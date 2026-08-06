@@ -86,8 +86,12 @@ final class STTStatusMapTests: XCTestCase {
     // MARK: - OpenRouter (distinct 402 / 429 / 400-404 semantics)
 
     func testOpenRouter402MapsToQuotaExceededNonRetryable() {
-        // 402 = out of credits (billing-fatal). Mirrors the gateway's
-        // `remoteAgentOutOfCredits` posture without a new STT error case.
+        // 402 = out of credits (billing-fatal), reusing an existing STT case
+        // rather than adding one. Deliberately NOT the gateway's
+        // `remoteAgentOutOfCredits` posture: `isRetryable` gates STTClient's
+        // AUTOMATIC loop on this lane, so retryable here would re-ask a question
+        // the account cannot answer — where on the gateway lane the same flag
+        // only draws a button the user taps after topping up.
         XCTAssertEqual(STTStatusMap.openRouter.map(402)?.errorCode,
                        AppError.sttQuotaExceeded.errorCode,
                        "OpenRouter 402 (out of credits) must map to .sttQuotaExceeded (non-retryable).")
