@@ -5,7 +5,8 @@
 //
 // The horizontal strip of staged-but-unsent attachments shown ABOVE the
 // composer field. Renders:
-//   - image tiles  : 64×64 rounded thumbnail (`UIImage(data:)` / `NSImage`)
+//   - image tiles  : 64×64 rounded thumbnail, decoded off the main actor and
+//                    cached per tile identity by `StagedImageTile`
 //   - file chips   : color-coded by extension (icon + filename + size)
 //   - loading tile : determinate `ProgressView(value:)` while a PhotosPicker
 //                    `loadTransferable` (Progress overload) fetch is in flight
@@ -74,16 +75,21 @@ struct AttachmentPreviewStrip: View {
             loadingTile(id: item.id)
                 .overlay(alignment: .topTrailing) { removeButton(id: item.id) }
         case .image(let data):
-            imageTile(data: data)
+            imageTile(id: item.id, data: data)
                 .overlay(alignment: .topTrailing) { removeButton(id: item.id) }
-        case .dualImage(let original, _, _, _, _, _, _):
+        case .dualImage(_, let thumbnail, _, _, _, _):
             // A dual-route image renders as a plain image tile (its eager
             // file-server upload runs silently in the background and NEVER gates
             // Send, so no upload-progress chrome is shown — the inline base64 is
-            // always a guaranteed fallback). The thumbnail decodes from the
-            // ORIGINAL picked bytes (already in memory; no re-decode of the
-            // processed JPEG needed for a 64pt preview).
-            imageTile(data: original)
+            // always a guaranteed fallback). Renders the `thumbnail` the staging
+            // pass already produced (`ImageProcessor.thumbnailMaxPixel`), NEVER
+            // the `original`: the original is the raw picked camera file (HEIC /
+            // ProRAW, tens of megapixels, gain-map metadata intact), and
+            // `NSImage(data:)` on it decodes a full-resolution bitmap to fill a
+            // 64pt square — on the main actor, once per body pass. That decode is
+            // what the composer's eager upload used to re-trigger on every
+            // progress tick.
+            imageTile(id: item.id, data: thumbnail)
                 .overlay(alignment: .topTrailing) { removeButton(id: item.id) }
         case .file(let url):
             fileChip(url: url)
@@ -116,16 +122,20 @@ struct AttachmentPreviewStrip: View {
 
     // MARK: - Image tile
 
-    @ViewBuilder
-    private func imageTile(data: Data) -> some View {
-        Group {
-            if let image = Image.platformImage(from: data) {
-                image
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                placeholderGlyph("photo")
-            }
+    private func imageTile(id: UUID, data: Data) -> some View {
+        // A SUBVIEW, not an inline `Image.platformImage(from:)` call. The decode
+        // used to sit in this body, so every composer invalidation — a keystroke,
+        // an upload-progress tick, a staging mutation — paid for it again on the
+        // main actor. `StagedImageTile` decodes once per stable tile identity,
+        // off the main actor, and re-reads the result on later body passes.
+        //
+        // Bounded at `ImageProcessor.thumbnailMaxPixel` — the SAME size the
+        // staging pass bakes into a processed thumbnail, so an `.image` tile
+        // (inline-only route, no processed thumbnail exists) and a `.dualImage`
+        // tile (which passes its processed thumbnail straight in) resolve to the
+        // same preview size. Covers a 64pt tile at 3×.
+        StagedImageTile(id: id, data: data, maxPixel: ImageProcessor.thumbnailMaxPixel) {
+            placeholderGlyph("photo")
         }
         .frame(width: tileSize, height: tileSize)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))

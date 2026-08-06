@@ -422,7 +422,12 @@ struct iOSMessageComposerBar: View {
         // preserves the single-Button + single-Image identity so the mic↔send
         // morph (`.contentTransition(.symbolEffect(.replace))`) still plays, and
         // folds in the press-scale + recording halo (both Reduce-Motion aware).
-        CaptureCircleButton(
+        //
+        // Deliberately still ONE button: the safety comes from capturing
+        // `intent` here, not from splitting the control (which would lose the
+        // symbol-replacement animation).
+        let intent = trailingIntent
+        return CaptureCircleButton(
             symbol: trailingSymbol,
             fillColor: trailingColor,
             showsPulse: isRecordingActive,
@@ -431,7 +436,7 @@ struct iOSMessageComposerBar: View {
             glyphSize: 18,
             isDisabled: trailingDisabled,
             accessibilityLabel: trailingAccessibilityLabel,
-            action: trailingAction
+            action: { trailingAction(intent) }
         )
     }
 
@@ -462,13 +467,31 @@ struct iOSMessageComposerBar: View {
         }
     }
 
-    private func trailingAction() {
-        if isInFlight {
-            viewModel?.cancelInFlight()
-        } else if showsSendControl {
-            sendTapped()
-        } else {
-            micButtonTapped()
+    /// What the trailing control MEANT on the body pass that built it. Captured
+    /// rather than re-read inside the action closure, because this control
+    /// morphs: a tap the user aimed at one meaning can run after it has become
+    /// another, and on the compact bar there are THREE, so a late tap could
+    /// cancel the turn it was starting or open the mic instead of sending.
+    ///
+    /// `.stop` carries the identity of the turn it was rendered for, so a stale
+    /// tap cancels THAT turn or nothing — a live `isInFlight` re-check would
+    /// still cancel a turn that started in the gap. See
+    /// `cancelInFlight(expecting:)`.
+    private enum TrailingIntent { case stop(token: Date?), send, mic }
+
+    private var trailingIntent: TrailingIntent {
+        if isInFlight { return .stop(token: viewModel?.inFlightTurnToken) }
+        return showsSendControl ? .send : .mic
+    }
+
+    /// Acts on the CAPTURED intent. `.send` / `.mic` are safe to arrive late on
+    /// their own — `sendTapped()` and `micButtonTapped()` re-check live state —
+    /// so only `.stop`, the destructive one, needs the token.
+    private func trailingAction(_ intent: TrailingIntent) {
+        switch intent {
+        case .stop(let token): viewModel?.cancelInFlight(expecting: token)
+        case .send: sendTapped()
+        case .mic: micButtonTapped()
         }
     }
 
@@ -523,22 +546,7 @@ struct iOSMessageComposerBar: View {
                     action: micButtonTapped
                 )
 
-                // In-flight Stop morph (neutral) takes priority; otherwise the
-                // send arrow (amber when a draft is ready). The persistent mic to
-                // its left handles capture, so this control never shows the mic.
-                CaptureCircleButton(
-                    symbol: isInFlight ? "stop.fill" : "arrow.up",
-                    fillColor: regularTrailingColor,
-                    diameter: 44,
-                    glyphSize: 18,
-                    // In-flight Stop is always enabled (the cancel control). Otherwise
-                    // Send enables on sendable content — a draft OR a staged attachment.
-                    isDisabled: isInFlight ? false : (!hasSendableContent || isSendDisabled),
-                    accessibilityLabel: isInFlight
-                        ? String(localized: "Stop")  // xcstrings: chat-ui
-                        : String(localized: LocalizedStringResource("composer.send", defaultValue: "Send")),
-                    action: regularTrailingAction
-                )
+                regularTrailingButton
             }
         }
         .padding(.horizontal, 16)
@@ -598,12 +606,35 @@ struct iOSMessageComposerBar: View {
         return (hasSendableContent && !isSendDisabled) ? AppColors.brandAmber : AppColors.disabled
     }
 
-    private func regularTrailingAction() {
-        if isInFlight {
-            viewModel?.cancelInFlight()
-        } else {
-            sendTapped()
-        }
+    /// The regular-width bar keeps a persistent mic to this control's left, so
+    /// it morphs between two meanings rather than three — but the late-tap
+    /// hazard and the fix are the same as the compact bar's.
+    private var regularTrailingIntent: TrailingIntent {
+        isInFlight ? .stop(token: viewModel?.inFlightTurnToken) : .send
+    }
+
+    /// In-flight Stop morph (neutral) takes priority; otherwise the send arrow
+    /// (amber when a draft is ready). The persistent mic to its left handles
+    /// capture, so this control never shows the mic.
+    ///
+    /// A property rather than inline in the bar's `body` so the intent can be
+    /// captured before the button is built — a `ViewBuilder` has nowhere to put
+    /// the binding.
+    private var regularTrailingButton: some View {
+        let intent = regularTrailingIntent
+        return CaptureCircleButton(
+            symbol: isInFlight ? "stop.fill" : "arrow.up",
+            fillColor: regularTrailingColor,
+            diameter: 44,
+            glyphSize: 18,
+            // In-flight Stop is always enabled (the cancel control). Otherwise
+            // Send enables on sendable content — a draft OR a staged attachment.
+            isDisabled: isInFlight ? false : (!hasSendableContent || isSendDisabled),
+            accessibilityLabel: isInFlight
+                ? String(localized: "Stop")  // xcstrings: chat-ui
+                : String(localized: LocalizedStringResource("composer.send", defaultValue: "Send")),
+            action: { trailingAction(intent) }
+        )
     }
 
     // MARK: - Shared text field

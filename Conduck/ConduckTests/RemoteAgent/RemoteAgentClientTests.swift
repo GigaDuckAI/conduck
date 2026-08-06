@@ -237,11 +237,18 @@ final class RemoteAgentClientTests: XCTestCase {
         }
     }
 
-    func testCancelledDoesNotMapToCertMismatch() async {
-        // CRITICAL FIX: a user-initiated / structured-concurrency cancel
-        // must NOT surface as a cert error. The converse path re-throws it
-        // as a benign CancellationError; cert-mismatch comes ONLY from the
-        // trust-evaluator's server-certificate codes.
+    func testPeerCancelWithoutTaskCancellationIsUnreachableNotABenignCancel() async {
+        // DELIBERATE REVERSAL of the old expectation. This case previously
+        // asserted `CancellationError`, which was wrong in the one way that
+        // costs the user the most: `URLError.cancelled` (-999) is ALSO what a
+        // peer-side stream reset looks like, and treating that as "the user
+        // cancelled" makes the failure writers persist NO classification. The
+        // turn then renders the bare generic "wasn't delivered" copy with no
+        // cause and no Troubleshoot, and Diagnostics — which filters on a
+        // non-nil failure code — never records it at all.
+        //
+        // Nothing cancels the enclosing task here, so `Task.isCancelled` is
+        // false and the -999 must classify as a transport failure.
         MockURLProtocol.requestHandler = { _ in
             throw URLError(.cancelled)
         }
@@ -254,12 +261,61 @@ final class RemoteAgentClientTests: XCTestCase {
             )
             XCTFail("Expected a thrown error for a cancelled request")
         } catch is CancellationError {
-            // Expected — benign cancel, distinct from any .remoteAgent* case.
+            XCTFail("A -999 with no task cancellation behind it is a PEER reset, not a user cancel — classifying it as a cancel is what made the failure unclassified and invisible to Diagnostics.")
         } catch let error as AppError {
-            XCTFail("Cancelled request must NOT map to an AppError (got \(error)); cert-mismatch must come only from the trust path")
+            XCTAssertEqual(error.errorCode, AppError.remoteAgentUnreachable.errorCode,
+                           "An interrupted connection must classify as unreachable (delivery UNCERTAIN), not vanish as a benign cancel.")
+        } catch {
+            XCTFail("Expected an AppError, got \(type(of: error)): \(error)")
+        }
+    }
+
+    func testUserCancelledTaskStillMapsToBenignCancellationError() async {
+        // The other half, and the reason the discriminator is `Task.isCancelled`
+        // rather than a heuristic: when the app genuinely cancelled, -999 must
+        // STILL be a benign `CancellationError` so the turn keeps its
+        // status-only flip and no spurious gateway error is raised.
+        MockURLProtocol.requestHandler = { _ in
+            throw URLError(.cancelled)
+        }
+
+        // Cancel the enclosing task before the send observes the failure. The
+        // task checks `Task.isCancelled` inside its URLError catch, so a task
+        // cancelled up front is exactly the shape a Stop tap produces.
+        let task = Task {
+            try await RemoteAgentClient.shared.send(
+                backend: .openclaw, url: self.baseURL, token: self.token,
+                newUserText: "hi", fileServerReady: false,
+                transport: .unevaluated(session: self.session)
+            )
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected a thrown error for a cancelled request")
+        } catch is CancellationError {
+            // Expected — a real cancel stays benign.
+        } catch let error as AppError {
+            XCTFail("A genuinely cancelled task must stay a CancellationError, not surface as \(error) — otherwise every Stop raises a gateway failure banner.")
         } catch {
             XCTFail("Expected CancellationError, got \(type(of: error)): \(error)")
         }
+    }
+
+    func testTrustSignalsOutrankTaskCancellationForCertClassification() async {
+        // Precedence guard: a CONFIRMED pin rejection is reported as a cert
+        // error even when the task is also cancelled. A MITM must never be able
+        // to hide behind a concurrent Stop.
+        let mapped = RemoteAgentClient.mapTransportError(
+            .cancelled,
+            signals: .init(systemTrustRejected: false,
+                           challengeRefused: true,
+                           pinRejected: true,
+                           pinComparisonUnsupported: false),
+            isTaskCancelled: true)
+        XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertMismatch.errorCode,
+                       "Trust-signal arms must win over the cancellation discriminator.")
     }
 
     // MARK: - Helpers
@@ -721,7 +777,8 @@ final class RemoteAgentClientTests: XCTestCase {
             signals: .init(systemTrustRejected: false,
                            challengeRefused: true,
                            pinRejected: true,
-                           pinComparisonUnsupported: false))
+                           pinComparisonUnsupported: false),
+            isTaskCancelled: false)
         XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertMismatch.errorCode,
                        "A pin mismatch must surface as a cert error, not vanish as a benign cancel — otherwise a MITM reads as 'the user cancelled'.")
     }
@@ -738,7 +795,8 @@ final class RemoteAgentClientTests: XCTestCase {
             signals: .init(systemTrustRejected: true,
                            challengeRefused: true,
                            pinRejected: false,
-                           pinComparisonUnsupported: false))
+                           pinComparisonUnsupported: false),
+            isTaskCancelled: false)
         XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertUntrusted.errorCode,
                        "A connection refused because this device does not trust the certificate must reach the user as an UNTRUSTED-certificate error, not as a pin mismatch or a silent cancel.")
     }
@@ -753,7 +811,8 @@ final class RemoteAgentClientTests: XCTestCase {
             signals: .init(systemTrustRejected: false,
                            challengeRefused: true,
                            pinRejected: false,
-                           pinComparisonUnsupported: false))
+                           pinComparisonUnsupported: false),
+            isTaskCancelled: true)
         XCTAssertTrue(mapped is CancellationError,
                       "Cancel with NEITHER trust signal set is a user abort, not a cert failure.")
     }
@@ -787,23 +846,41 @@ final class RemoteAgentClientTests: XCTestCase {
             // ever rejected a certificate.
             (.secureConnectionFailed, AppError.remoteAgentUnreachable.errorCode),
             (.badServerResponse, AppError.remoteAgentUnreachable.errorCode),
-            (.cancelled, nil),   // nil = CancellationError, not an AppError
+            // -999 with the task NOT cancelled is a PEER-side stream reset, not a
+            // user abort — the two are byte-identical on the wire, and only the
+            // cancellation state tells them apart. Reporting it as a cancel would
+            // write no classification at all, leaving the turn with the bare
+            // "wasn't delivered" copy and no Diagnostics record.
+            (.cancelled, AppError.remoteAgentUnreachable.errorCode),
         ]
+        // `isTaskCancelled: false` for the whole table because that is the state
+        // every one of these codes actually occurs in — a timeout or a DNS
+        // failure cannot be produced by a cancelled task. Asserting the table
+        // under `true` would test a combination that never happens and would
+        // leave the production default for `.cancelled` uncovered.
         for (code, expectedCode) in expected {
             let mapped = RemoteAgentClient.mapTransportError(
             code,
             signals: .init(systemTrustRejected: false,
                            challengeRefused: false,
                            pinRejected: false,
-                           pinComparisonUnsupported: false))
-            if let expectedCode {
-                XCTAssertEqual((mapped as? AppError)?.errorCode, expectedCode,
-                               "Unpinned mapping drifted for \(code)")
-            } else {
-                XCTAssertTrue(mapped is CancellationError,
-                              "Unpinned `.cancelled` must stay a benign CancellationError")
-            }
+                           pinComparisonUnsupported: false),
+            isTaskCancelled: false)
+            XCTAssertEqual((mapped as? AppError)?.errorCode, expectedCode,
+                           "Unpinned mapping drifted for \(code)")
         }
+
+        // The other half of the -999 split, on the same unpinned lane: the task
+        // WAS cancelled, so this is the user tapping Stop and must stay benign.
+        let userCancel = RemoteAgentClient.mapTransportError(
+            .cancelled,
+            signals: .init(systemTrustRejected: false,
+                           challengeRefused: false,
+                           pinRejected: false,
+                           pinComparisonUnsupported: false),
+            isTaskCancelled: true)
+        XCTAssertTrue(userCancel is CancellationError,
+                      "A cancelled task's -999 is a user abort — surfacing it as a gateway failure would raise a banner on every Stop.")
     }
 
     func testGenericTLSFailureWithConfirmedPinRejectionIsCertMismatch() {
@@ -814,7 +891,8 @@ final class RemoteAgentClientTests: XCTestCase {
             signals: .init(systemTrustRejected: false,
                            challengeRefused: true,
                            pinRejected: true,
-                           pinComparisonUnsupported: false))
+                           pinComparisonUnsupported: false),
+            isTaskCancelled: false)
         XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertMismatch.errorCode)
     }
 
@@ -824,7 +902,8 @@ final class RemoteAgentClientTests: XCTestCase {
             signals: .init(systemTrustRejected: false,
                            challengeRefused: true,
                            pinRejected: false,
-                           pinComparisonUnsupported: false))
+                           pinComparisonUnsupported: false),
+            isTaskCancelled: false)
         XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentUnreachable.errorCode,
                        "A pinned gateway over a cold tunnel must stay retryable — NEITHER signal set means the trust layer never rejected anything.")
     }
@@ -839,7 +918,8 @@ final class RemoteAgentClientTests: XCTestCase {
             signals: .init(systemTrustRejected: true,
                            challengeRefused: false,
                            pinRejected: false,
-                           pinComparisonUnsupported: false))
+                           pinComparisonUnsupported: false),
+            isTaskCancelled: false)
         XCTAssertEqual((mapped as? AppError)?.errorCode, AppError.remoteAgentCertUntrusted.errorCode,
                        "An untrusted certificate on the live converse hop must name the certificate, not read as 'unreachable, try again' and not as a pin mismatch.")
     }

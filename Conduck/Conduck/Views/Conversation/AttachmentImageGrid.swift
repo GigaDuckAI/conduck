@@ -88,20 +88,43 @@ struct AttachmentImageGrid: View {
         thumb(index, width: side, height: side)
     }
 
+    /// Shared empty state — a tile with no thumbnail bytes, and the placeholder
+    /// `StagedImageTile` shows while its off-main decode is in flight.
+    private var thumbPlaceholder: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(AppColors.cardBackground)
+            Image(systemName: "photo")
+                .foregroundStyle(AppColors.textTertiary)
+        }
+    }
+
     private func thumb(_ index: Int, width: CGFloat, height: CGFloat) -> some View {
         Button {
             onTap(index)
         } label: {
             Group {
-                if let data = attachments[index].thumbnailData, let image = Image.platformImage(from: data) {
-                    image.resizable().scaledToFill()
-                } else {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(AppColors.cardBackground)
-                        Image(systemName: "photo")
-                            .foregroundStyle(AppColors.textTertiary)
+                if let data = attachments[index].thumbnailData {
+                    // Decoded once per attachment id rather than inline in this
+                    // body: a bubble re-renders on every store reload (CloudKit
+                    // remote-change traffic drives several per turn), and an
+                    // inline `Image.platformImage(from:)` paid the decode again
+                    // each time, on the main actor. The win here is the caching,
+                    // not the downsample — these bytes are already a stored
+                    // `ImageProcessor` thumbnail, so the bound is a no-op today.
+                    // It is passed anyway to keep the ceiling STRUCTURAL: this
+                    // tile's decodes are cached, and an unbounded entry would
+                    // put a full-resolution bitmap in that cache the day these
+                    // bytes stopped being a thumbnail.
+                    StagedImageTile(
+                        id: attachments[index].id,
+                        data: data,
+                        maxPixel: ImageProcessor.thumbnailMaxPixel
+                    ) {
+                        thumbPlaceholder
                     }
+                } else {
+                    thumbPlaceholder
                 }
             }
             .frame(width: width, height: height)

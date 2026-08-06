@@ -81,10 +81,20 @@ final class RemoteAgentTransportPairingTests: XCTestCase {
         }
     }
 
-    func testAnUnevaluatedTransportReportsACancelAsACancel() async {
+    func testAnUnevaluatedTransportInfersNoCertificateVerdict() async {
         // The other half of the same property: with no evaluator there is no
-        // verdict, and the mapping must NOT infer one. A `-999` on a lane that
-        // answered no challenge is a cancellation, full stop.
+        // verdict, and the mapping must NOT infer one. That property is
+        // unchanged — but the expectation it used to be spelled with is not.
+        //
+        // This case previously asserted `CancellationError`, which conflated two
+        // different events: `URLError.cancelled` (-999) is what a USER cancel
+        // looks like AND what a peer-side stream reset looks like. Nothing here
+        // cancels the enclosing task, so this is the peer case, and it must
+        // classify as a transport failure — otherwise the failure writers persist
+        // no classification at all and the turn renders the bare generic
+        // "wasn't delivered" copy with no cause and no Diagnostics record. The
+        // cancel half is covered by
+        // `RemoteAgentClientTests.testUserCancelledTaskStillMapsToBenignCancellationError`.
         MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
 
         do {
@@ -97,10 +107,14 @@ final class RemoteAgentTransportPairingTests: XCTestCase {
                 transport: .unevaluated(session: session)
             )
             XCTFail("Expected the cancelled transport failure to propagate.")
-        } catch is CancellationError {
-            // Expected.
         } catch {
-            XCTFail("A -999 with no trust verdict must stay a cancellation, never a certificate error. Got: \(error)")
+            let code = (error as? AppError)?.errorCode
+            XCTAssertEqual(code, AppError.remoteAgentUnreachable.errorCode,
+                           "A -999 on a lane that answered no challenge must classify as unreachable. Got: \(error)")
+            XCTAssertNotEqual(code, AppError.remoteAgentCertMismatch.errorCode,
+                              "No evaluator means no verdict — a certificate error must never be inferred.")
+            XCTAssertNotEqual(code, AppError.remoteAgentCertUntrusted.errorCode,
+                              "No evaluator means no verdict — a certificate error must never be inferred.")
         }
     }
 

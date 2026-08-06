@@ -118,6 +118,11 @@ final class ComposerAttachmentCoordinator {
     /// Retry re-uploads under the SAME key — overwriting the failed partial blob
     /// rather than orphaning it under a fresh key. PRIVACY: in-memory only.
     private var serverStoredKeys: [UUID: String] = [:]
+    /// Per-tile upload attempt number, bumped by every `kickUpload`. Retry
+    /// re-enters `.uploading(0)`, which makes a stale callback from the dead
+    /// attempt indistinguishable from a live one by state alone — see
+    /// `ServerFileUploadState.nextUploading(from:progress:)`.
+    private var serverUploadAttempts: [UUID: Int] = [:]
     /// Covers the async interval before a picked file has produced a tile (for
     /// example, while copying from iCloud Drive). Without this counter the
     /// new-chat gateway picker could move before `staged` became non-empty.
@@ -297,6 +302,10 @@ final class ComposerAttachmentCoordinator {
     /// Delete + forget the local staging temp file for `id` (best-effort).
     private func cleanupStagingFile(_ id: UUID) {
         serverStoredKeys[id] = nil
+        // Cleared with the rest of the tile's per-id bookkeeping: a surviving
+        // entry would both leak and, if the id were ever reused, let an old
+        // attempt number admit a callback it should reject.
+        serverUploadAttempts[id] = nil
         if let url = serverStagingFiles[id] {
             try? FileManager.default.removeItem(at: url)
             serverStagingFiles[id] = nil
@@ -481,7 +490,6 @@ final class ComposerAttachmentCoordinator {
 
         let item = StagedAttachment(
             kind: .dualImage(
-                original: original,
                 processedJPEG: processed.jpegData,
                 thumbnail: processed.thumbnailData,
                 width: processed.width,
@@ -512,15 +520,16 @@ final class ComposerAttachmentCoordinator {
     ) {
         let task = Task { @MainActor [weak self] in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
-                    Task { @MainActor [weak self] in
-                        guard let self,
-                              let i = self.staged.firstIndex(where: { $0.id == id }),
-                              self.staged[i].serverOwnerRef == ref,
-                              self.staged[i].serverOwnerSnapshot == snapshot else { return }
-                        self.staged[i].serverUploadState = .uploading(progress: progress)
-                    }
-                }
+                // NO progress sink: a `.dualImage` tile renders no progress
+                // chrome (see `AttachmentPreviewStrip.tile`), so every
+                // intermediate write would mutate published state — invalidating
+                // the composer and re-running the strip's body — to publish a
+                // number nothing displays. `URLSession` reports progress per
+                // body-data callback, i.e. dozens of times for one camera
+                // original. The tile stays at the `.uploading(0)` its staging set
+                // (`isUploading` remains true, so `awaitPreferredUploads` still
+                // joins it) until a terminal state lands below.
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { _ in }
                 guard let self,
                       let i = self.staged.firstIndex(where: { $0.id == id }),
                       self.staged[i].serverOwnerRef == ref,
@@ -692,15 +701,11 @@ final class ComposerAttachmentCoordinator {
     ) {
         let task = Task { @MainActor [weak self] in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
-                    Task { @MainActor [weak self] in
-                        guard let self,
-                              let i = self.staged.firstIndex(where: { $0.id == id }),
-                              self.staged[i].serverOwnerRef == ref,
-                              self.staged[i].serverOwnerSnapshot == snapshot else { return }
-                        self.staged[i].serverUploadState = .uploading(progress: progress)
-                    }
-                }
+                // NO progress sink — same reason as `kickImageUpload`: a
+                // `.dualText` tile renders no progress chrome, so an intermediate
+                // write is a composer-wide invalidation for a number nothing
+                // displays. Terminal states below still land.
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { _ in }
                 guard let self,
                       let i = self.staged.firstIndex(where: { $0.id == id }),
                       self.staged[i].serverOwnerRef == ref,
@@ -1160,18 +1165,31 @@ final class ComposerAttachmentCoordinator {
         ref: RemoteAgentRef,
         snapshot: SettingsManager.FileTransferSnapshot
     ) {
+        let attempt = (serverUploadAttempts[id] ?? 0) + 1
+        serverUploadAttempts[id] = attempt
         let task = Task { @MainActor [weak self] in
             do {
                 try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
                     Task { @MainActor [weak self] in
+                        // Attempt check FIRST: after a Retry the tile is back at
+                        // `.uploading(0)`, so a callback left over from the dead
+                        // attempt passes every state-based test.
                         guard let self,
+                              self.serverUploadAttempts[id] == attempt,
                               let i = self.staged.firstIndex(where: { $0.id == id }),
                               self.staged[i].serverOwnerRef == ref,
                               self.staged[i].serverOwnerSnapshot == snapshot else { return }
-                        self.staged[i].serverUploadState = .uploading(progress: progress)
+                        // Quantized — a write that doesn't move the rendered bar
+                        // is a composer-wide invalidation for nothing.
+                        guard let next = StagedAttachment.ServerFileUploadState.nextUploading(
+                            from: self.staged[i].serverUploadState,
+                            progress: progress
+                        ) else { return }
+                        self.staged[i].serverUploadState = next
                     }
                 }
                 guard let self,
+                      self.serverUploadAttempts[id] == attempt,
                       let i = self.staged.firstIndex(where: { $0.id == id }),
                       self.staged[i].serverOwnerRef == ref,
                       self.staged[i].serverOwnerSnapshot == snapshot else { return }

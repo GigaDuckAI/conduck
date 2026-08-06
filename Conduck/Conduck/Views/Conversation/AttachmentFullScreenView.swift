@@ -122,11 +122,16 @@ private struct ZoomableImagePage: View {
     @State private var lastScale: CGFloat = 1
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
+    /// The DECODED image, held in state so a zoom/pan frame re-reads it instead
+    /// of re-decoding. It was a computed property, which meant every
+    /// `MagnifyGesture`/`DragGesture` update — dozens per second — re-ran
+    /// `Image.platformImage(from:)` over the FULL-SIZE JPEG on the main actor.
+    @State private var decoded: Image?
 
     var body: some View {
         GeometryReader { _ in
             ZStack {
-                if let image = displayImage {
+                if let image = decoded {
                     image
                         .resizable()
                         .scaledToFit()
@@ -160,13 +165,23 @@ private struct ZoomableImagePage: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    /// Prefer the full bytes when loaded; otherwise the instant thumbnail.
-    private var displayImage: Image? {
-        if let fullData, let img = Image.platformImage(from: fullData) { return img }
-        if let thumbnailData, let img = Image.platformImage(from: thumbnailData) { return img }
-        return nil
+        // Keyed on WHETHER the full bytes have arrived, not just on appear:
+        // `fullData` starts nil (the page renders the instant thumbnail) and
+        // flips once `loadFullBytes` resolves, and this must re-run then or the
+        // page would keep showing the 256px thumbnail forever. It cannot re-run
+        // on a zoom/pan frame, which is the whole point — `scale`/`offset` are
+        // not part of the id.
+        .task(id: fullData == nil) {
+            // Full resolution deliberately (`maxPixel: nil`): this is the ZOOM
+            // surface, so a bounded decode would cap what the user can magnify
+            // to. The cost is paid once per page here instead of once per
+            // gesture frame.
+            if let fullData {
+                decoded = await Image.decoded(from: fullData) ?? decoded
+            } else if let thumbnailData {
+                decoded = await Image.decoded(from: thumbnailData)
+            }
+        }
     }
 
     private var magnify: some Gesture {

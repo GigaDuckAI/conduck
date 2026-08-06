@@ -725,6 +725,31 @@ final class ConversationDetailViewModel {
     /// release, and a second Bool would drift from it on one of them.
     var showsGatewayWaitIndicator: Bool { inFlightStartedAt != nil }
 
+    /// Identity of the turn currently in flight, for a caller that wants to act
+    /// on THAT turn rather than on whatever happens to be in flight when its
+    /// action runs — see `cancelInFlight(expecting:)`.
+    ///
+    /// DERIVED from `inFlightStartedAt` for the same reason the indicator above
+    /// is: a separately-stored id would have to be cleared at all eight sites
+    /// that clear the start stamp, and would silently become a stale identity on
+    /// the first one that was missed. Two turns cannot share a stamp — the
+    /// re-entrancy guard (`inFlightTask == nil, !isAwaitingReply`) admits a
+    /// second turn only after the first has fully resolved, so any two stamps are
+    /// separated by at least a network round-trip.
+    var inFlightTurnToken: Date? { inFlightStartedAt }
+
+    /// Whether a cancel qualified by `token` applies to the turn identified by
+    /// `current`. A pure function rather than an inline guard because the
+    /// alternative is untestable: both outcomes of the decision are no-ops on a
+    /// VM with no live task, so only the decision itself can be asserted.
+    ///
+    /// nil `token` means "whatever is running" and always applies — that is the
+    /// teardown caller, not a UI control.
+    static func cancelApplies(expecting token: Date?, current: Date?) -> Bool {
+        guard let token else { return true }
+        return token == current
+    }
+
     /// A transient error banner for the in-flight turn (cleared on the next
     /// send / cancel). Distinct from `loadError` (store-load failure).
     private(set) var sendError: String?
@@ -3228,7 +3253,12 @@ final class ConversationDetailViewModel {
     /// data-URIs + fenced text-file blocks). Image processing failures are
     /// dropped silently per-item (a sibling failing must not sink the turn);
     /// the UI layer surfaces per-tile errors before send.
-    private struct ProcessedAttachments {
+    /// `nonisolated` + `Sendable` explicitly, not incidentally: this is the value
+    /// `processAttachments` hands back ACROSS an actor boundary, so the boundary
+    /// should be stated in the type rather than inferred. Without `nonisolated`
+    /// the target's MainActor default isolation would make it main-actor-bound
+    /// and the `@concurrent` producer could not construct it at all.
+    private nonisolated struct ProcessedAttachments: Sendable {
         var drafts: [AttachmentDraft] = []
         var imageDataURIs: [String] = []
         var textFileBlocks: [(filename: String, text: String)] = []
@@ -3266,8 +3296,19 @@ final class ConversationDetailViewModel {
 
     /// Run images through `ImageProcessor` (downsize + EXIF/GPS strip → JPEG +
     /// thumbnail) and text files through `TextFileExtractor`, building drafts +
-    /// wire material in staged order. `nonisolated` + `static` so the heavy
-    /// work runs off the MainActor.
+    /// wire material in staged order.
+    ///
+    /// `@concurrent` — and it has to be. This type is `@MainActor`, and under the
+    /// target's `SWIFT_APPROACHABLE_CONCURRENCY` a bare `nonisolated async`
+    /// static runs on the CALLER's executor, which here is the main actor. So
+    /// the annotation that used to be here moved nothing: the base64 encoding of
+    /// every image, `TextFileExtractor`'s whole-file read + UTF-8 decode, and the
+    /// per-file `resourceValues` stats all ran on the main actor while the user
+    /// was waiting for the composer to clear. (The image downsize itself was
+    /// always fine — `ImageProcessor` is an actor and the `await` genuinely
+    /// hops.) `@concurrent` is the only spelling that reaches the generic
+    /// executor.
+    @concurrent
     private nonisolated static func processAttachments(
         _ attachments: [PendingAttachment],
         maxPixel: Int = ImageProcessor.defaultMaxPixel
@@ -3469,8 +3510,14 @@ final class ConversationDetailViewModel {
         // retry.
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("conduck-ftupload-\(UUID().uuidString)")
-        try FileManager.default.copyItem(at: localURL, to: tmp)
+        // The copy is INSIDE the cleanup scope, not before it. A `copyItem` that
+        // throws part-way can still leave a partial destination behind, and a
+        // cleanup that only begins after the copy returned would strand it in
+        // the temp directory. The cancellation re-check sits here too: the copy
+        // now suspends (it hops off the main actor), so a Stop can land during
+        // it, and without this the upload would proceed anyway.
         do {
+            try await copyForUpload(from: localURL, to: tmp)
             try Task.checkCancellation()
             try await BackgroundFileTransfer.shared.uploadFile(
                 localURL: tmp,
@@ -3482,6 +3529,22 @@ final class ConversationDetailViewModel {
             try? FileManager.default.removeItem(at: tmp)
             throw error
         }
+    }
+
+    /// The staging copy for an upload, OFF the main actor.
+    ///
+    /// `@concurrent` is load-bearing, not tidiness. This type is `@MainActor`, so
+    /// a plain `static func` — even an `async` one — inherits that isolation, and
+    /// under the target's `SWIFT_APPROACHABLE_CONCURRENCY` a bare `nonisolated
+    /// async` would too (it runs on the CALLER's executor). `copyItem` is a
+    /// synchronous whole-file byte copy: the source here is the user's ORIGINAL
+    /// picked file — a camera HEIC/ProRAW or an arbitrarily large binary, bounded
+    /// only by `Constants.fileTransferSoftConfirmBytes` — so on the main actor it
+    /// blocks the composer for as long as the copy takes. `@concurrent` is the
+    /// only annotation that actually moves it to the generic executor.
+    @concurrent
+    private nonisolated static func copyForUpload(from source: URL, to destination: URL) async throws {
+        try FileManager.default.copyItem(at: source, to: destination)
     }
 
     /// Best-effort delete of an orphaned uploaded file (e.g. the user removed /
@@ -3926,7 +3989,27 @@ final class ConversationDetailViewModel {
 
     /// Cancel the in-flight turn — no stale reply lands later. Leaves the user
     /// bubble; no agent bubble.
-    func cancelInFlight() {
+    /// Cancel the in-flight turn. `expecting` names the turn the caller intends
+    /// to stop (an `inFlightTurnToken` read earlier); a non-nil token that no
+    /// longer matches means the intended turn already resolved and a DIFFERENT
+    /// one is now in flight, so the cancel is dropped rather than applied to a
+    /// bystander.
+    ///
+    /// This is what makes the composer's captured Stop intent safe. That control
+    /// morphs between Send and Stop, so a click can be aimed at one and land
+    /// after the button has become the other; capturing the intent alone fixes
+    /// the Send half (a stale `.send` hits `send()`'s own live guards and
+    /// no-ops), but a stale `.stop` had nothing equivalent — and an unqualified
+    /// cancel is destructive in a way a no-op is not. A live `isInFlight`
+    /// re-check would NOT close it: in the case that matters something else
+    /// (Watch relay, Shortcut, the quick-capture lane on this same VM) has
+    /// already started the next turn, so the flag reads true and the wrong turn
+    /// dies. Only the identity distinguishes them.
+    ///
+    /// Callers that genuinely mean "stop whatever is running" (session teardown)
+    /// pass nil.
+    func cancelInFlight(expecting token: Date? = nil) {
+        guard Self.cancelApplies(expecting: token, current: inFlightStartedAt) else { return }
         #if os(macOS)
         // Cancel the foreground `Task`; its `defer` clears the in-flight flags.
         // `RemoteAgentClient` surfaces a URLError(.cancelled) → CancellationError

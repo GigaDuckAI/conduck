@@ -191,14 +191,37 @@ actor RemoteAgentClient {
         let diagStart = Date()
 #endif
 
-        let (data, response) = try await Self.performRequest(request, transport: transport)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await Self.performRequest(request, transport: transport)
+        } catch {
+#if DEBUG
+            // The TRANSPORT half of the outcome log. Without it a foreground send
+            // that never got a response left `send(fg)` with no counterpart at
+            // all, and the only way to tell a timeout from a reset from a cancel
+            // was to infer it from which copy the failed bubble rendered.
+            RemoteAgentDiagnostics.log.log("fail(fg): stage=transport elapsed=\(String(format: "%.1f", Date().timeIntervalSince(diagStart)), privacy: .public)s \(RemoteAgentDiagnostics.outcomeToken(for: error), privacy: .public)")
+#endif
+            throw error
+        }
 
 #if DEBUG
         let diagHTTP = (response as? HTTPURLResponse)?.statusCode ?? -1
+        // TRANSPORT-ONLY: `done(fg)` means bytes came back, NOT that the turn
+        // succeeded. A 4xx/5xx, an unparseable body, or a wire-coded refusal all
+        // log `done(fg)` and then a `fail(fg): stage=decode` below.
         RemoteAgentDiagnostics.log.log("done(fg): elapsed=\(String(format: "%.1f", Date().timeIntervalSince(diagStart)), privacy: .public)s http=\(diagHTTP, privacy: .public) respBytes=\(data.count, privacy: .public)")
 #endif
 
-        return try Self.decodeReply(data: data, response: response, backend: backend)
+        do {
+            return try Self.decodeReply(data: data, response: response, backend: backend)
+        } catch {
+#if DEBUG
+            RemoteAgentDiagnostics.log.log("fail(fg): stage=decode http=\(diagHTTP, privacy: .public) \(RemoteAgentDiagnostics.outcomeToken(for: error), privacy: .public)")
+#endif
+            throw error
+        }
     }
 
     // MARK: - Private — context assembly (the single request-shaping point)
@@ -456,9 +479,20 @@ actor RemoteAgentClient {
     /// loose-Bool overload: any such surface silently drops
     /// `pinComparisonUnsupported`, and a key Conduck cannot fingerprint goes back
     /// to reporting as a possible interception.
+    ///
+    /// `isTaskCancelled` is REQUIRED and has no default, because a default is
+    /// exactly how the bug it exists for got shipped. `URLError.cancelled`
+    /// (-999) is not proof of a user cancel: a peer that resets the stream
+    /// mid-request — a tunnel hiccup, a gateway dropping a large upload — is
+    /// reported with the same code. Conduck is the only party that knows whether
+    /// IT cancelled, and `Task.isCancelled` is that answer (`cancelInFlight()`
+    /// cancels the enclosing task, and cancellation is sticky once set). Callers
+    /// must read it INSIDE the catch, after the await failed — a value captured
+    /// before the await is necessarily false and could never observe a Stop.
     static func mapTransportError(
         _ code: URLError.Code,
-        signals: RemoteAgentTrustEvaluator.AttemptTrustSignals
+        signals: RemoteAgentTrustEvaluator.AttemptTrustSignals,
+        isTaskCancelled: Bool
     ) -> Error {
         switch RemoteAgentTrustEvaluator.classifyTransportError(code, signals: signals) {
         case .timeout:
@@ -508,6 +542,19 @@ actor RemoteAgentClient {
             // cancellation) MUST NOT masquerade as a cert error. Re-throw as a
             // `CancellationError` so callers can treat it as a benign abort
             // distinct from any `.remoteAgent*` failure.
+            //
+            // But ONLY when this task was actually cancelled. A -999 with no
+            // cancellation behind it came from the far side, and calling that a
+            // cancel is the worst possible answer: the failure writers treat a
+            // cancel as "not a gateway verdict" and persist NO classification,
+            // so the turn renders the bare generic "wasn't delivered" copy with
+            // no cause, no Troubleshoot, and — because Diagnostics filters on a
+            // non-nil failure code — no record that it ever happened.
+            // `.remoteAgentUnreachable` is the honest verdict: something
+            // interrupted the connection, and delivery is UNCERTAIN (the request
+            // may well have reached the gateway), which is precisely what that
+            // case's copy says.
+            guard isTaskCancelled else { return AppError.remoteAgentUnreachable }
             return CancellationError()
         }
     }
@@ -525,9 +572,16 @@ actor RemoteAgentClient {
             // `.empty` for a lane with no evaluator: no challenge was answered,
             // so there is no verdict to read — never a posture inferred from
             // whether a pin happens to be configured.
+            //
+            // `Task.isCancelled` is read HERE, after the await failed, so a Stop
+            // tapped during the request is observed. (A peer reset and a Stop can
+            // still race; the catch reports whichever is true when it runs.
+            // Attributing that exactly would need a per-turn cancellation token,
+            // which buys nothing the user can perceive.)
             throw mapTransportError(
                 error.code,
-                signals: transport.evaluator?.attemptSignals ?? .empty
+                signals: transport.evaluator?.attemptSignals ?? .empty,
+                isTaskCancelled: Task.isCancelled
             )
         } catch is CancellationError {
             // Preserve an upstream cancellation as-is rather than collapsing

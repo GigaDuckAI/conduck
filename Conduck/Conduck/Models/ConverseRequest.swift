@@ -42,7 +42,7 @@ import os.log
 /// session-ID field of any kind — continuity rides on the local
 /// conversation store, not a wire identifier. The encoded body is
 /// byte-shape-identical for OpenClaw and Hermes.
-struct ConverseRequest: Encodable, Sendable {
+nonisolated struct ConverseRequest: Encodable, Sendable {
     let messages: [Message]
     let stream: Bool
 
@@ -1143,6 +1143,27 @@ enum RemoteAgentDiagnostics {
         }
         let shape = (sawText && sawParts) ? "MIXED" : "uniform"
         return "shape=\(shape) turns=\(messages.count) bytes=\(bodyBytes) [\(kinds.joined(separator: ", "))]"
+    }
+
+    /// Content-free token naming WHY a converse hop failed: the numeric
+    /// `AppError.errorCode`, the adapter wire code when the gateway sent one, and
+    /// a `cancel` marker for a benign abort.
+    ///
+    /// PRIVACY: codes only. Never `localizedDescription`, never a response body,
+    /// never a URL — an error's own text can quote server prose, and the same
+    /// non-negotiable rule that governs `shapeSummary` governs this.
+    static func outcomeToken(for error: Error) -> String {
+        if error is CancellationError { return "outcome=cancel" }
+        var parts: [String] = []
+        if let code = error.unwrappedAppError?.errorCode {
+            parts.append("code=\(code)")
+        } else {
+            parts.append("code=none")
+        }
+        if let wire = (error as? ClassifiedRemoteAgentFailure)?.wireCode?.rawValue {
+            parts.append("wire=\(wire)")
+        }
+        return parts.joined(separator: " ")
     }
 }
 #endif

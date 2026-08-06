@@ -198,7 +198,9 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
             .untrustedCert,
             "The live failure code (\(urlError.code.rawValue)) must classify as UNTRUSTED, not as unreachable/cancelled and not as a mismatch. `systemTrustRejected` outranks `pinRejected` precisely so this case reads as the certificate problem it is.")
         XCTAssertEqual(
-            (RemoteAgentClient.mapTransportError(urlError.code, signals: evaluator.attemptSignals) as? AppError)?.errorCode,
+            (RemoteAgentClient.mapTransportError(urlError.code, signals: evaluator.attemptSignals,
+            isTaskCancelled: false
+        ) as? AppError)?.errorCode,
             AppError.remoteAgentCertUntrusted.errorCode,
             "The user must see the UNTRUSTED-certificate error, whose remedy is on the server. A silent cancel here is the failure mode that looks like success; a mismatch here would send them to edit a fingerprint that was never consulted.")
 
@@ -313,7 +315,9 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
             .certMismatch,
             "The live failure code (\(urlError.code.rawValue)) must classify as a certificate MISMATCH, not as unreachable/cancelled.")
         XCTAssertEqual(
-            (RemoteAgentClient.mapTransportError(urlError.code, signals: evaluator.attemptSignals) as? AppError)?.errorCode,
+            (RemoteAgentClient.mapTransportError(urlError.code, signals: evaluator.attemptSignals,
+            isTaskCancelled: false
+        ) as? AppError)?.errorCode,
             AppError.remoteAgentCertMismatch.errorCode,
             "The user must see 'certificate mismatch'. A silent cancel here is the failure mode that looks like success.")
 

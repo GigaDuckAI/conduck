@@ -94,6 +94,11 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         let taskIdentifier: Int
         let conversationID: UUID
         var continuation: CheckedContinuation<String, Error>?
+        /// Set by `cancel(conversationID:)` — i.e. WE asked for this task to
+        /// stop. `URLError.cancelled` (-999) is reported identically whether the
+        /// client cancelled or the peer reset the stream, so this flag is the
+        /// only thing that tells the two apart on this lane.
+        var cancelRequested = false
     }
 
     /// Outstanding turns keyed by `URLSessionTask.taskIdentifier`. Resolved
@@ -472,6 +477,11 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
             guard let entry = self.inFlight.values.first(where: { $0.conversationID == conversationID }) else {
                 return
             }
+            // Record the INTENT before asking the task to stop. The delegate
+            // cannot otherwise tell our cancel from a peer-side stream reset,
+            // and calling a reset a "cancel" suppresses the classification the
+            // user needs — see the `.cancelled` branch in `didCompleteWithError`.
+            self.inFlight[entry.taskIdentifier]?.cancelRequested = true
             // Find the live task by identifier and cancel it. The delegate's
             // `didCompleteWithError` with a `.cancelled` URLError performs the
             // continuation resume + cleanup.
@@ -747,14 +757,8 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         }
                     }
                     if urlError.code == .cancelled {
-                        // Disambiguate by the in-memory registry:
-                        //
-                        // entry PRESENT → a live in-process cancel (user tapped
-                        // Cancel / session teardown). No agent bubble, no
-                        // notification, NO `.remoteAgentTurnDidFail` post —
-                        // but the cancelled turn itself flips to `failed`
-                        // (below); the in-app caller's continuation receives
-                        // `CancellationError`.
+                        // -999 is THREE different events on this lane, and the
+                        // wire cannot tell them apart. The registry can:
                         //
                         // entry ABSENT → this task was resurrected ACROSS A
                         // LAUNCH (after a force-quit, ALL background tasks
@@ -766,10 +770,36 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         // (Retry chip) + post the failure notification (no
                         // awaiting caller exists by definition). `error: nil`
                         // keeps the generic "wasn't delivered" copy.
+                        //
+                        // entry PRESENT + `cancelRequested` → a live in-process
+                        // cancel (user tapped Stop / session teardown). No agent
+                        // bubble, no notification, NO `.remoteAgentTurnDidFail`
+                        // post — but the cancelled turn itself flips to `failed`
+                        // (below); the in-app caller's continuation receives
+                        // `CancellationError`.
+                        //
+                        // entry PRESENT + NOT `cancelRequested` → nobody here
+                        // asked for this. The PEER reset the stream mid-request
+                        // (an HTTP/2 RST_STREAM from the gateway or something in
+                        // front of it), which URLSession also reports as -999.
+                        // Presence alone used to be read as "the user cancelled",
+                        // which is the worst available answer: a cancel writes NO
+                        // classification, so a genuine gateway failure rendered
+                        // as the bare "wasn't delivered" with no cause, no
+                        // Troubleshoot link and no Diagnostics record. Classify
+                        // it as the transport failure it is.
                         if entry == nil {
                             if let cid = conversationID {
                                 self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: nil, notifyUser: true)
                             }
+                            return
+                        }
+                        if entry?.cancelRequested != true {
+                            let peerReset = AppError.remoteAgentUnreachable
+                            if let cid = conversationID {
+                                self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: peerReset, notifyUser: notifyUserOnFailure)
+                            }
+                            resolve(.failure(peerReset))
                             return
                         }
                         // LIVE cancel: flip the cancelled turn itself to

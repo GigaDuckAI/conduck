@@ -136,7 +136,7 @@ struct CloneResult: Sendable {
 /// membership exception) so the type is visible to the Watch target alongside
 /// the store — even though the Watch never builds a draft (no image pipeline on
 /// the wrist).
-struct AttachmentDraft: Sendable {
+nonisolated struct AttachmentDraft: Sendable {
     /// `image/jpeg` for images; `text/*` / `application/json` for text files.
     let mimeType: String
     /// Original filename (text files — drives the bubble chip label). Nil for
