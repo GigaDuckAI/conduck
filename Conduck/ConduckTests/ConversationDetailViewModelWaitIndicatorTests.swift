@@ -115,4 +115,57 @@ final class ConversationDetailViewModelWaitIndicatorTests: XCTestCase {
         XCTAssertFalse(vm.showsGatewayWaitIndicator,
                        "Clearing the timestamp must hide the row even while claimed.")
     }
+
+    // MARK: - Turn identity (qualified cancel)
+
+    // The composer's trailing control morphs between Send and Stop, so a click
+    // can be aimed at one and land after it has become the other. Capturing the
+    // INTENT at render time fixes the Send half — a stale `.send` hits `send()`'s
+    // own live guards and no-ops. The Stop half needs more: cancelling is
+    // destructive, and a live `isInFlight` re-check does NOT distinguish "the
+    // turn I meant" from "a different turn that started in the gap" (a Watch
+    // relay, a Shortcut, or the quick-capture lane on this same VM can start
+    // one). So Stop carries the turn's identity and the cancel is qualified by
+    // it. These lock that decision.
+
+    func testTheTurnTokenFollowsTheInFlightStamp() {
+        let vm = makeViewModel()
+        XCTAssertNil(vm.inFlightTurnToken, "A VM with nothing in flight names no turn.")
+
+        let started = Date()
+        vm.inFlightStartedAt = started
+        XCTAssertEqual(vm.inFlightTurnToken, started,
+                       "The token is DERIVED from the stamp — a separately-stored id would drift on the first clear site that forgot it.")
+
+        vm.inFlightStartedAt = nil
+        XCTAssertNil(vm.inFlightTurnToken)
+    }
+
+    func testAnUnqualifiedCancelAlwaysApplies() {
+        // Teardown callers mean "stop whatever is running" and pass no token.
+        XCTAssertTrue(ConversationDetailViewModel.cancelApplies(expecting: nil, current: Date()))
+        XCTAssertTrue(ConversationDetailViewModel.cancelApplies(expecting: nil, current: nil))
+    }
+
+    func testAQualifiedCancelAppliesToItsOwnTurn() {
+        let turn = Date()
+        XCTAssertTrue(ConversationDetailViewModel.cancelApplies(expecting: turn, current: turn),
+                      "The ordinary case: the Stop the user pressed reaches the turn it was rendered for.")
+    }
+
+    func testAQualifiedCancelIsDroppedOnceItsTurnHasResolved() {
+        let turn = Date()
+        XCTAssertFalse(ConversationDetailViewModel.cancelApplies(expecting: turn, current: nil),
+                       "The turn already finished — there is nothing this click can legitimately stop.")
+    }
+
+    /// THE case a live `isInFlight` re-check cannot catch: something IS in
+    /// flight, so the flag reads true, but it is not the turn the click meant.
+    func testAQualifiedCancelNeverKillsABystanderTurn() {
+        let intendedTurn = Date(timeIntervalSince1970: 1_000)
+        let laterTurn = Date(timeIntervalSince1970: 2_000)
+        XCTAssertFalse(
+            ConversationDetailViewModel.cancelApplies(expecting: intendedTurn, current: laterTurn),
+            "A stale Stop must not cancel a turn that started after it was rendered — that is a destructive action produced by a click aimed at something else.")
+    }
 }

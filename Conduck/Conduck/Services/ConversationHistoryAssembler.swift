@@ -61,7 +61,15 @@ enum ConversationHistoryAssembler {
     /// per-message byte loads are individually `try?`-tolerant — one
     /// unreadable attachment degrades that turn (the `priorTurns` honesty
     /// floor takes over), it never fails the whole assembly.
-    static func assemble(
+    /// `@concurrent` + `nonisolated` — load-bearing, not decoration. This enum
+    /// carries no isolation annotation, so under the targets' MainActor default
+    /// isolation it (and every unannotated helper it calls) would be main-actor
+    /// bound: the per-message `DataURIBuilder.jpegDataURI` base64 pass below runs
+    /// once per historical image on EVERY send, and on the main actor that is a
+    /// composer freeze that grows with the conversation. The store and settings
+    /// hops inside remain genuine actor calls either way.
+    @concurrent
+    nonisolated static func assemble(
         conversationID: UUID,
         excludingUserMessageID: UUID?,
         excludingNewUserText: String?,

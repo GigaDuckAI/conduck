@@ -17,7 +17,7 @@
 import Foundation
 
 /// Builds base64 image data-URIs for the multimodal `image_url` wire part.
-enum DataURIBuilder {
+nonisolated enum DataURIBuilder {
     /// Encode `jpegData` as a `data:image/jpeg;base64,<base64>` URI. The MIME
     /// is fixed to `image/jpeg` because `ImageProcessor` normalises every image
     /// (incl. HEIC / ProRAW) to JPEG before this point — there is no other

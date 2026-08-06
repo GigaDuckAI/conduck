@@ -144,7 +144,6 @@ final class StagedAttachmentMappingTests: XCTestCase {
     private func dualImage(state: StagedAttachment.ServerFileUploadState?) -> StagedAttachment {
         StagedAttachment(
             kind: .dualImage(
-                original: Data([0xAA, 0xBB]),
                 processedJPEG: Data([0x01, 0x02, 0x03]),
                 thumbnail: Data([0x09]),
                 width: 1024,

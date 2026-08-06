@@ -29,7 +29,7 @@ import AppKit
 #endif
 
 /// Extracts plain text + a derived MIME type from a picked text/code file.
-enum TextFileExtractor {
+nonisolated enum TextFileExtractor {
     /// One extracted text file: its decoded text, a derived MIME type
     /// (`text/plain` / `text/markdown` / `text/csv` / `application/json`), and
     /// the original filename (for the fenced splice label + the file chip).

@@ -96,6 +96,56 @@ struct StagedAttachment: Identifiable, Equatable {
                   let reason = appError.errorDescription else { return .failed }
             return .refused(reason: reason, detail: appError.descriptionWithRecovery)
         }
+
+        /// Progress quantization, in buckets per unit. Whole percent: the only
+        /// consumer is `AttachmentPreviewStrip`'s 110pt linear `ProgressView`, so
+        /// a bucket is ~1pt of bar and anything finer moves no pixel.
+        static let progressBuckets = 100.0
+
+        /// The `.uploading` state to WRITE for `progress`, or `nil` when the
+        /// rendered bar would not move and the write should be skipped.
+        ///
+        /// Load-bearing, not cosmetic. `URLSession` reports upload progress once
+        /// per body-data callback — hundreds of times for a large file — and each
+        /// write mutates the host's `@State` array, invalidating the whole
+        /// composer and re-running the attachment strip's body. Quantizing caps
+        /// that at `progressBuckets` mutations for the entire upload. (Tiles that
+        /// render NO progress chrome at all — `.dualImage` / `.dualText` — skip
+        /// the sink outright at the call site rather than quantizing.)
+        ///
+        /// TERMINAL-ABSORBING and MONOTONIC, both load-bearing. Each progress
+        /// callback hops onto the main actor in its own unstructured `Task`, and
+        /// those carry no FIFO guarantee — so a callback that lands late could
+        /// otherwise overwrite a `.uploaded` / `.failed` / `.refused` with
+        /// `.uploading` (the tile would drop its Retry chip, or a landed
+        /// storedKey would appear to un-land), or drag a bar backwards. Requiring
+        /// the current state to still BE `.uploading` and the bucket to be
+        /// strictly greater makes both impossible without ordering the callbacks.
+        /// The two roundings deliberately DIFFER, and mixing them up costs the
+        /// whole saving. `progress` is a raw fraction, so its bucket is the one it
+        /// has REACHED — floor. `shown` is a value this function itself wrote, so
+        /// it is already an exact multiple of `1 / progressBuckets` in intent —
+        /// but not in binary: `0.57 * 100` evaluates to `56.999999999999993`, and
+        /// flooring that recovers 56, so bucket 57 would look unwritten and get
+        /// written a second time. Rounding to NEAREST recovers the integer that
+        /// was stored. (Measured: floor-on-both let 1001 callbacks through as 125
+        /// writes instead of 100.)
+        /// NOTE ON RETRY: this guard is monotonic WITHIN one upload attempt, and
+    /// cannot be more than that on its own. Retry legitimately re-enters
+    /// `.uploading(0)`, so a stale high-progress callback from the dead attempt
+    /// still matches `.uploading` and still compares greater — it would be
+    /// accepted, and would then block every genuine callback of the new attempt
+    /// below it, freezing the bar until the upload passed the stale value.
+    /// Distinguishing attempts needs an identity this state does not carry, so
+    /// the callers own it: each `kickUpload` stamps an attempt number and drops
+    /// callbacks that are not from the current one.
+    static func nextUploading(from current: Self?, progress: Double) -> Self? {
+            guard case .uploading(let shown)? = current else { return nil }
+            let bucket = (min(max(progress, 0), 1) * progressBuckets).rounded(.down)
+            let shownBucket = (min(max(shown, 0), 1) * progressBuckets).rounded()
+            guard bucket > shownBucket else { return nil }
+            return .uploading(progress: bucket / progressBuckets)
+        }
     }
 
     /// The resolution state of a staged item.
@@ -114,9 +164,14 @@ struct StagedAttachment: Identifiable, Equatable {
         /// file-server in their TRUE format (HEIC / PNG / DNG / JPEG, metadata
         /// intact) so the agent's tools act on the real file — NOT the downsized
         /// JPEG. The two payloads deliberately DIFFER: vision reads the processed
-        /// JPEG, the agent's file tools read the original. `original` is the
-        /// picked bytes (also kept so the strip thumbnail can render without
-        /// re-decoding); `processedJPEG` is the inline-base64 + persisted-draft
+        /// JPEG, the agent's file tools read the original. The original bytes are
+        /// deliberately NOT an associated value: staging writes them to a
+        /// throwaway temp file (tracked in the host's `serverStagingFiles`) and
+        /// the upload reads that file, so carrying them here as well would pin a
+        /// second full copy of every picked camera file — HEIC / ProRAW, tens of
+        /// megabytes each — inside the composer's observed `@State` until Send,
+        /// and hand the synthesized `Equatable` those buffers to compare on every
+        /// strip diff. `processedJPEG` is the inline-base64 + persisted-draft
         /// copy; `thumbnail`/`width`/`height`/`byteSize` are the processed-image
         /// metadata for the persisted draft; `filename` is the display name with
         /// the original's sniffed extension (e.g. `image.heic` / `image-2.png`),
@@ -127,7 +182,7 @@ struct StagedAttachment: Identifiable, Equatable {
         /// time the storedKey is included only if the upload already landed
         /// (`.uploaded(key)`), else the image rides inline-only (NO auto-revert /
         /// NO degrade-to-inline state).
-        case dualImage(original: Data, processedJPEG: Data, thumbnail: Data, width: Int, height: Int, byteSize: Int, filename: String)
+        case dualImage(processedJPEG: Data, thumbnail: Data, width: Int, height: Int, byteSize: Int, filename: String)
         /// A security-scoped text/code file URL the VM extracts at send time.
         /// The INLINE-ONLY text route — used when the bound gateway has NO
         /// file-server configured (the extracted text rides the wire as a fenced
@@ -290,7 +345,7 @@ struct StagedAttachment: Identifiable, Equatable {
     var pendingAttachment: PendingAttachment? {
         switch kind {
         case .image(let data): return .image(data)
-        case .dualImage(_, let processedJPEG, let thumbnail, let width, let height, let byteSize, let filename):
+        case .dualImage(let processedJPEG, let thumbnail, let width, let height, let byteSize, let filename):
             // ALWAYS rides the wire (inline base64 from `processedJPEG` is the
             // guaranteed fallback). The storedKey is carried ONLY if the eager
             // upload has already landed — `.uploaded(key)` → include inline + the

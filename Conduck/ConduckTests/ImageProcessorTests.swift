@@ -239,6 +239,59 @@ final class ImageProcessorTests: XCTestCase {
                        "byteSize must equal jpegData.count.")
     }
 
+    // MARK: - displayCGImage (the shared view-side decode primitive)
+
+    // Every view-side image path goes through `displayCGImage`, at two different
+    // bounds: the composer strip and the bubble grid pass a `maxPixel`, the
+    // full-screen zoom viewer passes nil. The whole reason it is ONE function is
+    // that those surfaces must not disagree about what the bytes mean — so the
+    // bounded and unbounded routes have to apply the same EXIF orientation. They
+    // did not when the nil case took a plainer ImageIO call that passed no
+    // options at all, which silently dropped both the orientation transform and
+    // eager decoding.
+
+    /// Orientation 6 = "rotate 90° clockwise for display", so a 40×20 stored
+    /// image is a 20×40 picture. Both routes must agree that it is 20×40.
+    func testBothDecodeBoundsApplyEXIFOrientationIdentically() throws {
+        let landscapeBytes = try encode(
+            try makeCGImage(width: 40, height: 20),
+            as: .jpeg,
+            properties: [kCGImagePropertyOrientation: 6]
+        )
+
+        let unbounded = try XCTUnwrap(
+            ImageProcessor.displayCGImage(from: landscapeBytes, maxPixel: nil),
+            "The full-resolution route must decode a valid JPEG.")
+        let bounded = try XCTUnwrap(
+            ImageProcessor.displayCGImage(from: landscapeBytes, maxPixel: 1_000),
+            "The bounded route must decode a valid JPEG.")
+
+        XCTAssertEqual(unbounded.width, bounded.width,
+                       "The two routes disagree on width, so the same photo renders rotated in the zoom viewer and upright in the tile (or the reverse).")
+        XCTAssertEqual(unbounded.height, bounded.height,
+                       "The two routes disagree on height — same defect as above.")
+        XCTAssertEqual(unbounded.width, 20,
+                       "Orientation 6 means the DISPLAYED image is portrait; a 40-wide result is the raw stored buffer with the transform never applied.")
+        XCTAssertEqual(unbounded.height, 40)
+    }
+
+    /// A `maxPixel` above the source's own long edge must not upscale — the nil
+    /// route resolves its bound from the source dimensions, so an off-by-one
+    /// there would silently inflate every full-resolution decode.
+    func testTheFullResolutionRouteReturnsSourceDimensions() throws {
+        let bytes = try encode(try makeCGImage(width: 300, height: 120), as: .png)
+        let decoded = try XCTUnwrap(ImageProcessor.displayCGImage(from: bytes, maxPixel: nil))
+        XCTAssertEqual(decoded.width, 300)
+        XCTAssertEqual(decoded.height, 120)
+    }
+
+    func testDisplayDecodeReturnsNilForNonImageBytes() {
+        XCTAssertNil(ImageProcessor.displayCGImage(from: Data([0x00, 0x01, 0x02]), maxPixel: 256),
+                     "Undecodable bytes must produce nil so the caller can fall back, not a zero-sized image.")
+        XCTAssertNil(ImageProcessor.displayCGImage(from: Data([0x00, 0x01, 0x02]), maxPixel: nil),
+                     "Both routes must agree on failure too — the nil route resolves dimensions first and must not crash or invent them.")
+    }
+
     // MARK: - Decode failure
 
     func testGarbageBytesThrowDecodeFailed() async {

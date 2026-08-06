@@ -239,6 +239,11 @@ struct MessageComposerBar: View {
     /// Retry re-uploads under the SAME key — overwriting the failed partial blob
     /// rather than orphaning it under a fresh key. In-memory only.
     @State private var serverStoredKeys: [UUID: String] = [:]
+    /// Per-tile upload attempt number, bumped by every `kickUpload`. Retry
+    /// re-enters `.uploading(0)`, which makes a stale callback from the dead
+    /// attempt indistinguishable from a live one by state alone — see
+    /// `ServerFileUploadState.nextUploading(from:progress:)`.
+    @State private var serverUploadAttempts: [UUID: Int] = [:]
     /// Covers async importer/drop/image work before a tile has appeared.
     @State private var activeGatewayStages = 0
     /// Holds the picker lock across clear → host conversation mint/bind.
@@ -906,10 +911,36 @@ struct MessageComposerBar: View {
 
     // MARK: - Send
 
+    /// What the trailing control MEANT when it was drawn. One control, two
+    /// meanings — and the meaning must be decided at RENDER time, not at action
+    /// time.
+    ///
+    /// The failure this prevents: the button morphs Send → Stop the moment a
+    /// turn goes in flight. If the meaning is re-read inside the action closure,
+    /// a click the user aimed at Send — queued while the main actor was busy —
+    /// runs after the morph and CANCELS the turn they were trying to start. That
+    /// is a destructive action produced by a click that meant the opposite, and
+    /// it is silent: a cancelled turn writes no classification, so the thread
+    /// just shows "wasn't delivered".
+    /// `.stop` carries the identity of the turn it was rendered for, so a stale
+    /// click cancels THAT turn or nothing — never whichever turn happens to be
+    /// running when it lands. See `cancelInFlight(expecting:)`.
+    private enum TrailingIntent { case send, stop(token: Date?) }
+
+    private var trailingIntent: TrailingIntent {
+        isInFlight ? .stop(token: viewModel?.inFlightTurnToken) : .send
+    }
+
     private var sendButton: some View {
         // In-flight Stop morph (neutral) takes priority; otherwise the send
         // arrow (amber when a draft is ready). Part 2: FILLED-circle treatment.
-        CaptureCircleButton(
+        //
+        // Deliberately ONE `CaptureCircleButton`, not two — the symbol swap
+        // animates off a single stable button identity, and splitting it into
+        // separate Send/Stop views would lose that. The safety comes from
+        // capturing `intent` below, not from splitting the control.
+        let intent = trailingIntent
+        return CaptureCircleButton(
             symbol: isInFlight ? "stop.fill" : "arrow.up",
             fillColor: trailingColor,
             diameter: 32,
@@ -921,7 +952,7 @@ struct MessageComposerBar: View {
             accessibilityLabel: isInFlight
                 ? String(localized: "Stop")  // xcstrings: chat-ui
                 : String(localized: LocalizedStringResource("composer.send", defaultValue: "Send")),
-            action: trailingAction
+            action: { trailingAction(intent) }
         )
     }
 
@@ -930,11 +961,17 @@ struct MessageComposerBar: View {
         return (hasSendableContent && !isSendDisabled) ? AppColors.brandAmber : AppColors.disabled
     }
 
-    private func trailingAction() {
-        if isInFlight {
-            viewModel?.cancelInFlight()
-        } else {
-            send()
+    /// Acts on the intent CAPTURED when the button was built, never on a fresh
+    /// read of `isInFlight`. Both arms are guarded against arriving late, and
+    /// they need DIFFERENT guards: a stale `.send` falls through to `send()`,
+    /// whose own live checks (`isSendDisabled` includes `isAwaitingReply`) turn
+    /// it into a no-op, while a stale `.stop` is qualified by the turn token it
+    /// captured — an unqualified cancel would kill whatever turn had started in
+    /// the meantime.
+    private func trailingAction(_ intent: TrailingIntent) {
+        switch intent {
+        case .stop(let token): viewModel?.cancelInFlight(expecting: token)
+        case .send: send()
         }
     }
 
@@ -1444,14 +1481,11 @@ struct MessageComposerBar: View {
     ) {
         let task = Task { @MainActor in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
-                    Task { @MainActor in
-                        guard let i = attachments.firstIndex(where: { $0.id == id }),
-                              attachments[i].serverOwnerRef == ref,
-                              attachments[i].serverOwnerSnapshot == snapshot else { return }
-                        attachments[i].serverUploadState = .uploading(progress: progress)
-                    }
-                }
+                // NO progress sink — same reason as `kickImageUpload`: a
+                // `.dualText` tile renders no progress chrome, so an intermediate
+                // write is a composer-wide invalidation for a number nothing
+                // displays. Terminal states below still land.
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { _ in }
                 guard let i = attachments.firstIndex(where: { $0.id == id }),
                       attachments[i].serverOwnerRef == ref,
                       attachments[i].serverOwnerSnapshot == snapshot else { return }
@@ -1594,7 +1628,6 @@ struct MessageComposerBar: View {
 
         let item = StagedAttachment(
             kind: .dualImage(
-                original: original,
                 processedJPEG: processed.jpegData,
                 thumbnail: processed.thumbnailData,
                 width: processed.width,
@@ -1631,14 +1664,16 @@ struct MessageComposerBar: View {
     ) {
         let task = Task { @MainActor in
             do {
-                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
-                    Task { @MainActor in
-                        guard let i = attachments.firstIndex(where: { $0.id == id }),
-                              attachments[i].serverOwnerRef == ref,
-                              attachments[i].serverOwnerSnapshot == snapshot else { return }
-                        attachments[i].serverUploadState = .uploading(progress: progress)
-                    }
-                }
+                // NO progress sink: a `.dualImage` tile renders no progress
+                // chrome (see `AttachmentPreviewStrip.tile`), so every
+                // intermediate write would mutate `@State` — invalidating the
+                // whole composer and re-running the strip's body — to publish a
+                // number nothing displays. `URLSession` reports progress per
+                // body-data callback, i.e. dozens of times for one camera
+                // original. The tile stays at the `.uploading(0)` its staging set
+                // (`isUploading` remains true, so `awaitPreferredUploads` still
+                // joins it) until a terminal state lands below.
+                try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { _ in }
                 guard let i = attachments.firstIndex(where: { $0.id == id }),
                       attachments[i].serverOwnerRef == ref,
                       attachments[i].serverOwnerSnapshot == snapshot else { return }
@@ -1713,17 +1748,30 @@ struct MessageComposerBar: View {
         ref: RemoteAgentRef,
         snapshot: SettingsManager.FileTransferSnapshot
     ) {
+        let attempt = (serverUploadAttempts[id] ?? 0) + 1
+        serverUploadAttempts[id] = attempt
         let task = Task { @MainActor in
             do {
                 try await ConversationDetailViewModel.uploadServerFile(localURL: localURL, storedKey: storedKey, snapshot: snapshot) { progress in
                     Task { @MainActor in
-                        guard let i = attachments.firstIndex(where: { $0.id == id }),
+                        // Attempt check FIRST: after a Retry the tile is back at
+                        // `.uploading(0)`, so a callback left over from the dead
+                        // attempt passes every state-based test.
+                        guard serverUploadAttempts[id] == attempt,
+                              let i = attachments.firstIndex(where: { $0.id == id }),
                               attachments[i].serverOwnerRef == ref,
                               attachments[i].serverOwnerSnapshot == snapshot else { return }
-                        attachments[i].serverUploadState = .uploading(progress: progress)
+                        // Quantized — a write that doesn't move the rendered bar
+                        // is a composer-wide invalidation for nothing.
+                        guard let next = StagedAttachment.ServerFileUploadState.nextUploading(
+                            from: attachments[i].serverUploadState,
+                            progress: progress
+                        ) else { return }
+                        attachments[i].serverUploadState = next
                     }
                 }
-                guard let i = attachments.firstIndex(where: { $0.id == id }),
+                guard serverUploadAttempts[id] == attempt,
+                      let i = attachments.firstIndex(where: { $0.id == id }),
                       attachments[i].serverOwnerRef == ref,
                       attachments[i].serverOwnerSnapshot == snapshot else { return }
                 attachments[i].serverUploadState = .uploaded(storedKey: storedKey)
@@ -1798,6 +1846,10 @@ struct MessageComposerBar: View {
 
     private func cleanupStagingFile(_ id: UUID) {
         serverStoredKeys[id] = nil
+        // Cleared with the rest of the tile's per-id bookkeeping: a surviving
+        // entry would both leak and, if the id were ever reused, let an old
+        // attempt number admit a callback it should reject.
+        serverUploadAttempts[id] = nil
         if let url = serverStagingFiles[id] {
             try? FileManager.default.removeItem(at: url)
             serverStagingFiles[id] = nil

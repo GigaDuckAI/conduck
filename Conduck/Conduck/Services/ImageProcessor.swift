@@ -79,8 +79,12 @@ actor ImageProcessor {
     /// Fixed long-edge cap for the inline/persisted copy (the de-facto
     /// vision-tile sweet spot; no longer user-configurable).
     static let defaultMaxPixel = 1568
-    /// Thumbnail long-edge target (small preview, ~50 KB JPEG).
-    private static let thumbnailMaxPixel = 256
+    /// Thumbnail long-edge target — the size `process` bakes into
+    /// `ProcessedImage.thumbnailData`, and the display-decode bound the composer
+    /// strip reuses for a staged image that has no processed thumbnail yet
+    /// (`.image`, the inline-only route). One constant for both so a tile and a
+    /// stored thumbnail can never disagree about what "preview size" means.
+    static let thumbnailMaxPixel = 256
 
     /// Hard ceiling on a WS-2 preview thumbnail's JPEG size — a produced
     /// thumbnail above this is rejected rather than persisted. 128 KiB is
@@ -140,14 +144,74 @@ actor ImageProcessor {
         )
     }
 
+    // MARK: - Display decode (the ONE ImageIO decode primitive)
+
+    /// Decode `data` for DISPLAY, optionally bounding the long edge to
+    /// `maxPixel`. The single decode primitive every view-side image path goes
+    /// through (`Image.decoded(from:maxPixel:)` is the SwiftUI wrapper) — so the
+    /// ImageIO option block below exists exactly once, and a change to
+    /// orientation handling or cache posture cannot apply to some surfaces only.
+    ///
+    /// `maxPixel` non-nil bounds the long edge, so a multi-megapixel original
+    /// never inflates to its full bitmap to fill a small tile. Nil decodes at
+    /// full resolution — correct only where the pixels are actually wanted (the
+    /// zoom viewer).
+    ///
+    /// BOTH cases route through `downsizedCGImage`, nil by resolving the bound to
+    /// the image's own long edge rather than by taking a second, plainer ImageIO
+    /// call. That is the whole point of the shared primitive, and the two
+    /// properties it exists to keep uniform are exactly the ones a bare
+    /// `CGImageSourceCreateImageAtIndex(source, 0, nil)` would silently drop:
+    ///
+    ///   - `…ShouldCacheImmediately` — without it ImageIO hands back a LAZY
+    ///     image whose decompression is deferred to the first draw, i.e. back
+    ///     onto the main thread, which would make the `@concurrent` hop in
+    ///     `Image.decoded` return having done no work at all.
+    ///   - `…WithTransform` — without it EXIF orientation is never applied, so
+    ///     any payload with an orientation tag ≠ 1 renders rotated or mirrored
+    ///     on the surfaces that pass nil, while the bounded surfaces show it
+    ///     upright.
+    ///
+    /// `nonisolated` + SYNCHRONOUS on purpose: it touches no actor state, and
+    /// hopping onto this actor's serial executor would queue display decodes
+    /// behind a staging `process` call. The CALLER owns getting off the main
+    /// actor — `Image.decoded` does that with `@concurrent`.
+    nonisolated static func displayCGImage(from data: Data, maxPixel: Int?) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let bound: Int
+        if let maxPixel {
+            bound = max(1, maxPixel)
+        } else {
+            guard let longEdge = pixelLongEdge(of: source) else { return nil }
+            bound = longEdge
+        }
+        return try? downsizedCGImage(from: source, maxPixel: bound)
+    }
+
+    /// The source's stored pixel dimensions, read from metadata WITHOUT decoding
+    /// anything — this is what lets the nil (full-resolution) case reuse the
+    /// bounded path instead of needing its own decode call.
+    ///
+    /// Deliberately the PRE-orientation dimensions: the long edge is
+    /// orientation-invariant (a 90° swap exchanges width and height), so it is
+    /// the right bound either way, and asking for the larger of the two can only
+    /// ever be a no-op downsize, never a crop.
+    private nonisolated static func pixelLongEdge(of source: CGImageSource) -> Int? {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return max(1, max(width, height))
+    }
+
     // MARK: - Private — ImageIO
 
     /// Decode-and-downsize in one pass via `CGImageSourceCreateThumbnailAtIndex`.
     /// `…FromImageAlways` forces a downsize even when an embedded thumbnail
     /// exists (so we always honour `maxPixel`); `…WithTransform` bakes the EXIF
     /// orientation into pixels (so the stored JPEG is upright with no
-    /// orientation metadata to strip); `…ShouldCacheImmediately` decodes now (on
-    /// this actor) rather than lazily on the main thread at draw time.
+    /// orientation metadata to strip); `…ShouldCacheImmediately` decodes on the
+    /// CALLING executor rather than lazily on the main thread at draw time —
+    /// which is what makes an off-main decode hop actually buy anything.
     private static func downsizedCGImage(
         from source: CGImageSource,
         maxPixel: Int

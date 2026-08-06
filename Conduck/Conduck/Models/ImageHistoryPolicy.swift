@@ -30,7 +30,7 @@ import Foundation
 /// How much prior-turn IMAGE history a gateway's requests carry inline.
 /// Persisted per-`RemoteAgentRef` (`imageHistory.policy.<suffix>`); consumed
 /// by `ConverseRequest.priorTurns` via `ConversationHistoryAssembler`.
-enum ImageHistoryPolicy: String, Sendable, Equatable, Codable, CaseIterable {
+nonisolated enum ImageHistoryPolicy: String, Sendable, Equatable, Codable, CaseIterable {
     /// Newest `Constants.imageInlineWindow` (3) image-bearing turns ride
     /// inline; older uploaded images demote to on-disk references, and
     /// never-uploaded images expire after `orphanInlineWindow` turns. The
