@@ -2526,6 +2526,74 @@ final class ConversationDetailViewModel {
         }
     }
 
+    /// Fill the memo for a conversation the app has JUST created — a first-turn
+    /// mint or a Clone — from the ref it was created with, BEFORE any VM is bound
+    /// to it. `warmHeaderMemo()` structurally cannot cover this case: the row did
+    /// not exist the last time it ran, so a just-minted conversation is always a
+    /// miss and its pill shows the generic "Personal AI" placeholder for the
+    /// length of `resolveBackendDisplayName()`'s hops — while the app already knew
+    /// the answer, having just written it into the row.
+    ///
+    /// `hasTurns` is a PARAMETER, not derived from `titleSnippet != nil` the way
+    /// `warmHeaderMemo()` derives it. A clone copies the source's turns but
+    /// inherits only its OPTIONAL snippet, and an attachment-only or whitespace
+    /// first turn writes none — so a snippet test would report "no turns" for a
+    /// clone that has them and pop the chevron in a frame late. Callers pass
+    /// `false` for a fresh mint and the source VM's `hasTurns` for a clone.
+    ///
+    /// Every awaited value is gathered into a local before ANYTHING is published,
+    /// so a partially-resolved identity can never become visible. At capacity this
+    /// EVICTS rather than skipping — the opposite of `warmHeaderMemo()`, whose
+    /// bulk fill deliberately stops when full; this is the one entry that must not
+    /// be the one dropped.
+    static func seedHeaderIdentity(
+        for record: ConversationRecord,
+        ref: RemoteAgentRef,
+        hasTurns: Bool
+    ) async {
+        let customs = await SettingsManager.shared.gatewayBadgeRoster()
+        let configured = await SettingsManager.shared.configuredRemoteAgentRefs()
+        // Availability uses the SAME predicate as `warmHeaderMemo()` and
+        // `resolveBackendDisplayName()`, both of which overwrite this entry within
+        // a beat. `configuredRemoteAgentRefs().contains(ref)` is stricter (it
+        // fails closed on an unreadable token), so seeding from it would render a
+        // one-frame "this gateway is no longer available" banner on a thread whose
+        // gateway is fine — the inverse of the flicker this seed exists to remove.
+        let available = await SettingsManager.shared
+            .remoteAgentSnapshot(forConversationBackend: record.backend) != nil
+        let identity = HeaderIdentity(
+            displayName: RemoteAgentRefMetadata.displayName(for: ref, customs: customs),
+            boundRef: ref,
+            boundGatewayAvailable: available,
+            customGateways: customs,
+            configuredRefsForClone: configured,
+            hasTurns: hasTurns
+        )
+        if var existing = headerMemo[record.id] {
+            // A `warmHeaderMemo()` that raced the awaits above resolved from the
+            // same stored binding, so its name, ref and availability are equally
+            // authoritative — leave them. But it DERIVES `hasTurns` from
+            // `titleSnippet`, which a clone need not carry, so that one field is
+            // ours to correct: otherwise the clone chevron still pops in late on
+            // exactly the rows this parameter exists for.
+            guard hasTurns, !existing.hasTurns else { return }
+            existing.hasTurns = true
+            headerMemo[record.id] = existing
+            return
+        }
+        if headerMemo.count >= headerMemoCap, let victim = headerMemo.keys.first {
+            headerMemo.removeValue(forKey: victim)
+        }
+        headerMemo[record.id] = identity
+    }
+
+    /// Test seam only — the memo is process-global static, so it outlives an
+    /// XCTest case and a full one leaves `warmHeaderMemo()` silently filling
+    /// nothing for the rest of the run.
+    static func resetHeaderMemoForTesting() {
+        headerMemo.removeAll()
+    }
+
     /// Publish the just-resolved header state into the session memo so the NEXT
     /// VM minted for this conversation renders it on frame one. See `headerMemo`.
     private func rememberHeaderIdentity() {
@@ -2673,6 +2741,16 @@ final class ConversationDetailViewModel {
                     messageID: continuationID
                 )
             }
+            // Seed BEFORE returning: the caller navigates by posting a deep-link
+            // carrying a bare UUID, so the target gateway's identity would
+            // otherwise not survive the hop and the clone's pill would open on
+            // "Personal AI". `hasTurns` comes from this (the SOURCE) VM — the
+            // clone copies its turns, but not necessarily its title snippet.
+            await Self.seedHeaderIdentity(
+                for: cloned.conversation,
+                ref: ref,
+                hasTurns: hasTurns
+            )
             return cloned.conversation.id
         } catch {
             setSendNotice(String(localized: "remoteAgent.clone.failed",

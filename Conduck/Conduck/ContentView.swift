@@ -116,21 +116,6 @@ struct ContentView: View {
     /// `.onAppear`, which SwiftUI re-fires) so it stays stable while typing /
     /// on navigation re-appear. This is a host view with no conversation VM.
     @State private var hostMascot = MascotShuffleBag.next()
-    /// The nav-title display name: the visible conversation's bound backend
-    /// (per-conversation routing), or the default backend in the empty/new
-    /// state. Non-reactive snapshot read — refreshed at the same hooks as
-    /// `isRemoteAgentConfigured` (launch / scenePhase / settings dismiss /
-    /// `.settingsDidChangeRemotely`) PLUS on a thread switch
-    /// (`onChange(of: currentConversationID)`).
-    /// Nav-title snapshot: the RESPONDING gateway's display name once one is
-    /// configured. With no gateway at all there is no responder to name, so it
-    /// falls back to the app name — "Personal AI" here was a placeholder backend
-    /// name wearing a title's clothes, and it made the unconfigured screen say
-    /// the same six words four times over.
-    @State private var backendTitle: String = String(localized: LocalizedStringResource(
-        "chat.title.unconfigured",
-        defaultValue: "Conduck"
-    ))
     /// Session-local (NOT persisted) gateway-picker selection for the NEXT new
     /// conversation. The persisted preference is the Settings *default*;
     /// this is purely the title-dropdown's transient choice. Seeded from the
@@ -138,6 +123,13 @@ struct ContentView: View {
     /// and `sendTurn`'s mint reads it. Falls back harmlessly to the default
     /// backend before the first seed.
     @State private var pickerSelectedRef: RemoteAgentRef = .builtin(Constants.remoteAgentDefaultBackendDefault)
+    /// True once the user has picked a gateway BY HAND for the chat currently
+    /// being composed. It makes that choice outrank the persisted Settings
+    /// default in `refreshGatewayRoster()` until the chat is minted or the user
+    /// starts another one — without it, a refresh still suspended from
+    /// `startNewConversation()` resumes and silently reinstates the default,
+    /// which is both a title flicker and a re-aim of the ref the next send seals.
+    @State private var userPickedRefForNewChat = false
     /// The fully-configured gateway refs (token + url): built-ins first, then
     /// customs. The gateway picker renders IFF this has ≥2 entries AND the
     /// conversation is new/empty (`currentConversationID == nil`). Refreshed
@@ -180,7 +172,7 @@ struct ContentView: View {
                 customGateways: customGateways,
                 selectedRef: $pickerSelectedRef,
                 canPickBackend: canPickBackend,
-                onPickBackend: { Task { await refreshBackendTitle() } },
+                onPickBackend: { userPickedRefForNewChat = true },
                 onOpenSettings: { category in
                     settingsRoute = SettingsRoute(category: category)
                 },
@@ -207,14 +199,19 @@ struct ContentView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active { Task { await refreshOnForeground() } }
             }
-            .onChange(of: currentConversationID) { _, _ in
+            .onChange(of: currentConversationID) { _, newID in
                 composerDraft = ""   // don't carry a half-typed draft into another thread
                 clearComposerFeedback()   // stale voice error/recovery shouldn't follow a thread switch
+                // Entering a new-chat state retires the previous chat's hand-pick,
+                // whichever surface got us here. iPad's New button lives in
+                // `ConversationLibraryView` and never reaches this view's
+                // `startNewConversation()`, so gating the reset on that call alone
+                // left an iPad pick sticky for the rest of the session — a later
+                // Settings default change would never take effect.
+                if newID == nil { userPickedRefForNewChat = false }
+                // The nav title follows the VM this rebuilds — it is derived, so
+                // no separate refresh hop can go stale or land out of order.
                 syncDetailVM()
-                // Refresh the nav title to the newly-selected thread's bound
-                // backend (per-conversation routing) — else it stays stale when
-                // switching between threads on different gateways.
-                Task { await refreshBackendTitle() }
             }
             // iPad settings is a full-window cover — presenting it leaves the chat,
             // so clear the transient composer feedback before the cover dismisses.
@@ -281,7 +278,7 @@ struct ContentView: View {
                 let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
                 Button {
                     pickerSelectedRef = ref
-                    Task { await refreshBackendTitle() }
+                    userPickedRefForNewChat = true
                 } label: {
                     if ref == pickerSelectedRef {
                         Label(name, systemImage: "checkmark")
@@ -299,7 +296,7 @@ struct ContentView: View {
                         let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
                         Button {
                             pickerSelectedRef = ref
-                            Task { await refreshBackendTitle() }
+                            userPickedRefForNewChat = true
                         } label: {
                             if ref == pickerSelectedRef {
                                 Label(name, systemImage: "checkmark")
@@ -324,16 +321,45 @@ struct ContentView: View {
         .accessibilityIdentifier("toolbar.gatewayPicker")  // stable QA target (non-localized)
     }
 
+    /// The nav-title display name, derived — never snapshotted. Inside a thread:
+    /// the bound backend, via the VM (whose header is memo-seeded at mint and on
+    /// warm, so it is right on frame one). Empty/new state: the picker selection,
+    /// which is what the next send will bind to. No gateway configured at all:
+    /// the app name, because there is no responder to name — "Personal AI" here
+    /// was a placeholder backend name wearing a title's clothes.
+    ///
+    /// The `conversationID` guard matters twice: it keeps a thread switch from
+    /// briefly rendering the OUTGOING VM's name, and during a first-turn mint —
+    /// between `currentConversationID` moving and `syncDetailVM()` catching up —
+    /// it falls through to the picked ref, which is the correct answer for that
+    /// window rather than a stale one.
+    private var backendTitle: String {
+        if let vm = detailVM, vm.conversationID == currentConversationID {
+            return vm.backendDisplayName
+        }
+        if !configuredRefs.isEmpty {
+            return RemoteAgentRefMetadata.displayName(for: pickerSelectedRef, customs: customGateways)
+        }
+        return String(localized: LocalizedStringResource(
+            "chat.title.unconfigured",
+            defaultValue: "Conduck"
+        ))
+    }
+
     /// The centered principal-toolbar control. Three-way: the gateway picker
     /// when a new/empty chat with ≥2 backends can pick; else a tappable title
     /// that folds in "Clone & continue" when the bound thread is clone-eligible
     /// (has turns, gateway available, somewhere to switch to); else a plain
     /// static title.
+    ///
+    /// `hasTurns`, not `!messages.isEmpty` — a freshly minted VM has no messages
+    /// for a beat, which popped the chevron affordance in a frame late (iPad and
+    /// macOS already gate on the memo-seeded form).
     @ViewBuilder
     private var gatewayTitleControl: some View {
         if canPickBackend {
             gatewayPickerMenu
-        } else if let vm = detailVM, vm.canSwitchGateway, !vm.messages.isEmpty, vm.boundGatewayAvailable {
+        } else if let vm = detailVM, vm.canSwitchGateway, vm.hasTurns, vm.boundGatewayAvailable {
             Button { vm.showingGatewaySheet = true } label: {
                 HStack(spacing: 4) {
                     Text(backendTitle)
@@ -533,11 +559,12 @@ struct ContentView: View {
                 #endif
                 composerDraft = ""   // don't carry a half-typed draft into another thread
                 clearComposerFeedback()   // stale voice error/recovery shouldn't follow a thread switch
+                // Entering a new-chat state retires the previous chat's hand-pick,
+                // whichever surface got us here (see the iPad twin above).
+                if newID == nil { userPickedRefForNewChat = false }
+                // The nav title follows the VM this rebuilds — it is derived, so
+                // no separate refresh hop can go stale or land out of order.
                 syncDetailVM()
-                // Refresh the nav title to the newly-selected thread's bound
-                // backend (per-conversation routing) — else it stays stale when
-                // switching between threads on different gateways.
-                Task { await refreshBackendTitle() }
             }
             // Leaving the chat for the list / settings sheet clears the transient
             // composer feedback ON PRESENTATION, so the banner is already gone when
@@ -621,17 +648,13 @@ struct ContentView: View {
         composerDraft = ""
         currentConversationID = nil
         hostMascot = MascotShuffleBag.next()  // fresh shuffle-bag pose for the new empty state
+        // Drop the PREVIOUS chat's hand-pick synchronously, before the refresh
+        // below can observe it — a genuinely fresh chat starts on the default.
+        userPickedRefForNewChat = false
         // Re-seed the gateway picker from the persisted default + refresh the
         // configured list so the dropdown reappears (when ≥2 are configured)
         // with the default pre-selected for this fresh conversation.
-        Task {
-            configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
-            customGateways = await SettingsManager.shared.gatewayBadgeRoster()
-            if !attachmentGatewaySelectionLocked {
-                pickerSelectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
-            }
-            await refreshBackendTitle()
-        }
+        Task { await refreshGatewayRoster() }
     }
 
     /// Rebuild the shared detail VM when the visible conversation changes.
@@ -741,6 +764,19 @@ struct ContentView: View {
         }
         await refreshConfiguredFlag()
         await refreshPendingRetryState()
+        // Warm the header memo BEFORE any VM is built (the first one is minted by
+        // `syncDetailVM()` at the end of this function), so the first thread opened
+        // this session draws its gateway on frame one instead of the generic
+        // "Personal AI" placeholder while its resolve walks the store. macOS warms
+        // from `MenuBarCoordinator`; this is the iOS/iPadOS half, and it became
+        // load-bearing when the nav title started deriving from the VM.
+        //
+        // Ordered AFTER the configured flag on purpose: the warm forces the
+        // persistent-store load plus a full conversation fetch, and
+        // `isRemoteAgentConfigured` starts false — putting it first held a
+        // configured user on the "connect a gateway" empty state for the length of
+        // that fetch on every cold launch.
+        await ConversationDetailViewModel.warmHeaderMemo()
         // Proactively hydrate the Apple on-device model state so the pre-mic
         // gate has a warm cache (no hot-path latency on the first mic tap). Cheap
         // no-op when the active STT is a cloud provider; the gate re-checks the
@@ -770,6 +806,14 @@ struct ContentView: View {
         // drains (this + a notification tap firing near-simultaneously); an empty
         // inbox is a cheap no-op.
         await SharedInboxDrainer.shared.drain()
+        // Fill header-memo entries for rows this foreground introduced — a
+        // CloudKit import that landed while suspended, or a share-extension turn
+        // the drain above just minted — so opening one draws its gateway on frame
+        // one. Deliberately here and NOT on `.conversationsDidChange` (which
+        // macOS uses): that notification also fires on every message append, and
+        // a full-table warm per append is a cost a phone should not pay. Locally
+        // minted and cloned rows are seeded at mint by `seedHeaderIdentity`.
+        await ConversationDetailViewModel.warmHeaderMemo()
         // Silent foreground catch-up. Re-read the local store into the on-screen
         // list + open thread (covers a CloudKit import that landed while the app
         // was suspended and whose remote-change post fired before/without a live
@@ -829,65 +873,57 @@ struct ContentView: View {
 
     private func refreshConfiguredFlag() async {
         let hadConfiguredGateway = !configuredRefs.isEmpty
-        configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
+        let refs = await refreshGatewayRoster()
         // Strict configured flag: a usable gateway needs a URL AND (for `.bearer`)
         // a token — never URL alone. The old `remoteAgentSnapshot() != nil` was
         // URL-gated and could read "ready" with no key, showing the composer when
         // a send would fail closed. Align with the strict predicate used
         // everywhere else (`configuredRemoteAgentRefs()`).
-        isRemoteAgentConfigured = !configuredRefs.isEmpty
-        customGateways = await SettingsManager.shared.gatewayBadgeRoster()
+        isRemoteAgentConfigured = !refs.isEmpty
 
         // Cross-device "set up later, then it synced" path: a gateway just
         // appeared where there was none. Gate on the FIRST load (an
         // already-configured gateway at launch is not a sync event) and on the
         // empty → non-empty transition (never an ordinary edit), so the transient
         // banner reads as sync magic, not a glitch.
-        if didCompleteInitialConfiguredLoad, !hadConfiguredGateway, !configuredRefs.isEmpty {
+        if didCompleteInitialConfiguredLoad, !hadConfiguredGateway, !refs.isEmpty {
             presentSyncedBanner()
         }
         didCompleteInitialConfiguredLoad = true
-        // Seed the session-local picker selection from the persisted default
-        // whenever we're in an empty/new state (no bound thread yet). Inside a
-        // thread the picker is hidden, so the selection is irrelevant.
-        if currentConversationID == nil, !attachmentGatewaySelectionLocked {
-            pickerSelectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
-        }
-        await refreshBackendTitle()
     }
 
-    /// Refresh the nav-title snapshot (non-reactive `@State`). Inside a thread:
-    /// the conversation's bound backend display name. Empty/new state: the
-    /// default backend's display name (a future release swaps this for the picker
-    /// selection). Falls back to the app name when no backend is configured at
-    /// all. Refreshed at the same hooks as `isRemoteAgentConfigured` (launch /
-    /// scenePhase / settings dismiss / remote change) PLUS on a thread switch
-    /// — otherwise the title goes stale when moving between threads bound to
-    /// different gateways.
-    private func refreshBackendTitle() async {
-        if let id = currentConversationID,
-           let raw = try? await ConversationStore.shared.fetchConversation(id: id)?.backend,
-           let ref = RemoteAgentRef(rawString: raw) {
-            backendTitle = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
-        } else if !(await SettingsManager.shared.configuredRemoteAgentRefs().isEmpty) {
-            // Empty/new state, or a thread with an unknown stored backend →
-            // preview the session-local picker selection (what the next send
-            // will mint). The selection is seeded from the default in
-            // `refreshConfiguredFlag`, then driven by the picker. This keeps the
-            // static title (1 gateway configured) and the dropdown label in sync.
-            // Gate on per-ref CONFIGURED state, NOT the legacy single-slot
-            // `getRemoteAgentBackend()` (frozen after migration → nil on a fresh
-            // multi-gateway install, which would wrongly fall through to
-            // "Personal AI").
-            backendTitle = RemoteAgentRefMetadata.displayName(for: pickerSelectedRef, customs: customGateways)
-        } else {
-            // No gateway configured → nothing to name. Show the app, not a
-            // stand-in gateway called "Personal AI".
-            backendTitle = String(localized: LocalizedStringResource(
-                "chat.title.unconfigured",
-                defaultValue: "Conduck"
-            ))
+    /// Re-read the configured roster and re-seed the new-chat picker selection.
+    /// Returns the configured refs so the caller drives its own derived state
+    /// from the SAME snapshot rather than re-reading a moved one.
+    ///
+    /// Every awaited value is gathered BEFORE anything is published, and both the
+    /// staging lock and the user's hand-pick are read AFTER the last suspension.
+    /// Reading them before it was the bug: `startNewConversation()` fires this
+    /// task and returns immediately, so the picker is live while this is still
+    /// suspended — the resumed task then overwrote a gateway the user had since
+    /// chosen, visibly in the title and in the ref the next send seals.
+    @discardableResult
+    private func refreshGatewayRoster() async -> [RemoteAgentRef] {
+        let refs = await SettingsManager.shared.configuredRemoteAgentRefs()
+        let roster = await SettingsManager.shared.gatewayBadgeRoster()
+        let persistedDefault = await SettingsManager.shared.defaultRemoteAgentRef()
+
+        configuredRefs = refs
+        customGateways = roster
+        // Inside a thread the picker is hidden, so the selection is irrelevant.
+        guard currentConversationID == nil, !attachmentGatewaySelectionLocked else { return refs }
+        // A hand-pick outranks the persisted default until this chat is minted or
+        // the user starts another one. It yields only when the picked gateway is
+        // no longer configured at all — and then to the default, or to the first
+        // configured ref if the default is not configured either, never to
+        // another invalid selection.
+        if !userPickedRefForNewChat || !refs.contains(pickerSelectedRef) {
+            pickerSelectedRef = refs.contains(persistedDefault)
+                ? persistedDefault
+                : (refs.first ?? persistedDefault)
+            userPickedRefForNewChat = false
         }
+        return refs
     }
 
     /// Pick the conversation to show on launch. Gated by the user's
@@ -1041,6 +1077,23 @@ struct ContentView: View {
         if currentConversationID == nil {
             let mintRef = expectedRef ?? pickerSelectedRef
             if let fresh = try? await ConversationStore.shared.createConversation(backend: mintRef.rawString) {
+                // Hand the row's identity to the header memo BEFORE the selection
+                // moves: `currentConversationID` going non-nil gates the picker
+                // off and hands the title to `detailVM`, whose fresh VM would
+                // otherwise open on the generic "Personal AI" placeholder while
+                // its resolve walks the store.
+                //
+                // Deliberately ABOVE the ownership guard, not between it and the
+                // commit it protects — that guard must be the last thing before
+                // the selection moves, with no suspension in between. The cost is
+                // that an abandoned mint leaves one stale memo entry keyed by a
+                // deleted UUID: bounded, never looked up again, and cheaper than
+                // reopening the race this guard exists to close.
+                await ConversationDetailViewModel.seedHeaderIdentity(
+                    for: fresh,
+                    ref: mintRef,
+                    hasTurns: false
+                )
                 guard ComposerMintOwnership.resolve(
                     sealedConversationID: expectedConversationID,
                     activeConversationIDAfterMint: currentConversationID

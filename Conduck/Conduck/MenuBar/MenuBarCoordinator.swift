@@ -1312,6 +1312,13 @@ final class MenuBarCoordinator {
                 }
                 return
             }
+            // Same reason as the window mint: `viewModel(for:)` below binds a VM
+            // whose header would otherwise open on the "Personal AI" placeholder.
+            await ConversationDetailViewModel.seedHeaderIdentity(
+                for: fresh,
+                ref: ref,
+                hasTurns: false
+            )
             resolvedID = fresh.id
         }
 
@@ -1390,6 +1397,22 @@ final class MenuBarCoordinator {
                 _ = dictationService.presentHandoffError(message: mintFailedMessage)
                 return false
             }
+            // Hand the row's identity to the memo BEFORE binding: the bind mints
+            // a VM whose `backendDisplayName` is the generic "Personal AI" until
+            // its resolve lands, and the title bar switches to reading it the
+            // moment `windowViewModel` goes non-nil.
+            //
+            // Deliberately ABOVE the ownership guard, not between it and the
+            // clear-and-bind pair it protects — that pair must follow the guard
+            // with no suspension in between. The cost is that an abandoned mint
+            // leaves one stale memo entry keyed by a deleted UUID: bounded, never
+            // looked up again, and cheaper than reopening the race the guard
+            // exists to close.
+            await ConversationDetailViewModel.seedHeaderIdentity(
+                for: fresh,
+                ref: dispatch.ref,
+                hasTurns: false
+            )
             guard ComposerMintOwnership.resolve(
                 sealedConversationID: dispatch.conversationID,
                 activeConversationIDAfterMint: windowViewModel?.conversationID

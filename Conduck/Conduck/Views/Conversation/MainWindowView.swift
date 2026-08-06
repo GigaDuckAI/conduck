@@ -57,6 +57,14 @@ struct MainWindowView: View {
     /// writes through to `coordinator.pendingNewConversationRef` so the next
     /// minted conversation actually binds to the chosen gateway.
     @State private var selectedRef: RemoteAgentRef = .builtin(Constants.remoteAgentDefaultBackendDefault)
+    /// True once the user has picked a gateway BY HAND for the chat currently
+    /// being composed. It makes that choice outrank the persisted Settings
+    /// default in `refreshConfiguredBackends()` until the chat is minted or the
+    /// user starts another one — without it, a refresh still suspended from
+    /// `startNewConversation()` resumes and silently reinstates the default,
+    /// which is both the title-bar flicker and a re-aim of the ref the next send
+    /// seals (`MessageComposerBar`'s new-chat dispatch reads `selectedRef`).
+    @State private var userPickedRefForNewChat = false
     /// Raised by the VM-less composer while attachment staging/dispatch owns
     /// `selectedRef`; the title-bar pill becomes read-only for that interval.
     @State private var newChatGatewaySelectionLocked = false
@@ -433,6 +441,7 @@ struct MainWindowView: View {
                 let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
                 Button {
                     selectedRef = ref
+                    userPickedRefForNewChat = true
                     coordinator.pendingNewConversationRef = ref
                 } label: {
                     if ref == selectedRef {
@@ -451,6 +460,7 @@ struct MainWindowView: View {
                         let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
                         Button {
                             selectedRef = ref
+                            userPickedRefForNewChat = true
                             coordinator.pendingNewConversationRef = ref
                         } label: {
                             if ref == selectedRef {
@@ -606,20 +616,44 @@ struct MainWindowView: View {
         coordinator.startNewWindowConversation()
         selectedConversationID = nil
         hostMascot = MascotShuffleBag.next()  // fresh shuffle-bag pose for the new empty state
+        // Drop the PREVIOUS chat's hand-pick synchronously, before the refresh
+        // below can observe it — a genuinely fresh chat starts on the default.
+        userPickedRefForNewChat = false
         coordinator.pendingNewConversationRef = selectedRef
         Task { await refreshConfiguredBackends() }
     }
 
+    /// Re-read the configured roster and re-seed the new-chat picker selection.
+    ///
+    /// Every awaited value is gathered BEFORE anything is published, and both the
+    /// staging lock and the user's hand-pick are read AFTER the last suspension.
+    /// Reading them before it was the bug: `startNewConversation()` fires this
+    /// task and returns immediately, so the picker is live while this is still
+    /// suspended — the resumed task then overwrote a gateway the user had since
+    /// chosen, visibly in the title bar and in the ref the next send seals.
     private func refreshConfiguredBackends() async {
-        configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
-        customGateways = await SettingsManager.shared.gatewayBadgeRoster()
-        if !gatewaySelectionLocked {
-            selectedRef = await SettingsManager.shared.defaultRemoteAgentRef()
+        let refs = await SettingsManager.shared.configuredRemoteAgentRefs()
+        let roster = await SettingsManager.shared.gatewayBadgeRoster()
+        let persistedDefault = await SettingsManager.shared.defaultRemoteAgentRef()
+
+        configuredRefs = refs
+        customGateways = roster
+        guard !gatewaySelectionLocked else { return }
+        // A hand-pick outranks the persisted default until this chat is minted or
+        // the user starts another one. It yields only when the picked gateway is
+        // no longer configured at all — and then to the default, or to the first
+        // configured ref if the default is not configured either, never to
+        // another invalid selection.
+        if !userPickedRefForNewChat || !refs.contains(selectedRef) {
+            selectedRef = refs.contains(persistedDefault)
+                ? persistedDefault
+                : (refs.first ?? persistedDefault)
+            userPickedRefForNewChat = false
         }
         // Keep the pending mint-ref in sync with the visible picker label so a
         // first typed turn binds to the gateway the user sees selected. Gated
         // on the WINDOW lane — `pendingNewConversationRef` is window-mint state.
-        if coordinator.windowViewModel == nil, !gatewaySelectionLocked {
+        if coordinator.windowViewModel == nil {
             coordinator.pendingNewConversationRef = selectedRef
         }
     }

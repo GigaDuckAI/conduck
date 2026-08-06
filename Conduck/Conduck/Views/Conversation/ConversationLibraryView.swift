@@ -30,8 +30,10 @@ struct ConversationLibraryView: View {
     /// the bubble footer chip.
     let onSendTurn: (ComposerTurnDispatch, TurnModality) async -> Bool
     let isRemoteAgentConfigured: Bool
-    /// Active backend display name shown as the detail-column nav title
-    /// (fallback "Personal AI"). Host-owned (`ContentView.backendTitle`).
+    /// Active backend display name shown as the detail-column nav title.
+    /// Host-derived (`ContentView.backendTitle`) — the bound thread's gateway
+    /// inside a conversation, the picker selection in the empty/new state, and
+    /// the app name when nothing is configured.
     let backendTitle: String
     /// The fully-configured gateway refs (token + url): built-ins first, then
     /// customs. Host-owned. The detail-column gateway picker renders only when
@@ -49,8 +51,9 @@ struct ConversationLibraryView: View {
     /// When true the detail toolbar shows the gateway dropdown instead of a
     /// static title.
     let canPickBackend: Bool
-    /// Notify the host that the picker selection changed so it can refresh the
-    /// title preview (the host owns `backendTitle`).
+    /// Notify the host that the user picked a gateway BY HAND, so the host can
+    /// stop a background roster refresh from reinstating the Settings default
+    /// over that choice. Called after the `selectedRef` binding is written.
     let onPickBackend: () -> Void
     /// Open the host's Settings sheet, optionally deep-linked to a category. The
     /// host owns the sheet; passing `.voice` lands directly on Settings → Voice
