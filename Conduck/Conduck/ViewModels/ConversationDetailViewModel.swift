@@ -1047,13 +1047,6 @@ final class ConversationDetailViewModel {
     /// id.
     var missingOutputNoticeIDs: Set<UUID> = []
 
-    /// The USER turn annotated with "your file reached the file server, and what
-    /// the agent did with it is not something Conduck can see" — the inbound
-    /// counterpart to `missingOutputNoticeIDs`. A single id, not a set: the
-    /// caveat is a constant, so it is stated once per conversation on the newest
-    /// qualifying turn (see `FileDeliveryNotice`). DERIVED, never persisted.
-    var fileDeliveryNoticeID: UUID?
-
     /// Per-turn state of the user-initiated "Check again" re-probe. Absent =
     /// nothing to report. Observable: drives the row's button + result caption.
     var outputRecheckStates: [UUID: OutputRecheckState] = [:]
@@ -1300,17 +1293,6 @@ final class ConversationDetailViewModel {
             // echo re-fetches an identical thread — the storm's cheapest exit.
             if fetched != messages {
                 messages = fetched
-            }
-            // The INBOUND half of the file-transfer story ("your file got there;
-            // Conduck can't see what the agent did with it"). Derived inline
-            // rather than in a Task like the outbound notice below, because it
-            // reads turn STRUCTURE only — no reply text, no probe, no store hop —
-            // so there is nothing to hop off the main actor for. Compared before
-            // assigning: an unconditional write to an `@Observable` property
-            // repaints every observing bubble on each pass of a reload storm.
-            let deliveryNoticeID = FileDeliveryNotice.noticeTurnID(in: messages)
-            if fileDeliveryNoticeID != deliveryNoticeID {
-                fileDeliveryNoticeID = deliveryNoticeID
             }
             // Retroactive output scan (non-awaited): any modern dispatch that
             // persisted an explicit pending marker + exact durable lane may

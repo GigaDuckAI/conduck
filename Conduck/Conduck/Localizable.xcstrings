@@ -4277,6 +4277,28 @@
         }
       }
     },
+    "fileTransfer.sent.onFileServer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "On your file server"
+          }
+        }
+      }
+    },
+    "fileTransfer.sent.sizeOnFileServer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ · on your file server"
+          }
+        }
+      }
+    },
     "fileTransfer.snippet.copied" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15255,39 +15277,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "You:"
-          }
-        }
-      }
-    },
-    "thread.fileDelivered.action.reviewSetup" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Review file setup"
-          }
-        }
-      }
-    },
-    "thread.fileDelivered.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck uploaded it and included its location in the request to your gateway, but can't tell whether the agent opened it."
-          }
-        }
-      }
-    },
-    "thread.fileDelivered.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "File delivered to your file server"
           }
         }
       }

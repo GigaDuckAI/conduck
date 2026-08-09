@@ -289,7 +289,6 @@ struct ConversationThreadView: View {
                             speakState: speaker.speakState(for: message.id),
                             usedFallbackVoice: speaker.usedFallbackVoice(for: message.id),
                             showsMissingOutputNotice: viewModel.missingOutputNoticeIDs.contains(message.id),
-                            showsFileDeliveredNotice: viewModel.fileDeliveryNoticeID == message.id,
                             outputRecheckState: viewModel.outputRecheckStates[message.id],
                             awaitsCloneContinuation: awaitsCloneContinuation(message),
                             filePreview: filePreview,
@@ -1056,12 +1055,6 @@ private struct MessageBubble: View, Equatable {
     /// never persisted, never computed here: the derivation walks
     /// adversary-controlled reply text and must not run inside `body`.
     let showsMissingOutputNotice: Bool
-    /// This USER turn handed a file to the file server, and it is the turn the
-    /// thread annotates with what Conduck can and cannot see about what happened
-    /// next. Derived by the VM (`FileDeliveryNotice`) from turn structure alone —
-    /// never from reply text, which cannot distinguish an ignored file from a
-    /// used one. At most one turn per conversation carries it.
-    let showsFileDeliveredNotice: Bool
     /// Outcome of the user's last "Check again" on this turn, if any.
     let outputRecheckState: ConversationDetailViewModel.OutputRecheckState?
     /// This turn is a freshly cloned trailing turn whose automatic continuation
@@ -1090,7 +1083,8 @@ private struct MessageBubble: View, Equatable {
     /// Re-probe this turn's output window against the file server, on demand
     /// (the missing-output row's "Check again").
     let onRecheckOutputs: () -> Void
-    /// Open the bound gateway's file-transfer setup (the row's second action).
+    /// Open the bound gateway's file-transfer setup (the missing-output row's
+    /// "Review file setup").
     let onOpenFileSetup: () -> Void
 
     @State private var didCopy = false
@@ -1112,7 +1106,6 @@ private struct MessageBubble: View, Equatable {
             && lhs.speakState == rhs.speakState
             && lhs.usedFallbackVoice == rhs.usedFallbackVoice
             && lhs.showsMissingOutputNotice == rhs.showsMissingOutputNotice
-            && lhs.showsFileDeliveredNotice == rhs.showsFileDeliveredNotice
             && lhs.outputRecheckState == rhs.outputRecheckState
             && lhs.awaitsCloneContinuation == rhs.awaitsCloneContinuation
     }
@@ -1152,18 +1145,6 @@ private struct MessageBubble: View, Equatable {
             bubbleRow
             if isUser, message.status == "failed", !awaitsCloneContinuation {
                 deliveryErrorRow
-            }
-            // The INBOUND handback diagnostic, in the same structural place its
-            // outbound sibling occupies below: under the bubble, outside its
-            // background, device-local metadata about THIS turn's delivery.
-            // Deliberately under the USER turn rather than the reply — nothing
-            // persisted pairs a reply with the turn it answers, so a row placed
-            // under a reply would assert a relationship the store cannot prove
-            // (see `FileDeliveryNotice`). It cannot collide with the delivery
-            // error row above: that one needs `status == "failed"` and this one
-            // needs `sent`.
-            if isUser, showsFileDeliveredNotice {
-                fileDeliveredRow
             }
             // Handback diagnostic: sits UNDER the agent bubble, outside its
             // background — device-local metadata about THIS turn's delivery,
@@ -1353,68 +1334,6 @@ private struct MessageBubble: View, Equatable {
         .frame(maxWidth: 520, alignment: .trailing)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: "\(presentation.title). \(presentation.body)"))
-    }
-
-    // MARK: - File-delivered row (the user's file reached the server)
-
-    /// Persistent inline row under a user turn that handed a file to the file
-    /// server. It states the two things Conduck can actually prove — the upload
-    /// succeeded, and the file's location rode along in the request — and then
-    /// stops, because what the agent did with it afterwards is not observable
-    /// from this side of the wire.
-    ///
-    /// NEUTRAL BY CONSTRUCTION, which is the entire point. It never reads the
-    /// reply, so it can never say "your agent ignored this" — a verdict the same
-    /// silent reply would earn whether the agent never opened the file, opened
-    /// it and answered without mentioning it, hit a broken PDF parser, or used
-    /// it perfectly. Same quiet chrome as `missingOutputRow`: neutral tint, no
-    /// warning red, nothing that reads as a failure, because nothing failed.
-    ///
-    /// ONE action, and it is the one thing a user can actually act on: a served
-    /// folder that isn't the folder the agent reads from. No Retry (there is no
-    /// failure to re-fire) and no dismissal (the row is already at most one per
-    /// conversation, so a control to silence it would be more chrome than the
-    /// caption it silences).
-    private var fileDeliveredRow: some View {
-        VStack(alignment: .trailing, spacing: 5) {
-            HStack(spacing: 5) {
-                Image(systemName: "externaldrive.fill")
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textTertiary)
-                Text(LocalizedStringResource(
-                    "thread.fileDelivered.title",
-                    defaultValue: "File delivered to your file server"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppColors.textSecondary)
-            }
-            Text(LocalizedStringResource(
-                "thread.fileDelivered.body",
-                defaultValue: "Conduck uploaded it and included its location in the request to your gateway, but can't tell whether the agent opened it."))
-                .font(.caption2)
-                .foregroundStyle(AppColors.textTertiary)
-                .multilineTextAlignment(.trailing)
-                .fixedSize(horizontal: false, vertical: true)
-            Button(action: onOpenFileSetup) {
-                Text(LocalizedStringResource(
-                    "thread.fileDelivered.action.reviewSetup",
-                    defaultValue: "Review file setup"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppColors.brandAmber)
-            }
-            .inlineLinkButton()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(AppColors.cardBackgroundElevated)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(AppColors.borderSubtle, lineWidth: 1)
-        )
-        .frame(maxWidth: 520, alignment: .trailing)
-        .accessibilityElement(children: .contain)
     }
 
     // MARK: - Missing-output row (agent named a file that isn't there)
@@ -2164,12 +2083,52 @@ private struct ServerFileDownloadChip: View {
                 ))
                     .font(.caption2)
                     .foregroundStyle(secondaryTint)
-            } else if attachment.byteSize > 0 {
-                Text(AttachmentChipStyle.formattedSize(attachment.byteSize))
+            } else if let idleCaption {
+                Text(idleCaption)
                     .font(.caption2)
                     .foregroundStyle(secondaryTint)
+                    // Wrap rather than truncate, for the same reason the failure
+                    // branch does: the half that clips first is the tail, and on
+                    // a user chip the tail is where the file actually is.
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// The quiet metadata line under an idle chip's filename.
+    ///
+    /// On a USER turn it also names where the bytes ended up. A user-bubble chip
+    /// renders only for a server reference, and only an addressable one reaches
+    /// this branch, so "on your file server" restates exactly what this row
+    /// proves — the file went up, and it is still reachable there. That is the
+    /// fact worth carrying: it is the difference between a file that rode inline
+    /// inside the request and one the agent has to go and open.
+    ///
+    /// A LOCATION, never a verdict. What the agent did with the file afterwards
+    /// is not observable from this side of the wire — the same silent reply fits
+    /// an agent that never opened it, one that read it and answered without
+    /// naming it, and one whose PDF parser broke — so the caption stops at the
+    /// last provable fact and says nothing about the reply.
+    ///
+    /// An ASSISTANT chip keeps the bare size: an output file the agent wrote is
+    /// on the file server by definition, so naming it there is noise. Nil when
+    /// there is nothing left to say (an assistant file of unknown size).
+    private var idleCaption: String? {
+        let size = attachment.byteSize > 0
+            ? AttachmentChipStyle.formattedSize(attachment.byteSize)
+            : nil
+        guard isUserBubble else { return size }
+        guard let size else {
+            return String(localized: LocalizedStringResource(
+                "fileTransfer.sent.onFileServer",
+                defaultValue: "On your file server"))
+        }
+        return String(
+            format: String(localized: LocalizedStringResource(
+                "fileTransfer.sent.sizeOnFileServer",
+                defaultValue: "%@ · on your file server")),
+            size
+        )
     }
 
     /// Button action. For a KNOWN very-large size, gate behind a soft-confirm
