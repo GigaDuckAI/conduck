@@ -82,7 +82,12 @@ while IFS= read -r -d '' file; do
     # Idempotency: a file already carrying the tag near the top is left alone.
     # Five lines is enough to cover a shebang plus a short preamble without
     # matching a stray mention deeper in a file's prose.
-    if head -5 "$file" | grep -qF "$SPDX_TAG"; then
+    # Process substitution, not a pipeline: under `pipefail` a `head … | grep -q`
+    # can report 141 because `grep -q` exits on the first match and `head` takes
+    # SIGPIPE, which would mark an already-headered file as missing (and, outside
+    # --check, stamp a second header into it). The pipe buffer normally hides the
+    # race; a different kernel and scheduler is exactly where it stops hiding.
+    if grep -qF "$SPDX_TAG" <(head -5 "$file"); then
         continue
     fi
     missing+=("$file")

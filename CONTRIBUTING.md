@@ -79,10 +79,11 @@ Two things that are intentional, not broken:
 
   In short: **compiled on every PR, executed only where a signing identity
   exists.** That file is `#if os(macOS)`, so the simulator jobs compile it out
-  entirely — and a file nothing compiles can never fail. CI therefore builds
-  the macOS test bundle unconditionally, which is the real guard, and runs the
-  suite only when the runner has an Apple Development certificate, saying so
-  loudly when it does not. A GitHub-hosted runner **cannot** execute it: the
+  entirely — and a file nothing compiles can never fail. Compiling the macOS
+  test bundle is therefore the real guard, and it runs wherever the macOS jobs
+  run — every pull request, and every push to `main` in the public repository.
+  The suite itself runs only when the runner has an Apple Development
+  certificate, saying so loudly when it does not. A GitHub-hosted runner **cannot** execute it: the
   test host is the Conduck app itself, and its App Group / iCloud KVS /
   CloudKit entitlements cannot be granted by ad-hoc signing, so the host dies
   at launch before the first test. Running it for real needs your own signed
@@ -96,9 +97,13 @@ Two things that are intentional, not broken:
 Some tests skip themselves in community builds: cases that touch the live
 Keychain skip on unsigned simulator builds, and the official-identity lock
 tests skip under the community identity. Skips there are expected — failures
-are not. Please keep the suite green. Pull requests and pushes to `main` run
-both complete simulator suites in GitHub Actions, plus the macOS compile of
-the live-TLS bundle.
+are not. Please keep the suite green. Your pull request runs both complete
+simulator suites in GitHub Actions, plus the macOS compile of the live-TLS
+bundle and the source guards — SPDX headers, the storage seam, and the folder
+map. Opening the pull request is what runs them: pushing to a branch in your own
+fork runs nothing here, so run the two suites locally before you push rather
+than using CI to find out. A push to `main` runs the guards, and the full matrix
+as well in the public repository.
 
 ### Manual testing against real providers
 

@@ -107,6 +107,38 @@ final class BackgroundFileTransferCancellationTests: XCTestCase {
         }
     }
 
+    /// Suspends until `condition()` holds, failing with a named timeout instead
+    /// of leaving the caller's assertion to report the expiry as a logic bug.
+    ///
+    /// Three properties are load-bearing, and a fixed `Task.yield()` budget has
+    /// none of them. `Task.sleep` genuinely suspends, so work that lives OUTSIDE
+    /// the cooperative pool — URLSession's own thread, say — actually gets the
+    /// CPU; a yield budget can drain in microseconds without that thread ever
+    /// being scheduled. `ContinuousClock` is monotonic, so a CI runner stepping
+    /// its clock under NTP cannot end the wait early or extend it. And
+    /// cancellation ends the wait rather than being discarded: a swallowed
+    /// `CancellationError` would spin at full speed for the rest of the deadline
+    /// on the very runner whose load these waits exist to tolerate.
+    private func waitUntil(
+        _ what: String,
+        timeout: Duration = .seconds(10),
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: @Sendable () -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertTrue(
+            condition(),
+            "timed out after \(timeout) waiting for \(what)",
+            file: file,
+            line: line
+        )
+    }
+
     func testCancellationBeforeInstallPreventsUnderlyingTransferStart() {
         let relay = BackgroundTransferCancellationRelay()
         relay.cancel()
@@ -151,10 +183,14 @@ final class BackgroundFileTransferCancellationTests: XCTestCase {
             }
         }
 
-        for _ in 0..<1_000 where !waiter.isInstalled {
-            await Task.yield()
+        // Bounded for the same reason as the URLSession wait below. This one
+        // waits on the cooperative pool rather than outside it, so `yield` was
+        // closer to correct — but it only ever guaranteed a reschedule
+        // OPPORTUNITY, never a free thread to take it, so a saturated pool could
+        // still drain the budget before the child task ran.
+        await waitUntil("the parent task to install its continuation") {
+            waiter.isInstalled
         }
-        XCTAssertTrue(waiter.isInstalled)
 
         parent.cancel()
 
@@ -244,8 +280,14 @@ final class BackgroundFileTransferCancellationTests: XCTestCase {
             }
         }
 
-        for _ in 0..<1_000 where HangingURLProtocol.startCalls.current == 0 {
-            await Task.yield()
+        // The wait this replaced was a fixed 1,000-iteration `Task.yield()`
+        // budget. `startLoading()` runs on URLSession's OWN internal thread, not
+        // the cooperative pool, so yielding could never hand it the CPU: the
+        // budget drained in microseconds while URLSession had not been scheduled
+        // once. Fast enough locally, red on a loaded CI runner — including on
+        // commits that touched no Swift at all.
+        await waitUntil("URLSession to dispatch the request into the protocol") {
+            HangingURLProtocol.startCalls.current > 0
         }
         XCTAssertEqual(HangingURLProtocol.startCalls.current, 1)
 

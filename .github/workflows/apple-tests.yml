@@ -15,8 +15,60 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Everything that needs nothing from Xcode. These are pure Bash, so they run
+  # on Linux — which is billed at a tenth of a macOS minute and, on a public
+  # repository, at nothing at all. They gate the macOS jobs below rather than
+  # sharing a runner with them: a missing SPDX header should never be discovered
+  # by a 90-minute simulator matrix, and should never have paid for one.
+  guards:
+    name: Source guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check SPDX license headers
+        run: scripts/add-spdx-headers.sh --check
+
+      # The failure this catches is a test suite writing into a real,
+      # iCloud-syncing store.
+      - name: Check storage seam
+        run: scripts/check-storage-seam.sh
+
+      # Fires a couple of times a year at most — folders barely move — but a
+      # folder map nobody checks is how the previous one drifted 12% out of date
+      # without anyone noticing.
+      - name: Check folder map
+        run: scripts/check-folder-map.sh
+
+      # A job skipped by an `if` renders as neutral, and a run whose only red is
+      # absent reads as a run that passed. That is the same false-green this
+      # workflow already exists to close, so the skip says so out loud: the run
+      # summary states which coverage did NOT run and how to get it. Without this
+      # line, "the suites were skipped to save money" and "the suites passed"
+      # look identical in the run list.
+      - name: Say so when the simulator matrix is skipped
+        if: github.event_name == 'push' && github.event.repository.private == true
+        run: |
+          echo "::notice title=Simulator suites NOT RUN::Source guards only. The iOS/watchOS suites and the macOS TLS bundle compile were skipped: macOS runners are billed at 10x against a private repository, so a push to main runs the guards alone. This run is NOT evidence the suites pass. Run them locally, open a pull request, or start them from Actions > Apple tests > Run workflow. They resume automatically on every push once this repository is public."
+
   test:
     name: iOS and watchOS
+    needs: guards
+    # macOS runners are billed at 10x, and only against a PRIVATE repository —
+    # public repositories run standard runners for free. So while this repository
+    # is private, a push to main (the everyday path here, where the suites have
+    # already been run locally) skips the expensive matrix, and pull requests and
+    # the manual "Run workflow" button still get the full run. The moment the
+    # repository becomes public this condition goes true on its own and every
+    # push is covered again, because by then it costs nothing. Deliberately no
+    # hardcoded switch to flip on release day: a cost gate that has to be
+    # remembered is a cost gate that gets remembered late.
+    if: github.event_name != 'push' || github.event.repository.private == false
     runs-on: macos-26
     timeout-minutes: 90
 
@@ -25,22 +77,6 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-
-      # Runs before the Xcode steps because it costs about a second and a missing
-      # header should not wait on a 90-minute simulator matrix to surface.
-      - name: Check SPDX license headers
-        run: scripts/add-spdx-headers.sh --check
-
-      # Same reasoning as the header check — a second, and the failure it catches
-      # is a test suite writing into a real, iCloud-syncing store.
-      - name: Check storage seam
-        run: scripts/check-storage-seam.sh
-
-      # Same reasoning again. This one fires a couple of times a year at most —
-      # folders barely move — but a folder map nobody checks is how the previous
-      # one drifted 12% out of date without anyone noticing.
-      - name: Check folder map
-        run: scripts/check-folder-map.sh
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -132,8 +168,17 @@ jobs:
   # the certificate pin is enforced against a real TLS handshake, so a change
   # that broke it produced a green build. This job is the macOS destination that
   # closes that hole.
-  macos-live-tls:
-    name: macOS live TLS trust
+  #
+  # The job is named for what it actually does. A hosted runner can COMPILE the
+  # bundle and nothing more (see the run step below), so a green check here means
+  # "the suite still builds", never "the pin was proven". Naming it for the
+  # execution it cannot perform would rebuild, in the check list, the same
+  # false-green this job exists to remove.
+  macos-tls-compile:
+    name: macOS TLS test bundle compile
+    needs: guards
+    # Same cost gate as the simulator job above.
+    if: github.event_name != 'push' || github.event.repository.private == false
     runs-on: macos-26
     timeout-minutes: 60
 
