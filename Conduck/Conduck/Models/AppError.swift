@@ -401,7 +401,12 @@ enum AppError: LocalizedError {
         case .remoteAgentImageTooLarge:
             return String(localized: "remoteAgent.error.imageTooLarge", defaultValue: "An attached image was too large for your gateway.")
         case .remoteAgentOutOfCredits:
-            return String(localized: "remoteAgent.error.outOfCredits", defaultValue: "Your AI provider is out of credits. Add credits with your provider, then try again.")
+            // Cause only, like its 429 sibling. The remedy is an account
+            // balance, which belongs in `recoverySuggestion` where the two-slot
+            // surfaces can reach it — Diagnostics renders the fix row from it,
+            // and the gateway editor renders nothing else. `descriptionWithRecovery`
+            // rejoins the pair for the single-line surfaces.
+            return String(localized: "remoteAgent.error.outOfCredits", defaultValue: "Your AI provider is out of credits.")
         case .remoteAgentModelUnavailable:
             return String(localized: "remoteAgent.error.modelUnavailable", defaultValue: "That AI model isn't available.")
         case .remoteAgentContextTooLong:
@@ -579,6 +584,12 @@ enum AppError: LocalizedError {
             return String(localized: "remoteAgent.error.visionUnsupported.recovery", defaultValue: "Enable photo support on your gateway, or keep chatting with text.")
         case .remoteAgentImageTooLarge:
             return String(localized: "remoteAgent.error.imageTooLarge.recovery", defaultValue: "Your gateway rejected the image as too large. Try a smaller image, or raise your gateway's image-size limit.")
+        case .remoteAgentOutOfCredits:
+            // BYO-key: the balance is on the user's OWN provider account, so the
+            // remedy points there and nowhere else. Without this arm 52 falls to
+            // the generic "Try again." — which the gateway editor renders as its
+            // WHOLE message, telling a user with no credit to keep retrying.
+            return String(localized: "remoteAgent.error.outOfCredits.recovery", defaultValue: "Add credits with your provider, then try again.")
         case .remoteAgentModelUnavailable:
             return String(localized: "remoteAgent.error.modelUnavailable.recovery", defaultValue: "Check the model name in Settings, or pick a different one.")
         case .remoteAgentContextTooLong:

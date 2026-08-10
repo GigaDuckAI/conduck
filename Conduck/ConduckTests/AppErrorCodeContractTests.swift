@@ -391,10 +391,36 @@ final class AppErrorCodeContractTests: XCTestCase {
         // that cannot be retried.
         XCTAssertEqual(AppError.fileTransferCertUntrusted.descriptionWithRecovery,
                        "\(AppError.fileTransferCertUntrusted.errorDescription ?? "") \(CertificateTrustCopy.untrustedRemedy)")
-        // `.remoteAgentOutOfCredits` has no recovery arm, so it lands on the
+        // `.audioMissingData` carries no recovery arm, so it lands on the
         // generic fallback — which this property drops rather than appends.
+        // (If it ever earns a real remedy, this fails and wants a case that
+        // still falls through; it must not be relaxed into a tautology.)
+        XCTAssertEqual(AppError.audioMissingData.descriptionWithRecovery,
+                       AppError.audioMissingData.errorDescription)
+    }
+
+    /// 52 splits its copy the way the taxonomy intends — cause in
+    /// `errorDescription`, remedy in `recoverySuggestion` — so the two-slot
+    /// surfaces (Diagnostics' cause/fix rows, the gateway editor, Shortcuts'
+    /// `NSLocalizedRecoverySuggestionErrorKey`) each get the half they render.
+    /// Collapsing both halves back into the description strands those surfaces
+    /// on the generic "Try again.", which tells a user with no credit to retry
+    /// a request their provider will refuse identically every time.
+    func testOutOfCreditsCarriesItsRemedyInTheRecoverySlot() throws {
+        let remedy = try XCTUnwrap(AppError.remoteAgentOutOfCredits.recoverySuggestion)
+        XCTAssertNotEqual(remedy, AppError.audioMissingData.recoverySuggestion,
+                          "52 must ship its own remedy, not the generic fallback.")
+        XCTAssertTrue(remedy.localizedCaseInsensitiveContains("credit"),
+                      "52's remedy must name the balance the user has to top up. Got: \(remedy)")
+        // The cause line states the symptom and nothing else. Leaving the
+        // instruction in BOTH halves makes the rejoined single line say it twice.
+        let cause = try XCTUnwrap(AppError.remoteAgentOutOfCredits.errorDescription)
+        XCTAssertFalse(cause.localizedCaseInsensitiveContains("try again"),
+                       "The cause line must not carry the remedy's call to action. Got: \(cause)")
+        // The single-line surfaces rejoin the halves, so they read exactly as
+        // they did when the description carried both sentences itself.
         XCTAssertEqual(AppError.remoteAgentOutOfCredits.descriptionWithRecovery,
-                       AppError.remoteAgentOutOfCredits.errorDescription)
+                       "\(cause) \(remedy)")
     }
 
     func testCertUntrustedCopyNeverClaimsTheCertificateChanged() {

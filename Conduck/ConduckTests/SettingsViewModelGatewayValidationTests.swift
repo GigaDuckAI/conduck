@@ -207,16 +207,37 @@ final class SettingsViewModelGatewayValidationTests: XCTestCase {
         XCTAssertTrue(selfHosted.localizedCaseInsensitiveContains("gateway logs"))
     }
 
-    /// 429 is routine on a hosted lane's free models. Its bare `errorDescription`
-    /// states the symptom and withholds the fix; the remedy carries the wait.
+    /// 402 and 429 are both routine on a hosted lane's free models. Each bare
+    /// `errorDescription` states the symptom and withholds the fix, so the editor
+    /// renders the remedy instead — and the remedy has to BE one. A code with no
+    /// `recoverySuggestion` arm still returns non-nil (the generic "Try again."
+    /// fallback), so `XCTUnwrap` alone cannot tell a real remedy from a missing
+    /// one: this editor renders that string as its WHOLE message, which tells a
+    /// user out of credit to retry a request their provider refuses identically
+    /// every time. Hence the explicit comparison against the fallback.
     func testRateLimitAndCreditFailuresSurfaceTheirRemedy() throws {
+        // `.audioMissingData` has no recovery arm, so its suggestion IS the
+        // generic fallback — the value neither error below may equal.
+        let genericFallback = AppError.audioMissingData.recoverySuggestion
+
         for error in [AppError.remoteAgentRateLimited, .remoteAgentOutOfCredits] {
             let message = SettingsViewModel.friendlyGatewayMessage(for: error, category: .hostedModel)
             let remedy = try XCTUnwrap(error.recoverySuggestion)
             XCTAssertEqual(message, remedy,
                            "\(error) must surface its remedy, not the symptom-only description.")
             XCTAssertNotEqual(message, error.errorDescription)
+            XCTAssertNotEqual(message, genericFallback,
+                              "\(error) must ship a real remedy — the generic fallback leaves the editor saying only \"Try again.\"")
         }
+
+        // Each remedy names the thing that actually has to change: a balance for
+        // 402, elapsed time for 429.
+        let credits = SettingsViewModel.friendlyGatewayMessage(for: .remoteAgentOutOfCredits, category: .hostedModel)
+        XCTAssertTrue(credits.localizedCaseInsensitiveContains("credit"),
+                      "402's editor message must name the credit the user has to add. Got: \(credits)")
+        let rateLimited = SettingsViewModel.friendlyGatewayMessage(for: .remoteAgentRateLimited, category: .hostedModel)
+        XCTAssertTrue(rateLimited.localizedCaseInsensitiveContains("wait"),
+                      "429's editor message must tell the user to wait it out. Got: \(rateLimited)")
     }
 
     // MARK: - Stale green — every user edit retracts the live verdict
