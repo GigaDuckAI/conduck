@@ -556,6 +556,9 @@
         }
       }
     },
+    "Can Conduck reach your AI?" : {
+
+    },
     "Can't reach %@. Check connection." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5496,35 +5499,13 @@
         }
       }
     },
-    "gatewaySetup.readiness.custom.compat" : {
+    "gatewaySetup.readiness.custom.compat.open" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Ollama, LiteLLM, something else? [See what Conduck can talk to](%1$@)."
-          }
-        }
-      }
-    },
-    "gatewaySetup.readiness.custom.req.chat" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Required — OpenAI-compatible chat"
-          }
-        }
-      }
-    },
-    "gatewaySetup.readiness.custom.req.files" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Optional — a file server for attachments"
+            "value" : "Not sure what counts? [See what Conduck can talk to](%1$@)."
           }
         }
       }
@@ -5614,9 +5595,6 @@
 
     },
     "I already have a code" : {
-
-    },
-    "I built my own AI — it's not a server yet" : {
 
     },
     "I've Added It" : {
@@ -6172,6 +6150,9 @@
         }
       }
     },
+    "Not yet, or I'm not sure" : {
+
+    },
     "Nothing in your conversations matches that search." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6193,6 +6174,9 @@
           }
         }
       }
+    },
+    "Ollama, LiteLLM, or a server you already run." : {
+
     },
     "On-device voice isn't ready. Open Conduck on your iPhone to set it up." : {
 
@@ -16088,7 +16072,13 @@
     "Yes, it's running" : {
 
     },
+    "Yes — it's running and I can reach it" : {
+
+    },
     "Yesterday" : {
+
+    },
+    "You built your own AI, or it's a script — not a server." : {
 
     },
     "You can enable this later in Settings → Privacy." : {

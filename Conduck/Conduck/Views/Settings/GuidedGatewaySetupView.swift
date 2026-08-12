@@ -25,8 +25,9 @@
 //    chooser            — "where does your AI live?" fork (entry point when the
 //                         primer is skipped).
 //    fork(lane)         — create-a-code vs. already-have-a-code.
-//    readiness(lane)    — pre-flight checklist before running the command. The
-//                         custom lane offers a secondary escape into `adapter`.
+//    readiness(lane)    — pre-flight check before running the command. The custom
+//                         lane asks it as two equal-weight cards, the second of
+//                         which ("not yet, or I'm not sure") routes to `adapter`.
 //    adapter(lane)      — custom-lane escape hatch: keep a self-built AI and have
 //                         an AI-coding tool build a small OpenAI-compatible adapter
 //                         in front of it (copy-instructions brief). Continues to
@@ -394,10 +395,10 @@ struct GuidedGatewaySetupView: View {
             GatewayHeadsUpView(lane: lane, proceed: { goTo(.readiness(lane)) })
 
         case .readiness(let lane):
-            // Pre-flight checklist before running the conduck-connect command. The
-            // custom lane also offers an escape to the adapter step (for a user
-            // whose self-built AI is not an HTTP server yet); the full-agent lane
-            // passes nil, so its footer is unchanged.
+            // Pre-flight check before running the conduck-connect command. The
+            // custom lane's second answer ("not yet, or I'm not sure") routes to
+            // the adapter step; the full-agent lane passes nil and answers "no"
+            // inline, via its own "Get OpenClaw or Hermes" link.
             GatewayReadinessView(
                 lane: lane,
                 proceed: { goTo(.helper(lane)) },

@@ -5,19 +5,38 @@
 //
 // Guided gateway-setup READINESS beat (between the lane fork and the helper
 // step). The helper that follows CONNECTS to a gateway — it does NOT install
-// one — so this screen makes the prerequisite explicit: your server has to be
-// up and reachable already. Without it, the helper's "I don't install gateways"
+// one — so this screen makes the prerequisite explicit: your AI has to be up
+// and reachable already. Without it, the helper's "I don't install gateways"
 // behavior reads as a failure rather than the expected hand-off.
 //
-// Lane-specific (`GatewaySetupLane`): the full-agent lane points at OpenClaw /
-// Hermes on an always-on machine and offers a "Get OpenClaw" docs link for the
-// user who has nothing yet; the custom lane points at the user's own
-// OpenAI-compatible server and links the site's compatibility section (which
-// carries the product examples — Ollama, LiteLLM — so the in-app rows stay light).
+// Lane-specific (`GatewaySetupLane`) in title, body AND action shape:
+//
+//   .fullAgent — "Is your server running?" over OpenClaw / Hermes on an
+//     always-on machine. Its "Don't have one yet? Get OpenClaw or Hermes"
+//     sentence IS this lane's answer for the user who has nothing, so the screen
+//     needs no second action: one filled "Yes, it's running" CTA in the pinned
+//     footer, and `onAdapterEscape` is never passed.
+//
+//   .custom — "Can Conduck reach your AI?" over the user's own OpenAI-compatible
+//     server. Its body card is TWO LINES (lead + a link to the site's compatibility
+//     section) because the answers sit below it: the product examples — Ollama,
+//     LiteLLM — ride the first answer card instead, where the choice is actually
+//     made, and are said once per viewport. The answer is TWO `OnboardingChoiceCard`s
+//     in the scrollable content, the same pattern the chooser and the fork use: the
+//     cards ARE the actions, so the footer is empty.
+//
+// Why the custom lane's two cards carry EQUAL weight (no `emphasis:`, no
+// filled-vs-bordered pairing) and why "I'm not sure" rides the second card:
+// answering yes wrongly is the EXPENSIVE mistake — it sends the user to a
+// terminal to run a pairing command against a server that isn't there. The
+// second card costs one screen they can back out of, and the adapter brief it
+// opens leads with "Your AI stays exactly as it is", which reads fine to someone
+// who arrived merely uncertain. So the screen makes the cheap failure the easy
+// one to fall into, and neither card is styled as the consolation prize.
 //
 // Like every guided sub-step, the container paints the gradient + Back/Close
-// chrome; this view only renders the mascot / title / body card and pins its
-// single primary CTA via `.onboardingStepLayout`.
+// chrome; this view renders only the mascot / title / body card (plus the custom
+// lane's cards) and pins the full-agent lane's CTA via `.onboardingStepLayout`.
 
 import SwiftUI
 
@@ -25,11 +44,24 @@ struct GatewayReadinessView: View {
     let lane: GatewaySetupLane
     let proceed: () -> Void
 
-    /// The custom-lane escape hatch: for the user who built their OWN AI (e.g. with
-    /// an AI coding tool) and stalls here because that AI is not an HTTP server. The
-    /// container passes a non-nil closure ONLY for `.custom` (→ the adapter step);
-    /// the `.fullAgent` lane leaves it `nil` and the footer renders exactly as before.
+    /// The custom lane's SECOND answer — "not yet, or I'm not sure": the user who
+    /// built their OWN AI (e.g. with an AI coding tool) and stalls here because that
+    /// AI is not an HTTP server, and the user who simply can't tell. The container
+    /// passes a non-nil closure ONLY for `.custom` (→ the adapter step); `.fullAgent`
+    /// leaves it `nil` and answers "no" through its inline "Get OpenClaw" sentence.
     var onAdapterEscape: (() -> Void)? = nil
+
+    /// Lane-specific screen title. The full-agent lane can presume a server (the
+    /// lane IS "run OpenClaw or Hermes"); the custom lane can't, so it asks for the
+    /// actual requirement — reachability — instead of presuming the thing exists.
+    private var title: LocalizedStringKey {
+        switch lane {
+        case .fullAgent:
+            return "Is your server running?" // xcstrings: gateway-readiness
+        case .custom:
+            return "Can Conduck reach your AI?" // xcstrings: gateway-readiness
+        }
+    }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -40,7 +72,7 @@ struct GatewayReadinessView: View {
                 .onboardingMascot()
 
             // Title
-            Text("Is your server running?") // xcstrings: gateway-readiness
+            Text(title)
                 .onboardingScaledFont(.title, weight: .bold)
                 .foregroundStyle(AppColors.textEmphasis)
                 .multilineTextAlignment(.center)
@@ -48,6 +80,12 @@ struct GatewayReadinessView: View {
                 .padding(.horizontal, 32)
 
             bodyCard
+
+            // The custom lane answers with cards, in the scrollable content; the
+            // full-agent lane answers with the pinned footer CTA below.
+            if lane == .custom {
+                customAnswerCards
+            }
         }
         .onboardingStepLayout {
             footer
@@ -76,31 +114,24 @@ struct GatewayReadinessView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
             case .custom:
-                // The bring-your-own-gateway lane is the one beat that diverges from
-                // the OpenClaw/Hermes lane: a ONE-LINE lead naming WHAT (an
-                // OpenAI-compatible gateway) + WHERE (a server you run), two light
-                // requirement rows (a floor + an optional — capabilities are framed
-                // OPEN, never a fixed product need), and a learn-more link that
-                // carries the product examples (Ollama, LiteLLM) so the rows stay
-                // scannable.
+                // Two lines only — a lead naming WHAT (an OpenAI-compatible gateway)
+                // + WHERE (a server you run), then the learn-more link. The card is
+                // deliberately SHORT on this lane because the two answer cards sit
+                // below it: every row here pushes them further under the fold, and on
+                // a phone an answer the user has to scroll to find is worse than an
+                // unstated requirement. What the lane needs (chat now, files later)
+                // the lead sentence and the cards already carry.
                 Text("Conduck connects to an OpenAI-compatible gateway on a server you run — a VPS, a Mac mini, a Raspberry Pi.") // xcstrings: gateway-readiness
                     .onboardingScaledFont(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                VStack(alignment: .leading, spacing: 12) {
-                    infoRow("bubble.left.and.bubble.right", LocalizedStringResource(
-                        "gatewaySetup.readiness.custom.req.chat",
-                        defaultValue: "Required — OpenAI-compatible chat"))
-                    infoRow("folder", LocalizedStringResource(
-                        "gatewaySetup.readiness.custom.req.files",
-                        defaultValue: "Optional — a file server for attachments"))
-                }
-
                 // Learn-more — the custom lane's analog of the full-agent lane's
-                // "Get OpenClaw or Hermes" sentence. Carries the product examples
-                // and points at the site's compatibility section (the durable
-                // OpenAI-API rule + what works), NOT the install walkthrough.
+                // "Get OpenClaw or Hermes" sentence, pointing at the site's
+                // compatibility section (the durable OpenAI-API rule + what works),
+                // NOT the install walkthrough. It names no products: the answer
+                // cards below name them at the point the choice is made, and saying
+                // them twice in one viewport reads as padding.
                 Text(customLearnMore)
                     .onboardingScaledFont(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
@@ -136,14 +167,19 @@ struct GatewayReadinessView: View {
     }
 
     /// The custom lane's "learn more" sentence as a markdown `AttributedString`,
-    /// carrying the product examples (Ollama, LiteLLM) with only the call-to-read
-    /// phrase linked to the site's compatibility section (`setupGuideURL` +
-    /// `#compatibility`). Plain-text fallback if the markdown fails to parse.
+    /// with only the call-to-read phrase linked to the site's compatibility section
+    /// (`setupGuideURL` + `#compatibility`). Plain-text fallback if the markdown
+    /// fails to parse. The product examples live on the answer cards, not here.
+    ///
+    /// Key is `…custom.compat.open`, NOT the retired `…custom.compat`: rewording an
+    /// existing catalog key's `defaultValue:` never shows at runtime — the catalog
+    /// entry wins — so a reworded string MUST take a new key or it silently keeps
+    /// rendering the old text.
     private var customLearnMore: AttributedString {
         let url = Constants.setupGuideURL + "#compatibility"
         let template = String(localized: LocalizedStringResource(
-            "gatewaySetup.readiness.custom.compat",
-            defaultValue: "Ollama, LiteLLM, something else? [See what Conduck can talk to](%1$@)."
+            "gatewaySetup.readiness.custom.compat.open",
+            defaultValue: "Not sure what counts? [See what Conduck can talk to](%1$@)."
         ))
         let markdown = String(format: template, url)
         return (try? AttributedString(
@@ -151,33 +187,55 @@ struct GatewayReadinessView: View {
             options: AttributedString.MarkdownParsingOptions(
                 interpretedSyntax: .inlineOnlyPreservingWhitespace
             )
-        )) ?? AttributedString("Ollama, LiteLLM, something else? See what Conduck can talk to.")
+        )) ?? AttributedString("Not sure what counts? See what Conduck can talk to.")
     }
 
-    /// One requirement row: an SF Symbol in a fixed-width gutter + a short phrase —
-    /// matching `GatewayHelperTrustView.capabilityRow` exactly: an accent-tinted
-    /// icon beside neutral `textSecondary` copy (the `AccentGlyphActionLabelStyle`
-    /// vocabulary — a calm blue pop, never amber, which is reserved for the flow's
-    /// one true caution).
-    private func infoRow(_ symbol: String, _ text: LocalizedStringResource) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Image(systemName: symbol)
-                .onboardingScaledFont(.subheadline)
-                .foregroundStyle(.tint)
-                .frame(width: 22, alignment: .center)
-                .accessibilityHidden(true)
-            Text(text)
-                .onboardingScaledFont(.subheadline)
-                .foregroundStyle(AppColors.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
+    // MARK: - Custom-lane answers (equal-weight cards, in-content)
 
-    // MARK: - Pinned footer (single primary CTA)
-
-    private var footer: some View {
+    /// The custom lane's two answers, as the chooser/fork choice cards rather than
+    /// a filled CTA over a bordered runner-up: an unsure user must not be nudged
+    /// toward "yes" (see the file header). Both cards stay at the default weight —
+    /// no `emphasis:`, no badge — so the only steer is reading order.
+    private var customAnswerCards: some View {
         VStack(spacing: 12) {
+            // Answers the title's question — REACHABLE, not merely running. A server
+            // that is up on a box this device cannot route to is the case that used
+            // to slip through a bare "Yes, it's running" and land the user in the
+            // terminal step anyway, which is the expensive failure this screen exists
+            // to prevent.
+            OnboardingChoiceCard(
+                icon: "server.rack",
+                title: "Yes — it's running and I can reach it", // xcstrings: gateway-readiness
+                subtitle: "Ollama, LiteLLM, or a server you already run.", // xcstrings: gateway-readiness
+                action: proceed
+            )
+            .accessibilityIdentifier("guidedSetup.readiness.proceed")
+
+            // `cpu` (the chooser's glyph for "an AI you built") against the first
+            // card's `server.rack`: the difference between the two answers is
+            // whether there is a server around the AI at all.
+            if let onAdapterEscape {
+                OnboardingChoiceCard(
+                    icon: "cpu",
+                    title: "Not yet, or I'm not sure", // xcstrings: gateway-readiness
+                    subtitle: "You built your own AI, or it's a script — not a server.", // xcstrings: gateway-readiness
+                    action: onAdapterEscape
+                )
+                .accessibilityIdentifier("guidedSetup.readiness.adapterEscape")
+            }
+        }
+        .padding(.horizontal, 32)
+    }
+
+    // MARK: - Pinned footer (full-agent lane only)
+
+    /// The full-agent lane's single filled CTA. The custom lane's actions are the
+    /// cards above, so its footer is empty — the scaffold then yields the whole
+    /// viewport to the content, exactly as on the chooser and fork steps.
+    @ViewBuilder
+    private var footer: some View {
+        switch lane {
+        case .fullAgent:
             Button(action: proceed) {
                 Text("Yes, it's running") // xcstrings: gateway-readiness
                     .onboardingScaledFont(.headline)
@@ -189,33 +247,12 @@ struct GatewayReadinessView: View {
             }
             .primaryCTAButton()
             .frame(maxWidth: .infinity)
+            .padding(.horizontal, Constants.Layout.horizontalPadding)
             .accessibilityIdentifier("guidedSetup.readiness.proceed")
 
-            // Custom-lane-only escape for the user whose self-built AI is not an
-            // HTTP server yet. A BORDERED secondary (the primer's "Set up manually"
-            // chrome) — not accent text, so the footer keeps exactly one blue and
-            // this still reads as a real, pressable alternative. Non-nil only for
-            // `.custom`; the full-agent lane never renders it.
-            if let onAdapterEscape {
-                Button(action: onAdapterEscape) {
-                    Text("I built my own AI — it's not a server yet") // xcstrings: gateway-readiness
-                        .onboardingScaledFont(.headline)
-                        .foregroundColor(AppColors.textPrimary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: Constants.Layout.buttonMaxWidth)
-                        .padding(.vertical, 16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(AppColors.border, lineWidth: 1)
-                        )
-                }
-                .choiceCardButton(cornerRadius: 14)
-                .frame(maxWidth: .infinity)
-                .accessibilityIdentifier("guidedSetup.readiness.adapterEscape")
-            }
+        case .custom:
+            EmptyView()
         }
-        .padding(.horizontal, Constants.Layout.horizontalPadding)
     }
 }
 
@@ -232,7 +269,9 @@ struct GatewayReadinessView: View {
     }
 }
 
-#Preview("Custom") {
+// The custom lane without an escape closure — not what the container ships, but
+// it proves the "yes" card still stands alone if `onAdapterEscape` is ever nil.
+#Preview("Custom — no escape") {
     ZStack {
         LinearGradient(
             colors: [AppColors.gradientStart, AppColors.gradientEnd],
@@ -245,6 +284,7 @@ struct GatewayReadinessView: View {
     }
 }
 
+// The custom lane as the container ships it: both answers, equal weight.
 #Preview("Custom — adapter escape") {
     ZStack {
         LinearGradient(
