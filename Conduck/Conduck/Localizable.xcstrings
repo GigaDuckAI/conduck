@@ -5026,6 +5026,17 @@
         }
       }
     },
+    "gateway.commands.handoff.action.here" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Scan or paste it here to finish."
+          }
+        }
+      }
+    },
     "gateway.commands.handoff.action.mac" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -5033,17 +5044,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Then paste it to finish."
-          }
-        }
-      }
-    },
-    "gateway.commands.handoff.action.return" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Come back here and scan or paste it to finish."
           }
         }
       }

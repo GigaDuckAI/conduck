@@ -10,9 +10,11 @@
 // the script reports detected gateways and asks which one to configure.
 //
 // The command card leads on every platform and the neutral what-happens-next
-// panel carries the come-back-here cue. (The "easier from a computer" pointer —
-// the lane-correct site page — was already given once, by the guided flow's
-// heads-up step; this screen repeats no handoff.) The footer stays the screen's
+// panel names where the code gets entered — THIS device — without presuming the
+// user walked off to a computer: the heads-up step that sends them there is
+// guided-path-only, and quick connect can enter this lane below it. (The "easier
+// from a computer" pointer — the lane-correct site page — is that step's job when
+// it runs; this screen repeats no handoff.) The footer stays the screen's
 // single FILLED CTA on every platform — this step is visited twice, and on the
 // return visit (QR code in hand) that button is the sole completion door.
 //
@@ -116,9 +118,11 @@ struct GatewayCommandsView: View {
     // MARK: - Terminal → app hand-off panel (neutral)
 
     /// What comes back from the terminal: a platform icon + the bold outcome (what
-    /// conduck-connect prints) + the action that finishes setup — including the
-    /// come-back-to-this-device cue on iOS, where the user has likely walked off to
-    /// a computer. A NEUTRAL glass panel, not amber: this is sequencing, not a
+    /// conduck-connect prints) + the action that finishes setup, which on iOS names
+    /// THIS device as where the code is entered (see `handoffAction` — it must read
+    /// true both for the user the heads-up step sent to a computer and for the quick
+    /// connect user who never left). A NEUTRAL glass panel, not amber: this is
+    /// sequencing, not a
     /// warning (amber is reserved for the flow's one true caution). iOS can scan
     /// the QR or paste; macOS (no camera) pastes the code — mirrors the footer
     /// CTA's platform gate and the script's own "scan the QR or paste this code /
@@ -175,11 +179,19 @@ struct GatewayCommandsView: View {
             "gateway.commands.handoff.action.mac",
             defaultValue: "Then paste it to finish.")
         #else
-        // "Come back here" — the return cue for the user who ran the command from
-        // a computer (the flow's heads-up step sent them there).
+        // "here" — this device is where the code gets entered, whatever route the
+        // user took to the terminal. The retired `…action.return` said "Come back
+        // here", which presumed the heads-up step had sent them off to a computer:
+        // true on the guided path, false via quick connect, which skips that step
+        // and so was telling a user who had never left to come back. Says the same
+        // thing to the one who DID walk away — the code is entered on this device —
+        // without asserting a trip that may not have happened.
+        //
+        // New KEY, not a reworded `…action.return`: rewording an existing catalog
+        // entry's `defaultValue:` never renders (the catalog value wins).
         return LocalizedStringResource(
-            "gateway.commands.handoff.action.return",
-            defaultValue: "Come back here and scan or paste it to finish.")
+            "gateway.commands.handoff.action.here",
+            defaultValue: "Scan or paste it here to finish.")
         #endif
     }
 }
