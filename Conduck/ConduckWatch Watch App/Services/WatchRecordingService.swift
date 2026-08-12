@@ -1465,6 +1465,13 @@ final class WatchRecordingService {
             return
         }
 
+        // The user turn once it is durable, so the `catch` can resolve it. Every
+        // throw site AFTER the append (history assembly, the dispatch itself)
+        // leaves a `sending` row that no background task will ever flip, and a
+        // turn that spins on every device is exactly the bug the `sending` write
+        // exists to fix — in a new costume.
+        var appendedUserTurnID: UUID?
+
         do {
             // Resolve the conversation FIRST so we can route to
             // ITS bound REF: an existing conversation's persisted `.backend` ref
@@ -1492,12 +1499,20 @@ final class WatchRecordingService {
             let sourceDeviceTag = pendingTypedSend ? "watch-text" : "watch-voice"
 
             // Append the user turn to the store (source of truth before upload).
+            // `status: "sending"` — matching CarPlay and iOS — is what makes a
+            // wrist-dispatched turn VISIBLE as in flight on every surface: a nil
+            // status reads as a resolved turn, so a wrist turn that the gateway
+            // never answered looked delivered on the phone, the iPad and the Mac.
+            // The uploader's completion resolves it exactly (`sent` / `failed`),
+            // addressed by `userRecord.id`.
             let userRecord = try await store.appendMessage(
                 role: "user",
                 text: trimmed,
                 conversationID: conversationID,
-                sourceDevice: sourceDeviceTag
+                sourceDevice: sourceDeviceTag,
+                status: "sending"
             )
+            appendedUserTurnID = userRecord.id
 
             // Anti-orphan: stamp the active-conversation pointer NOW —
             // right after the user-turn append, BEFORE the converse hop — for
@@ -1544,11 +1559,31 @@ final class WatchRecordingService {
                 priorTurns: priorTurns,
                 newUserText: trimmed,
                 conversationID: conversationID,
+                // Exact per-message status flips (sent / failed / cancelled).
+                // The conversation-wide fallback ALIASES sibling in-flight turns,
+                // and "the wrist serializes its own turns" proves only that the
+                // Watch does not race itself — an iPhone, Mac, CarPlay or share
+                // turn can be writing this same conversation right now.
+                userMessageID: userRecord.id,
                 stampsActiveConversation: stampsQuickPointer
             )
         } catch {
             // Log the cause BEFORE `clearInFlight()` wipes the turn tag.
             WatchLog.error(.converse, "converse.start.failed", ["turn": turnTag, "code": (error as? AppError)?.errorCode ?? -1])
+            // Resolve the durable user turn, if one was written. The throw
+            // happened after the append and at or before dispatch, so no
+            // background task exists to flip it and `failed` is the honest
+            // terminal — the same classification the user is about to read in
+            // the error state, so the phone explains the turn the same way.
+            // EXACT id only: this device knows precisely which turn it wrote.
+            if let appendedUserTurnID {
+                await store.failTurn(
+                    messageID: appendedUserTurnID,
+                    classification: ConversationStore.TurnFailureClassification(
+                        failureCode: (error as? AppError)?.errorCode
+                    )
+                )
+            }
             clearInFlight()
             let message = (error as? AppError)?.errorDescription
                 ?? String(localized: "Couldn't reach your personal AI. Try again.")  // xcstrings
@@ -1842,20 +1877,61 @@ final class WatchRecordingService {
         }
     }
 
-    private func loadInFlight() -> (UUID, Date)? {
+    /// The persisted marker exactly as written — no TTL rule, no side effects.
+    /// Split out because the two readers apply the TTL differently:
+    /// `loadInFlight()` CLEARS a dead marker (it is restoring the state machine
+    /// and must not restore a stuck thinking view), while
+    /// `liveTurnStartedAt(for:now:)` must not write at all (it renders a list
+    /// row).
+    private func persistedInFlightMarker() -> (conversationID: UUID, startedAt: Date)? {
         guard let raw = appGroupDefaults.string(forKey: Self.inFlightConversationKey),
               let id = UUID(uuidString: raw) else { return nil }
         let stamp = appGroupDefaults.double(forKey: Self.inFlightStartedAtKey)
         guard stamp > 0 else { return nil }
-        let startedAt = Date(timeIntervalSinceReferenceDate: stamp)
+        return (id, Date(timeIntervalSinceReferenceDate: stamp))
+    }
+
+    private func loadInFlight() -> (UUID, Date)? {
+        guard let marker = persistedInFlightMarker() else { return nil }
         // Stale guard: an in-flight marker older than the resource timeout is
         // dead (the turn was dropped). Clear + ignore so we never restore a
         // permanently-stuck thinking view.
-        guard Date().timeIntervalSince(startedAt) < Constants.remoteAgentConverseResourceTimeout else {
+        guard Date().timeIntervalSince(marker.startedAt) < Constants.remoteAgentConverseResourceTimeout else {
             clearInFlight()
             return nil
         }
-        return (id, startedAt)
+        return (marker.conversationID, marker.startedAt)
+    }
+
+    /// When THIS WRIST started a turn for `conversationID`, or nil when this
+    /// device holds no live turn for it. The wrist's answer to
+    /// `ConversationActivityResolver`'s `locallyLiveSince:` — the thing a stored
+    /// `status == "sending"` cannot tell you, because that row may have been
+    /// written by the iPhone and mirrored here via CloudKit.
+    ///
+    /// Exposed here rather than read from the defaults keys at the call site:
+    /// the key literals are `private static` on this type and a duplicated Watch
+    /// constant is a known runtime footgun (rename one copy, silently lose the
+    /// other). Same TTL rule as `loadInFlight()`, but it NEVER clears — a list
+    /// row rendering must not write, and a resolver input is never a reason to
+    /// write anything.
+    ///
+    /// Reads the observable `state` deliberately, and NOT as a gate: a headless
+    /// background relaunch has a live marker with an `.idle` machine, so gating
+    /// would under-report. The read exists so a SwiftUI `body` calling this
+    /// registers an Observation dependency on the state machine, which flips on
+    /// the SAME transitions that write and clear the marker (`persistInFlight`
+    /// → `.waiting`; `clearInFlight` → `.idle` / `.error`). Without it the
+    /// App-Group marker publishes nothing and an on-screen row would keep its
+    /// stale status word until the next store notification.
+    func liveTurnStartedAt(for conversationID: UUID, now: Date = Date()) -> Date? {
+        _ = state
+        guard let marker = persistedInFlightMarker(),
+              marker.conversationID == conversationID,
+              now.timeIntervalSince(marker.startedAt) < Constants.remoteAgentConverseResourceTimeout else {
+            return nil
+        }
+        return marker.startedAt
     }
 
     private func clearInFlight() {

@@ -4,8 +4,9 @@
 // MessageRowFormatters.swift
 //
 // Formatters for the conversation surfaces: relative-date + device icon/label
-// helpers + a conversation title-fallback, with a `carplay` case in the device
-// icon/label maps.
+// helpers, a conversation title-fallback, and the list row's role-aware subtitle
+// + composed VoiceOver label, with a `carplay` case in the device icon/label
+// maps.
 //
 // The thinking-stage selector lives here too (pure function of elapsed
 // seconds + prior-turn count) so it is unit-testable independent of SwiftUI.
@@ -94,6 +95,140 @@ enum MessageRowFormatters {
         if trimmed.count <= 80 { return trimmed }
         let head = String(trimmed.prefix(80)).trimmingCharacters(in: .whitespaces)
         return head + String(localized: "…")
+    }
+
+    // MARK: - Conversation-list row
+
+    /// The row SUBTITLE. `text` is the RAW tail preview, never a pre-prefixed
+    /// string: `conversationTitle` above uses that same raw text as its TITLE
+    /// fallback, so a "You: " baked into the cache would land in headlines.
+    ///
+    /// Returns nil when there is nothing to show, so the caller omits the line
+    /// entirely and the row's height depends on whether the conversation HAS a
+    /// tail — never on what state it is in. An attachment-only turn stores empty
+    /// `text` and takes that path: a bare "You:" with nothing after it is worse
+    /// than no line, and naming the attachment would be inventing content this
+    /// projection does not carry (the tail fetch reads one row and deliberately
+    /// faults no attachments).
+    ///
+    /// The prefix is ONE format string, never two concatenated `Text`s — a
+    /// translator must be able to reorder it. An AGENT turn gets no prefix at
+    /// all; its absence is the signal.
+    static func conversationSubtitle(text: String?, role: MessageRole?) -> String? {
+        guard let text else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard role == .user else { return trimmed }
+        return String(localized: "conversation.row.youSaid",
+                      defaultValue: "You: \(trimmed)")  // xcstrings: chat-ui
+    }
+
+    /// One composed VoiceOver label for a whole conversation row.
+    ///
+    /// STATE LEADS. The row sets `.accessibilityElement(children: .ignore)`
+    /// precisely so this ordering holds — left to itself the gateway badge's own
+    /// element reads first and the trailing mark reads last, the inverse of what
+    /// a triage surface needs.
+    ///
+    /// The LIVE CLOCK IS EXCLUDED, replaced by an absolute "Sent at 10:14": a
+    /// label that rewrites itself on a timer produces a stream of repeated
+    /// announcements over the whole wait, and an absolute reference is better
+    /// information anyway (the same reasoning the thread view's elapsed clock
+    /// already follows). A FAILED row gets no such stamp — its metadata line
+    /// carries the words "Not sent" where the date would be, and the label
+    /// tracks what the row actually says.
+    ///
+    /// - Parameter showsGateway: mirrors the row's badge visibility. The gateway
+    ///   is named as its own component only when the badge is on screen AND the
+    ///   status sentence did not already name it.
+    static func rowAccessibilityLabel(
+        state: ConversationRowState,
+        title: String,
+        subtitle: String?,
+        gatewayName: String,
+        lastActivityAt: Date,
+        showsGateway: Bool,
+        now: Date = Date()
+    ) -> String {
+        var parts: [String] = []
+        if let lead = stateLead(state) { parts.append(lead) }
+        parts.append(title)
+
+        let gateway = gatewayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        var statusNamedTheGateway = false
+        if case .working(let confidence, _) = state.activity {
+            // The status sentence mirrors what the metadata line actually says,
+            // so the spoken row and the seen row agree.
+            let sentence = ConversationActivityCopy.working(confidence, gatewayName: gateway)
+            statusNamedTheGateway = confidence == .live && !gateway.isEmpty
+            parts.append(sentence.trimmingCharacters(in: sentenceTail))
+        }
+        if showsGateway, !gateway.isEmpty, !statusNamedTheGateway {
+            parts.append(gateway)
+        }
+        if let subtitle { parts.append(subtitle) }
+        // NEVER after "Not sent": a failed row's own metadata line replaces the
+        // date with the words "Not sent", and appending "Sent at 10:14" would
+        // tell a VoiceOver user the turn both was and was not sent — the one
+        // reading a sighted user cannot get. Every other state's line does show
+        // a time, and this static stamp is what stands in for the live clock the
+        // label deliberately excludes.
+        switch state.activity {
+        case .failed:
+            break
+        case .idle, .working, .answeredUnseen:
+            parts.append(sentPhrase(lastActivityAt, now: now))
+        }
+        return parts.joined(separator: ". ")
+    }
+
+    /// Trailing ellipsis + full stop, trimmed off a status sentence before it is
+    /// joined into the composed label: "OpenClaw is answering…. Kitchen…" is a
+    /// stutter VoiceOver reads aloud.
+    private static let sentenceTail = CharacterSet(charactersIn: "… .")
+
+    /// The state word (or pair of words) the label opens with. Nil for a row with
+    /// nothing to report, which then simply starts with its title.
+    ///
+    /// A delivery state and an unseen reply can BOTH be true, and the label says
+    /// both — the same orthogonality the mark and the bold title render.
+    private static func stateLead(_ state: ConversationRowState) -> String? {
+        switch state.activity {
+        case .idle:
+            // The resolver folds idle + unseen into `.answeredUnseen`, so this
+            // arm is belt-and-braces rather than a live path.
+            return state.hasUnseenReply ? newReplyWord : nil
+        case .answeredUnseen:
+            return newReplyWord
+        case .working:
+            return state.hasUnseenReply
+                ? String(localized: "activity.a11y.workingUnseen",
+                         defaultValue: "Working, new reply")  // xcstrings: chat-ui
+                : String(localized: "activity.a11y.working",
+                         defaultValue: "Working")  // xcstrings: chat-ui
+        case .failed:
+            return state.hasUnseenReply
+                ? String(localized: "activity.a11y.notSentUnseen",
+                         defaultValue: "Not sent, new reply")  // xcstrings: chat-ui
+                : ConversationActivityCopy.notSent
+        }
+    }
+
+    private static var newReplyWord: String {
+        String(localized: "activity.a11y.newReply", defaultValue: "New reply")  // xcstrings: chat-ui
+    }
+
+    /// "Sent at 10:14" for today, "Sent Yesterday" / "Sent Apr 12" otherwise —
+    /// two WHOLE format strings, because "Sent at Yesterday" is what one string
+    /// plus `conversationListDate` would have produced.
+    private static func sentPhrase(_ date: Date, now: Date) -> String {
+        let stamp = conversationListDate(from: date, now: now)
+        if Calendar.current.isDate(date, inSameDayAs: now) {
+            return String(localized: "activity.a11y.sentAtTime",
+                          defaultValue: "Sent at \(stamp)")  // xcstrings: chat-ui
+        }
+        return String(localized: "activity.a11y.sentOnDay",
+                      defaultValue: "Sent \(stamp)")  // xcstrings: chat-ui
     }
 
     static func icon(forDevice device: String) -> String {

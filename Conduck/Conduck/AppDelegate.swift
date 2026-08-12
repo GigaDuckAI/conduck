@@ -67,6 +67,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `ShareInboxWatcher` for why this is a file-system watch, not a Darwin wake.
     private let shareInboxWatcher = ShareInboxWatcher()
 
+    /// True from `NSWorkspace.willPowerOffNotification` onwards — a logout,
+    /// restart or shutdown is running. The quit guard reads it and terminates
+    /// unconditionally: a modal panel during a power-off blocks the whole
+    /// sequence until macOS times this app out, and the user is not sitting
+    /// there to answer it. Never reset — the notification is terminal.
+    private var isPowerOffInProgress = false
+
+    /// Observer token for the above, held so it outlives `didFinishLaunching`.
+    private var powerOffObserver: NSObjectProtocol?
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Force `.accessory` here (before the scene graph mounts) so `main`'s
         // `.automatic` Window is instantiated-but-NOT-foregrounded — i.e. no
@@ -136,6 +146,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = MenuBarController(coordinator: coordinator)
         controller.setup()
         self.menuBarController = controller
+
+        // Power-off watch for the quit guard. `NSWorkspace` posts on its OWN
+        // notification center, not `NotificationCenter.default`.
+        powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willPowerOffNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.isPowerOffInProgress = true }
+        }
+
+        // Stamp this device's first sight of the unviewed-reply feature. HERE,
+        // in deterministic app init — never from a SwiftUI `body`, which both
+        // creates state during rendering and races the CloudKit import (a reply
+        // that imported at 10:00 would be classified read because the first row
+        // happened to render at 10:01). Idempotent after the first launch.
+        // Mirrors the iOS `ConduckApp.init` wiring.
+        ReadStateStore.shared.stampEpochIfNeeded()
 
         // "Show in Dock" ON → promote to a Dock app at launch (PERMANENT): Dock
         // icon + top app menu appear with NO window and NO focus grab (deliberately
@@ -247,6 +275,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the Dock icon + menu-bar item persist (click the Dock icon to reopen).
         false
     }
+
+    // MARK: - Quit guard
+
+    /// Ask before quitting mid-turn. macOS's converse hop is a FOREGROUND
+    /// URLSession, so terminating during a turn destroys the reply with nothing
+    /// left to resolve it — the single highest-consequence failure in the
+    /// product, and the only reason this alert exists.
+    ///
+    /// The decision and its wording are `QuitGuard`'s (pure, unit-tested); this
+    /// method only supplies the inputs and drives the modality.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        switch QuitGuard.verdict(
+            liveCount: InFlightTurnRegistry.shared.liveCount,
+            singleThreadTitle: coordinator.soleLiveThreadTitle,
+            singleGatewayName: coordinator.soleLiveThreadGatewayName,
+            powerOffInProgress: isPowerOffInProgress
+        ) {
+        case .quitNow:
+            return .terminateNow
+        case .ask(let prompt):
+            return runQuitGuardAlert(prompt) ? .terminateNow : .terminateCancel
+        }
+    }
+
+    /// Present the quit-guard alert and answer "quit?".
+    ///
+    /// Shape mirrors `MarkdownAttachmentPolicy`'s interstitial: activate first
+    /// (the app may be `.accessory` with no window, so the alert would otherwise
+    /// appear behind whatever is frontmost), DESTRUCTIVE button first with NO
+    /// key equivalent — AppKit makes the first button the Return default, and a
+    /// lost answer must be unreachable by muscle memory — and the safe button
+    /// second, owning Esc.
+    private func runQuitGuardAlert(_ prompt: QuitGuard.Prompt) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = prompt.messageText
+        alert.informativeText = prompt.informativeText
+        alert.addButton(withTitle: prompt.quitButtonTitle).keyEquivalent = ""
+        alert.addButton(withTitle: prompt.keepWaitingButtonTitle).keyEquivalent = "\u{1b}"
+
+        // MID-MODAL RACE. `NSModalPanelRunLoopMode` is in the main run loop's
+        // common modes, so the reply-landing continuation keeps running while
+        // this alert is up — and the alert becomes a lie the instant the last
+        // claim is released. Poll for that and resolve the modal ourselves.
+        //
+        // Resolving to QUIT is the right direction: the user already asked to
+        // quit, and the only reason to stop them has evaporated. This is safe
+        // ONLY because claims are token-keyed (a conversation-keyed registry
+        // could report a false zero while a sibling turn ran) and because the
+        // share-drain claim spans persistence, not just the network hop — so
+        // `liveCount == 0` cannot mean "mid-write".
+        //
+        // A `Timer`, not `withObservationTracking`: the observation graph
+        // re-arms through a `Task`, and a nested modal run loop is not where to
+        // reason about `Task` scheduling.
+        //
+        // The flag is an instance property, not a local `var`: `Timer`'s block
+        // is `@Sendable` and cannot mutate a captured local.
+        quitGuardAutoResolved = false
+        let timer = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, InFlightTurnRegistry.shared.liveCount == 0 else { return }
+                self.quitGuardAutoResolved = true
+                NSApp.stopModal(withCode: Self.quitGuardAutoResolvedResponse)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        defer { timer.invalidate() }
+
+        let response = alert.runModal()
+        // The flag is checked independently of the returned code so the decision
+        // survives even if a future AppKit build reports the stopped session
+        // with a different response.
+        return quitGuardAutoResolved
+            || response == Self.quitGuardAutoResolvedResponse
+            || response == .alertFirstButtonReturn
+    }
+
+    /// Set by the mid-modal poll above when the last live claim is released
+    /// while the quit alert is on screen. Instance state because `Timer`'s
+    /// `@Sendable` block cannot mutate a captured local `var`.
+    private var quitGuardAutoResolved = false
+
+    /// Private modal code for "the turn finished while the alert was up".
+    /// Outside AppKit's reserved values (`.stop`/`.abort`/`.continue` are
+    /// negative; the alert-button codes start at 1000).
+    private static let quitGuardAutoResolvedResponse = NSApplication.ModalResponse(rawValue: 9_001)
 
     func applicationDidBecomeActive(_ notification: Notification) {
         // Share Extension drain hook (macOS). The drainer claims any published

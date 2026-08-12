@@ -5,8 +5,10 @@
 //
 // iPhone conversation list.
 // Time-grouped (Today / This Week / Earlier) by `lastActivityAt`,
-// `.searchable`, swipe-delete. Each row = title (fallback to the first line
-// of the last message) + relative `lastActivityAt` + last-message preview.
+// `.searchable`, swipe-delete. Each row = title (fallback to the first line of
+// the last message) + a reserved trailing activity mark + a role-aware preview
+// subtitle + a metadata line that is a date when nothing is happening and the
+// status words while a turn is in flight.
 // Tapping a row selects that conversation ("Continue" = set it active +
 // show it). Backed by `ConversationListViewModel`.
 
@@ -72,10 +74,12 @@ struct ConversationListView: View {
     @State private var syncMonitor = CloudSyncMonitor.shared
     @State private var internalSearch: String = ""
     @State private var showDeleteAllConfirmation = false
-    /// Cache of last-message previews keyed by conversation ID (filled on
-    /// row appear; avoids holding the whole message store in memory). Feeds the
-    /// row SUBTITLE only (display) — it no longer drives search.
-    @State private var previews: [UUID: String] = [:]
+    /// Cache of conversation TAILS keyed by conversation ID (filled on row
+    /// appear; avoids holding the whole message store in memory). Feeds the row
+    /// SUBTITLE and the title fallback only (display) — it does not drive search,
+    /// and it does not drive delivery state (that comes from the whole-store
+    /// unresolved-turn aggregate, because a conversation is not a turn).
+    @State private var previews: [UUID: TailPreview] = [:]
     /// Tier-2 whole-history content-search result: ids of conversations whose
     /// MESSAGE TEXT matches the active query (filled by the debounced
     /// `.task(id:)` below; empty when there's no query). Unioned with the
@@ -410,38 +414,78 @@ struct ConversationListView: View {
     }
 
     private func conversationRow(_ convo: ConversationRecord, showsBadge: Bool) -> some View {
-        HStack(spacing: 12) {
+        let tail = previews[convo.id]
+        let ref = RemoteAgentRef(rawString: convo.backend)
+        // "" for an unresolvable ref — the shared copy then says a bare
+        // "Answering…" rather than " is answering…".
+        let gatewayName = ref.map { RemoteAgentRefMetadata.displayName(for: $0, customs: customGateways) } ?? ""
+        let state = viewModel.rowState(for: convo, tailRole: tail?.role)
+        let inputs = ConversationActivityInputs(record: convo, tailRole: tail?.role)
+        // The title fallback receives the RAW tail text. Baking the "You: "
+        // prefix into the cache would put it in headlines, because
+        // `conversationTitle` uses the same string as its fallback.
+        let title = MessageRowFormatters.conversationTitle(
+            title: convo.title,
+            titleSnippet: convo.titleSnippet,
+            lastMessagePreview: tail?.text
+        )
+        let subtitle = MessageRowFormatters.conversationSubtitle(text: tail?.text, role: tail?.role)
+
+        return HStack(spacing: 12) {
             // Leading gateway badge — only when the list spans two gateway
             // identities, and only for a resolvable ref (a deleted / un-synced
             // custom renders nothing via `GatewayBadge`'s empty-monogram
             // guard, and is excluded from the count for that same reason).
-            if showsBadge, let ref = RemoteAgentRef(rawString: convo.backend) {
+            // NEVER tinted, dimmed or overlaid by row state: it answers "which
+            // gateway", not "what is happening".
+            if showsBadge, let ref {
                 GatewayBadge(ref: ref, customs: customGateways)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(MessageRowFormatters.conversationTitle(
-                    title: convo.title,
-                    titleSnippet: convo.titleSnippet,
-                    lastMessagePreview: previews[convo.id]
-                ))
-                .font(.headline)
-                .lineLimit(1)
-                .foregroundStyle(AppColors.textEmphasis)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // ONE clock for the whole row. It exists only while the row is
+            // working, and it re-resolves the state every minute so the title
+            // weight, the mark and the status words cross the grace boundary
+            // together instead of on three schedules.
+            ConversationActivityClock(
+                state: state,
+                inputs: inputs,
+                conversationID: convo.id
+            ) { resolved, tick in
+                VStack(alignment: .leading, spacing: 6) {
+                    // `.center`, not `.firstTextBaseline`: the mark has no text
+                    // baseline and would float low against the headline.
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(title)
+                            .font(.headline)
+                            // Bold is the unseen treatment, and it is INDEPENDENT
+                            // of delivery state — a failed-and-unseen row is red
+                            // AND bold, with neither fact suppressed. `nil`
+                            // inherits `.headline`'s own weight rather than
+                            // flattening it.
+                            .fontWeight(resolved.hasUnseenReply ? .bold : nil)
+                            .lineLimit(1)
+                            .foregroundStyle(AppColors.textEmphasis)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                if let preview = previews[convo.id], !preview.isEmpty {
-                    Text(preview)
-                        .font(.subheadline)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                        ConversationActivityMark(state: resolved)
+                    }
 
-                Text(MessageRowFormatters.conversationListDate(from: convo.lastActivityAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(resolved.hasUnseenReply ? AppColors.textPrimary : AppColors.textSecondary)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    ConversationActivityLine(
+                        state: resolved,
+                        now: tick,
+                        gatewayName: gatewayName,
+                        lastActivityAt: convo.lastActivityAt
+                    )
                     .padding(.top, 2)
+                }
             }
         }
         .padding(.vertical, 4)
@@ -450,8 +494,23 @@ struct ConversationListView: View {
         // width, leaving the right side a dead zone even with `contentShape`).
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .task(id: convo.id) {
-            await loadPreviewIfNeeded(convo.id)
+        // REQUIRED for "state leads": without it the gateway badge's own
+        // accessibility element reads first and the mark reads last.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(MessageRowFormatters.rowAccessibilityLabel(
+            state: state,
+            title: title,
+            subtitle: subtitle,
+            gatewayName: gatewayName,
+            lastActivityAt: convo.lastActivityAt,
+            showsGateway: showsBadge && ref != nil
+        )))
+        // Keyed on the PAIR, not the id: the tail changes only when a message is
+        // appended, and that bumps `lastActivityAt`. Keying on the id alone froze
+        // a row's preview for the life of the view, so a reply landing while the
+        // list was on screen never reached the subtitle.
+        .task(id: Self.previewKey(convo)) {
+            await loadPreviewIfNeeded(convo)
         }
     }
 
@@ -491,15 +550,43 @@ struct ConversationListView: View {
         String(ReplySanitizer.linkCollapsed(reply).prefix(previewCharacterCount))
     }
 
-    private func loadPreviewIfNeeded(_ id: UUID) async {
-        guard previews[id] == nil else { return }
-        let messages = (try? await ConversationStore.shared.fetchMessages(for: id)) ?? []
-        if let last = messages.last {
+    /// One conversation's cached tail: the collapsed-and-cut preview string plus
+    /// the role that decides whether it gets a "You: " prefix, stamped with the
+    /// `lastActivityAt` it was read at so the entry is self-invalidating. ONE
+    /// entry per conversation — the stamp lives in the value, not the key, so the
+    /// cache cannot grow past the conversation count.
+    private struct TailPreview: Equatable {
+        let lastActivityAt: Date
+        let text: String
+        let role: MessageRole?
+    }
+
+    /// Combined identity + freshness key for a row's tail fetch.
+    private struct PreviewKey: Hashable {
+        let id: UUID
+        let lastActivityAt: Date
+    }
+
+    private static func previewKey(_ convo: ConversationRecord) -> PreviewKey {
+        PreviewKey(id: convo.id, lastActivityAt: convo.lastActivityAt)
+    }
+
+    /// Lazily fetch one row's tail, once per `(id, lastActivityAt)`.
+    ///
+    /// ONE row, no attachment faults — `fetchConversationTail` replaces a
+    /// `fetchMessages(for:)` fan-out that faulted every message of the
+    /// conversation plus each one's `attachments` set and kept only the last. The
+    /// cost still scales with VISIBLE rows, not with the list, so a CloudKit
+    /// change storm cannot turn this into a per-reload fan-out.
+    private func loadPreviewIfNeeded(_ convo: ConversationRecord) async {
+        guard previews[convo.id]?.lastActivityAt != convo.lastActivityAt else { return }
+        let tail = try? await ConversationStore.shared.fetchConversationTail(id: convo.id)
+        previews[convo.id] = TailPreview(
+            lastActivityAt: convo.lastActivityAt,
             // (The thread view renders the full Markdown; this is preview-only.)
-            previews[id] = Self.previewText(forReply: last.text)
-        } else {
-            previews[id] = ""
-        }
+            text: tail.map { Self.previewText(forReply: $0.text) } ?? "",
+            role: MessageRole(stored: tail?.role)
+        )
     }
 
     // MARK: - Empty / error

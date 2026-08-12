@@ -419,6 +419,13 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// Rides `RemoteAgentBackgroundMetadata` so the reply-time stamp survives
     /// a cross-launch process recycle.
     ///
+    /// `userMessageID` is the `Message.id` of the user turn the caller just
+    /// appended. It rides the same metadata envelope so the completion handler
+    /// can flip THAT EXACT turn (`sent` / `failed`) after a cross-launch process
+    /// recycle. Not optional: the one call site always knows it, and the
+    /// conversation-wide fallback below exists only for tasks enqueued before
+    /// the wrist threaded an id at all.
+    ///
     /// - Throws: `AppError.remoteAgentNotConfigured` if URL/token absent;
     ///   `.remoteAgentInvalidResponse` if metadata/body encoding fails.
     func uploadConverse(
@@ -430,6 +437,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         priorTurns: [ConverseRequest.Message],
         newUserText: String,
         conversationID: UUID,
+        userMessageID: UUID,
         stampsActiveConversation: Bool
     ) throws {
         let endpoint = url.appending(path: "v1/chat/completions")
@@ -481,6 +489,9 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             bodyPath: bodyURL.path,
             conversationID: conversationID.uuidString,
             backendRawValue: ref,
+            // Rides the task so the completion handler can address THIS turn
+            // rather than every `sending` turn in the conversation.
+            userMessageID: userMessageID,
             stampsActiveConversation: stampsActiveConversation,
             // Rides the task so the identity survives suspension, a cross-launch
             // process recycle, and any settings edit between now and the reply.
@@ -901,18 +912,43 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             trustSignals: trustSignals
         )
 
+        // The exact user turn this task carries, when the dispatch site threaded
+        // it. Nil only for a task enqueued before the wrist threaded an id at
+        // all (an in-flight blob across an app upgrade); every write below then
+        // falls back to the conversation-wide flip.
+        let userMessageID = metadata?.userMessageID
+
         switch verdict {
         case .cleanupOnly:
-            // Live in-process cancel (session teardown) — drop the turn
-            // silently: no agent bubble, no notification (cancel is not a
-            // failure). The user's turn is already in the store; the defer
-            // above still runs the cleanup.
+            // Live in-process cancel (session teardown) — no agent bubble and
+            // no notification, because a cancel is not a failure. But the user
+            // turn is sitting at `sending` and nothing else on the wrist will
+            // ever resolve it, so flip it to `failed`: that is the honest
+            // terminal for a cancelled turn (a capable surface then offers
+            // Retry), where leaving it `sending` is the original wrist bug in a
+            // new costume — a turn that spins on every device until the
+            // iPhone's next launch sweep. Mirrors `BackgroundRemoteAgent`'s
+            // live-cancel arm, which likewise writes no classification: a
+            // user-initiated cancel has no cause to record.
+            if let cid = metadata.flatMap({ UUID(uuidString: $0.conversationID) }) {
+                beginPersistenceWork()
+                Task {
+                    if let userMessageID {
+                        await ConversationStore.shared.markPendingUserTurn(messageID: userMessageID, to: "failed")
+                    } else {
+                        await ConversationStore.shared.markPendingUserTurns(conversationID: cid, to: "failed")
+                    }
+                    endPersistenceWork()
+                }
+            }
             return
 
         case .failure(let kind, let conversationID):
             surfaceTurnFailure(
                 message: failureMessage(for: kind),
-                conversationID: conversationID
+                conversationID: conversationID,
+                userMessageID: userMessageID,
+                classification: Self.failureClassification(for: kind)
             )
             return
 
@@ -933,30 +969,60 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                 // not-yet-refreshed array (the follow-up stale-read bug).
                 let appendedID: UUID
                 do {
-                    appendedID = try await ConversationStore.shared.appendMessage(
-                        role: "agent",
-                        text: reply,
-                        conversationID: cid,
-                        sourceDevice: "watch",
-                        // Stamp the DISPATCH-time lane so this turn is eligible
-                        // for the retroactive output scan a capable device runs
-                        // when the thread is next opened. The wrist itself never
-                        // probes, downloads, or renders a chip — files are an
-                        // iPhone/iPad/Mac capability — it only records which lane
-                        // the request invited a file into. Without this the turn
-                        // is invisible to the scan permanently, even though its
-                        // request carried the file-delivery instruction.
-                        // Nil (no ready lane at dispatch, pre-courier iPhone, or
-                        // an in-flight pre-upgrade task) → unstamped, as before.
-                        outputScanLaneID: metadata?.fileTransferLaneID
-                    ).id
+                    if let userMessageID {
+                        // ONE save: flip THIS user turn to `sent` and insert the
+                        // reply together — one CloudKit export, one reload post,
+                        // and the flip is exact, so a sibling turn still in
+                        // flight from the phone is left alone.
+                        //
+                        // `outputScanLaneID` stamps the DISPATCH-time lane so
+                        // this turn is eligible for the retroactive output scan
+                        // a capable device runs when the thread is next opened.
+                        // The wrist itself never probes, downloads, or renders a
+                        // chip — files are an iPhone/iPad/Mac capability — it
+                        // only records which lane the request invited a file
+                        // into. Without it the turn is invisible to the scan
+                        // permanently, even though its request carried the
+                        // file-delivery instruction. Nil (no ready lane at
+                        // dispatch, pre-courier iPhone, or an in-flight
+                        // pre-upgrade task) → unstamped, as before.
+                        appendedID = try await ConversationStore.shared.completeAgentTurn(
+                            userMessageID: userMessageID,
+                            userStatus: "sent",
+                            agentText: reply,
+                            conversationID: cid,
+                            sourceDevice: "watch",
+                            outputScanLaneID: metadata?.fileTransferLaneID
+                        ).id
+                    } else {
+                        // Backward-compatible landing for a task enqueued before
+                        // the wrist threaded a user-turn id. Its owner turn
+                        // cannot be proven, so the reply is appended on its own
+                        // and the conversation-wide flip resolves whatever is
+                        // still `sending` — the aliasing this branch exists to
+                        // avoid, accepted only because there is nothing more
+                        // precise to address.
+                        WatchLog.note(.converse, "converse.bg.wideFlip")
+                        appendedID = try await ConversationStore.shared.appendMessage(
+                            role: "agent",
+                            text: reply,
+                            conversationID: cid,
+                            sourceDevice: "watch",
+                            outputScanLaneID: metadata?.fileTransferLaneID
+                        ).id
+                        await ConversationStore.shared.markPendingUserTurns(conversationID: cid, to: "sent")
+                    }
                 } catch {
                     // Append failed (e.g. the conversation was deleted on another
-                    // device mid-flight). Don't claim success.
+                    // device mid-flight). Don't claim success — and don't leave
+                    // the user turn spinning either: the turn is over whichever
+                    // way the persistence went. No classification: the gateway
+                    // answered, so there is no gateway-side cause to record.
                     WatchLog.error(.converse, "converse.bg.appendFail")
                     surfaceTurnFailure(
                         message: String(localized: "Couldn't read the reply from your personal AI."),
-                        conversationID: cid
+                        conversationID: cid,
+                        userMessageID: userMessageID
                     )
                     return
                 }
@@ -1108,25 +1174,87 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         }
     }
 
+    /// The stored failure classification for a converse verdict — written
+    /// alongside the `failed` flip so a wrist turn EXPLAINS itself when the user
+    /// later opens the thread on a device that renders the reason.
+    ///
+    /// Deliberately narrow: only the two kinds that already hold an exact
+    /// `AppError` produce one. Everything else returns nil, which is itself a
+    /// valid classification (a generic failure), because guessing a code from a
+    /// transport error or a certificate refusal would pin the row on copy the
+    /// wrist cannot prove. `failTurn`'s richest-wins upgrade means a nil write
+    /// never overwrites a better classification another surface already stored.
+    private static func failureClassification(
+        for kind: WatchConverseCompletionVerdict.FailureKind
+    ) -> ConversationStore.TurnFailureClassification? {
+        switch kind {
+        case .classifiedBody(let classified):
+            return ConversationStore.TurnFailureClassification(
+                failureCode: classified.appError.errorCode,
+                wireCode: classified.wireCode?.rawValue
+            )
+        case .httpStatus(let status):
+            guard let error = RemoteAgentStatusMap.unified.map(status) else { return nil }
+            return ConversationStore.TurnFailureClassification(failureCode: error.errorCode)
+        case .transport, .responseOverCap, .certificateUntrusted, .certificatePinMismatch,
+             .certificateKeyUnpinnable, .cancelledAcrossLaunch, .missingHTTPResponse,
+             .undecodableReply, .noConversationID:
+            return nil
+        }
+    }
+
     // MARK: - Failure funnel
 
-    /// Surface a failed background turn BOTH ways: route it into the live
+    /// Surface a failed background turn THREE ways: flip the user turn to
+    /// `failed` in the store, route the message into the live
     /// `WatchRecordingService` state machine (mirroring how
-    /// `handleBackgroundReply` lands successes) AND post the notification.
+    /// `handleBackgroundReply` lands successes), AND post the notification.
     /// Load-bearing for the foreground case: `WatchNotificationDelegate`
     /// suppresses ALL foreground banners, so without the state transition a
     /// user watching the live "Thinking…" spinner gets ZERO feedback and
     /// `.waiting` persists until pop/relaunch (the 600 s stale-guard only runs
     /// on restore-from-idle). `conversationID` nil = unmatchable turn (STT
     /// tasks / a failed metadata decode) — the service still transitions a
-    /// live waiting/uploading machine, it just can't conversation-match.
-    private func surfaceTurnFailure(message: String, conversationID: UUID?) {
+    /// live waiting/uploading machine, it just can't conversation-match, and
+    /// there is no turn to flip.
+    ///
+    /// The store write is the DURABLE half and runs on every path, including
+    /// the ones with no live machine to talk to: it is what makes a dropped
+    /// wrist turn readable as "Not sent" on the phone hours later instead of
+    /// spinning forever. Exact-message flip when the dispatch site threaded the
+    /// id; conversation-wide fallback only for pre-upgrade in-flight blobs.
+    /// `userMessageID` / `classification` default to nil for the STT callers,
+    /// which pass `conversationID: nil` and therefore write nothing at all — an
+    /// STT failure happens BEFORE any user turn exists.
+    private func surfaceTurnFailure(
+        message: String,
+        conversationID: UUID?,
+        userMessageID: UUID? = nil,
+        classification: ConversationStore.TurnFailureClassification? = nil
+    ) {
         // Counted as persistence work so a background wake's `.backgroundTask`
         // closure holds open until the failure lands in the live state machine.
         beginPersistenceWork()
         Task { @MainActor in
             WatchRecordingService.shared.handleBackgroundFailure(message, conversationID: conversationID)
             endPersistenceWork()
+        }
+        if let conversationID {
+            // Same counter, separate task: the store write must also hold the
+            // wake open, and it must not be serialized behind the state-machine
+            // hop.
+            beginPersistenceWork()
+            Task {
+                if let userMessageID {
+                    await ConversationStore.shared.failTurn(messageID: userMessageID, classification: classification)
+                } else {
+                    await ConversationStore.shared.failPendingUserTurns(
+                        conversationID: conversationID,
+                        classification: classification
+                    )
+                }
+                endPersistenceWork()
+            }
         }
         postNotification(title: String(localized: "Conduck"), body: message)
     }

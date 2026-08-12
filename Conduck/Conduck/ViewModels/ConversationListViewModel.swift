@@ -107,7 +107,16 @@ final class ConversationListViewModel {
         isLoading = true
         loadError = nil
         do {
-            let fetched = try await ConversationStore.shared.fetchConversations()
+            // `.turnStates` costs exactly ONE extra query for the whole list, not
+            // one per conversation — and it is also what makes a status flip
+            // repaint at all: `sending → failed` writes only `Message` columns
+            // and does not bump `lastActivityAt`, so without the derived fields
+            // the equality check below is false and nothing changes on screen.
+            let fetched = try await ConversationStore.shared.fetchConversations(activity: .turnStates)
+            // Re-run the liveness probes BEFORE assigning, so the registry and
+            // the rows land in one main-actor turn — a row never renders against
+            // fresh conversations and a stale claim set.
+            await InFlightTurnRegistry.shared.reconcile()
             // Skip the reassignment + `changeGeneration` bump when a no-op import
             // echo re-fetches an identical list (the storm's cheapest exit); the
             // generation bump only needs to fire when the data actually changed.
@@ -121,11 +130,37 @@ final class ConversationListViewModel {
         isLoading = false
     }
 
+    // MARK: - Row state
+
+    /// The delivery + attention state one row renders, resolved SYNCHRONOUSLY —
+    /// a SwiftUI `body` cannot await, and both sources are in-memory.
+    ///
+    /// - Parameter tailRole: the role of the conversation's newest message, or
+    ///   nil while the row's lazy tail fetch is still in flight. Nil suppresses
+    ///   the unseen branch rather than guessing, so a row shows delivery state
+    ///   only and then repaints — the same shape as today's blank-then-filled
+    ///   preview.
+    func rowState(
+        for convo: ConversationRecord,
+        tailRole: MessageRole?,
+        now: Date = Date()
+    ) -> ConversationRowState {
+        ConversationRowActivity.state(
+            inputs: ConversationActivityInputs(record: convo, tailRole: tailRole),
+            conversationID: convo.id,
+            now: now
+        )
+    }
+
     // MARK: - Mutations
 
     func delete(_ conversation: ConversationRecord) async {
         do {
             try await ConversationStore.shared.deleteConversation(id: conversation.id)
+            // A real deletion is the ONLY thing that drops a read-state marker.
+            // Absence from a fetch is not a deletion signal — an offline launch
+            // reads a partial local mirror before the CloudKit import lands.
+            ReadStateStore.shared.markDeleted(conversation.id)
             conversations.removeAll { $0.id == conversation.id }
             changeGeneration += 1
         } catch {
@@ -135,7 +170,12 @@ final class ConversationListViewModel {
 
     func deleteAll() async {
         do {
+            let doomed = conversations.map(\.id)
             try await ConversationStore.shared.deleteAll()
+            // Same rule as `delete(_:)`, applied to every row this surface just
+            // destroyed: markers for conversations that no longer exist would
+            // otherwise sit in the bounded cache forever, crowding out live ones.
+            for id in doomed { ReadStateStore.shared.markDeleted(id) }
             conversations = []
             changeGeneration += 1
         } catch {

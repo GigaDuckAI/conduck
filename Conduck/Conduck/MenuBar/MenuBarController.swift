@@ -70,10 +70,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// recreated) by `updateUnreadBadge` from `updateIcon`.
     private var unreadBadge: NSView?
 
-    /// Error-red "send failed" dot, the failure analog of `unreadBadge` — same
-    /// 6pt top-trailing geometry + appear-pulse, created ONCE in `setup()`,
+    /// Error-red "send failed" mark, the failure analog of `unreadBadge` — same
+    /// 7pt top-trailing geometry + appear-pulse, created ONCE in `setup()`,
     /// toggled (never recreated) by `updateFailureBadge` from `updateIcon`. Red
     /// takes PRECEDENCE over yellow, so at most one of the two is ever visible.
+    /// A filled TRIANGLE against the unread dot's circle, so the two states are
+    /// distinguishable with the colour channel removed.
     private var failureBadge: NSView?
 
     /// Region-capture engine for "Screenshot & Ask" (⌘⇧2). Built in the parallel
@@ -577,13 +579,20 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// template image, so the duck glyph keeps its light/dark/click tinting.
     private func installUnreadBadge(on button: NSStatusBarButton) {
         guard unreadBadge == nil else { return }
-        let size: CGFloat = 6
+        let size: CGFloat = 7
         let dot = NSView()
         dot.translatesAutoresizingMaskIntoConstraints = false
         dot.wantsLayer = true
         // AppColors.accent (Conduck yellow rgb 1.0, 0.757, 0.027) as NSColor.
         dot.layer?.backgroundColor = NSColor(srgbRed: 1.0, green: 0.757, blue: 0.027, alpha: 1.0).cgColor
         dot.layer?.cornerRadius = size / 2
+        // A hairline ring OUTSIDE the fill, never a tint of it: at 7 pt on a
+        // light menu bar the amber disc can wash into the background, and the
+        // ring restores the edge without touching the brand colour. The failure
+        // badge is a TRIANGLE, so the two are distinguishable with the colour
+        // channel removed — shape, not colour.
+        dot.layer?.borderWidth = 0.5
+        dot.layer?.borderColor = NSColor.black.withAlphaComponent(0.35).cgColor
         dot.isHidden = true
         button.addSubview(dot)
         NSLayoutConstraint.activate([
@@ -618,28 +627,39 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     // MARK: - Send-failure dot
 
-    /// Create the error-red failure dot ONCE, pinned to the SAME top-trailing
+    /// Create the error-red failure MARK once, pinned to the SAME top-trailing
     /// corner as the unread dot (mutually exclusive — red wins, so they never
     /// co-render and can't overlap). Starts hidden; rides ON TOP of the template
     /// image so the duck glyph keeps its system tinting.
+    ///
+    /// A TRIANGLE, not a second dot: unread and failure previously differed by
+    /// colour alone, which is unreadable to a colour-blind user and gone
+    /// entirely in a greyscale screenshot. `exclamationmark.triangle.fill` is
+    /// already this app's "error" glyph (the `.error` status-item image uses
+    /// it), so the menu bar keeps one vocabulary.
     private func installFailureBadge(on button: NSStatusBarButton) {
         guard failureBadge == nil else { return }
-        let size: CGFloat = 6
-        let dot = NSView()
-        dot.translatesAutoresizingMaskIntoConstraints = false
-        dot.wantsLayer = true
-        // AppColors.error (rgb 0.937, 0.325, 0.314) as NSColor.
-        dot.layer?.backgroundColor = NSColor(srgbRed: 0.937, green: 0.325, blue: 0.314, alpha: 1.0).cgColor
-        dot.layer?.cornerRadius = size / 2
-        dot.isHidden = true
-        button.addSubview(dot)
+        let size: CGFloat = 7
+        let mark = NSImageView()
+        mark.translatesAutoresizingMaskIntoConstraints = false
+        mark.wantsLayer = true   // `pulseBadge` animates the layer
+        mark.image = NSImage(
+            systemSymbolName: "exclamationmark.triangle.fill",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: size, weight: .bold))
+        // AppColors.error (rgb 0.937, 0.325, 0.314) as NSColor. `contentTintColor`
+        // recolours the template symbol without touching the duck beneath it.
+        mark.contentTintColor = NSColor(srgbRed: 0.937, green: 0.325, blue: 0.314, alpha: 1.0)
+        mark.imageScaling = .scaleProportionallyUpOrDown
+        mark.isHidden = true
+        button.addSubview(mark)
         NSLayoutConstraint.activate([
-            dot.widthAnchor.constraint(equalToConstant: size),
-            dot.heightAnchor.constraint(equalToConstant: size),
-            dot.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -1),
-            dot.topAnchor.constraint(equalTo: button.topAnchor, constant: 1),
+            mark.widthAnchor.constraint(equalToConstant: size),
+            mark.heightAnchor.constraint(equalToConstant: size),
+            mark.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -1),
+            mark.topAnchor.constraint(equalTo: button.topAnchor, constant: 1),
         ])
-        failureBadge = dot
+        failureBadge = mark
     }
 
     /// Toggle the failure dot (never recreate it). Updates the button's

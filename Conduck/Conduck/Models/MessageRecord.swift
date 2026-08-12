@@ -9,10 +9,9 @@
 // `init(managedObject:)` (KVC + nil-coalescing) tolerates the all-optional
 // Core Data model required by `NSPersistentCloudKitContainer`.
 //
-// V1.1 adds the `status` send-state field (`sending` / `sent` / `failed`;
-// nil = legacy = treated as `sent`) and the `attachments` to-many
-// (image/text-file attachments, ordered in code by `sequence` — the model
-// relationship is unordered because CloudKit rejects `NSOrderedSet`).
+// The `attachments` to-many carries image/text-file attachments, ordered in
+// code by `sequence` — the model relationship is unordered because CloudKit
+// rejects `NSOrderedSet`.
 
 import Foundation
 import CoreData
@@ -30,9 +29,11 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
     let createdAt: Date
     /// `phone` / `watch` / `mac` / `carplay`.
     let sourceDevice: String
-    /// Send-state: `sending` / `sent` / `failed`. Nil = legacy turn (pre-V1.1)
-    /// = treated as `sent` by the UI. Persisted on the user turn only; agent
-    /// turns are written already-complete (status stays nil).
+    /// Send-state: `sending` / `sent` / `failed`. Stored on the store's own
+    /// `Message` row and synced with it. Persisted on the USER turn only —
+    /// agent turns are written already-complete, and a headless capture is
+    /// written with no send at all, so nil means "no send state to show" and
+    /// the UI treats it as `sent`.
     let status: String?
     /// Failure classification: the `AppError.errorCode` the turn failed
     /// with. Nil while `sending`/`sent`, on legacy failed rows, and after a

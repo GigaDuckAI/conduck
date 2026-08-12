@@ -989,9 +989,98 @@ actor ConversationStore {
         return keptKeys
     }
 
+    // MARK: - Unresolved-turn aggregate (conversation-list activity)
+
+    /// The unresolved USER turns of ONE conversation, reduced to the two stamps
+    /// a list row needs.
+    nonisolated struct UnresolvedTurns: Sendable, Hashable {
+        let newestSendingAt: Date?
+        let newestFailedAt: Date?
+    }
+
+    /// Whether `fetchConversations` also runs the unresolved-turn aggregate.
+    ///   `.none`       — one query, today's exact behaviour. The DEFAULT.
+    ///   `.turnStates` — plus ONE aggregate query, for the list surfaces.
+    nonisolated enum ActivityProjection: Sendable {
+        case none
+        case turnStates
+    }
+
+    /// ONE whole-store query returning every UNRESOLVED user turn, keyed by
+    /// conversation. Only `sending` and `failed` rows qualify. `sending` is
+    /// genuinely transient (the launch sweep resolves it past the grace);
+    /// `failed` is TERMINAL and nothing clears it short of an explicit Retry,
+    /// so the set grows slowly over an install's life. That is a size fact, not
+    /// a display fact — `ConversationActivityResolver` bounds the failed arm to
+    /// failures that are still a conversation's last activity, so an old
+    /// failure reported here does not pin a row red.
+    ///
+    /// SIBLING-SAFE BY CONSTRUCTION — this is the whole point. Deriving a
+    /// conversation's delivery state from its LAST message is provably wrong
+    /// when two turns overlap in one conversation, a case this store explicitly
+    /// supports and warns about (see the `markPendingUserTurn` header). The
+    /// aggregate reports the newest sending turn and the newest failed turn
+    /// SEPARATELY, so a conversation holding both keeps both facts.
+    func fetchUnresolvedUserTurns() async throws -> [UUID: UnresolvedTurns] {
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        let start = Date()
+        let (turns, rows): ([UUID: UnresolvedTurns], Int) = try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(
+                format: "role == %@ AND (status == %@ OR status == %@)",
+                "user", "sending", "failed"
+            )
+            // Prefetch the owning conversation so reading each row's id is not
+            // an N-fault walk. NOT `propertiesToFetch` — projecting a
+            // relationship keypath there is the documented trap (see
+            // `searchConversationIDs`).
+            request.relationshipKeyPathsForPrefetching = ["conversation"]
+            let objects = try context.fetch(request)
+
+            var sending: [UUID: Date] = [:]
+            var failed: [UUID: Date] = [:]
+            for message in objects {
+                guard let conversationID = (message.value(forKey: "conversation") as? NSManagedObject)?
+                        .value(forKey: "id") as? UUID,
+                      let createdAt = message.value(forKey: "createdAt") as? Date,
+                      let status = message.value(forKey: "status") as? String else {
+                    continue
+                }
+                if status == "sending" {
+                    if let existing = sending[conversationID], existing >= createdAt { continue }
+                    sending[conversationID] = createdAt
+                } else {
+                    if let existing = failed[conversationID], existing >= createdAt { continue }
+                    failed[conversationID] = createdAt
+                }
+            }
+
+            var merged: [UUID: UnresolvedTurns] = [:]
+            for conversationID in Set(sending.keys).union(failed.keys) {
+                merged[conversationID] = UnresolvedTurns(
+                    newestSendingAt: sending[conversationID],
+                    newestFailedAt: failed[conversationID]
+                )
+            }
+            return (merged, objects.count)
+        }
+        Self.logFetchIfSlow("fetch.unresolvedTurns", start: start, rows: rows)
+        return turns
+    }
+
     /// Fetch every conversation, most-recently-active first (`lastActivityAt`
     /// descending — the list sort key).
-    func fetchConversations() async throws -> [ConversationRecord] {
+    ///
+    /// With `activity: .turnStates` the returned records also carry their
+    /// unresolved-turn stamps, at a cost of exactly ONE additional query for the
+    /// whole list — not one per conversation. Those derived fields are also what
+    /// make a status flip repaint a list at all: a `sending → failed` transition
+    /// writes only `Message` columns and does not bump `lastActivityAt`, so
+    /// without them two consecutive fetches compare equal.
+    func fetchConversations(
+        activity: ActivityProjection = .none
+    ) async throws -> [ConversationRecord] {
         try await ensureLoaded()
         let context = container.newBackgroundContext()
         let start = Date()
@@ -1009,7 +1098,17 @@ actor ConversationStore {
             return objects.map { ConversationRecord(managedObject: $0) }
         }
         Self.logFetchIfSlow("fetch.conversations", start: start, rows: records.count)
-        return records
+
+        guard case .turnStates = activity else { return records }
+        let turns = try await fetchUnresolvedUserTurns()
+        guard !turns.isEmpty else { return records }
+        return records.map { record in
+            guard let turn = turns[record.id] else { return record }
+            return record.withTurnStates(
+                newestSendingAt: turn.newestSendingAt,
+                newestFailedAt: turn.newestFailedAt
+            )
+        }
     }
 
     /// Fetch a single conversation by UUID, or nil if no row matches. One
@@ -1131,6 +1230,27 @@ actor ConversationStore {
         let lastActivityAt: Date
         /// `openclaw` / `hermes` — a conversation is bound to one backend.
         let backend: String
+        /// Turn-state projection, filled only when the caller passed
+        /// `includeTurnStates: true`. Same derived-not-stored contract as
+        /// `ConversationRecord`'s pair; nil resolves to `.idle`.
+        let newestSendingAt: Date?
+        let newestFailedAt: Date?
+
+        init(
+            id: UUID,
+            label: String,
+            lastActivityAt: Date,
+            backend: String,
+            newestSendingAt: Date? = nil,
+            newestFailedAt: Date? = nil
+        ) {
+            self.id = id
+            self.label = label
+            self.lastActivityAt = lastActivityAt
+            self.backend = backend
+            self.newestSendingAt = newestSendingAt
+            self.newestFailedAt = newestFailedAt
+        }
     }
 
     /// Fetch the most-recently-active conversations for the CarPlay picker,
@@ -1143,9 +1263,17 @@ actor ConversationStore {
     /// `CPListTemplate.maximumItemCount − 1`, reserving row 0 for "New voice
     /// chat"). Labels are derived via the pure `CarPlayConversationLabel`
     /// helper so the derivation is unit-testable in isolation.
-    func fetchRecentForPicker(limit: Int) async throws -> [RecentConversation] {
+    ///
+    /// `includeTurnStates: false` keeps today's cost exactly. Passing true adds
+    /// ONE whole-store aggregate query (never one per row) so the picker can
+    /// render a closed vocabulary of delivery-status phrases beside each label.
+    func fetchRecentForPicker(
+        limit: Int,
+        includeTurnStates: Bool = false
+    ) async throws -> [RecentConversation] {
         try await ensureLoaded()
         guard limit > 0 else { return [] }
+        let turns = includeTurnStates ? try await fetchUnresolvedUserTurns() : [:]
         let context = container.newBackgroundContext()
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
@@ -1204,7 +1332,9 @@ actor ConversationStore {
                     id: record.id,
                     label: label,
                     lastActivityAt: record.lastActivityAt,
-                    backend: record.backend
+                    backend: record.backend,
+                    newestSendingAt: turns[record.id]?.newestSendingAt,
+                    newestFailedAt: turns[record.id]?.newestFailedAt
                 )
             }
         }
@@ -1886,7 +2016,9 @@ actor ConversationStore {
     /// can flip the turn off `sending`, and the Retry chip requires
     /// `status == "failed"` — without this sweep the turn spins forever.
     ///
-    /// GRACE WINDOW (default 30 min, deliberately conservative): the converse
+    /// GRACE WINDOW (`ConversationActivityResolver.staleSendingGrace`, 30 min,
+    /// deliberately conservative — single-sourced there so the WRITE grace and
+    /// the list's DISPLAY grace cannot drift apart): the converse
     /// resource timeout is 600 s (the longest a turn can legitimately be in
     /// flight), but a `sending` turn may also have been written by ANOTHER
     /// device and arrived via CloudKit — its in-flight task is invisible here,
@@ -1898,7 +2030,7 @@ actor ConversationStore {
     /// fail the launch path. Posts `.conversationsDidChange` only when
     /// something actually flipped.
     func sweepStaleSendingUserTurns(
-        olderThan interval: TimeInterval = 1800,
+        olderThan interval: TimeInterval = ConversationActivityResolver.staleSendingGrace,
         excludingConversationIDs: Set<UUID> = []
     ) async {
         do { try await ensureLoaded() } catch { return }
@@ -2281,6 +2413,50 @@ actor ConversationStore {
         return records
     }
 
+    /// The newest message of one conversation, reduced to what a LIST row needs.
+    nonisolated struct ConversationTail: Sendable, Hashable {
+        let role: String?
+        let status: String?
+        let createdAt: Date?
+        let text: String
+    }
+
+    /// The NEWEST message of one conversation — ONE row, no attachment faults.
+    ///
+    /// Exists for the list's per-visible-row preview, which otherwise faults
+    /// EVERY message of the conversation plus each one's `attachments` set and
+    /// keeps only the last. Strictly cheaper than the fetch it replaces.
+    ///
+    /// The `id` tiebreaker on the sort is REQUIRED, not cosmetic: message
+    /// timestamps are local wall clock, so two turns written on two devices can
+    /// share (or invert) a `createdAt`, and without a total order the chosen
+    /// tail would flip between otherwise identical fetches.
+    func fetchConversationTail(id: UUID) async throws -> ConversationTail? {
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        let start = Date()
+        let tail: ConversationTail? = try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(
+                format: "conversation.id == %@", id as CVarArg
+            )
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "createdAt", ascending: false),
+                NSSortDescriptor(key: "id", ascending: true)
+            ]
+            request.fetchLimit = 1
+            guard let message = try context.fetch(request).first else { return nil }
+            return ConversationTail(
+                role: message.value(forKey: "role") as? String,
+                status: message.value(forKey: "status") as? String,
+                createdAt: message.value(forKey: "createdAt") as? Date,
+                text: (message.value(forKey: "text") as? String) ?? ""
+            )
+        }
+        Self.logFetchIfSlow("fetch.conversationTail", start: start, rows: tail == nil ? 0 : 1)
+        return tail
+    }
+
     // MARK: - Content search
 
     /// Whole-history content search backing every surface's conversation list
@@ -2370,8 +2546,11 @@ actor ConversationStore {
     ///
     /// CROSS-TARGET: lives here (the store is a Watch membership exception) so
     /// both the write path and the backfill share one definition. Deliberately
-    /// NOT `MessageRowFormatters.firstLineFallback` — that formatter is
-    /// iOS-target-only and would break the Watch build.
+    /// NOT `MessageRowFormatters.firstLineFallback` — that helper is a DISPLAY
+    /// fallback (first line even when blank, 80-char cap) while this is a
+    /// STORED denormalization (first NON-EMPTY line, 60-char cap, nil when the
+    /// turn has no text so a later turn can fill it). Both types are Watch
+    /// members, so the split is about semantics, not target membership.
     static func snippet(from text: String) -> String? {
         let firstLine = text
             .split(whereSeparator: \.isNewline)

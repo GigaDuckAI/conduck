@@ -118,10 +118,11 @@ final class MenuBarCoordinator {
     /// sends). Nil → the window shows its new-chat empty state.
     private(set) var windowViewModel: ConversationDetailViewModel?
 
-    /// Reuse-or-mint a thread VM. macOS surfaces a reply via the menu-bar
-    /// unread dot (`noteReplyArrived`), never a notification — the VM just posts
-    /// `.conversationReplyArrived` on every reply success, which this
-    /// coordinator observes and decides whether to mark unread.
+    /// Reuse-or-mint a thread VM. The VM posts `.conversationReplyArrived` on
+    /// every macOS reply success and decides nothing about presentation; this
+    /// coordinator observes it and owns BOTH cues — the menu-bar unread dot
+    /// (`noteReplyArrived`) and the reply banner
+    /// (`postReplyBannerIfUnattended`).
     func viewModel(for id: UUID) -> ConversationDetailViewModel {
         if let existing = vmRegistry[id] { return existing }
         let vm = ConversationDetailViewModel(conversationID: id)
@@ -248,6 +249,13 @@ final class MenuBarCoordinator {
     /// popover or the ACTIVE main window is showing that exact thread right now
     /// (then the user already sees it). Re-noting an already-unread thread
     /// refreshes its recency.
+    ///
+    /// NEVER POST A NOTIFICATION FROM HERE. BOTH reply observers funnel into
+    /// this method, and one of them (`.remoteAgentTurnDidComplete` — the share
+    /// drain / background landing) has already posted its own banner. A post
+    /// here would emit two banners for one reply and consume the burst-chime
+    /// window twice. The banner lives in the `.conversationReplyArrived`
+    /// observer alone.
     func noteReplyArrived(_ id: UUID) {
         guard id != popoverVisibleConversationID,
               id != windowVisibleConversationID else { return }
@@ -262,6 +270,28 @@ final class MenuBarCoordinator {
     func clearUnread(_ id: UUID) {
         unreadOrder.removeAll { $0 == id }
         unreadReplyConversationIDs.remove(id)
+        markViewedLocally(id)
+    }
+
+    /// Stamp the device-local "last looked at" marker that drives the
+    /// conversation LIST's unviewed treatment. Called from every acknowledgement
+    /// seam the menu bar owns, so the two surfaces settle together: opening a
+    /// thread clears its dot AND un-bolds its row.
+    ///
+    /// `lastActivityAt` comes from the cached picker recents when the thread is
+    /// in them, and is nil otherwise — nil is not a failure case, it just means
+    /// the marker clamps to `now`, which is exactly "I looked at this now".
+    ///
+    /// DOCUMENTED DIVERGENCE, deliberately not fixed here: the menu-bar dot is
+    /// populated by local completion EVENTS, while the list row is derived from
+    /// STORED data. A reply that arrives purely via CloudKit from another Mac
+    /// can therefore bold a list row without ever lighting the dot. Both are
+    /// honest about what they observe; unifying them is a much larger refactor.
+    private func markViewedLocally(_ id: UUID) {
+        ReadStateStore.shared.markViewed(
+            id,
+            lastActivityAt: quickRecents.first(where: { $0.id == id })?.lastActivityAt
+        )
     }
 
     // MARK: - Send-failure menu-bar cue (red dot)
@@ -310,6 +340,83 @@ final class MenuBarCoordinator {
     func clearFailure(_ id: UUID) {
         failedOrder.removeAll { $0 == id }
         failedConversationIDs.remove(id)
+        markViewedLocally(id)
+    }
+
+    // MARK: - macOS reply banner
+
+    /// Post the reply notification for a FOREGROUND macOS reply — the path that
+    /// has no background delegate to post one for it.
+    ///
+    /// Same visibility guard as `noteReplyArrived`: a reply for the thread the
+    /// user is already looking at needs no banner (and the foreground
+    /// presentation delegate would suppress it anyway). Kept as a separate
+    /// method rather than folded into `noteReplyArrived` because the two
+    /// observers share that method and only ONE of them may post — see the
+    /// `.conversationReplyArrived` observer's header.
+    ///
+    /// The body + gateway are read from the STORE rather than carried on the
+    /// notification: `.conversationReplyArrived` deliberately carries only the
+    /// conversation id, and it is posted after the agent row is persisted, so
+    /// the tail read is exact. A tail that is not an agent turn (a race with a
+    /// newer user turn) posts nothing rather than quoting the wrong bubble.
+    private func postReplyBannerIfUnattended(_ id: UUID) {
+        guard id != popoverVisibleConversationID,
+              id != windowVisibleConversationID else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            guard let tail = ((try? await self.conversationStore.fetchConversationTail(id: id)) ?? nil),
+                  tail.role == MessageRole.agent.rawValue,
+                  !tail.text.isEmpty else { return }
+            let backendRaw = ((try? await self.conversationStore.fetchConversation(id: id)) ?? nil)?.backend
+            await BackgroundRemoteAgent.postReplyNotification(
+                tail.text,
+                conversationID: id,
+                backendRawValue: backendRaw
+            )
+        }
+    }
+
+    /// THE ONE FOUNDER-VISIBLE BEHAVIOUR CHANGE: macOS now asks for
+    /// notification permission, because macOS now posts a reply banner (before,
+    /// the menu-bar dot was the only cue and no macOS path ever prompted).
+    /// Called from the committed dispatch paths — past every rejection guard, so
+    /// a blocked or abandoned send never pops a system dialog.
+    ///
+    /// TO REVERT THE PROMPT: make this method return unconditionally. It is the
+    /// single gate; both dispatch paths route through it and nothing else on
+    /// macOS calls `NotificationPermissions`.
+    ///
+    /// Honors an explicit Setup-Guide "Not now" for the same reason the iOS
+    /// composer backstop does: the user is watching, this is low-urgency, and
+    /// re-popping the OS dialog on the very next send would undo their choice.
+    private func requestNotificationPermissionIfNeeded() {
+        guard !NotificationPermissions.isNotificationsDeferred else { return }
+        Task { await NotificationPermissions.ensureRequested() }
+    }
+
+    // MARK: - Quit-guard copy inputs
+
+    /// Title of the ONE conversation with a live turn, when exactly one is live.
+    /// Nil otherwise, and nil when it cannot be resolved — `applicationShouldTerminate`
+    /// cannot await, so this reads only synchronous caches (the picker recents)
+    /// and a miss simply falls back to the generic alert copy.
+    var soleLiveThreadTitle: String? {
+        guard let id = InFlightTurnRegistry.shared.soleLiveConversationID else { return nil }
+        return quickRecents.first(where: { $0.id == id })?.label
+    }
+
+    /// Gateway display name for that same sole live thread. Prefers the live
+    /// VM's already-resolved name (the thread is mid-turn, so its VM is in the
+    /// registry by construction), falling back to labelling the picker row's raw
+    /// backend against the cached custom roster. Both are synchronous.
+    var soleLiveThreadGatewayName: String? {
+        guard let id = InFlightTurnRegistry.shared.soleLiveConversationID else { return nil }
+        if let vm = vmRegistry[id] { return vm.backendDisplayName }
+        if let recent = quickRecents.first(where: { $0.id == id }) {
+            return quickGatewayDisplayName(forBackendRaw: recent.backend)
+        }
+        return nil
     }
 
     /// Record that the popover is now showing `id` (clears its unread mark).
@@ -320,6 +427,10 @@ final class MenuBarCoordinator {
         if let id {
             clearUnread(id)
             clearFailure(id)   // viewing the thread settles its failure dot too
+            // Retire this thread's banners. The popover hosts
+            // `DictationPopoverView`, NOT `ConversationThreadView`, so that
+            // view's own `.onAppear` clear never fires for a popover glance.
+            NotificationDeepLink.clearDelivered(for: id)
         }
     }
 
@@ -333,6 +444,10 @@ final class MenuBarCoordinator {
         if let id {
             clearUnread(id)
             clearFailure(id)
+            // Covers cmd-tabbing back onto an ALREADY-MOUNTED thread: the view's
+            // `.onAppear` fired long ago, so this re-activation report is the
+            // only signal that the user is looking at it again.
+            NotificationDeepLink.clearDelivered(for: id)
         }
     }
 
@@ -647,9 +762,17 @@ final class MenuBarCoordinator {
         })
 
         // Reply-arrived (posted by `ConversationDetailViewModel` on every macOS
-        // reply success) → raise the menu-bar unread dot for that thread unless
-        // the popover is showing it right now. macOS surfaces replies via the
-        // dot, not a notification.
+        // FOREGROUND reply success) → raise the menu-bar unread dot for that
+        // thread AND post the reply banner.
+        //
+        // THE BANNER LIVES HERE AND NOWHERE ELSE. Both reply observers funnel
+        // into `noteReplyArrived`, and the OTHER one
+        // (`.remoteAgentTurnDidComplete`, i.e. the share drain / background
+        // landing) has ALREADY posted a banner of its own through
+        // `recordReply → finishRecordedReply → postReplyNotification`. Posting
+        // from the shared method would emit TWO banners for one share reply and
+        // consume the burst-chime window twice. The foreground-VM path is the
+        // one that has no banner otherwise, and it is exactly this notification.
         observerBox.observers.append(NotificationCenter.default.addObserver(
             forName: .conversationReplyArrived,
             object: nil,
@@ -659,6 +782,7 @@ final class MenuBarCoordinator {
                   let id = UUID(uuidString: idString) else { return }
             MainActor.assumeIsolated {
                 self?.noteReplyArrived(id)
+                self?.postReplyBannerIfUnattended(id)
             }
         })
 
@@ -671,6 +795,11 @@ final class MenuBarCoordinator {
         // the share drainer's success branch: the dispatch awaiter resumes BEFORE
         // the reply is persisted, and a drainer post would also miss the
         // relaunch-reconcile completion.
+        //
+        // POSTS NO BANNER, deliberately: this path already posted one inside
+        // `recordReply → finishRecordedReply → postReplyNotification`. Adding one
+        // here — or moving the post into the shared `noteReplyArrived` — is the
+        // double-banner bug.
         observerBox.observers.append(NotificationCenter.default.addObserver(
             forName: .remoteAgentTurnDidComplete,
             object: nil,
@@ -1340,6 +1469,10 @@ final class MenuBarCoordinator {
         // Successful hand-off — a stale stash (user re-recorded instead of
         // Retrying) must not ride a later, unrelated error's Retry.
         pendingFailedTurn = nil
+        // Committed dispatch: this turn WILL produce a reply banner, so ask for
+        // permission now if it is still undecided. Idempotent, non-blocking, and
+        // never gates the send.
+        requestNotificationPermissionIfNeeded()
         bindQuickViewModel(to: resolvedID)
         // Thread a pending "Screenshot & Ask" screenshot onto the turn as an
         // inline image attachment (empty when this is a plain ⌘⇧1 capture).
@@ -1421,6 +1554,10 @@ final class MenuBarCoordinator {
                 // conversation meanwhile. Discard only our unused empty mint;
                 // never bind it over the user's newer selection.
                 try? await conversationStore.deleteConversation(id: fresh.id)
+                // Real deletion is the ONLY thing that drops a read-state
+                // marker (absence from a fetch is not one), so every delete
+                // path calls this — even a mint that never carried a marker.
+                ReadStateStore.shared.markDeleted(fresh.id)
                 windowViewModel?.reportComposerDispatchRejection()
                 return false
             }
@@ -1442,6 +1579,9 @@ final class MenuBarCoordinator {
         // Successful hand-off — drop any stale mint-failure stash (see
         // `handleTranscript`).
         pendingFailedTurn = nil
+        // Committed dispatch (window lane) — same reply-banner permission
+        // backstop as the quick lane.
+        requestNotificationPermissionIfNeeded()
         return await vm.submitUserTurnAwaitingLocalAcceptance(
             trimmed,
             modality: .text,

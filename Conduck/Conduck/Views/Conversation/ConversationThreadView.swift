@@ -220,6 +220,12 @@ struct ConversationThreadView: View {
         // macOS multi-window register independently (Set<UUID> in the tracker).
         .onAppear {
             ActiveViewTracker.track(viewModel.conversationID)
+            // The acknowledgement seam. Opening the thread IS the act of
+            // looking at it, so it stamps the device-local read marker (which
+            // un-bolds its list row) and retires any banner still sitting in
+            // Notification Center pointing here.
+            markThreadViewed()
+            NotificationDeepLink.clearDelivered(for: viewModel.conversationID)
             // Clone continuation: claimed only AFTER the line above, so the
             // reply that comes back is suppressed as an on-screen thread rather
             // than banner-and-sound at a user already reading it.
@@ -231,6 +237,13 @@ struct ConversationThreadView: View {
             // job in `handleMessageCountChange`.
             attemptAutoSpeak()
             #endif
+        }
+        // A reply landing while the user is READING must never light the row
+        // they are looking at, so re-stamp on every new tail. Keyed on the tail
+        // id rather than the count: a cold-launch fetch replaces the whole array
+        // without necessarily growing it.
+        .onChange(of: viewModel.messages.last?.id) { _, _ in
+            markThreadViewed()
         }
         .onDisappear { ActiveViewTracker.untrack(viewModel.conversationID) }
         // Copy conversation — declared HERE (not in the three host views) so
@@ -383,6 +396,25 @@ struct ConversationThreadView: View {
         }
     }
 
+    /// Stamp the device-local "last looked at" marker for this thread.
+    ///
+    /// `lastActivityAt` is the newest bubble's stamp rather than `Date()` alone:
+    /// message timestamps are local wall clock, so a reply mirrored from a
+    /// device whose clock runs a little ahead would otherwise stay "newer than
+    /// the marker" and keep its own row lit while the user reads it. The store
+    /// clamps anything implausibly far ahead, so a badly-skewed device costs a
+    /// stuck dot rather than silence.
+    ///
+    /// CAVEAT, benign and deliberate: on macOS a background window keeping a
+    /// thread mounted marks it viewed. The menu-bar dot uses the stricter
+    /// `appearsActive`-gated window report, so the more urgent cue is unaffected.
+    private func markThreadViewed() {
+        ReadStateStore.shared.markViewed(
+            viewModel.conversationID,
+            lastActivityAt: viewModel.messages.last?.createdAt
+        )
+    }
+
     private func handleMessageCountChange(_ newCount: Int, proxy: ScrollViewProxy) {
         defer { lastMessageCount = newCount }
         #if os(iOS)
@@ -434,7 +466,13 @@ struct ConversationThreadView: View {
                 .foregroundStyle(AppColors.textSecondary)
 
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                let elapsed = viewModel.inFlightStartedAt.map {
+                // `liveTurnStartedAt`, not this instance's own stamp: the row
+                // above renders for any turn live on this device, including one
+                // a sibling VM, the background session, CarPlay or the share
+                // drainer dispatched. Reading the stored stamp would map those
+                // to `nil` → 0, so the `elapsed > 3` branch never fired and a
+                // re-minted thread showed the words with no clock beside them.
+                let elapsed = viewModel.liveTurnStartedAt.map {
                     context.date.timeIntervalSince($0)
                 } ?? 0
                 if elapsed > 3 {

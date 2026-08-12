@@ -201,6 +201,36 @@ enum Constants {
     /// `SettingsManager.menuBarInputModeAtLaunch()`, mirroring `showDockIconKey`.
     static let menuBarInputModeKey = "menuBarInputMode"
 
+    /// App-Group UserDefaults key PREFIX for the device-local "last looked at"
+    /// marker of ONE conversation: `conversations.readState.<uuidString>` →
+    /// `Double` (seconds since 1970). **App Group ONLY, never iCloud KVS** —
+    /// "I read this on my phone" is not a fact the iPad should inherit, and the
+    /// CloudKit production schema is additive-only and permanent.
+    ///
+    /// One key per conversation (matching the per-ref prefix convention
+    /// elsewhere in this file) rather than one dictionary: `DefaultsStore`
+    /// offers no compare-and-swap, so a single dictionary key would make every
+    /// write a read-modify-write and two writers could lose each other's
+    /// markers. Read/written only through `ReadStateStore`.
+    static let conversationReadStatePrefix = "conversations.readState."
+
+    /// App-Group UserDefaults key for the moment this device first saw the
+    /// unviewed-reply feature, as a `Double` (seconds since 1970). **App Group
+    /// ONLY, never iCloud KVS.** Everything older than this stamp counts as
+    /// already viewed, which is what keeps an imported iCloud history from
+    /// lighting up on a fresh install. Note it shares
+    /// `conversationReadStatePrefix`'s literal prefix — the marker sweep skips
+    /// it because "epoch" is not a UUID.
+    static let conversationReadStateEpochKey = "conversations.readState.epoch"
+
+    /// App-Group UserDefaults key for the last moment a reply notification was
+    /// allowed to play a sound, as a `Double` (seconds since 1970). **App Group
+    /// ONLY, never iCloud KVS** — and deliberately not a process-local static:
+    /// on iOS the process is relaunched by the background URLSession event once
+    /// per landing turn, so a process-local timestamp would reset every time and
+    /// a burst of agents answering at once would chime once per reply.
+    static let lastReplyChimeAtKey = "notifications.lastReplyChimeAt"
+
     /// Conduck homepage (marketing site + FAQ); linked from Settings → About
     static let websiteURL = "https://conduck.com/"
 
