@@ -7,16 +7,19 @@
 // copies to the clipboard (`GatewayAdapterBriefView.clipboardBrief`). The brief
 // is pointer-first (it delegates to the hosted build brief, narrowed to stop
 // before exposure/pairing — the app owns those) with a self-contained fallback
-// aligned to contract revision 1.3, so its load-bearing points must not silently
+// aligned to contract revision 1.6, so its load-bearing points must not silently
 // drift: the two raw `.md` URLs, the workflow-ownership boundary, the COMPLETE
-// runnable adapter-check invocation (download + `CONDUCK_TOKEN` + explicit
-// loopback URL — a bare `--check-adapter` blocks on an interactive prompt), the wire shape,
-// the 1.3 image rules (verbatim historical disclosure, never-reject-historical),
+// runnable adapter-check invocation (download + `CI=1` + `CONDUCK_TOKEN` +
+// explicit loopback URL — a bare `--check-adapter` blocks on an interactive
+// prompt, and one without `CI=1` hangs on a PASS), the wire shape,
+// the image rules (verbatim historical disclosure, never-reject-historical),
 // the frozen error-code vocabulary, the 285s cap, the 50 MiB body floor,
 // loopback-only bind, and bearer auth. It also guards the security-critical
-// NEGATIVES: never a wildcard bind, never the pairing command, and never the
-// pre-1.3 image rule that permitted rejecting on historical images.
+// NEGATIVES: never a wildcard bind, never the pairing command, never a hosted-brief
+// step number, and never the pre-1.3 image rule that permitted rejecting on
+// historical images.
 
+import Foundation
 import XCTest
 @testable import Conduck
 
@@ -44,16 +47,13 @@ final class GatewayAdapterBriefTests: XCTestCase {
             // Pointers + workflow ownership (the app owns exposure/pairing)
             "https://conduck.com/setup/adapter/build.md", // hosted build brief
             "https://conduck.com/setup/adapter/v1.md",    // full contract mirror
-            "steps 1-9",                                   // narrowed scope
-            "STOP before step 10",                         // stop before expose/pair
             "supervisor",                                  // always-on install stays in scope
             // Adapter check in COMPLETE runnable form — a bare `--check-adapter`
             // blocks on an interactive URL prompt, fatal for a headless agent.
             "curl -fsSLO https://github.com/gigaduckai/conduck-connect/releases/latest/download/conduck-connect.sh",
-            "CONDUCK_TOKEN=\"$TOKEN\" bash conduck-connect.sh --check-adapter http://127.0.0.1:8480",
-            "CONDUCK_TOKEN=\"$TOKEN\" bash conduck-connect.sh --check-adapter --deep http://127.0.0.1:8480",
-            "a PASS may ask whether to continue with setup",
-            "answer no during these build checks",
+            "CI=1 CONDUCK_TOKEN=\"$TOKEN\" bash conduck-connect.sh --check-adapter http://127.0.0.1:8480",
+            "CI=1 CONDUCK_TOKEN=\"$TOKEN\" bash conduck-connect.sh --check-adapter --deep http://127.0.0.1:8480",
+            "if one somehow does, answer no",               // belt-and-braces if CI=1 is dropped
 
             // Wire + security
             "/v1/chat/completions",                        // the turn route
@@ -125,6 +125,58 @@ final class GatewayAdapterBriefTests: XCTestCase {
             brief.contains("Conduck's guided setup"),
             "clipboardBrief must still name the user-owned exposure/pairing step in prose"
         )
+    }
+
+    /// `CI=1` is not optional for an autonomous agent. Without it a check that
+    /// PASSES goes on to ask whether to continue into exposure and pairing, and
+    /// waits for an answer the AI is not allowed to give — and it asks AFTER
+    /// printing its result, so the run looks finished and then hangs forever.
+    /// Every check invocation the brief hands over must carry it.
+    func testEveryAdapterCheckInvocationSetsCI() {
+        let checkLines = GatewayAdapterBriefView.clipboardBrief
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { $0.contains("--check-adapter") }
+        XCTAssertFalse(
+            checkLines.isEmpty,
+            "clipboardBrief must hand over a runnable adapter-check invocation"
+        )
+        for line in checkLines {
+            XCTAssertTrue(
+                line.hasPrefix("CI=1 "),
+                "adapter-check invocation must set CI=1 or a PASS hangs waiting: \(line)"
+            )
+        }
+    }
+
+    /// The hosted build brief's step NUMBERS live in another repo, and nothing on
+    /// this side guards that a given number still means what the brief claims. Cite
+    /// none of them: describe the boundary in words. (A shifted number once put the
+    /// operator handoff — the port and token the very next screen of the guided flow
+    /// asks for — on the far side of the STOP.)
+    func testBriefCitesNoHostedStepNumbers() throws {
+        let brief = GatewayAdapterBriefView.clipboardBrief
+        let stepNumber = try NSRegularExpression(pattern: "\\bsteps?\\s+\\d", options: [.caseInsensitive])
+        XCTAssertEqual(
+            stepNumber.numberOfMatches(in: brief, range: NSRange(brief.startIndex..., in: brief)),
+            0,
+            "clipboardBrief must not cite hosted-brief step numbers — state the boundary in words"
+        )
+    }
+
+    /// The handoff is INSIDE the narrowed scope, not past it: the user runs
+    /// `conduck-connect` on the next screen and needs the adapter's port and token
+    /// to do it. Both paths must ask for the hand-back before they say STOP.
+    func testBriefHandsBackCredentialsBeforeStopping() {
+        let brief = GatewayAdapterBriefView.clipboardBrief
+        for needle in [
+            "port, bearer token, working folder and supervisor details", // best path
+            "handed me its port and token",                              // either path
+        ] {
+            XCTAssertTrue(
+                brief.contains(needle),
+                "clipboardBrief must require the operator hand-off before STOP: \(needle)"
+            )
+        }
     }
 
     /// The public CLI has one canonical spelling per action. The brief must
