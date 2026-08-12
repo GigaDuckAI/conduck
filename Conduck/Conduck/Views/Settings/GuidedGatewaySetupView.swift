@@ -71,12 +71,21 @@
 //                     CHOOSER (own gateways first, hosted last).
 //    - .selfHosted  → jump straight to the full-agent lane fork.
 //    - .hostedModel → jump straight to the hosted-model step.
-//    - .quickConnect(target) → jump straight to the COMMANDS step in the target's
-//                     lane (built-in → full-agent, custom → custom), with the
-//                     pairing import LOCKED to that ref — a `.custom` target
-//                     imports into the SAME custom gateway (updating it), never a
-//                     freshly minted one. OpenRouter never quick-connects (no
-//                     pairing lane); it maps defensively to the hosted step.
+//    - .quickConnect(target, needsSetup) → jump into the target's lane (built-in →
+//                     full-agent, custom → custom) with the pairing import LOCKED
+//                     to that ref — a `.custom` target imports into the SAME custom
+//                     gateway (updating it), never a freshly minted one. Entry step
+//                     depends on whether the target is already set up: a configured
+//                     one opens on COMMANDS (a quick re-pair, one screen), an
+//                     unconfigured `.custom` one on READINESS, so a first-timer
+//                     walks the lane's middle (readiness → helper → commands) and
+//                     gets the prerequisite and the trust screen the bare command
+//                     step cannot give them. Readiness is then the ENTRY step, so
+//                     it carries no Back either (empty back-stack) — what the walk
+//                     buys is a Back arrow on every step AFTER it, including the
+//                     command step, which had none when it was the entry. OpenRouter
+//                     never quick-connects (no pairing lane); it maps defensively to
+//                     the hosted step.
 //
 //  No manual-entry escape inside the guided lanes: the fork offers only the two
 //  guided branches. Hand-editing a URL/token stays reachable OUTSIDE the guide —
@@ -201,14 +210,33 @@ struct GuidedGatewaySetupView: View {
         switch initialPath {
         case .selfHosted:   return .fork(.fullAgent)
         case .hostedModel:  return .hostedModel
-        case .quickConnect(let target):
-            // Straight to the Commands step in the target's lane. OpenRouter has
-            // no pairing lane at all — a (never-constructed) hosted target maps
-            // defensively to its own step instead of a meaningless command screen.
+        case .quickConnect(let target, let needsSetup):
+            // Straight to the Commands step in the target's lane — EXCEPT a custom
+            // gateway that was never set up, which enters its lane one beat
+            // earlier, at readiness (see below). OpenRouter has no pairing lane at
+            // all — a (never-constructed) hosted target maps defensively to its own
+            // step instead of a meaningless command screen.
             switch target {
             case .builtin(.openrouter): return .hostedModel
             case .builtin:              return .commands(.fullAgent)
-            case .custom:               return .commands(.custom)
+            // An UNCONFIGURED custom gateway lands on readiness, not the command:
+            // its row's amber "Set up" is the loudest thing on the editor for a
+            // first-timer, and it used to open on a shell command with nothing
+            // behind it — no statement of the one prerequisite the helper can't
+            // supply (an OpenAI-compatible server already running), no trust screen
+            // for the script it tells you to run, and no Back, because the
+            // back-stack is empty on the entry step. Entering at readiness walks
+            // the lane's own middle instead (readiness → helper → commands, or
+            // → adapter for "not yet, or I'm not sure"), so the answer is asked as
+            // a QUESTION rather than added as a caveat on the command screen, which
+            // both lanes share and the guided path reaches having just answered it.
+            // Readiness is the entry step now, so IT has no Back — the walk moves
+            // that gap to a screen that costs one tap, and every step after it,
+            // command included, gains the arrow.
+            // Configured targets keep today's one-screen behaviour: "Set up again"
+            // is a re-pair of a gateway we KNOW works, so re-asking whether it is
+            // reachable would only slow the path whose promise is speed.
+            case .custom:               return needsSetup ? .readiness(.custom) : .commands(.custom)
             }
         case .later, .none: return showPrimer ? .primer : .chooser
         }
@@ -220,7 +248,7 @@ struct GuidedGatewaySetupView: View {
     /// nil for every other entry (free-target import), and for the defensive
     /// OpenRouter mapping (the hosted step never opens the import sheet).
     private var quickConnectTarget: RemoteAgentRef? {
-        guard case .quickConnect(let target) = initialPath else { return nil }
+        guard case .quickConnect(let target, _) = initialPath else { return nil }
         if case .builtin(.openrouter) = target { return nil }
         return target
     }

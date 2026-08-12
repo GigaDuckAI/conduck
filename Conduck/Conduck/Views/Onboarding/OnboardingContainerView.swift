@@ -41,10 +41,19 @@ enum GatewayPath {
     case selfHosted
     case hostedModel
     case later
-    /// Deep link from a SAVED gateway's editor: open the guided flow directly at
-    /// the Commands step with the target's lane, and lock the pairing import to
-    /// that ref (a `.custom` target imports into the SAME custom gateway).
-    case quickConnect(target: RemoteAgentRef)
+    /// Deep link from a SAVED gateway's editor: open the guided flow in the
+    /// target's lane, and lock the pairing import to that ref (a `.custom` target
+    /// imports into the SAME custom gateway).
+    ///
+    /// `needsSetup` — the target has NO complete config yet (CALLER-RESOLVED, at
+    /// the tap, from `isRemoteAgentConfigured`: the same read that decides whether
+    /// the row says "Set up" or "Set up again"). It rides INSIDE the path rather
+    /// than arriving as a separate view parameter so destination and eligibility
+    /// commit as one value — the same reason `GuidedGatewayPresentation` carries
+    /// the path itself. A `.custom` target that needs setup enters its lane at the
+    /// READINESS step; a configured one still opens straight on Commands, which is
+    /// the whole point of a *quick* re-pair. Ignored for built-in targets.
+    case quickConnect(target: RemoteAgentRef, needsSetup: Bool)
 }
 
 /// Pure step-ordering for the onboarding machine. Extracted from

@@ -551,7 +551,10 @@ struct RemoteAgentConfigBody: View {
     // MARK: - Zone 1: Quick connect (guided cover deep-link; never OpenRouter)
 
     /// One row into the guided cover, deep-linked to THIS ref
-    /// (`GatewayPath.quickConnect(target:)` — the host owns presentation). Hosted
+    /// (`GatewayPath.quickConnect(target:needsSetup:)` — the host owns
+    /// presentation). A ref that is not configured yet opens the lane at its
+    /// readiness step rather than on the bare command; a configured one still goes
+    /// straight to the command, so a re-pair stays one screen. Hosted
     /// -model built-ins (OpenRouter) have NO guided server setup — no server to
     /// run, no pairing — so the zone is omitted for that lane, and it hides when
     /// the mounting surface carries no guided host (Watch companion settings).
@@ -560,6 +563,15 @@ struct RemoteAgentConfigBody: View {
     @ViewBuilder
     private var quickConnectSection: some View {
         if builtinDescriptor?.category != .hostedModel, let host = guidedHost {
+            // ONE read of the configured snapshot per body pass, shared by the
+            // label, its amber tint AND the destination the tap commits. Reading it
+            // separately inside the action closure would resolve it LATER than the
+            // label did, so an iCloud-KVS `refreshRemoteAgentReadinessSnapshots()`
+            // landing between render and tap (a second device finishing this same
+            // pairing) could open the Commands step from a row still reading amber
+            // "Set up". Captured here, the label the user pressed and the screen
+            // they get are the same fact.
+            let isConfigured = viewModel.isRemoteAgentConfigured(ref)
             Section {
                 VStack(alignment: .leading, spacing: 4) {
                     Button {
@@ -569,7 +581,12 @@ struct RemoteAgentConfigBody: View {
                         // `.fullScreenCover(item:)`) — writing them as separate
                         // fields raced the cover's first build on iOS 26 and
                         // opened the CHOOSER instead of this ref's Commands step.
-                        host.wrappedValue.present(initialPath: .quickConnect(target: ref))
+                        // `needsSetup` rides inside that same value, so the entry
+                        // step is fixed by the state the row was RENDERED from.
+                        host.wrappedValue.present(initialPath: .quickConnect(
+                            target: ref,
+                            needsSetup: !isConfigured
+                        ))
                     } label: {
                         HStack(spacing: 8) {
                             Label(
@@ -579,7 +596,7 @@ struct RemoteAgentConfigBody: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(AppColors.textPrimary)
                             Spacer(minLength: 8)
-                            Text(viewModel.isRemoteAgentConfigured(ref)
+                            Text(isConfigured
                                 ? LocalizedStringResource("settings.remoteAgent.quickConnect.setUpAgain", defaultValue: "Set up again")
                                 : LocalizedStringResource("settings.remoteAgent.quickConnect.setUp", defaultValue: "Set up"))
                                 .font(.subheadline)
@@ -591,7 +608,7 @@ struct RemoteAgentConfigBody: View {
                                 .foregroundStyle(
                                     isDirty
                                         ? AppColors.textTertiary
-                                        : (viewModel.isRemoteAgentConfigured(ref)
+                                        : (isConfigured
                                             ? AppColors.textSecondary
                                             : AppColors.brandAmber)
                                 )
