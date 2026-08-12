@@ -1212,7 +1212,18 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your AI provider is out of credits. Add credits with your provider, then try again."
+            "value" : "Your AI provider is out of credits."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.outOfCredits.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add credits with your provider, then try again."
           }
         }
       }
