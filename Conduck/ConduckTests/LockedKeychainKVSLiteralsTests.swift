@@ -280,15 +280,33 @@ final class LockedKeychainKVSLiteralsTests: XCTestCase {
                        "File-server folder-capable flag key (built-in) literal changed.")
         XCTAssertEqual(Constants.fileServerKeepImagesInlineKey(for: openclaw), "fileServer.keepImagesInline.openclaw",
                        "Legacy file-server keep-images-inline key (built-in) literal changed — breaks lazy migration to ImageHistoryPolicy.")
+        XCTAssertEqual(Constants.fileServerAutoDeliverKey(for: openclaw), "fileServer.autoDeliver.openclaw",
+                       "File-server auto-deliver permission key (built-in) literal changed.")
+        XCTAssertEqual(Constants.fileServerFilenamePolicyKey(for: openclaw), "fileServer.filenamePolicy.openclaw",
+                       "File-server filename-policy key (built-in) literal changed.")
 
         // Custom (suffix == 'custom_' + lowercased uuid) — guards the lowercasing.
         XCTAssertEqual(Constants.fileServerURLKey(for: custom), "fileServer.url." + customSuffix,
                        "File-server per-ref URL key (custom) literal/format changed.")
         XCTAssertEqual(Constants.fileServerCredentialKeychainAccount(for: custom), "fileServer.credential." + customSuffix,
                        "File-server credential Keychain account (custom) literal/format changed.")
+        XCTAssertEqual(Constants.fileServerAutoDeliverKey(for: custom), "fileServer.autoDeliver." + customSuffix,
+                       "File-server auto-deliver permission key (custom) literal/format changed.")
+        XCTAssertEqual(Constants.fileServerFilenamePolicyKey(for: custom), "fileServer.filenamePolicy." + customSuffix,
+                       "File-server filename-policy key (custom) literal/format changed.")
+
+        // Prefixes are single-sourced because the inbound KVS mirror scans by
+        // prefix; a drifted prefix would stop mirroring silently rather than
+        // failing to compile.
+        XCTAssertEqual(Constants.fileServerAutoDeliverKeyPrefix, "fileServer.autoDeliver.",
+                       "File-server auto-deliver key PREFIX changed — the KVS mirror scan keys on it.")
+        XCTAssertEqual(Constants.fileServerFilenamePolicyKeyPrefix, "fileServer.filenamePolicy.",
+                       "File-server filename-policy key PREFIX changed — the KVS mirror scan keys on it.")
 
         // Non-keyed file-server constants.
         XCTAssertEqual(Constants.fileServerUsername, "conduck",
                        "File-server basic-auth username literal changed — the client and conduck-connect (which provisions the server) would disagree.")
+        XCTAssertEqual(Constants.fileServerFilenamePolicyPreserve, "preserve",
+                       "The only filename-policy value changed — a stored value would stop resolving on upgraded devices.")
     }
 }

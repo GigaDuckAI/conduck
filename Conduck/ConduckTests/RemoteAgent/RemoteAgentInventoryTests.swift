@@ -245,6 +245,48 @@ final class RemoteAgentInventoryTests: XCTestCase {
         XCTAssertFalse(SettingsManager.gatewayUserStateKeyPrefixes.contains("fileServer.keepImagesInline."),
                        "the retired legacy bool is swept only by deleteCustomGateway; "
                        + "probing it strands the Forget button on built-ins")
+        XCTAssertFalse(SettingsManager.gatewayUserStateKeyPrefixes.contains(Constants.fileServerAutoDeliverKeyPrefix),
+                       "the auto-deliver permission is swept only by deleteCustomGateway; "
+                       + "probing it strands the Forget button on built-ins")
+        XCTAssertFalse(SettingsManager.gatewayUserStateKeyPrefixes.contains(Constants.fileServerFilenamePolicyKeyPrefix),
+                       "the filename policy is swept only by deleteCustomGateway; "
+                       + "probing it strands the Forget button on built-ins")
+    }
+
+    /// The two per-gateway delivery properties must be REGISTERED as
+    /// gateway-owned, or "Forget this gateway" leaves a permission behind that a
+    /// re-added gateway with the same uuid would silently inherit.
+    func testDeliveryPolicyKeysAreGatewayOwned() {
+        XCTAssertTrue(SettingsManager.gatewayOwnedKeyPrefixes.contains(Constants.fileServerAutoDeliverKeyPrefix),
+                      "auto-deliver must be swept by the custom-gateway purge")
+        XCTAssertTrue(SettingsManager.gatewayOwnedKeyPrefixes.contains(Constants.fileServerFilenamePolicyKeyPrefix),
+                      "filename policy must be swept by the custom-gateway purge")
+    }
+
+    /// Forgetting a custom gateway erases its delivery properties from BOTH
+    /// stores. Without this a re-added gateway would resurrect a permission the
+    /// user believed they had removed.
+    func testForgettingACustomGatewayErasesItsDeliveryPolicy() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        let ref = seedRoster(defaults)
+        guard case .custom(let id) = ref else { return XCTFail("expected a custom ref") }
+        let autoKey = Constants.fileServerAutoDeliverKey(for: ref)
+        let policyKey = Constants.fileServerFilenamePolicyKey(for: ref)
+        defaults.set(false, forKey: autoKey)
+        kvs.set(false, forKey: autoKey)
+        defaults.set(Constants.fileServerFilenamePolicyPreserve, forKey: policyKey)
+        kvs.set(Constants.fileServerFilenamePolicyPreserve, forKey: policyKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        await manager.deleteCustomGateway(id: id)
+
+        XCTAssertNil(defaults.object(forKey: autoKey), "auto-deliver survived Forget in App Groups")
+        XCTAssertNil(kvs.object(forKey: autoKey), "auto-deliver survived Forget in KVS")
+        XCTAssertNil(defaults.object(forKey: policyKey), "filename policy survived Forget in App Groups")
+        XCTAssertNil(kvs.object(forKey: policyKey), "filename policy survived Forget in KVS")
+        let restored = await manager.getFileServerAutoDeliver(for: ref)
+        XCTAssertTrue(restored, "a re-added gateway starts from the permissive default, not the forgotten false")
     }
 
     /// The cheap `configuredRemoteAgentRefs()` query and the inventory's

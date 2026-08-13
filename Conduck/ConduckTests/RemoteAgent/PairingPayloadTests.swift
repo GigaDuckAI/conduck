@@ -248,6 +248,64 @@ final class PairingPayloadTests: XCTestCase {
         XCTAssertEqual(payload.fileServer?.credential, "cred-test-456")
     }
 
+    /// The two reserved per-gateway delivery properties must actually SURVIVE the
+    /// parse. They are stored, synced and couriered to the Watch already; a payload
+    /// that dropped them on the floor would look wired from every other angle and
+    /// only reveal itself the day a seat policy tried to import one.
+    func testFileServerDeliveryPropertiesParse() {
+        var dict = minimalDict()
+        dict["fileServer"] = [
+            "url": "https://files.example.com:8443",
+            "credential": "cred-test-456",
+            "autoDeliver": false,
+            "filenamePolicy": "preserve",
+        ]
+        guard let payload = assertParses(pairingString(dict)) else { return }
+        XCTAssertEqual(payload.fileServer?.autoDeliver, false,
+                       "An explicit autoDeliver:false must reach the payload")
+        XCTAssertEqual(payload.fileServer?.filenamePolicy, "preserve",
+                       "A well-formed filenamePolicy token must reach the payload")
+    }
+
+    /// Absence is the ONLY shape any code minted today has, so it must parse and
+    /// yield nil — "unstated", never a coerced `false` that would read as a
+    /// gateway forbidding automatic delivery.
+    func testFileServerDeliveryPropertiesAbsentYieldNil() {
+        var dict = minimalDict()
+        dict["fileServer"] = [
+            "url": "https://files.example.com:8443",
+            "credential": "cred-test-456",
+        ]
+        guard let payload = assertParses(pairingString(dict)) else { return }
+        XCTAssertNotNil(payload.fileServer, "The block itself must still parse")
+        XCTAssertNil(payload.fileServer?.autoDeliver,
+                     "A missing autoDeliver is unstated, never an explicit false")
+        XCTAssertNil(payload.fileServer?.filenamePolicy,
+                     "A missing filenamePolicy is unstated, never an empty policy")
+    }
+
+    /// Off-shape values degrade to nil and NEVER reject the payload: a hostile or
+    /// simply newer code must not be able to fail an import over a reserved field
+    /// that changes no behaviour, and an unbounded string must not ride into
+    /// App-Group defaults / iCloud KVS.
+    func testFileServerDeliveryPropertiesOffShapeDegradeToNil() {
+        var dict = minimalDict()
+        dict["fileServer"] = [
+            "url": "https://files.example.com:8443",
+            "credential": "cred-test-456",
+            // Wrong type — the wizard writes a JSON bool.
+            "autoDeliver": "yes",
+            // Right type, wrong shape: over the token cap AND outside the token
+            // alphabet (a policy is compared for equality against a closed set).
+            "filenamePolicy": String(repeating: "A", count: 64),
+        ]
+        guard let payload = assertParses(pairingString(dict)) else { return }
+        XCTAssertNotNil(payload.fileServer,
+                        "An off-shape reserved field must never reject the payload")
+        XCTAssertNil(payload.fileServer?.autoDeliver)
+        XCTAssertNil(payload.fileServer?.filenamePolicy)
+    }
+
     func testFileServerEmptyCredentialIsMalformed() {
         var dict = minimalDict()
         dict["fileServer"] = [

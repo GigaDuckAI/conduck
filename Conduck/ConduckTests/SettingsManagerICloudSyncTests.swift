@@ -77,6 +77,8 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
     private let fileServerSeededFlagKey = "fileServer.testedLocallySeeded"           // Constants.fileServerTestedLocallySeededKey
     private let fileServerProbeRevisionKeyOpenclaw = "fileServer.folderProbeRevision.openclaw" // Constants.fileServerFolderProbeRevisionKey
     private let fileServerProbeAttemptKeyOpenclaw = "fileServer.folderProbeAttempt.openclaw"   // Constants.fileServerFolderProbeAttemptKey
+    private let fileServerAutoDeliverKeyOpenclaw = "fileServer.autoDeliver.openclaw"           // Constants.fileServerAutoDeliverKey
+    private let fileServerFilenamePolicyKeyOpenclaw = "fileServer.filenamePolicy.openclaw"     // Constants.fileServerFilenamePolicyKey
 
     override func setUp() async throws {
         try await super.setUp()
@@ -103,6 +105,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
             fileServerCertKeyOpenclaw, fileServerKeepInlineKeyOpenclaw,
             fileServerTestedLocallyKeyOpenclaw, fileServerSeededFlagKey,
             fileServerProbeRevisionKeyOpenclaw, fileServerProbeAttemptKeyOpenclaw,
+            fileServerAutoDeliverKeyOpenclaw, fileServerFilenamePolicyKeyOpenclaw,
         ] {
             defaults.removeObject(forKey: key)
             kvs.removeObject(forKey: key)
@@ -441,11 +444,48 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         XCTAssertFalse(capable, "The durable folderCapable read must reflect the mirrored false, not the default true.")
     }
 
+    func testInboundFileServerDeliveryPolicyMirrors() async {
+        // The two per-gateway delivery PROPERTIES are decisions about the
+        // gateway, not device-local provenance, so a peer's choice must reach
+        // every device — a permission that applied only where it was typed
+        // would be worthless as a policy.
+        kvs.set(false, forKey: fileServerAutoDeliverKeyOpenclaw)
+        kvs.set(Constants.fileServerFilenamePolicyPreserve, forKey: fileServerFilenamePolicyKeyOpenclaw)
+
+        await SettingsManager.shared.handleICloudChange(
+            makeKVSNotification(changedKeys: [fileServerAutoDeliverKeyOpenclaw,
+                                              fileServerFilenamePolicyKeyOpenclaw])
+        )
+
+        XCTAssertEqual(defaults.object(forKey: fileServerAutoDeliverKeyOpenclaw) as? Bool, false,
+                       "Inbound autoDeliver must mirror the VALUE (false) — the durable read consults defaults only.")
+        XCTAssertEqual(defaults.string(forKey: fileServerFilenamePolicyKeyOpenclaw),
+                       Constants.fileServerFilenamePolicyPreserve,
+                       "Inbound filenamePolicy must mirror through the STRING prefix scan.")
+        let autoDeliver = await SettingsManager.shared.getFileServerAutoDeliver(for: .builtin(.openclaw))
+        XCTAssertFalse(autoDeliver, "The durable read must reflect the mirrored false, not the default true.")
+    }
+
+    func testInboundAutoDeliverRemovalRestoresThePermissiveDefault() async {
+        // Device A forgets the gateway → the KVS key goes; the local mirror must
+        // not keep a peer's withdrawn `false` alive forever.
+        defaults.set(false, forKey: fileServerAutoDeliverKeyOpenclaw)
+
+        await SettingsManager.shared.handleICloudChange(
+            makeKVSNotification(changedKeys: [fileServerAutoDeliverKeyOpenclaw])
+        )
+
+        XCTAssertNil(defaults.object(forKey: fileServerAutoDeliverKeyOpenclaw),
+                     "A removed cloud permission must clear the local mirror.")
+        let autoDeliver = await SettingsManager.shared.getFileServerAutoDeliver(for: .builtin(.openclaw))
+        XCTAssertTrue(autoDeliver, "With nothing stored the read returns the permissive default.")
+    }
+
     func testInboundFileServerCertFingerprintAndLegacyKeyAreNeverMirrored() async {
         // The cert pin is a PER-DEVICE optional tightening (never synced by
         // design) and `keepImagesInline` is the retired legacy bool
         // (mirror-banned). Even a hostile/buggy KVS push naming them must not
-        // land in defaults — the handler scans three EXPLICIT prefixes, never
+        // land in defaults — the handler scans an EXPLICIT prefix list, never
         // blanket `fileServer.`.
         kvs.set("ab12", forKey: fileServerCertKeyOpenclaw)
         kvs.set(true, forKey: fileServerKeepInlineKeyOpenclaw)
