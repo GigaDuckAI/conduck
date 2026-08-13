@@ -25,7 +25,7 @@ for simulator UI automation) reads, so the toolbar buttons are NOT
 reachable by id OR by label — do not waste turns on `tap --id`/`--label` for
 them. Tap by coordinate instead (iPhone 17 Pro, portrait, inline nav bar at
 y≈89): Conversations x≈22, centered gateway-title/Clone x≈201, New conversation x≈370. Settings is a conversation-list footer row (id `toolbar.settings`) — in the live tree, tap by id or row coordinate, not a nav-bar coordinate. (The buttons
-carry `accessibilityIdentifier`s — `toolbar.*`, `sidebar.newConversation` — but
+carry `accessibilityIdentifier`s — `toolbar.*` — but
 those surface to XCUITest/VoiceOver only, not to `axe`.) Non-toolbar controls
 (composer, list rows, settings fields) ARE in the live tree — target those
 normally.

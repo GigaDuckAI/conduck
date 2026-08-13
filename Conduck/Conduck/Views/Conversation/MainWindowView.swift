@@ -5,9 +5,11 @@
 // MainWindowView.swift
 //
 // The unified macOS shell — a single `Window("Conduck", id: "main")` modeled on
-// the Claude desktop app: a `NavigationSplitView` sidebar (New-conversation
-// button + gateway picker + conversation list + bottom identity footer) and a
-// detail column reusing the conversation thread + composer. Settings is a
+// the Claude desktop app: a `NavigationSplitView` sidebar (search field +
+// conversation list + bottom identity footer) and a detail column reusing the
+// conversation thread + composer. The sidebar toggle and the compose action
+// share the title bar's leading edge (`LeadingToolbarChrome`), so collapsing
+// the sidebar never hides the way to start a chat. Settings is a
 // full-window MODE SWAP (`MacSettingsView`), NOT a sheet or a separate window:
 // while `showingSettings` the window renders `MacSettingsView` INSTEAD OF
 // `splitView`, giving the dense setup screens the whole resizable window. Evolved
@@ -79,10 +81,9 @@ struct MainWindowView: View {
     @State private var hostMascot = MascotShuffleBag.next()
 
     /// Sidebar search text. Owned here (NOT by `ConversationListView`'s native
-    /// `.searchable`, which renders above the New Conversation button — the
-    /// founder rejected that position) and passed down via `externalSearchText`
-    /// so the custom `macSearchField` below the New Conversation button drives
-    /// the list filter.
+    /// `.searchable`, which iOS forces into the nav-bar area rather than inline
+    /// in the column) and passed down via `externalSearchText` so the custom
+    /// `SidebarSearchField` at the top of the sidebar drives the list filter.
     @State private var sidebarSearch = ""
 
     /// The Settings modal. Triggered by the footer menu, ⌘,, the
@@ -212,6 +213,14 @@ struct MainWindowView: View {
             detailColumn
         }
         .toolbar {
+            // Sidebar toggle + compose, in that order, at the leading edge.
+            // Shared verbatim with the iPad split view; the placement lives in
+            // `LeadingToolbarChrome`, not here, so the two surfaces cannot
+            // drift. Compose sits in the TITLE BAR rather than the sidebar so a
+            // collapsed sidebar can't strand the user with no way to start a
+            // chat. No `sharedBackgroundVisibility` override — unlike the
+            // gateway pill below, this pair WANTS the system glass.
+            LeadingToolbarChrome { startNewConversation() }
             // Gateway identity, centered in the title bar — fills the otherwise
             // empty top strip and stays visible across new + existing chats.
             ToolbarItem(placement: .principal) {
@@ -380,31 +389,19 @@ struct MainWindowView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            // 1. Prominent New-conversation button.
-            Button {
-                startNewConversation()
-            } label: {
-                Label(
-                    LocalizedStringResource("conversations.newConversation", defaultValue: "New Conversation"),
-                    systemImage: "square.and.pencil"
-                )
-                .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(AppColors.brandAmber)
-            .accessibilityIdentifier("sidebar.newConversation")  // stable QA target (non-localized)
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-
-            // 2. Custom search field — BELOW New Conversation (founder rejected
-            // the native `.searchable(placement:.sidebar)` position above it).
-            // Shared `SidebarSearchField` (same component the iPad sidebar uses).
+            // 1. Custom search field — the sidebar's top element. Compose lives
+            // in the window toolbar (`LeadingToolbarChrome`), which is what
+            // keeps it reachable with the sidebar collapsed. Carries the 12pt
+            // top inset so the column's top rhythm is unchanged. Shared
+            // `SidebarSearchField` (same component the iPad sidebar uses); the
+            // native `.searchable(placement:.sidebar)` is deliberately unused —
+            // it renders in the nav-bar area rather than inline in the column.
             SidebarSearchField(text: $sidebarSearch)
                 .padding(.horizontal, 12)
-                .padding(.top, 8)
+                .padding(.top, 12)
 
-            // 3. Conversation list (toolbar New/Delete suppressed; header owns New).
+            // 2. Conversation list (toolbar New/Delete suppressed; the window
+            // toolbar owns New).
             ConversationListView(
                 onSelect: { id in selectedConversationID = id },
                 showsToolbarActions: false,
@@ -418,7 +415,7 @@ struct MainWindowView: View {
 
             Spacer(minLength: 0)
 
-            // 5. Identity footer menu.
+            // 3. Identity footer menu.
             identityFooter
         }
     }

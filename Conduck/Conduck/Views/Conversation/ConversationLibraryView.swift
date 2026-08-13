@@ -78,9 +78,10 @@ struct ConversationLibraryView: View {
     /// current composer text without reaching into the composer's private state.
     @State private var composerDraft: String = ""
     /// Sidebar search text. Owned here (NOT by `ConversationListView`'s native
-    /// `.searchable`, which iOS renders above the pinned New button) and threaded
-    /// through `externalSearchText` so the custom `SidebarSearchField` in the
-    /// header drives filtering — mirrors `MainWindowView.sidebarSearch`.
+    /// `.searchable`, which iOS forces into the nav-bar area above any pinned
+    /// header) and threaded through `externalSearchText` so the custom
+    /// `SidebarSearchField` in the header drives filtering — mirrors
+    /// `MainWindowView.sidebarSearch`.
     @State private var sidebarSearch = ""
     /// Shared attachment staging for the iPad composer (pickers + camera + the
     /// staged collection + ⌘V paste).
@@ -94,11 +95,6 @@ struct ConversationLibraryView: View {
     /// creation (NOT in `.onAppear`, which SwiftUI re-fires) so it stays stable
     /// across re-render. This host state has no conversation VM of its own.
     @State private var hostMascot = MascotShuffleBag.next()
-    /// Split-view column visibility. Drives the collapsed-sidebar safety net: a
-    /// trailing compose item appears in the DETAIL toolbar only when the sidebar
-    /// is hidden, so the prominent sidebar New button never becomes unreachable.
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
-
     /// True while the in-app mic is capturing or transcribing (Part 1f). Gates
     /// the host `⌘Return` shortcut so a keyboard send can't race the
     /// voice-populates-the-field flow.
@@ -110,18 +106,19 @@ struct ConversationLibraryView: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView {
             ConversationListView(
                 onSelect: { id in
                     selectedConversationID = id
                 },
-                onNewConversation: { startNewConversation() },
-                // The pinned header (safeAreaInset below) owns New + the custom
-                // search field, so suppress the toolbar New item and drive the
+                // The pinned header (safeAreaInset below) owns the custom search
+                // field, so suppress the toolbar New item and drive the
                 // list's filter via `externalSearchText` (no native `.searchable`).
+                // New lives in the DETAIL toolbar (`LeadingToolbarChrome`), where
+                // collapsing the sidebar cannot hide it — which is also why no
+                // `onNewConversation` is passed: nothing here would call it.
                 // Delete-All renders as a bare trash button like iPhone
-                // (`deleteAllInMenu: false`) — the slim title-less bar has room
-                // beside the system sidebar toggle. (Args in declaration order.)
+                // (`deleteAllInMenu: false`). (Args in declaration order.)
                 showsToolbarActions: true,
                 externalSearchText: $sidebarSearch,
                 customGateways: customGateways,
@@ -135,33 +132,17 @@ struct ConversationLibraryView: View {
                 // Persistent split-view sidebar: highlight the active thread's row.
                 selectedConversationID: selectedConversationID
             )
-            // Mac-mirroring pinned header: prominent New button on top, custom
-            // search field directly below it (identical stack + styling to
-            // `MainWindowView.sidebar`). The list's native `.searchable` is
-            // suppressed (we pass `externalSearchText`), so this header — not the
-            // nav bar — owns search, sitting tight under the slim Delete-All/toggle
-            // bar with no wasted large-title band.
+            // Mac-mirroring pinned header: the custom search field, same styling
+            // as `MainWindowView.sidebar`. The list's native `.searchable` is
+            // suppressed (we pass `externalSearchText`), so this band — not the
+            // nav bar — owns search, sitting tight under the slim Delete-All bar
+            // with no wasted large-title band. The card background is what makes
+            // it read as pinned against the scrolling list below.
             .safeAreaInset(edge: .top) {
-                VStack(spacing: 8) {
-                    Button {
-                        startNewConversation()
-                    } label: {
-                        Label(
-                            LocalizedStringResource("conversations.newConversation", defaultValue: "New Conversation"),
-                            systemImage: "square.and.pencil"
-                        )
-                        .font(.body.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(AppColors.brandAmber)
-                    .accessibilityIdentifier("sidebar.newConversation")  // stable QA target (non-localized)
-
-                    SidebarSearchField(text: $sidebarSearch)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(AppColors.cardBackground)
+                SidebarSearchField(text: $sidebarSearch)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(AppColors.cardBackground)
             }
         } detail: {
             detailColumn
@@ -259,28 +240,18 @@ struct ConversationLibraryView: View {
         // into that control — no separate trailing button.
         .navigationTitle(Text(""))
         .toolbar {
+            // Sidebar toggle + compose, in that order, at the leading edge —
+            // present in BOTH column states, so a hidden sidebar can no longer
+            // strand the user. This REPLACES the old `.detailOnly`-gated
+            // trailing fallback, which existed only because the real New button
+            // lived in the sidebar and vanished with it. Declared on the DETAIL
+            // column (not the sidebar) for exactly that reason — a sidebar-column
+            // item is gone the moment the sidebar is. Same component and same
+            // placement as the macOS window; see `LeadingToolbarChrome` for the
+            // cross-column caveat on the sidebar toggle.
+            LeadingToolbarChrome { startNewConversation() }
             ToolbarItem(placement: .principal) {
                 gatewayTitleControl
-            }
-            // Collapsed-sidebar safety net: when the sidebar is hidden, the
-            // prominent sidebar New button is unreachable, so surface a trailing
-            // compose item in the detail toolbar. Gated EXACTLY on `.detailOnly`
-            // — for a two-column split, both-columns-visible resolves to
-            // `.doubleColumn` (and the initial `.automatic` resolves to
-            // detailOnly/doubleColumn/all), so a `!= .all` test would fire while
-            // the sidebar is still shown → a DUPLICATE New affordance. The
-            // sidebar (and its New button) is gone ONLY in `.detailOnly`, so
-            // that's precisely when this fallback is needed.
-            if columnVisibility == .detailOnly {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        startNewConversation()
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
-                    .accessibilityLabel("New conversation")  // xcstrings: chat-ui
-                    .accessibilityIdentifier("toolbar.newConversation.detail")  // stable QA target (non-localized)
-                }
             }
         }
     }
@@ -527,6 +498,16 @@ struct ConversationLibraryView: View {
     /// uses on first send). Reuses the existing minting flow rather than adding
     /// a new store call.
     private func startNewConversation() {
+        // Stop any in-flight capture FIRST, mirroring the macOS window's
+        // `cancelWindowCapture()`. Without this a mic held in the outgoing
+        // thread keeps running, and `handleVoiceResult` lands the OLD thread's
+        // transcript in the NEW chat's composer. Reachable from the toolbar
+        // compose button and ⌘N alike.
+        switch recorder.state {
+        case .recording: recorder.cancelRecording()
+        case .processing, .preparingVoice: recorder.cancelProcessing()
+        case .idle, .error: break
+        }
         composerDraft = ""
         // A fresh new-chat session gets a fresh pre-minted conversation
         // identifier, so its first attachment cannot land in the folder of the

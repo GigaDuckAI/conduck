@@ -24,13 +24,15 @@ struct ConversationListView: View {
     /// closure that just clears its selection.
     var onNewConversation: () -> Void = {}
     /// Additive: suppress the built-in toolbar New / Delete-All actions. The
-    /// macOS `MainWindowView` sidebar header owns its own "New conversation"
-    /// button, so it passes `false`; iOS keeps the default `true`.
+    /// macOS window has no sidebar-column toolbar of its own (one toolbar spans
+    /// the whole split view, and `LeadingToolbarChrome` owns New there), so it
+    /// passes `false`; iOS keeps the default `true`.
     var showsToolbarActions: Bool = true
-    /// Optional host-owned search binding. macOS passes its sidebar search
-    /// field's text through this so filtering is driven by the custom field
-    /// (NOT the native `.searchable`, which renders above the New Conversation
-    /// button). iOS leaves this nil and uses `internalSearch` via `.searchable`.
+    /// Optional host-owned search binding. The split-view hosts pass their
+    /// pinned search field's text through this so filtering is driven by the
+    /// custom field (NOT the native `.searchable`, which iOS forces into the
+    /// nav-bar area rather than inline in the column). iPhone leaves this nil
+    /// and uses `internalSearch` via `.searchable`.
     var externalSearchText: Binding<String>? = nil
     /// Custom-gateway roster snapshot, used to resolve a row's gateway badge
     /// (name / color / monogram) for a `.custom` ref. Host-owned.
@@ -51,14 +53,14 @@ struct ConversationListView: View {
     /// (top-left) instead of the bottom footer row, freeing the bottom edge for the
     /// native iOS 26 search capsule. iPad/macOS sidebars keep the footer (default false).
     var settingsInToolbar: Bool = false
-    /// Additive: render the New `square.and.pencil` toolbar item. iPhone + macOS
-    /// keep the default `true`; the iPad sidebar passes `false` because its own
-    /// prominent pinned "New Conversation" header owns New there.
+    /// Additive: render the New `square.and.pencil` toolbar item. iPhone keeps
+    /// the default `true`; the iPad sidebar passes `false` because the DETAIL
+    /// toolbar owns New there (`LeadingToolbarChrome`), and a second one here
+    /// would duplicate it whenever the sidebar is showing.
     var newConversationInToolbar: Bool = true
     /// Additive: collapse Delete-All into an `ellipsis.circle` overflow menu
-    /// instead of a bare destructive trash button. The iPad sidebar passes `true`
-    /// (the prominent New header already occupies the toolbar's primary slot);
-    /// iPhone + macOS keep the default `false` (bare trash button verbatim).
+    /// instead of a bare destructive trash button. Every current host keeps the
+    /// default `false` (bare trash button verbatim).
     var deleteAllInMenu: Bool = false
     /// Optional active-conversation highlight. The persistent-sidebar hosts (iPad
     /// split + macOS window) pass the currently-selected id so its row reads as
@@ -112,10 +114,9 @@ struct ConversationListView: View {
         // iPhone (no external field) keeps the native large "Conversations" title
         // + `.searchable` bar. The iPad sidebar passes `externalSearchText` and
         // renders its own pinned search field above the list (Mac-mirroring), so it
-        // suppresses BOTH: an empty inline title (the slim bar then hosts only the
-        // Delete-All button + the system sidebar toggle — no wasted large-title band)
-        // and the native search (which iOS forces into the nav-bar area, ABOVE any
-        // pinned header — the very thing that put search above New here).
+        // suppresses BOTH: an empty inline title (so no wasted large-title band
+        // above the pinned header) and the native search (which iOS forces into
+        // the nav-bar area, ABOVE any pinned header).
         .navigationTitle(externalSearchText == nil ? Text("Conversations") : Text(""))
         .navigationBarTitleDisplayMode(externalSearchText == nil ? .large : .inline)
         .modifier(NativeSearchableModifier(text: $internalSearch, isEnabled: externalSearchText == nil))
@@ -155,8 +156,8 @@ struct ConversationListView: View {
                 if !viewModel.conversations.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
                         if deleteAllInMenu {
-                            // iPad sidebar: fold Delete-All into an overflow menu
-                            // so it doesn't crowd the prominent New header.
+                            // Opt-in: fold Delete-All into an overflow menu when
+                            // a host's bar is too crowded for a bare button.
                             Menu {
                                 Button(role: .destructive) {
                                     showDeleteAllConfirmation = true
@@ -675,9 +676,9 @@ private struct NativeSearchableModifier: ViewModifier {
 /// BOTH the iPad split sidebar (`ConversationLibraryView`) and the macOS unified
 /// window (`MainWindowView`). Reproduces the iPhone's native dark-mode search
 /// chrome — cool translucent system-gray fill, capsule shape, body-size glyph —
-/// while sitting BELOW the prominent New Conversation button (the founder-locked
-/// sidebar order; native `.searchable` can only render above it). Drives the
-/// list's filter via the host's `externalSearchText` binding.
+/// inline at the TOP of the sidebar column, which the native `.searchable`
+/// cannot do (iOS forces it into the nav-bar area instead). Drives the list's
+/// filter via the host's `externalSearchText` binding.
 struct SidebarSearchField: View {
     @Binding var text: String
 
