@@ -1172,13 +1172,41 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     /// Post the reply notification (≤200-char body) whose tap deep-links to
     /// the conversation. userInfo carries the conversationID for the
     /// `NotificationDelegate` deep-link.
-    private static func postReplyNotification(_ reply: String, conversationID: UUID, backendRawValue: String?) async {
+    ///
+    /// `static` + internal (not `private`) for the same reason
+    /// `postFailureNotification` is: the macOS in-app reply path has no
+    /// background delegate to land through, so `MenuBarCoordinator` posts this
+    /// exact notification itself rather than replicating its copy, identifier
+    /// and sound policy.
+    static func postReplyNotification(_ reply: String, conversationID: UUID, backendRawValue: String?) async {
         let content = UNMutableNotificationContent()
         content.title = await Self.replyNotificationTitle(backendRawValue: backendRawValue)
         content.body = String(reply.prefix(200))
-        content.sound = .default
+        // One chime per BURST, not one per reply — three agents answering within
+        // 30 s produce three banners and one sound. The window is App-Group
+        // state, because on iOS this method runs in a process the background
+        // URLSession event relaunched, once per landing turn. It is spent only
+        // when this banner can actually be heard: a foreground presentation has
+        // its sound stripped by `NotificationDelegate.willPresent`, so consuming
+        // there would silence the rest of the burst for nothing.
+        content.sound = await MainActor.run { ReplyNotificationSoundPolicy.consumeChimeIfAudible() }
+            ? .default
+            : nil
+        // Group every banner for one conversation under that conversation, so a
+        // quiet hour of replies reads as N threads rather than N notifications.
+        content.threadIdentifier = conversationID.uuidString
+        // DRIFT GUARD, not a change: `.active` is already the default. Stating
+        // it makes any future `.timeSensitive` an explicit, reviewable edit — a
+        // reply that took four minutes to arrive is by definition not
+        // time-sensitive, and does not earn a Focus-mode break-through.
+        content.interruptionLevel = .active
         content.userInfo = [NotificationDeepLink.conversationIDKey: conversationID.uuidString]
 
+        // Identifier is DETERMINISTIC per conversation: Apple replaces a
+        // pending/delivered request that reuses one, so a second reply in the
+        // SAME conversation supersedes the first banner (one live banner per
+        // thread — what we want). `threadIdentifier` above is what groups
+        // DIFFERENT conversations.
         let request = UNNotificationRequest(
             identifier: NotificationDeepLink.replyIdentifierPrefix + conversationID.uuidString,
             content: content,
@@ -1232,11 +1260,18 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         case nil:
             content.body = fallback
         }
+        // FAILURES ALWAYS CHIME and never consume the reply burst window. A
+        // burst is many agents answering at once — a reply phenomenon. A failure
+        // is not, and it is the one thing worth hearing every time.
         content.sound = .default
+        // Same grouping + drift guard as the reply poster, so a failure banner
+        // lands in its conversation's thread rather than beside it.
+        content.threadIdentifier = conversationID.uuidString
+        content.interruptionLevel = .active
         content.userInfo = [NotificationDeepLink.conversationIDKey: conversationID.uuidString]
 
         let request = UNNotificationRequest(
-            identifier: "remoteAgent.failure.\(conversationID.uuidString)",
+            identifier: NotificationDeepLink.failureIdentifierPrefix + conversationID.uuidString,
             content: content,
             trigger: nil
         )
@@ -1430,11 +1465,16 @@ extension Notification.Name {
     static let openConversationDeepLink = Notification.Name("openConversationDeepLink")
 
     /// Posted (main thread, macOS only) when an agent reply lands for a
-    /// conversation. userInfo carries the conversationID string. macOS surfaces
-    /// replies via a menu-bar unread dot rather than a notification, so
-    /// `MenuBarCoordinator` observes this to mark the thread unread (unless it's
-    /// the one the popover is currently showing). Independent of the (now-
-    /// removed) reply banner — it always fires on a macOS reply success.
+    /// conversation from the FOREGROUND view-model path. userInfo carries the
+    /// conversationID string. `MenuBarCoordinator` observes it and raises both
+    /// macOS cues — the menu-bar unread dot and the reply banner — unless the
+    /// popover or the active window is already showing that thread.
+    ///
+    /// The banner belongs to THIS notification and not to
+    /// `.remoteAgentTurnDidComplete`: the share/background landing already posts
+    /// its own banner inside `recordReply`, so the two events stay one-banner-
+    /// per-reply only because each posts from its own path. Fires on every macOS
+    /// foreground reply success.
     static let conversationReplyArrived = Notification.Name("conversationReplyArrived")
 }
 
@@ -1452,6 +1492,42 @@ enum NotificationDeepLink {
     /// never auto-speaks a stale previous reply. Single-sourced here so the
     /// posting sites and the decider can't drift.
     static let replyIdentifierPrefix = "remoteAgent.reply."
+
+    /// Request-identifier prefix shared by every TURN-failure notification.
+    /// Single-sourced beside its reply sibling for the same reason: the poster
+    /// and `clearDelivered(for:)` must agree on the exact string, or opening a
+    /// thread would leave its failure banner behind in Notification Center.
+    static let failureIdentifierPrefix = "remoteAgent.failure."
+
+    /// Retire this conversation's REPLY and FAILURE notifications — delivered
+    /// and still-pending — because the user is now looking at the thread they
+    /// point to. A banner that survives the thread being opened is a lie the
+    /// user has to dismiss by hand.
+    ///
+    /// Removes BY DETERMINISTIC IDENTIFIER, never by enumerating
+    /// `deliveredNotifications()`: the identifiers are constructed from the
+    /// conversation id at post time, so the exact two strings are known here,
+    /// and an enumeration would pay an async round-trip plus a filter to
+    /// rediscover them.
+    ///
+    /// Both are removed, not just the reply: a failure banner sitting beside a
+    /// reply banner for the same thread is exactly the pair that a tap on one
+    /// leaves half-cleared (the OS removes only the notification actually
+    /// tapped).
+    ///
+    /// Safe to call for a conversation with no notifications — removal of an
+    /// unknown identifier is a no-op. `nonisolated` because
+    /// `UNUserNotificationCenter` removal is thread-safe and one of the four
+    /// call sites is the notification delegate's nonisolated tap handler.
+    nonisolated static func clearDelivered(for conversationID: UUID) {
+        let identifiers = [
+            replyIdentifierPrefix + conversationID.uuidString,
+            failureIdentifierPrefix + conversationID.uuidString,
+        ]
+        let center = UNUserNotificationCenter.current()
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
 }
 
 // MARK: - Source device

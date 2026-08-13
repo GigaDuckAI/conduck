@@ -4,6 +4,182 @@
     "" : {
 
     },
+    "activity.a11y.newReply" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New reply"
+          }
+        }
+      }
+    },
+    "activity.a11y.notSentUnseen" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not sent, new reply"
+          }
+        }
+      }
+    },
+    "activity.a11y.sentAtTime" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sent at %@"
+          }
+        }
+      }
+    },
+    "activity.a11y.sentOnDay" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sent %@"
+          }
+        }
+      }
+    },
+    "activity.a11y.working" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Working"
+          }
+        }
+      }
+    },
+    "activity.a11y.workingUnseen" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Working, new reply"
+          }
+        }
+      }
+    },
+    "activity.noReplyYet" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No reply yet"
+          }
+        }
+      }
+    },
+    "activity.notSent" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not sent"
+          }
+        }
+      }
+    },
+    "activity.waitingForReply" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Waiting for a reply…"
+          }
+        }
+      }
+    },
+    "conversation.row.youSaid" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You: %@"
+          }
+        }
+      }
+    },
+    "quitGuard.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Quitting now ends the request. The answer can't be recovered — you'd have to ask again."
+          }
+        }
+      }
+    },
+    "quitGuard.button.keepWaiting" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Keep Waiting"
+          }
+        }
+      }
+    },
+    "quitGuard.button.quit" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Quit Anyway"
+          }
+        }
+      }
+    },
+    "quitGuard.multiple.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld conversations are still waiting on answers"
+          }
+        }
+      }
+    },
+    "quitGuard.single.named.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ is still working on “%@”"
+          }
+        }
+      }
+    },
+    "quitGuard.single.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your personal AI is still answering"
+          }
+        }
+      }
+    },
     "…" : {
 
     },

@@ -315,15 +315,19 @@ struct MessageComposerBar: View {
     /// removed the inline Cancel from the shared thinking indicator, so this is
     /// the window's only cancel control during the wait.
     ///
-    /// Gated on the dispatch flag, NOT `isAwaitingReply`: during macOS's
+    /// Gated on a CANCELLABLE live turn, NOT `isAwaitingReply`: during macOS's
     /// pre-dispatch window `inFlightTask` is still nil, so a Stop offered there
     /// would silently do nothing. `isSendDisabled` below stays on the claim, so
     /// the control is a *disabled Send* for that window rather than a Stop that
     /// lies. (There is no gap on the other side — nothing suspends between the
-    /// VM setting `inFlightStartedAt` and assigning `inFlightTask`, so the
-    /// MainActor cannot render a Stop that has no task behind it.)
+    /// VM claiming the turn and assigning `inFlightTask`, so the MainActor cannot
+    /// render a Stop that has no task behind it.)
+    ///
+    /// Nor is it the wait indicator: a share-drained turn is visible to this
+    /// process but carries no cancel handle, so it shows the wait row and a
+    /// disabled Send — never a Stop that cannot stop anything.
     private var isInFlight: Bool {
-        viewModel?.showsGatewayWaitIndicator ?? false
+        viewModel?.canStopLiveTurn ?? false
     }
 
     /// A `.failed` tile carries NO payload, so a strip holding only failures is
@@ -334,8 +338,13 @@ struct MessageComposerBar: View {
         !trimmedDraft.isEmpty || attachments.contains { !$0.isFailed }
     }
 
+    /// TWO in-flight terms, not one. `isAwaitingReply` is this VM instance's own
+    /// claim — the only thing that covers the pre-dispatch window. The wait
+    /// indicator covers turns this instance did not dispatch (the share drainer,
+    /// a sibling VM), which would otherwise leave Send live beside a running turn.
     private var isSendDisabled: Bool {
         (viewModel?.isAwaitingReply ?? false)
+            || (viewModel?.showsGatewayWaitIndicator ?? false)
             || attachments.hasLoadingItem
             || attachments.hasUploadingItem   // strict send-gating: a server-file PUT
             || attachments.hasFailedUpload    // is still climbing / failed (Retry first)

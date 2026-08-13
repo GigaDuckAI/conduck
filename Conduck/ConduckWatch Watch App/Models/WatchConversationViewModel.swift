@@ -163,7 +163,12 @@ final class WatchConversationViewModel {
         if loadError != nil { loadError = nil }
         var changed = false
         do {
-            let fresh = try await store.fetchConversations()
+            // `.turnStates` adds exactly ONE query for the whole list (never one
+            // per row — the wrist takes no per-row fetch), and it is also what
+            // makes a status flip repaint at all: `sending → failed` writes only
+            // `Message` columns and does not bump `lastActivityAt`, so without
+            // the two derived fields the equality skip below would swallow it.
+            let fresh = try await store.fetchConversations(activity: .turnStates)
             hasCompletedInitialLoad = true
             // Assign only on a REAL change — the records are Hashable value
             // snapshots, and `@Observable` invalidates on reassignment regardless
@@ -179,6 +184,32 @@ final class WatchConversationViewModel {
         }
         if isLoading { isLoading = false }
         return changed
+    }
+
+    /// Resolve one list row's activity SYNCHRONOUSLY, for `body` — the row
+    /// renders it in the date slot, so this must not await and must not fetch.
+    ///
+    /// `lastViewedAt: nil` and `tailRole: nil` are LOAD-BEARING, not
+    /// placeholders. The Watch keeps no read state: its app has its own
+    /// container, so a wrist marker could only ever record wrist-viewing, and
+    /// "I read this on my watch" is not a fact the phone should inherit. And it
+    /// projects no tail role: that costs a per-row message fetch on the slowest
+    /// device in the fleet, which is the same reason the rows carry no preview.
+    /// Both nils suppress the unseen branch entirely, so `.answeredUnseen`
+    /// cannot arise here — the wrist shows DELIVERY state only.
+    ///
+    /// `locallyLiveSince` is this wrist's own App-Group in-flight marker, read
+    /// through `WatchRecordingService` rather than the raw defaults keys. It is
+    /// what separates "a turn is running HERE" (→ "Answering…") from "some
+    /// device wrote a `sending` row that CloudKit mirrored to me" (→ "Waiting
+    /// for a reply…"). Neither is ever a reason to write.
+    func rowState(for convo: ConversationRecord, now: Date = Date()) -> ConversationRowState {
+        ConversationActivityResolver.resolve(
+            ConversationActivityInputs(record: convo, tailRole: nil),
+            locallyLiveSince: WatchRecordingService.shared.liveTurnStartedAt(for: convo.id, now: now),
+            lastViewedAt: nil,
+            now: now
+        )
     }
 
     func delete(_ conversation: ConversationRecord) {

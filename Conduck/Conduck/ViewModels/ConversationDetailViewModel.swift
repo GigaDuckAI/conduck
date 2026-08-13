@@ -8,12 +8,19 @@
 // `ConversationListViewModel`.
 //
 // Handles load + append + the deinit-safe `.conversationsDidChange`
-// observer, plus the EPHEMERAL in-flight state machine (NOT a persisted
-// `Message.status` — that send-state field is V1.1): optimistic user bubble,
-// a "thinking" elapsed timer driving the staged copy, and a Cancel affordance
-// that cancels the underlying `URLSessionTask`. The in-flight state lives
-// here on the VM (local, never persisted) so the bubble row stays a plain
-// snapshot of the store.
+// observer, plus the DEVICE-LOCAL in-flight state machine: optimistic user
+// bubble, a "thinking" elapsed timer driving the staged copy, and a Cancel
+// affordance that cancels the underlying `URLSessionTask`. That state is never
+// persisted, and it answers a question the durable `Message.status` cannot: a
+// stored `sending` row may have been written by another device and mirrored
+// here via CloudKit, so it is no proof that anything is running HERE.
+//
+// The wait indicator and Stop are therefore DERIVED — from this VM's own stamp
+// OR from `InFlightTurnRegistry`, which every dispatch lane on this device
+// claims. That is what makes them survive the view model being discarded and
+// re-minted by a navigation pop (`ContentView.syncDetailVM()` mints a fresh VM
+// on every conversation switch), while the bubble row stays a plain snapshot of
+// the store.
 
 import Foundation
 import SwiftUI
@@ -676,7 +683,7 @@ final class ConversationDetailViewModel {
         configuredRefsForClone.contains { $0 != boundRef }
     }
 
-    // MARK: - Ephemeral in-flight state (NOT persisted — V1.0 has no Message.status)
+    // MARK: - In-flight turn state (device-local, never persisted)
 
     /// True while an agent turn is in flight for this conversation — and, on
     /// macOS, from the moment the send *claims* the VM, several `await`s before
@@ -686,13 +693,47 @@ final class ConversationDetailViewModel {
     /// reads as "the agent is working" belongs on `showsGatewayWaitIndicator`.
     var isAwaitingReply = false
 
-    /// When the in-flight turn started — drives the elapsed clock. Nil when no
-    /// turn is in flight.
+    /// When a turn dispatched by THIS instance started — the stamp its elapsed
+    /// clock counts from. Nil when this instance has nothing in flight, which is
+    /// NOT the same as "nothing is running for this conversation": a sibling VM
+    /// the navigation stack discarded, the background converse session, CarPlay
+    /// or the macOS share drainer can own a live turn here (see
+    /// `liveTurnStartedAt`).
+    ///
+    /// Written in production only through `beginInFlight`/`endInFlight`, which
+    /// keep the registry claim in lockstep with it.
     var inFlightStartedAt: Date?
 
+    /// The registry claim `beginInFlight` minted, released by `endInFlight`.
+    /// Token-keyed rather than conversation-keyed, which is what makes the two
+    /// double-end sites on one macOS turn safe: `landMacForegroundReply`'s
+    /// `releaseAwaitingUI` and the send Task's `defer` both fire for it. Ending
+    /// an already-ended token is a no-op that cannot delete a NEWER claim taken
+    /// by the share drainer or the background session in between.
+    /// `@ObservationIgnored` — bookkeeping; every view reads the derived
+    /// properties below, which observe the registry itself.
+    @ObservationIgnored private var inFlightClaim: InFlightTurnRegistry.ClaimToken?
+
+    /// Stamp of a turn running for this conversation ON THIS DEVICE, whoever
+    /// dispatched it: this VM, a sibling instance the navigation stack
+    /// discarded, the background converse session, CarPlay, or the macOS share
+    /// drainer.
+    ///
+    /// DERIVED, never seeded into stored state. A seed taken in `init` could not
+    /// un-set itself — the seeded instance owns no `Task`, so nothing would clear
+    /// it, and a reply landing under a different owner would leave a permanently
+    /// spinning thread that also blocks the send guard. Reading the registry
+    /// instead means the indicator is correct on the FIRST frame of a re-minted
+    /// VM and disappears the moment the claim is released, with no bookkeeping on
+    /// either side. `InFlightTurnRegistry` is `@Observable` with in-memory stored
+    /// state, so reading it here registers a real SwiftUI dependency.
+    var liveTurnStartedAt: Date? {
+        inFlightStartedAt ?? InFlightTurnRegistry.shared.liveSince(conversationID)
+    }
+
     /// The single DISPLAY gate for the agent-side wait: the "{Gateway} is
-    /// answering…" row, the composer's Stop morph, and the popover's answering
-    /// phase. True once the turn has entered its gateway dispatch phase — after
+    /// answering…" row, the popover's answering phase, and the composer's Send
+    /// gating. True once a turn has entered its gateway dispatch phase — after
     /// attachment processing, the durable write, history assembly and credential
     /// resolution, immediately before the hop.
     ///
@@ -702,23 +743,60 @@ final class ConversationDetailViewModel {
     /// is already the answer). A real "accepted" event would be a wire-contract
     /// change. This is the closest honest signal the client owns.
     ///
-    /// Derived, never mirrored into stored state — `inFlightStartedAt` is
-    /// already cleared by every success, failure, cancel and early-landing
-    /// release, and a second Bool would drift from it on one of them.
-    var showsGatewayWaitIndicator: Bool { inFlightStartedAt != nil }
+    /// NOT the Stop gate — see `canStopLiveTurn`. A turn this device can SEE but
+    /// cannot cancel (a macOS share drain, a CarPlay upload) shows the wait and
+    /// offers no Stop.
+    var showsGatewayWaitIndicator: Bool { liveTurnStartedAt != nil }
+
+    /// Whether the UI may offer Stop. True only for a turn THIS DEVICE holds a
+    /// usable handle to: this VM's own `inFlightTask`, or a registry claim
+    /// registered as cancellable (the background converse session). A Mac cannot
+    /// cancel an iPhone-owned turn, and the macOS share drainer and the CarPlay
+    /// uploader register `isCancellable: false` — so their turns render the wait
+    /// indicator with no Stop, rather than a button that calls a cancel with no
+    /// handle behind it and does nothing.
+    var canStopLiveTurn: Bool {
+        inFlightStartedAt != nil || InFlightTurnRegistry.shared.isCancellable(conversationID)
+    }
 
     /// Identity of the turn currently in flight, for a caller that wants to act
     /// on THAT turn rather than on whatever happens to be in flight when its
     /// action runs — see `cancelInFlight(expecting:)`.
     ///
-    /// DERIVED from `inFlightStartedAt` for the same reason the indicator above
-    /// is: a separately-stored id would have to be cleared at all eight sites
-    /// that clear the start stamp, and would silently become a stale identity on
-    /// the first one that was missed. Two turns cannot share a stamp — the
-    /// re-entrancy guard (`inFlightTask == nil, !isAwaitingReply`) admits a
-    /// second turn only after the first has fully resolved, so any two stamps are
-    /// separated by at least a network round-trip.
-    var inFlightTurnToken: Date? { inFlightStartedAt }
+    /// DERIVED from `liveTurnStartedAt`, not from the stored stamp, so a Stop
+    /// rendered for a registry-owned turn names the same identity
+    /// `cancelInFlight` compares against — otherwise every such Stop would carry
+    /// a nil token and be dropped. A separately-stored id would have to be
+    /// cleared at every site that clears the start stamp, and would silently
+    /// become a stale identity on the first one that was missed. Two turns
+    /// cannot share a stamp: the re-entrancy guard (`inFlightTask == nil,
+    /// !isAwaitingReply`) admits a second turn only after the first has fully
+    /// resolved, and the registry reports the EARLIEST live claim, which is
+    /// stable for as long as that turn runs.
+    var inFlightTurnToken: Date? { liveTurnStartedAt }
+
+    /// Enter the in-flight state: stamp this instance's clock AND claim the
+    /// conversation in the shared registry, so every other surface on this
+    /// device — the list row, a VM the navigation stack mints later, the macOS
+    /// quit guard — sees the turn without this VM having to tell them.
+    ///
+    /// A method rather than a `didSet` on `inFlightStartedAt`: `@Observable`
+    /// rewrites stored properties into accessors, so a property observer there is
+    /// a compile hazard, not a hook.
+    private func beginInFlight(at date: Date = Date()) {
+        inFlightStartedAt = date
+        inFlightClaim = InFlightTurnRegistry.shared.noteBegan(
+            conversationID, lane: .viewModel, isCancellable: true, at: date)
+    }
+
+    /// Leave the in-flight state. Safe to call twice for one turn — the token is
+    /// dropped on the first call and `noteEnded` on an already-ended token is a
+    /// no-op — which is exactly what the two macOS release sites need.
+    private func endInFlight() {
+        inFlightStartedAt = nil
+        if let token = inFlightClaim { InFlightTurnRegistry.shared.noteEnded(token) }
+        inFlightClaim = nil
+    }
 
     /// Whether a cancel qualified by `token` applies to the turn identified by
     /// `current`. A pure function rather than an inline guard because the
@@ -1469,7 +1547,7 @@ final class ConversationDetailViewModel {
         }
         let releaseAwaitingUI: @MainActor () -> Void = { [weak self] in
             self?.isAwaitingReply = false
-            self?.inFlightStartedAt = nil
+            self?.endInFlight()
         }
         // `reconcileOutputs` stays on the ordering primitive but production
         // supplies none: discovery is the retro pass's single lane, and the
@@ -2946,10 +3024,12 @@ final class ConversationDetailViewModel {
         // "Not now" (this low-urgency, user-is-watching path doesn't re-pop the
         // dialog; the genuinely-headless backstops still ask).
         //
-        // macOS is deliberately EXCLUDED: replies surface via the menu-bar
-        // unread dot (`dispatchReplyArrivedEffects` → `MenuBarCoordinator`), so
-        // macOS never prompts for reply notifications. (The Share path keeps its
-        // own prompt in `SharedInboxDrainer`.)
+        // macOS is deliberately EXCLUDED *here*, not app-wide: it owns the same
+        // prompt at its own committed-dispatch points
+        // (`MenuBarCoordinator.requestNotificationPermissionIfNeeded`), which is
+        // where a Mac send is actually committed. Asking from this window path
+        // too would only re-pop the same dialog. (The Share path keeps its own
+        // prompt in `SharedInboxDrainer`.)
         #if !os(macOS)
         if !NotificationPermissions.isNotificationsDeferred {
             await NotificationPermissions.ensureRequested()
@@ -3039,8 +3119,11 @@ final class ConversationDetailViewModel {
         let newUserImageFileRefs = processed.imageFileRefs
         let newUserTextFileServerRefs = processed.textFileServerRefs
 
-        // Enter in-flight state — drives the answering indicator + elapsed clock.
-        inFlightStartedAt = Date()
+        // Enter in-flight state — drives the answering indicator + elapsed clock
+        // here, and claims the conversation in `InFlightTurnRegistry` so the list
+        // row, the quit guard, and any VM minted for this thread later see the
+        // same turn.
+        beginInFlight()
         #if !os(macOS)
         // macOS already claimed `isAwaitingReply` synchronously at the top (race
         // guard); only the non-macOS path sets it here.
@@ -3060,7 +3143,7 @@ final class ConversationDetailViewModel {
             guard let self else { return }
             defer {
                 self.isAwaitingReply = false
-                self.inFlightStartedAt = nil
+                self.endInFlight()
                 self.inFlightTask = nil
             }
             do {
@@ -3175,7 +3258,7 @@ final class ConversationDetailViewModel {
         #else
         defer {
             isAwaitingReply = false
-            inFlightStartedAt = nil
+            endInFlight()
         }
 
         do {
@@ -3619,6 +3702,18 @@ final class ConversationDetailViewModel {
             #endif
             return
         }
+        // CLAIM THE TURN AT THE CAS, not at the dispatch far below. A retry
+        // re-uses the ORIGINAL message row and `beginRetry` writes only the
+        // status column — `createdAt` still says 09:00 for a turn re-fired at
+        // 11:00. So from the instant that row reads `sending` again, every
+        // surface resolving delivery state from the aggregate sees an unresolved
+        // turn two hours old, and without a local claim the resolver returns
+        // `.working(.stale)`: this device would render the static "No reply yet"
+        // mark over its own live request, for the whole pre-flight (which
+        // includes network `probeExists` round-trips). Claiming here also closes
+        // the window in which the composer still offered Send for a turn already
+        // dispatching. EVERY early return below releases it.
+        beginInFlight()
         await reload()
 
         // Route the retry by THIS conversation's bound backend (per-conversation
@@ -3629,6 +3724,9 @@ final class ConversationDetailViewModel {
             #if os(macOS)
             isAwaitingReply = false
             #endif
+            // Drop the registry claim taken at the CAS — this turn never
+            // dispatched, so no surface may keep showing it as live.
+            endInFlight()
             // Release the retry claim STATUS-ONLY (keeps the stored
             // classification — the original failure reason still explains
             // the row; this pre-flight never reached the gateway).
@@ -3645,6 +3743,7 @@ final class ConversationDetailViewModel {
             #if os(macOS)
             isAwaitingReply = false
             #endif
+            endInFlight()
             await ConversationStore.shared.markPendingUserTurn(messageID: message.id, to: "failed")
             await reload()
             setSendError(.remoteAgentNotConfigured, messageID: message.id)
@@ -3675,6 +3774,7 @@ final class ConversationDetailViewModel {
                 #if os(macOS)
                 isAwaitingReply = false
                 #endif
+                endInFlight()
                 await ConversationStore.shared.markPendingUserTurn(
                     messageID: message.id,
                     to: "failed"
@@ -3743,6 +3843,7 @@ final class ConversationDetailViewModel {
                     #if os(macOS)
                     isAwaitingReply = false
                     #endif
+                    endInFlight()
                     // Release the retry claim status-only (classification
                     // kept) — the Retry affordance stays visible.
                     await ConversationStore.shared.markPendingUserTurn(messageID: message.id, to: "failed")
@@ -3809,7 +3910,11 @@ final class ConversationDetailViewModel {
         // exactly what actually goes on the wire.)
         let requestHadHistoryImages = ConverseRequest.containsImageParts(priorTurns)
 
-        inFlightStartedAt = Date()
+        // The registry claim is ALREADY held (taken at the `beginRetry` CAS, so
+        // the pre-flight above is covered too) — re-taking it here would mint a
+        // second token and orphan the first, which would then pin a spinner for
+        // its whole TTL. A retry is a turn like any other from here on, and the
+        // surfaces reading the registry cannot tell them apart.
         #if !os(macOS)
         isAwaitingReply = true
         #endif
@@ -3819,7 +3924,7 @@ final class ConversationDetailViewModel {
             guard let self else { return }
             defer {
                 self.isAwaitingReply = false
-                self.inFlightStartedAt = nil
+                self.endInFlight()
                 self.inFlightTask = nil
             }
             do {
@@ -3925,7 +4030,7 @@ final class ConversationDetailViewModel {
         #else
         defer {
             isAwaitingReply = false
-            inFlightStartedAt = nil
+            endInFlight()
         }
         do {
             _ = try await BackgroundRemoteAgent.shared.send(
@@ -4032,8 +4137,22 @@ final class ConversationDetailViewModel {
     ///
     /// Callers that genuinely mean "stop whatever is running" (session teardown)
     /// pass nil.
+    ///
+    /// Qualified against `liveTurnStartedAt`, not the stored stamp: a Stop
+    /// rendered for a turn this VM did not dispatch (the same conversation, a
+    /// discarded sibling instance or the background session) carries that turn's
+    /// registry stamp, and comparing it to a nil stored stamp would silently drop
+    /// every such cancel. `canStopLiveTurn` has already established that this
+    /// device holds a usable handle before any of this is reachable from the UI.
+    ///
+    /// KNOWN LIMITATION, not fixed here: the non-macOS arm routes to
+    /// `BackgroundRemoteAgent.cancel(conversationID:)`, which picks
+    /// `inFlight.values.first(where:)` — so when TWO background turns overlap in
+    /// one conversation it may cancel the wrong one. The single-turn case, which
+    /// is what the composer's Stop offers, is exact. Fixing the overlap needs a
+    /// task-identity handle threaded through `BackgroundRemoteAgent`.
     func cancelInFlight(expecting token: Date? = nil) {
-        guard Self.cancelApplies(expecting: token, current: inFlightStartedAt) else { return }
+        guard Self.cancelApplies(expecting: token, current: liveTurnStartedAt) else { return }
         #if os(macOS)
         // Cancel the foreground `Task`; its `defer` clears the in-flight flags.
         // `RemoteAgentClient` surfaces a URLError(.cancelled) → CancellationError
@@ -4050,10 +4169,12 @@ final class ConversationDetailViewModel {
     /// macOS reply-arrived effect: post `.conversationReplyArrived` so the
     /// menu-bar coordinator can raise the unread dot for `conversationID`. Wraps
     /// the two real call sites (`sendUserTurn` + `retry` success branches).
-    /// macOS surfaces replies via the menu-bar cue, NOT a notification — no
-    /// banner is posted here. Fires on every macOS reply success regardless of
-    /// originating surface; the coordinator decides whether to mark unread
-    /// (it skips the thread the popover is currently showing). Exercised by
+    /// THIS VIEW MODEL POSTS NO BANNER — it posts only the notification the
+    /// coordinator observes. The coordinator is what decides, from that one
+    /// observer, whether to raise the dot and whether to post a banner (it does
+    /// both only when the thread is unattended). Fires on every macOS reply
+    /// success regardless of originating surface; it skips the thread the
+    /// popover is currently showing. Exercised by
     /// `ConversationDetailViewModelMacReplyArrivedTests`.
     func dispatchReplyArrivedEffects() {
         NotificationCenter.default.post(

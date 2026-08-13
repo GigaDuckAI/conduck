@@ -720,10 +720,23 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
         let indent: Int
         let startLine: Int
         var endLine: Int
+        /// Whether this declaration OWNS CODE. A `func` always does; a `var`
+        /// does only when it is computed (its declaration line opens a brace).
+        ///
+        /// A STORED property owns no statements, so it can never be the thing
+        /// that decides how an error is rendered — but the indentation heuristic
+        /// below cannot tell `var x: UUID?` declared inside a function body from
+        /// a member declaration, and a local `var` sits DEEPER than its host
+        /// `func`. Without this flag such a local wins `enclosingDeclaration`'s
+        /// deepest-indent rule and silently steals attribution from the function
+        /// that actually contains the render site — which detaches every
+        /// exemption and anchor keyed on that function's name, so adding an
+        /// ordinary local variable above a rendering site fails this guard.
+        let ownsBody: Bool
     }
 
     private static let declarationPattern =
-        #"^(\s*)(?:@[A-Za-z]+(?:\([^)]*\))?\s+)*(?:(?:private|fileprivate|internal|public|open|static|final|class|nonisolated|override|lazy|weak|dynamic|mutating)\s+)*(?:func|var)\s+([A-Za-z_][A-Za-z0-9_]*)"#
+        #"^(\s*)(?:@[A-Za-z]+(?:\([^)]*\))?\s+)*(?:(?:private|fileprivate|internal|public|open|static|final|class|nonisolated|override|lazy|weak|dynamic|mutating)\s+)*(func|var)\s+([A-Za-z_][A-Za-z0-9_]*)"#
 
     /// Every declaration in a file, each ending where the next declaration at the
     /// same-or-shallower indentation begins. Approximate by design — indentation
@@ -736,11 +749,17 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
         for entry in lines {
             let ns = entry.text as NSString
             guard let match = regex.firstMatch(in: entry.text, range: NSRange(location: 0, length: ns.length)),
-                  match.numberOfRanges == 3 else { continue }
-            found.append(Declaration(name: ns.substring(with: match.range(at: 2)),
+                  match.numberOfRanges == 4 else { continue }
+            let keyword = ns.substring(with: match.range(at: 2))
+            found.append(Declaration(name: ns.substring(with: match.range(at: 3)),
                                      indent: ns.substring(with: match.range(at: 1)).count,
                                      startLine: entry.number,
-                                     endLine: lines.last?.number ?? entry.number))
+                                     endLine: lines.last?.number ?? entry.number,
+                                     // Stored properties are kept in the list —
+                                     // they still terminate the declaration
+                                     // above them — but flagged as owning no
+                                     // code so they cannot claim a render site.
+                                     ownsBody: keyword == "func" || entry.text.contains("{")))
         }
         for index in found.indices {
             for later in found[(index + 1)...] where later.indent <= found[index].indent {
@@ -753,9 +772,12 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
 
     /// The INNERMOST declaration containing `line` — the deepest indentation
     /// wins, so a nested helper is judged on its own body rather than its host's.
+    /// Only body-owning declarations compete: a stored property brackets no
+    /// statements, so attributing a render site to one would name something that
+    /// cannot possibly be responsible for it.
     private func enclosingDeclaration(ofLine line: Int, indent: Int, in declarations: [Declaration]) -> Declaration? {
         declarations
-            .filter { $0.startLine <= line && line <= $0.endLine && $0.indent < indent }
+            .filter { $0.ownsBody && $0.startLine <= line && line <= $0.endLine && $0.indent < indent }
             .max { ($0.indent, $0.startLine) < ($1.indent, $1.startLine) }
     }
 

@@ -204,6 +204,7 @@
 				Models/AppError.swift,
 				Models/AttachmentRecord.swift,
 				Models/CertificateTrustCopy.swift,
+				Models/ConversationActivity.swift,
 				Models/ConversationRecord.swift,
 				Models/Conversations.xcdatamodeld,
 				Models/ConversationSearchFilter.swift,

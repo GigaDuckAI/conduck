@@ -42,6 +42,23 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
     /// ("Try photos again"). Nil (v3 row) == false.
     let hideEarlierPhotos: Bool
 
+    // TURN-STATE PROJECTION — derived, NOT Core Data attributes, NOT CloudKit
+    // fields. Filled ONLY by `ConversationStore.fetchConversations(activity:)`
+    // from the whole-store unresolved-turn aggregate. Nil everywhere else
+    // (`fetchConversation(id:)`, tests), and nil resolves to `.idle` — the row
+    // renders exactly as it does without the projection.
+    //
+    // These are also the ONLY reason a status flip re-renders a list: a
+    // `sending → failed` transition changes no `Conversation` column and does
+    // not bump `lastActivityAt` (the send-state writers touch `Message` columns
+    // only), so without them `fetched != conversations` is false in both list
+    // view models and nothing repaints.
+
+    /// Newest still-`sending` USER turn in this conversation.
+    let newestSendingAt: Date?
+    /// Newest still-`failed` USER turn in this conversation.
+    let newestFailedAt: Date?
+
     init(
         id: UUID,
         title: String?,
@@ -50,7 +67,9 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
         sessionID: String,
         backend: String,
         titleSnippet: String?,
-        hideEarlierPhotos: Bool = false
+        hideEarlierPhotos: Bool = false,
+        newestSendingAt: Date? = nil,
+        newestFailedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -60,6 +79,8 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
         self.backend = backend
         self.titleSnippet = titleSnippet
         self.hideEarlierPhotos = hideEarlierPhotos
+        self.newestSendingAt = newestSendingAt
+        self.newestFailedAt = newestFailedAt
     }
 
     /// Defensive bridge from the all-optional Core Data entity. Every field
@@ -77,6 +98,29 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
         self.titleSnippet = managedObject.value(forKey: "titleSnippet") as? String
         // Compat flag (v4 model): nil (v3 row / partial sync) == false.
         self.hideEarlierPhotos = ((managedObject.value(forKey: "hideEarlierPhotos") as? NSNumber)?.boolValue) ?? false
+        // Derived, never stored: the aggregate that fills these runs over
+        // `Message`, so a single-conversation materialization cannot know them.
+        self.newestSendingAt = nil
+        self.newestFailedAt = nil
+    }
+
+    /// Copy carrying this conversation's unresolved-turn stamps. The only
+    /// writer is `ConversationStore.fetchConversations(activity: .turnStates)`,
+    /// which reads them from ONE whole-store aggregate rather than a per-row
+    /// fan-out.
+    func withTurnStates(newestSendingAt: Date?, newestFailedAt: Date?) -> ConversationRecord {
+        ConversationRecord(
+            id: id,
+            title: title,
+            createdAt: createdAt,
+            lastActivityAt: lastActivityAt,
+            sessionID: sessionID,
+            backend: backend,
+            titleSnippet: titleSnippet,
+            hideEarlierPhotos: hideEarlierPhotos,
+            newestSendingAt: newestSendingAt,
+            newestFailedAt: newestFailedAt
+        )
     }
 
     /// Display title for the Watch conversation list rows AND the Watch thread

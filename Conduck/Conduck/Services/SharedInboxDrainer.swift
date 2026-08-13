@@ -205,6 +205,26 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             pinnedFingerprintHex: RemoteAgentTrustEvaluator.storedConversePin(for: ref)
         )
         defer { pinnedSession.invalidateAndCancel() }
+        // Local liveness claim for the whole share turn. `isCancellable: false`
+        // — a share drain exposes no cancel handle, so the UI must never offer
+        // Stop for it.
+        //
+        // The claim SPANS PERSISTENCE, not just the network hop: the macOS quit
+        // guard auto-resolves on `liveCount == 0`, and a claim released the
+        // instant the response arrived would let the app quit inside the exact
+        // `recordReply` window that exists to make the reply durable. Released
+        // in a `defer` so a throw releases it too; ending a token twice is a
+        // no-op, and a leaked claim ages out on the registry's TTL.
+        let shareClaim = await MainActor.run {
+            InFlightTurnRegistry.shared.noteBegan(
+                conversationID,
+                lane: .shareDrain,
+                isCancellable: false
+            )
+        }
+        defer {
+            Task { @MainActor in InFlightTurnRegistry.shared.noteEnded(shareClaim) }
+        }
         let reply = try await RemoteAgentClient.shared.send(
             backend: backend,
             url: url,

@@ -3,12 +3,16 @@
 // Conduck
 // ConversationDetailViewModelMacReplyArrivedTests.swift
 //
-// Coverage for the macOS reply-arrived effect. macOS posts NO reply
+// Coverage for the macOS reply-arrived effect. THE VIEW MODEL posts no reply
 // notification (the old `suppressReplyBanner` / `replyBannerPoster` /
 // `postMacReplyNotification` machinery is REMOVED) — instead every macOS reply
 // success calls `dispatchReplyArrivedEffects()`, which posts
 // `.conversationReplyArrived` (userInfo `conversationID`). `MenuBarCoordinator`
-// observes that to raise the menu-bar unread dot. We drive the extracted helper
+// observes that one notification and owns BOTH downstream effects: the menu-bar
+// unread dot and, when the thread is unattended, a user-visible banner. That
+// banner is the coordinator's decision and is asserted in its own coverage —
+// what these cases pin is that the VM's whole contribution is the post, so a
+// future banner added back HERE would double up. We drive the extracted helper
 // directly (the exact code path `sendUserTurn` + `retry` run on the macOS
 // success branch) and assert the notification fires with the right id, without
 // standing up a converse round-trip.

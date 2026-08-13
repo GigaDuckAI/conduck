@@ -99,7 +99,12 @@ private final class NotificationDelegate: NSObject, UNUserNotificationCenterDele
                 userInfo: userInfo,
                 viewedConversationIDs: ActiveViewTracker.viewedConversationIDs
             )
-            completionHandler(suppress ? [] : [.banner, .sound])
+            // SILENT banner in the foreground. This delegate only runs while the
+            // app is frontmost, so the user is already here — a chime is
+            // redundant noise on top of a banner they can see. `.list` keeps the
+            // notification retrievable in Notification Center afterwards, which
+            // a bare `.banner` does not.
+            completionHandler(suppress ? [] : [.banner, .list])
         }
     }
 
@@ -115,6 +120,13 @@ private final class NotificationDelegate: NSObject, UNUserNotificationCenterDele
         let userInfo = response.notification.request.content.userInfo
         if let idString = userInfo[NotificationDeepLink.conversationIDKey] as? String {
             let requestIdentifier = response.notification.request.identifier
+            // Retire the WHOLE conversation's banners, not just the tapped one.
+            // The OS removes only the notification actually tapped, so a failure
+            // banner sitting beside the reply banner for the same thread would
+            // survive the user opening that thread.
+            if let id = UUID(uuidString: idString) {
+                NotificationDeepLink.clearDelivered(for: id)
+            }
             DispatchQueue.main.async {
                 #if !os(macOS)
                 // Read-aloud (iOS/iPadOS only — macOS deep-links must NEVER
@@ -453,6 +465,33 @@ struct ConduckApp: App {
                 excludingConversationIDs: liveConverse2.union(liveCarPlay2)
             )
         }
+
+        // 6b. Local in-flight liveness probes. The registry answers "is a turn
+        //     for this conversation running RIGHT NOW, on THIS device, and can I
+        //     stop it?" — which `Message.status == "sending"` cannot, because a
+        //     `sending` row may have been written by another device and mirrored
+        //     here. The two background sessions above already know the answer;
+        //     these hand it to the registry.
+        //
+        //     CANCELLABILITY IS DECLARED HERE, at the site that knows which
+        //     session it is wiring — a probe returning only `Set<UUID>` cannot
+        //     carry it. A CarPlay upload is NOT cancellable through
+        //     `BackgroundRemoteAgent.cancel`, so marking it cancellable would
+        //     light a Stop button that does nothing.
+        InFlightTurnRegistry.shared.addProbe(lane: .backgroundConverse, isCancellable: true) {
+            await BackgroundRemoteAgent.shared.liveConversationIDs()
+        }
+        InFlightTurnRegistry.shared.addProbe(lane: .carPlay, isCancellable: false) {
+            await CarPlayConverseUploader.shared.liveConversationIDs()
+        }
+
+        // 6c. Stamp this device's first sight of the unviewed-reply feature.
+        //     HERE, in deterministic app init — never from a SwiftUI `body`.
+        //     A body-stamped epoch both creates state during rendering and races
+        //     the CloudKit import: a reply that imported at 10:00 would be
+        //     classified as already-read because the first row happened to
+        //     render at 10:01. Idempotent after the first launch.
+        ReadStateStore.shared.stampEpochIfNeeded()
 
         // 7. Warm the conversation store at launch so NSPersistentCloudKitContainer
         //    starts mirroring immediately, rather than lazily when the list first

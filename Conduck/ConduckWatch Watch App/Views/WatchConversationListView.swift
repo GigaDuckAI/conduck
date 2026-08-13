@@ -6,7 +6,8 @@
 // Watch conversation browse: grouped list, swipe-to-delete, empty state. Search
 // entry is a top-bar magnifier (`TextFieldLink` → system text-entry screen);
 // an active query shows as a slim in-list chip with one-tap clear.
-// Rows rebind to title + `lastActivityAt` + last-message preview.
+// Rows rebind to title + `lastActivityAt` + the row's delivery state, which
+// swaps into the date slot rather than taking a line of its own.
 //
 // Backed by `WatchConversationViewModel` over the CloudKit-ready
 // `ConversationStore` — conversations from any device appear here once sync
@@ -274,23 +275,73 @@ struct WatchConversationListView: View {
     // but NO last-message preview. Deriving a preview means an N-message fetch
     // per visible row on the wrist — not worth the perf cost. The thread view
     // shows the bodies. Keep this.
+    //
+    // Delivery state rides the SAME single list query (`fetchConversations(
+    // activity: .turnStates)`) and renders as a SWAP inside the existing date
+    // slot — one `Text` whose string and tint change. No extra line, no extra
+    // fetch, and the row's height is identical in every state.
     private func row(for conversation: ConversationRecord, showsBadge: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let activity = viewModel.rowState(for: conversation).activity
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(Self.displayTitle(for: conversation))
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
                 Spacer(minLength: 4)
+                // The gateway badge is never tinted, dimmed or overlaid by
+                // activity — it answers "which agent", not "what happened".
                 if showsBadge {
                     WatchGatewayBadge(backendRawValue: conversation.backend)
                 }
             }
-            Text(Self.relativeFormatter.localizedString(
-                for: conversation.lastActivityAt,
-                relativeTo: Date()
-            ))
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+            Text(Self.metadataText(for: activity, lastActivityAt: conversation.lastActivityAt))
+                .font(.caption2)
+                .foregroundStyle(Self.metadataTint(for: activity))
+                // ALWAYS one line: "Waiting for a reply…" is far longer than a
+                // relative date and would wrap on a 40 mm watch, changing the
+                // row's height the moment its state changed.
+                .lineLimit(1)
+        }
+    }
+
+    /// The date slot's string. Distinct WORDS carry the state on the wrist —
+    /// there is no room for a mark, and colour alone would fail the
+    /// shape-not-colour rule.
+    ///
+    /// No elapsed clock and no `TimelineView`: a per-minute tick is continuous
+    /// work a browse list should not spend on the smallest battery in the
+    /// fleet, and the thread view already shows a clock for the turn you are
+    /// actually waiting on. `.answeredUnseen` is unreachable here (the wrist
+    /// keeps no read state and projects no tail role — see
+    /// `WatchConversationViewModel.rowState(for:)`) and falls through to the
+    /// date, which is what an idle row shows anyway.
+    private static func metadataText(
+        for activity: ConversationActivity,
+        lastActivityAt: Date
+    ) -> String {
+        switch activity {
+        case .idle, .answeredUnseen:
+            return relativeFormatter.localizedString(for: lastActivityAt, relativeTo: Date())
+        case .working(let confidence, _):
+            // Empty gateway name on purpose: the badge already names the gateway
+            // one line above and the row has no width to repeat it, so `.live`
+            // renders the shared bare "Answering…" fallback rather than
+            // "OpenClaw is answering…".
+            return ConversationActivityCopy.working(confidence, gatewayName: "")
+        case .failed:
+            return ConversationActivityCopy.notSent
+        }
+    }
+
+    /// Red = a problem; everything else stays neutral. A working row is
+    /// information, not a call to action, so it must not compete with the one
+    /// colour that means something went wrong.
+    private static func metadataTint(for activity: ConversationActivity) -> Color {
+        switch activity {
+        case .failed:
+            return AppColors.error
+        case .idle, .working, .answeredUnseen:
+            return .secondary
         }
     }
 

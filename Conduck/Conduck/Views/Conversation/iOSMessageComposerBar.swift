@@ -32,7 +32,8 @@ import UIKit
 
 struct iOSMessageComposerBar: View {
     /// The thread VM the typed/spoken turn lands on. Drives the send-disabled
-    /// state (`isAwaitingReply`); nil before the first conversation is minted.
+    /// state (its own claim plus the derived wait indicator) and the Stop morph;
+    /// nil before the first conversation is minted.
     let viewModel: ConversationDetailViewModel?
     /// Shared in-app mic recorder (host-owned). The mic button drives it.
     var recorder: InAppAudioRecorder
@@ -130,8 +131,15 @@ struct iOSMessageComposerBar: View {
     /// exactly as the voice path does. (Gating on `viewModel == nil` here would
     /// make the FIRST typed turn impossible — the headline regression caught in
     /// review.)
+    ///
+    /// TWO in-flight terms, not one. `isAwaitingReply` is this VM instance's own
+    /// claim — the only thing that covers the pre-dispatch window. The wait
+    /// indicator covers turns this instance did not dispatch (a discarded sibling
+    /// VM, the background session, the macOS share drainer), which a fresh VM
+    /// would otherwise let the user send straight into.
     private var isSendDisabled: Bool {
         viewModel?.isAwaitingReply == true
+            || viewModel?.showsGatewayWaitIndicator == true
             || hasLoadingAttachment
             || hasBlockingUpload
             || attachmentPreparationInProgress
@@ -151,13 +159,16 @@ struct iOSMessageComposerBar: View {
         }
     }
 
-    /// True once the turn has reached its gateway dispatch phase — the trailing
-    /// control becomes a neutral Stop that cancels the turn (TOP priority in the
-    /// state machine). Same gate as the Mac composer for uniformity; on iOS the
-    /// two flags flip in the same synchronous block, so this is behaviourally
-    /// identical to the claim here. `isSendDisabled` stays on the claim.
+    /// True once a turn this device can actually STOP is running — the trailing
+    /// control becomes a neutral Stop that cancels it (TOP priority in the state
+    /// machine). Same gate as the Mac composer for uniformity.
+    ///
+    /// Deliberately `canStopLiveTurn`, not the wait indicator: a turn this device
+    /// can see but holds no handle to (a macOS share drain, a CarPlay upload)
+    /// must show the wait and no Stop, rather than a button that does nothing.
+    /// `isSendDisabled` covers those turns instead.
     private var isInFlight: Bool {
-        viewModel?.showsGatewayWaitIndicator == true
+        viewModel?.canStopLiveTurn == true
     }
 
     /// The SUBDUED secondary Send shows only when attachments are staged AND the
