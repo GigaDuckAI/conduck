@@ -8,21 +8,22 @@
 // founder's on-device QA):
 //   • `ConversationDetailViewModel.retroScanCandidates(in:attempted:cap:)` —
 //     the turn-selection filter: only explicitly-pending agent turns
-//     (`outputScanDone == false`) with an exact durable output lane, skipping
-//     ownerless legacy, already-scanned, and already-attempted turns,
-//     newest-first and capped. A partial-success turn (already carrying a
-//     server-ref chip while still pending) is STILL selected so its missing
-//     candidates can retry.
+//     (`outputScanDone == false`) carrying BOTH an exact durable output lane and
+//     the folder that dispatch named, skipping ownerless legacy, already-scanned,
+//     and already-attempted turns, newest-first and capped. A partial-success
+//     turn (already carrying a server-ref chip while still pending) is STILL
+//     selected so the rest of its folder can be delivered.
 //   • `FileTransferOutputDetector.probeIsConclusive(_:)` — the per-outcome
-//     DEFINITIVENESS predicate (did the server answer at all?).
+//     DEFINITIVENESS predicate for the TAP-ONLY name search (did the server
+//     answer at all?).
 //   • `FileTransferOutputDetector.scanMayClose(...)` — the pass-level verdict
-//     that actually decides whether `outputScanDone` may be stamped: every
-//     probe definitive AND the turn's age gate open. Closing is permanent, so
-//     a definitive-but-too-early 404 must not be allowed to do it.
+//     that actually decides whether `outputScanDone` may be stamped: real
+//     evidence AND the turn's age gate open. Closing is permanent, so a
+//     definite-but-too-early empty answer must not be allowed to do it.
 //   • `ConversationDetailViewModel.holdVerdict(...)` — when a turn left PENDING
-//     by a pass may be probed again: at its age gate, immediately (the pass
-//     confirmed a file, so the window has walked on), or after a stalled
-//     interval (nothing closed, nothing found — re-running the identical window
+//     by a pass may be examined again: at its age gate, immediately (the pass
+//     delivered a file, so the window has walked on), or after a stalled
+//     interval (nothing closed, nothing found — re-running the identical request
 //     against the identical lane learns nothing and spends the user's server).
 //     The stalled interval WIDENS with the turn's consecutive-stall streak
 //     (`retroStallBackoff`), which is what bounds a turn no pass can ever close.
@@ -62,6 +63,10 @@ final class RetroOutputScanCandidateTests: XCTestCase {
         text: String = "",
         outputScanDone: Bool? = nil,
         outputScanLaneID: String? = nil,
+        /// The folder this dispatch named. Defaults to "the row is complete";
+        /// `nil` is the row a device synced ahead of the attribute, which the
+        /// filter must select OUT rather than close.
+        outputBoxKey: String? = "conv/out-box",
         storedKeys: [String] = []
     ) -> MessageRecord {
         let attachments = storedKeys.enumerated().map { index, key in
@@ -88,6 +93,7 @@ final class RetroOutputScanCandidateTests: XCTestCase {
             sourceDevice: sourceDevice,
             outputScanDone: outputScanDone,
             outputScanLaneID: outputScanLaneID,
+            outputBoxKey: outputScanLaneID == nil ? nil : outputBoxKey,
             attachments: attachments
         )
     }
@@ -310,12 +316,10 @@ final class RetroOutputScanCandidateTests: XCTestCase {
 
     // MARK: - durable lane routing
 
-    // `retroOutputScanRoute` is `async` because the candidate extraction is
-    // hopped off the main actor (its regex is superlinear in untrusted reply
-    // length). Every awaited value is hoisted into a `let` BEFORE the assertion:
-    // `XCTAssert*` autoclosures are not concurrency-aware and will not compile
-    // with an `await` inside them.
-    func testMacCandidateRoutesOnlyToMatchingCurrentLane() async {
+    // `retroOutputScanRoute` is PURE and synchronous: nothing about the reply's
+    // text enters the decision any more, so a pass over `retroScanCap` turns no
+    // longer pays an untrusted-input regex per candidate on every thread open.
+    func testMacCandidateRoutesOnlyToMatchingCurrentLane() {
         let laneA = String(repeating: "a", count: 64)
         let turn = message(
             role: "agent",
@@ -325,13 +329,13 @@ final class RetroOutputScanCandidateTests: XCTestCase {
             outputScanLaneID: laneA
         )
 
-        let matchingLane = await ConversationDetailViewModel.retroOutputScanRoute(
+        let matchingLane = ConversationDetailViewModel.retroOutputScanRoute(
             for: turn,
             currentLaneID: laneA
         )
         XCTAssertEqual(matchingLane, .probeCurrentLane)
 
-        let repointedLane = await ConversationDetailViewModel.retroOutputScanRoute(
+        let repointedLane = ConversationDetailViewModel.retroOutputScanRoute(
             for: turn,
             currentLaneID: String(repeating: "b", count: 64)
         )
@@ -341,7 +345,7 @@ final class RetroOutputScanCandidateTests: XCTestCase {
             "repointing A to B must result in zero B probes"
         )
 
-        let removedLane = await ConversationDetailViewModel.retroOutputScanRoute(
+        let removedLane = ConversationDetailViewModel.retroOutputScanRoute(
             for: turn,
             currentLaneID: nil
         )
@@ -352,19 +356,32 @@ final class RetroOutputScanCandidateTests: XCTestCase {
         )
     }
 
-    func testFilenameFreeMacReplyIsConclusiveWithoutCurrentLane() async {
-        let turn = message(
-            role: "agent",
-            sourceDevice: "mac",
-            text: "Done.",
-            outputScanDone: false,
-            outputScanLaneID: String(repeating: "a", count: 64)
+    /// THE REPLY TEXT DOES NOT ROUTE. A reply that names files and one that
+    /// names none take the identical route, because what the pass reads is the
+    /// folder this dispatch named — never the prose. There is no local-conclusion
+    /// shortcut left: a turn either gets its one listing or waits for its lane.
+    func testReplyTextDoesNotChangeTheRoute() {
+        let laneA = String(repeating: "a", count: 64)
+        let named = ConversationDetailViewModel.retroOutputScanRoute(
+            for: message(role: "agent", sourceDevice: "mac", text: "Done: output.pdf",
+                         outputScanDone: false, outputScanLaneID: laneA),
+            currentLaneID: laneA
         )
-        let route = await ConversationDetailViewModel.retroOutputScanRoute(
-            for: turn,
+        let silent = ConversationDetailViewModel.retroOutputScanRoute(
+            for: message(role: "agent", sourceDevice: "mac", text: "Done.",
+                         outputScanDone: false, outputScanLaneID: laneA),
+            currentLaneID: laneA
+        )
+        XCTAssertEqual(named, silent, "prose is not a routing input")
+        XCTAssertEqual(silent, .probeCurrentLane)
+
+        let noLane = ConversationDetailViewModel.retroOutputScanRoute(
+            for: message(role: "agent", sourceDevice: "mac", text: "Done.",
+                         outputScanDone: false, outputScanLaneID: laneA),
             currentLaneID: nil
         )
-        XCTAssertEqual(route, .conclusiveWithoutProbe)
+        XCTAssertEqual(noLane, .deferUntilMatchingLane,
+                       "a filename-free reply waits for its lane like any other")
     }
 
     func testProductionExecutorPerformsZeroProbesForRemovedOrRepointedMacLane() async {
@@ -396,9 +413,9 @@ final class RetroOutputScanCandidateTests: XCTestCase {
                         return true
                     },
                     didClaim: {},
-                    probe: { _ in
+                    list: { _, _ in
                         probes += 1
-                        return ([], true)
+                        return .init(drafts: [], conclusive: true, verdict: .entries([]))
                     }
                 )
 
@@ -433,14 +450,14 @@ final class RetroOutputScanCandidateTests: XCTestCase {
                 laneStillMatches: { true },
                 claim: { true },
                 didClaim: {},
-                probe: { _ in
+                list: { _, _ in
                     probes += 1
-                    return ([], true)
+                    return .init(drafts: [], conclusive: true, verdict: .entries([]))
                 }
             )
 
-        guard case .probed = execution else {
-            return XCTFail("the exact durable lane should reach the probe closure")
+        guard case .listed = execution else {
+            return XCTFail("the exact durable lane should reach the listing closure")
         }
         XCTAssertEqual(probes, 1)
     }
@@ -464,9 +481,13 @@ final class RetroOutputScanCandidateTests: XCTestCase {
                 laneStillMatches: { true },
                 claim: { true },
                 didClaim: {},
-                probe: { _ in
+                list: { _, _ in
                     probes += 1
-                    return ([self.serverRef("watch-output.pdf")], true)
+                    return .init(
+                        drafts: [self.serverRef("watch-output.pdf")],
+                        conclusive: true,
+                        verdict: .entries([])
+                    )
                 }
             )
 
@@ -813,7 +834,7 @@ final class RetroOutputScanCandidateTests: XCTestCase {
     /// was supposed to stop fans out again at a lane already shown to be unable
     /// to answer.
     func testParkSetIsEveryCandidateTheSuppressedPassDidNotSettle() {
-        let closedLocally = UUID()      // filename-free reply, no network needed
+        let closedLocally = UUID()      // listed and definitively finished
         let closedByProbe = UUID()      // probed and definitively finished
         let probedButOpen = UUID()      // probed, came back non-definitive
         let neverReached = UUID()       // the loop stopped before it
@@ -821,8 +842,8 @@ final class RetroOutputScanCandidateTests: XCTestCase {
         XCTAssertEqual(
             ConversationDetailViewModel.retroScanParkSet(
                 candidateIDs: [closedLocally, closedByProbe, probedButOpen, neverReached],
-                localResults: [reconciliation(closedLocally, markScanned: true)],
-                probedResults: [
+                listedResults: [
+                    reconciliation(closedLocally, markScanned: true),
                     reconciliation(closedByProbe, markScanned: true),
                     reconciliation(probedButOpen, markScanned: false)
                 ]
@@ -839,8 +860,7 @@ final class RetroOutputScanCandidateTests: XCTestCase {
         XCTAssertEqual(
             ConversationDetailViewModel.retroScanParkSet(
                 candidateIDs: [confirmedStillOpen],
-                localResults: [],
-                probedResults: [
+                listedResults: [
                     reconciliation(
                         confirmedStillOpen,
                         markScanned: false,
@@ -858,8 +878,10 @@ final class RetroOutputScanCandidateTests: XCTestCase {
         XCTAssertTrue(
             ConversationDetailViewModel.retroScanParkSet(
                 candidateIDs: [a, b],
-                localResults: [reconciliation(a, markScanned: true)],
-                probedResults: [reconciliation(b, markScanned: true)]
+                listedResults: [
+                    reconciliation(a, markScanned: true),
+                    reconciliation(b, markScanned: true)
+                ]
             ).isEmpty
         )
     }

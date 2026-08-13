@@ -34,9 +34,14 @@ struct AttachmentRecord: Identifiable, Hashable, Sendable {
     let id: UUID
     /// `image/jpeg` for images; `text/*` / `application/json` for text files.
     let mimeType: String
-    /// Original filename (text files — drives the bubble chip label, e.g.
-    /// "report.csv"). Nil for images (camera/library have no meaningful name;
-    /// the bubble renders a thumbnail, not a name).
+    /// Original filename — "report.csv" for a text file, and for an image the
+    /// name the user's own source carried, or the numbered `image…` name
+    /// `ComposerImageName` supplies when the source genuinely has none (a
+    /// photo-library pick, a camera shot, a pasted bitmap). It drives the bubble
+    /// chip label for a text file; an image bubble renders a thumbnail and shows
+    /// no name, but the value is still persisted because it is what the file was
+    /// uploaded under. Nil on a legacy row and on the share route, which stores
+    /// an image with no name at all.
     let filename: String?
     /// Small downsized preview (images only); nil for text files.
     let thumbnailData: Data?
@@ -107,17 +112,45 @@ struct AttachmentRecord: Identifiable, Hashable, Sendable {
         return previewableTextExtensions.contains(ext)
     }
 
-    /// TEXT-like subset of `FileTransferOutputDetector.outputAllowlist` — the
-    /// source/data/markup types whose bytes decode as UTF-8 text. Excludes
-    /// images (png/jpg/jpeg/gif/svg), archives (zip/tar/gz), office binaries
-    /// (xlsx/xls/docx/doc/pptx), pdf, and columnar binary (parquet). `swift` is
-    /// added on top of the mirrored set: it isn't in the detector's OUTPUT
-    /// allowlist (agents rarely emit `.swift` as a deliverable) but it is
-    /// unambiguously UTF-8 source and a natural preview target.
+    /// The extensions whose bytes this app will decode as UTF-8 and show the
+    /// wrist as text. A strict SUBSET of
+    /// `FileTransferOutputDetector.outputAllowlist` — every entry here is on
+    /// that list, `swift` included — but NOT every text-decodable entry of that
+    /// list is here: the allowlist also admits source and config types
+    /// (`go`, `rs`, `java`, `toml`, `ipynb`, …) that are perfectly UTF-8 and are
+    /// deliberately not previewed. Membership is a curation call, not a property
+    /// of the format, which is why it cannot be derived.
+    ///
+    /// HAND-MAINTAINED, and deliberately so — unlike
+    /// `FileTransferOutputDetector.imagePreviewExtensions`, which is a computed
+    /// intersection of that allowlist. The image side can be derived because
+    /// "ImageIO can rasterize it" is a property of the format. So widening the
+    /// output allowlist does NOT widen this set: a newly admitted text type
+    /// needs a line here too.
     private static let previewableTextExtensions: Set<String> = [
         "txt", "md", "json", "csv", "tsv", "xml", "yaml", "yml", "log", "html",
         "py", "js", "ts", "sh", "sql", "swift"
     ]
+
+    /// Whether this stored key was delivered out of the reply's OWN per-dispatch
+    /// output folder, which is the whole provenance question the thread can
+    /// answer.
+    ///
+    /// A key inside `<outputBoxKey>/` was found in a path minted for exactly this
+    /// turn and named on the wire before the reply existed, so it is this reply's
+    /// output. A key that is NOT — a bare name a user-tapped root search turned
+    /// up — was found somewhere on the file server that says nothing about which
+    /// turn produced it, or whether any turn did. The chip is labelled
+    /// accordingly.
+    ///
+    /// DERIVED AT RENDER TIME, on purpose: no schema, no flag, no second field
+    /// to keep in step with the key it describes. `nil` on either side means the
+    /// claim cannot be supported, which is the honest direction — a row that
+    /// synced ahead of its `outputBoxKey` must read as weaker, never stronger.
+    static func isFromReplyOutputBox(storedKey: String?, outputBoxKey: String?) -> Bool {
+        guard let storedKey, let outputBoxKey, !outputBoxKey.isEmpty else { return false }
+        return storedKey.hasPrefix(outputBoxKey + "/")
+    }
 
     // MARK: - Watch display classification
 
