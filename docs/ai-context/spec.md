@@ -193,6 +193,48 @@ A failed send surfaces to the user as a tappable Try Again. Nothing re-sends in 
 
 **Why the two differ:** re-sending a turn spends the user's own model budget a second time, and the agent may act on the world twice. Re-sending audio costs one cheap transcription call. The asymmetry is intentional.
 
+### A conversation row distinguishes working, answered, and failed
+
+Every row in the conversation list resolves to an activity — a turn is in flight, a reply is waiting unseen, the last turn failed, or nothing is happening — rather than every row rendering alike and sort order carrying the whole story. Dispatching several agents at once is an ordinary way to use this app, and recency alone cannot say which of them came back: sort order carries *how recently* a conversation changed and never in which direction, so a thread that rises because a reply landed is otherwise indistinguishable from one that rises because the user sent something.
+
+**Delivery and attention are independent facts, and collapsing them is the failure this design exists to prevent.** Whether a turn is still in flight is a property of the conversation; whether there is something here the user has not looked at is a property of the screen they are looking at. Kept apart, a fresh send never wears an older turn's failure, and a reply arriving does not by itself erase the fact that nobody has read it.
+
+**Delivery is aggregated over the conversation's unresolved turns, never read off the last message.** Two turns can be in flight in one conversation at once — a headless wrist relay racing an in-app send — and a reply that resolves one of them says nothing about the other. Within delivery, the newest unresolved turn wins.
+
+**A failure is reported only while it is still the conversation's last activity.** Asking again clears it, so the row stops claiming a state the user has already moved past without them having to go back and dismiss a Retry.
+
+The Watch records a sending state like every other surface, so a turn dispatched from the wrist shows as in-flight on the phone and the Mac rather than surfacing only once its reply lands.
+
+### A turn running on this device is a different question from a turn marked sending
+
+A stored turn marked *sending* may have been written by another device and mirrored here. So "is a turn for this conversation running right now, on *this* device, and can I stop it?" is answered by a separate registry of live claims held in the running process, never by reading the stored status.
+
+**That registry never writes turn state.** A write based on "I do not see a task here" would be a write based on local ignorance — the turn may be alive on the device that dispatched it, and marking it failed here would put a Retry beside a live request. Resolving a stale *sending* row stays with the launch sweeps, which is where the grace window and the live-task exclusion already live.
+
+**A Stop button appears only for a turn this device can actually cancel.** Cancellability is declared where a turn is registered, because the registration site is the one that knows which session is behind it: a share drain and a CarPlay upload expose no cancel handle, so their turns show the wait indicator with no Stop rather than a button that calls into nothing.
+
+**The wait indicator is re-derived rather than held by the view.** Leaving a sending thread and returning to it shows the spinner and the Stop that are still running, rather than a rebuilt view that knows nothing about them.
+
+**On the Mac, quitting with a turn in flight asks first.** The Mac's gateway hop is a foreground request and the gateway keeps no session, so quitting mid-turn destroys the answer with nothing left anywhere to resolve or resume it. That combination is unique to the Mac, and so is the interruption.
+
+### One chime per burst, and a banner does not outlive the thread it points at
+
+Several agents answering at once produce several banners and one sound. The window deciding that lives in shared app-group storage rather than in memory, because on iOS each landing reply relaunches the app — a process-local timestamp would reset every time, which is precisely the failure the rule exists to kill. The window is spent only when the banner can actually be heard, so a reply presented silently in the foreground does not consume the chime the next one needs.
+
+**Failures always chime and never spend that window.** A burst is many agents answering at once, which is a reply phenomenon; failures do not arrive in bursts, and a failure is the one thing worth hearing every time.
+
+**Opening a conversation retires both its reply and its failure banner.** A notification that survives the thread being opened is a lie the user has to dismiss by hand, and the system removes only the notification actually tapped — which strands the other half of a pair.
+
+The Mac raises a reply notification like every other surface. A menu-bar dot on its own reports that something happened without saying what, or where.
+
+### Whether a reply has been seen is a fact about one device, and never syncs
+
+The marker recording when a conversation was last looked at lives in device-local storage, not in the synced database, so the unseen state on the iPad is genuinely the iPad's.
+
+**Why it is not a field on the conversation:** the production CloudKit schema is additive-only and permanent. A field added to drive a dot could never be withdrawn, and would have to be carried and reasoned about for as long as the app exists. A dot does not justify that price. It is also not what a user wants — "I read this on my phone" is not a fact the iPad should inherit, because the question the dot answers is whether there is something here you have not looked at *on this screen*.
+
+The Watch keeps no such marker. Its app has its own container, so a wrist marker could only ever record wrist-viewing; the wrist shows delivery state and says nothing about attention.
+
 ### Everything persistent goes through one seam
 
 Three stores hold state: shared app-group defaults, the iCloud key-value store, and the keychain. Nothing in the app reaches any of them directly. They are behind protocols, with a live implementation for the app and in-memory doubles for tests.
@@ -280,7 +322,7 @@ Four things about these differences are load-bearing:
 
 **iOS and macOS have two entirely separate app entry points that share no launch code.** Every piece of startup wiring exists twice and must be added twice. By the codebase's own account this is its most repeated maintenance hazard — if you add something at launch, check whether you added it once or twice.
 
-**macOS has no background sessions.** A turn stranded by quitting mid-send has no delegate left to mark it failed. Both platforms sweep for stranded turns at launch and again after a delay — the second pass exists because a quick relaunch finds the turn not yet old enough to sweep — but the Mac has no live-task registry to exclude in-flight work from that sweep, which iOS does. The Mac app also deliberately outlives its windows (closing the last one must not quit, or the menu-bar item disappears) and controls its Dock icon at runtime rather than declaring it in the bundle, because the system ties the Dock icon and the application menu to the same switch and the preference has to be togglable live.
+**macOS has no background sessions.** A turn stranded by quitting mid-send has no delegate left to mark it failed — which is why quitting with a turn in flight asks for confirmation there and on no other surface. Both platforms sweep for stranded turns at launch and again after a delay — the second pass exists because a quick relaunch finds the turn not yet old enough to sweep — but the Mac has no live-task registry to exclude in-flight work from that sweep, which iOS does. The Mac app also deliberately outlives its windows (closing the last one must not quit, or the menu-bar item disappears) and controls its Dock icon at runtime rather than declaring it in the bundle, because the system ties the Dock icon and the application menu to the same switch and the preference has to be togglable live.
 
 **CarPlay pre-warms the speech provider and its key rather than reading them mid-turn.** They sit in a cache refreshed at launch and on every settings change, filled in one atomic step so a turn can never see a half-updated pairing of provider and key. This is empirical: keychain reads from the CarPlay scene caused intermittent stalls while Bluetooth negotiated the hands-free route. Note the limit — the *gateway* snapshot is not pre-warmed the same way and is still resolved during the turn.
 
