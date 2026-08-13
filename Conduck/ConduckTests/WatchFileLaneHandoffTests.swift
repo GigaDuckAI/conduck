@@ -21,12 +21,22 @@
 //                         (survives suspension + a cross-launch recycle, and
 //                         pins the DISPATCH-time lane so a settings edit
 //                         mid-turn cannot re-credit the reply)
-//   3. landing → store    `Message.outputScanLaneID` + `outputScanDone = false`
-//                         (the pair `retroScanCandidates` admits)
+//   3. landing → store    `Message.outputScanLaneID` + `outputBoxKey` +
+//                         `outputScanDone = false` (the triple
+//                         `retroScanCandidates` admits — the folder is what a
+//                         capable device actually reads, and a row missing it
+//                         is selected OUT rather than closed)
 //
 // Break any hop and the turn is not merely late — it is invisible to the scan
 // PERMANENTLY, because a conclusive pass stamps `outputScanDone` for good and a
 // row that never became a candidate never gets a second look.
+//
+// The hop BEFORE these — whether the wrist names a folder at all — lives in the
+// watchOS target and is locked by `ConduckWatchTests/WatchOutboxMintGateTests`.
+// It is gated on the lane identity, so the pair hop 3 requires is minted whole
+// or not at all; the `box: nil` fixture below therefore models a row this device
+// synced ahead of the attribute, never a dispatch that named a folder with no
+// lane behind it.
 //
 // Deterministic + headless: no network, no Core Data, no Keychain, no WCSession.
 // Production types end to end; synthetic lane digests and filenames only.
@@ -59,9 +69,14 @@ final class WatchFileLaneHandoffTests: XCTestCase {
     }
 
     /// The row the wrist's landing path writes: a plain agent append carrying
-    /// the dispatch-time lane, exactly as `ConversationStore.appendMessage`
-    /// materializes it (`outputScanDone` false iff an owner lane exists).
-    private func watchReply(lane: String?, text: String) -> MessageRecord {
+    /// the dispatch-time lane AND the folder the wrist named, exactly as
+    /// `ConversationStore.appendMessage` materializes it (`outputScanDone` false
+    /// iff an owner lane exists).
+    ///
+    /// The wrist names a folder with no credential and no round trip — naming a
+    /// path needs neither — so both halves land together. `box: nil` stands in
+    /// for the row a device syncs before that attribute arrives.
+    private func watchReply(lane: String?, text: String, box: String? = "conv/out-abc") -> MessageRecord {
         MessageRecord(
             id: UUID(),
             role: "agent",
@@ -69,7 +84,8 @@ final class WatchFileLaneHandoffTests: XCTestCase {
             createdAt: Date(timeIntervalSince1970: 0),
             sourceDevice: "watch",
             outputScanDone: lane == nil ? nil : false,
-            outputScanLaneID: lane
+            outputScanLaneID: lane,
+            outputBoxKey: lane == nil ? nil : box
         )
     }
 
@@ -134,6 +150,20 @@ final class WatchFileLaneHandoffTests: XCTestCase {
                       "Without a provable lane a wrist turn can never be scanned — that is the defect.")
     }
 
+    /// A row that reached this device AHEAD of its folder attribute is selected
+    /// OUT of the pass, never closed. Missing metadata means UNKNOWN: closing it
+    /// would make "we have not been told yet" permanently indistinguishable from
+    /// "there was nothing", on the device least able to know.
+    func testWatchReplyWithoutABoxIsSelectedOutRatherThanClosed() {
+        let laneOnly = watchReply(lane: laneA, text: "Wrote report.pdf for you.", box: nil)
+        XCTAssertEqual(laneOnly.outputScanDone, false,
+                       "The row stays PENDING — nothing about it is settled.")
+        XCTAssertTrue(
+            ConversationDetailViewModel.retroScanCandidates(in: [laneOnly], attempted: [], cap: 20).isEmpty,
+            "No folder means no listing, and no marker either."
+        )
+    }
+
     /// OLD iPHONE → NEW WATCH. Readiness arrives (so the turn still carries the
     /// file-delivery instruction) but no lane does, so the reply lands
     /// unstamped: today's behavior preserved exactly, no crash, no lost turn.
@@ -158,7 +188,7 @@ final class WatchFileLaneHandoffTests: XCTestCase {
 
     /// Stamped lane == the currently configured lane → the scan may probe.
     func testStampedWatchReplyProbesItsOwnLane() async {
-        let route = await ConversationDetailViewModel.retroOutputScanRoute(
+        let route = ConversationDetailViewModel.retroOutputScanRoute(
             for: watchReply(lane: laneA, text: "Saved summary.md to the working directory."),
             currentLaneID: laneA
         )
@@ -171,7 +201,7 @@ final class WatchFileLaneHandoffTests: XCTestCase {
     /// the scan refuses: a missed chip, never a file pulled from an unrelated
     /// server. Restoring lane A later lets the same turn recover.
     func testRepointedLaneDefersRatherThanProbingTheWrongServer() async {
-        let route = await ConversationDetailViewModel.retroOutputScanRoute(
+        let route = ConversationDetailViewModel.retroOutputScanRoute(
             for: watchReply(lane: laneA, text: "Saved summary.md to the working directory."),
             currentLaneID: laneB
         )
@@ -179,15 +209,32 @@ final class WatchFileLaneHandoffTests: XCTestCase {
                        "A wrist turn must never be finished against a lane it was not dispatched for.")
     }
 
-    /// A wrist reply that names no file needs no network evidence at all, so it
-    /// closes locally even when the lane is long gone — the stamp does not
-    /// create probe traffic for turns that never produced anything.
-    func testFilenameFreeWatchReplyClosesWithoutProbing() async {
-        let route = await ConversationDetailViewModel.retroOutputScanRoute(
+    /// THE REPLY TEXT DOES NOT ROUTE. A wrist reply that names no file and one
+    /// that names several take the identical route, because what a capable
+    /// device reads is the folder this dispatch named — never the prose. The
+    /// lane match is the whole decision.
+    func testReplyTextDoesNotChangeTheRoute() {
+        let named = ConversationDetailViewModel.retroOutputScanRoute(
+            for: watchReply(lane: laneA, text: "Saved summary.md and notes.csv for you."),
+            currentLaneID: laneA
+        )
+        let silent = ConversationDetailViewModel.retroOutputScanRoute(
+            for: watchReply(lane: laneA, text: "All done — nothing to hand back."),
+            currentLaneID: laneA
+        )
+        XCTAssertEqual(named, silent,
+                       "Prose is not a routing input: both replies get the same one listing.")
+        XCTAssertEqual(silent, .probeCurrentLane)
+    }
+
+    /// A lane the device no longer has defers whatever the reply says — the
+    /// stamp creates no traffic against a server this turn was not dispatched to.
+    func testMissingLaneDefersWhateverTheReplySays() {
+        let route = ConversationDetailViewModel.retroOutputScanRoute(
             for: watchReply(lane: laneA, text: "All done — nothing to hand back."),
             currentLaneID: nil
         )
-        XCTAssertEqual(route, .conclusiveWithoutProbe,
-                       "No filename in the reply means no probe: the two-source rule already fails it.")
+        XCTAssertEqual(route, .deferUntilMatchingLane,
+                       "No matching lane means no listing, and no marker either.")
     }
 }

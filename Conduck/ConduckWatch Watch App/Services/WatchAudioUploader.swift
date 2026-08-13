@@ -397,6 +397,44 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
 
     // MARK: - Upload: Converse (agent hop)
 
+    /// The per-dispatch output folder a WRIST turn names on the wire, or nil for
+    /// "this turn invites nothing back".
+    ///
+    /// THE WRIST NAMES A FOLDER TOO, and that is the point: naming a path costs
+    /// nothing — no credential, no capability, no round trip — so the one device
+    /// that deliberately never receives the file-server credential is not the one
+    /// device whose turns can never return a file. An iPhone/iPad/Mac lists the
+    /// folder later.
+    ///
+    /// GATED ON THE LANE IDENTITY, never on readiness alone.
+    /// `WatchSettingsReader.remoteAgentFileLane` documents `ready == true` with
+    /// `laneID == nil` as legitimate and means one thing: the paired iPhone
+    /// predates the lane courier. In exactly that state the store DROPS the
+    /// folder — `ConversationStore.appendMessage` persists `outputBoxKey` only
+    /// alongside an `outputScanLaneID`, deliberately, because a folder with no
+    /// owning lane could never be listed against a provable server. Minting on
+    /// readiness alone therefore puts a path on the wire that nothing will ever
+    /// read, and an agent that obeys writes files into a directory unreachable by
+    /// any route — strictly worse than never having asked. The pair appears and
+    /// disappears together, here as everywhere else.
+    ///
+    /// NO ABSENCE ASSERTION, unlike every credentialled surface. The wrist cannot
+    /// make one and does not need to: freshness rests on `OutboxKey`'s entropy,
+    /// and the device that eventually READS the folder is the one that can tell a
+    /// real listing from a catch-all server.
+    ///
+    /// Takes the resolver's whole verdict rather than a bare id so the readiness
+    /// half stays visible at the decision: `ready == false` must mint nothing even
+    /// if an identity is somehow in hand, which is the same fail-closed rule the
+    /// resolver already applies one layer down.
+    static func outboxKey(
+        forLane lane: (ready: Bool, laneID: String?),
+        conversationID: UUID
+    ) -> String? {
+        guard lane.ready, lane.laneID != nil else { return nil }
+        return OutboxKey.mint(conversationID: conversationID)
+    }
+
     /// Issue the agent converse turn over the background converse session
     /// (`POST /v1/chat/completions`). The user turn is expected to ALREADY be
     /// appended to the store by the caller (so the store is authoritative even
@@ -447,8 +485,8 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         // covers a glanced-or-heard compact surface either way), keeping the
         // spoken clause out of every watch view file. The wrist can't evaluate
         // file-lane readiness itself (the credential never syncs to it), so it
-        // reads the iPhone-couriered per-ref value; a ready lane also splices
-        // the delivery instruction first (delivery → spoken).
+        // reads the iPhone-couriered per-ref value; a lane that also couriered
+        // its identity splices the outbox location first (location → spoken).
         // Readiness AND lane identity in ONE resolve. The identity is captured
         // HERE, at dispatch, and carried on the task — it is a dispatch-time fact
         // that cannot be reconstructed when the reply lands (a wrist turn can run
@@ -459,6 +497,8 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         let fileLane = WatchSettingsReader.shared.remoteAgentFileLane(for: ref)
         let fileServerReady = fileLane.ready
 
+        let outboxKey = Self.outboxKey(forLane: fileLane, conversationID: conversationID)
+
         // `model` is threaded through for customs (built-ins pass nil → the
         // `"model"` key is OMITTED from JSON, byte-identical to today's wire).
         let body = ConverseRequest(
@@ -466,6 +506,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                 priorTurns: priorTurns,
                 newUserText: newUserText,
                 fileServerReady: fileServerReady,
+                outboxKey: outboxKey,
                 surface: .spoken
             ),
             stream: false,
@@ -486,7 +527,14 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // process recycle, and any settings edit between now and the reply.
             // Nil (no ready lane, or a pre-courier iPhone) → the reply lands
             // unstamped, exactly as before: no scan, but also no wrong scan.
-            fileTransferLaneID: fileLane.laneID
+            fileTransferLaneID: fileLane.laneID,
+            // The folder named on the wire above. The wrist never reads it —
+            // it records where the request invited files so a capable device
+            // can, and carrying it on the task is what survives a wrist-drop,
+            // a suspension, or a cross-launch process recycle. Non-nil only
+            // where `fileTransferLaneID` is (see `outboxKey(forLane:…)`), so the
+            // pair the store insists on lands whole or not at all.
+            outputBoxKey: outboxKey
         )
         let metadataString: String
         do {
@@ -943,12 +991,19 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                         // when the thread is next opened. The wrist itself never
                         // probes, downloads, or renders a chip — files are an
                         // iPhone/iPad/Mac capability — it only records which lane
-                        // the request invited a file into. Without this the turn
-                        // is invisible to the scan permanently, even though its
-                        // request carried the file-delivery instruction.
+                        // the request invited a file into. Dropping the stamp
+                        // would make a turn that DID name a folder invisible to
+                        // the scan permanently.
                         // Nil (no ready lane at dispatch, pre-courier iPhone, or
-                        // an in-flight pre-upgrade task) → unstamped, as before.
-                        outputScanLaneID: metadata?.fileTransferLaneID
+                        // an in-flight pre-upgrade task) → unstamped, and that
+                        // same dispatch named no folder either: the two are
+                        // minted together (`outboxKey(forLane:conversationID:)`).
+                        outputScanLaneID: metadata?.fileTransferLaneID,
+                        // The folder this dispatch named, read back from the
+                        // task. The wrist renders no chip for it — it persists
+                        // the folder so a capable device can list it. Nil is
+                        // UNKNOWN, never EMPTY.
+                        outputBoxKey: metadata?.outputBoxKey
                     ).id
                 } catch {
                     // Append failed (e.g. the conversation was deleted on another

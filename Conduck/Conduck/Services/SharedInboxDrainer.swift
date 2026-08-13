@@ -185,6 +185,17 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             }
         }
         let fileServerReady = fileTransferSnapshot != nil
+        // Name THIS dispatch's output box and witness that it is not there yet.
+        // AFTER the lane revalidation above, so the folder is named on the lane
+        // this send actually uses. Nil (no ready lane, a lane that cannot hold a
+        // nested collection, or an unwitnessed absence) → no location line and
+        // no automatic delivery for this turn; the same value is persisted with
+        // the reply below, so the wire and the row can never disagree about
+        // which folder was promised.
+        let outboxKey = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+            conversationID: conversationID,
+            snapshot: fileTransferSnapshot
+        )
         // Pinning session for the LIVE hop (same recipe as the in-app composer's
         // macOS branch): `URLSession.shared` cannot carry a delegate, so a send
         // on it silently ignores the user's per-ref cert pin. Pin resolved from
@@ -208,6 +219,7 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             newUserImageFileRefs: newUserImageFileRefs,
             newUserTextFileServerRefs: newUserTextFileServerRefs,
             fileServerReady: fileServerReady,
+            outboxKey: outboxKey,
             transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
         )
         // Land in-process via the SHARED landing path (append → flip → output
@@ -224,7 +236,11 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             backendRawValue: backend.rawValue,
             userMessageID: shareEnvelopeID,
             stampsActiveConversation: false,
-            fileTransferLaneID: fileTransferSnapshot?.durableLaneID
+            fileTransferLaneID: fileTransferSnapshot?.durableLaneID,
+            // The SAME folder the wire named — never a second mint. A macOS
+            // foreground hop cannot land after process death, so this in-process
+            // hand-off is the whole recovery channel for it.
+            outputBoxKey: outboxKey
         )
         return reply
         #else

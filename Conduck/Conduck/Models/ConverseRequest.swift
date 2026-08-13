@@ -438,8 +438,12 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
                 // bytes; splice an imperative text reference naming each
                 // image's on-disk path. The path comes from the attachment's
                 // persisted `storedKey` (already folder-prefixed when minted);
-                // a display filename is derived from the key's last
-                // `__`-delimited segment (images carry no `filename`).
+                // the display name is derived from the key's last
+                // `__`-delimited segment rather than from `filename`, because
+                // the key is what the file is actually called ON THE SERVER and
+                // a name that disagrees with the path would send the agent
+                // looking for a file that is not there. That segment already
+                // carries the user's own name, sanitized at mint.
                 let imageRefs: [(storedKey: String, filename: String)] = record.attachments
                     .filter { $0.isImage && !$0.isServerReference }
                     .compactMap { att in
@@ -731,11 +735,17 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// PUT them to the file-server), so the model only needs to be TOLD which
     /// files are there + the opaque path they were saved under. Rendered as:
     ///
-    ///     The following file(s) are in your working directory — use them for this request. Each input lives under its conversation folder at the path shown:
+    ///     The following file(s) are in your working directory — use them for this request:
     ///     - "report.pdf" (saved as <conversationID>/a1b2c3d4__report.pdf)
     ///
-    /// (one bullet per file: `- "<originalName>" (saved as <storedKey>)`, where
-    /// `storedKey` now carries the per-conversation folder prefix). Joined to the
+    /// The header states no path SHAPE, because there is not one shape: a
+    /// folder-capable lane mints `<conversationID>/<8hex>__<name>` while a lane
+    /// that rejects nested PUTs mints a flat `<8hex>__<name>`, and an agent
+    /// output replayed on a later turn sits under its dispatch's outbox. Only
+    /// the per-bullet `storedKey` is authoritative, so the header describes
+    /// nothing it cannot guarantee.
+    ///
+    /// (one bullet per file: `- "<originalName>" (saved as <storedKey>)`). Joined to the
     /// base with `"\n\n"` — the same joining idiom `spliceText` uses — so a turn's
     /// assembled text reads base → text-file fences → server-file refs.
     ///
@@ -761,10 +771,11 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// here — see `wireNameMaxCharacters`.
     ///
     /// This block is a pure INPUT reference — output guidance lives in the single
-    /// per-turn `fileDeliveryInstruction` (appended once by `assembleMessages`,
+    /// per-turn `outboxLocationLine` (appended once by `assembleMessages`,
     /// newest turn only). It CANNOT live here: this splice also runs on every
-    /// REPLAYED prior turn (`priorTurns` reconstruction), so an instruction
-    /// clause in this header would duplicate across the whole resent history.
+    /// REPLAYED prior turn (`priorTurns` reconstruction) and on BOTH roles, so a
+    /// clause in this header would duplicate across the whole resent history —
+    /// carrying, worse, the outbox path of a turn that is already finished.
     ///
     /// PRIVACY: `storedKey` + `originalName` are part of the turn the user
     /// deliberately sends to their OWN gateway; this method never logs them.
@@ -773,7 +784,7 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         serverFiles: [(originalName: String, storedKey: String)]
     ) -> String {
         guard !serverFiles.isEmpty else { return base }
-        var lines = ["The following file(s) are in your working directory — use them for this request. Each input lives under its conversation folder at the path shown:"]
+        var lines = ["The following file(s) are in your working directory — use them for this request:"]
         for file in serverFiles {
             lines.append("- \"\(Self.wireDisplayName(file.originalName))\" (saved as \(file.storedKey))")
         }
@@ -781,54 +792,63 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         return base.isEmpty ? block : [base, block].joined(separator: "\n\n")
     }
 
-    /// The single per-turn file-DELIVERY instruction (file-transfer route).
-    /// Appended once — newest user turn only, via `assembleMessages` — whenever
-    /// the conversation's bound gateway has a READY file lane
-    /// (`fileTransferReadySnapshot != nil`), attachments or not.
+    /// The single per-turn OUTBOX-LOCATION line (file-transfer route). Appended
+    /// once — newest user turn only, via `assembleMessages` — whenever the
+    /// conversation's bound gateway has a READY file lane AND this dispatch
+    /// holds an outbox key, attachments or not.
     ///
-    /// Why it exists (verified live against OpenClaw, July 2026): agent
-    /// platforms deliver output files via channel-attachment directives (e.g. a
-    /// `MEDIA:<path>` reply line) that the OpenAI-compatible endpoint STRIPS —
-    /// the reply reaches Conduck file-less and nameless, so output detection
-    /// (which scans reply text for filenames, then probes the file-server)
-    /// correctly finds nothing and the download chip never appears. The
-    /// instruction pins the one contract that works on EVERY gateway: write the
-    /// file to the working-directory root (where the detector probes) and NAME
-    /// it in plain reply text.
+    /// **This string is FROZEN.** It is published in the public adapter
+    /// contract, mirrored in `conduck-connect`'s golden doctor text, and it is
+    /// the exact byte sequence the live fleet was measured against. Change a
+    /// character and three independent copies go stale at once, silently.
+    ///
+    /// Why a bare location and nothing else. The measurement is unambiguous: a
+    /// named folder is obeyed by 16 of 18 turns across six gateways, while the
+    /// reply-prose contract this replaces is recoverable from 1 turn in 7 — and
+    /// no amount of wording fixes that, because the misses are the model's
+    /// writing style (path-qualified names, markdown links with a `sandbox:`
+    /// scheme, filenames sharing a line with prose). A location also survives
+    /// what prose cannot: the reply-side extractor cannot cross a `/`, so a file
+    /// delivered into a folder is unfindable from its own reply text.
+    ///
+    /// Why no `MEDIA:` warning here. Platform behaviour rules belong in the
+    /// gateway-side standing-instruction blocks that already carry them
+    /// (conduck-connect's `TOOLS.md` block for OpenClaw, the Hermes guidance
+    /// block); this line has one job and stays one line.
+    ///
+    /// Why the `[Conduck file transfer]` tag leads. It is the deterministic
+    /// marker gateway-side agent rules scope on, so a rule like "no MEDIA: in
+    /// Conduck sessions" is gated to Conduck turns and never leaks into the same
+    /// agent's WhatsApp/Telegram channels, where MEDIA: is correct. The tag is
+    /// unforgeable from a filename: `wireDisplayName` folds `[` and `]` to
+    /// parentheses.
     ///
     /// Why per-turn wire text (not gateway-side config): it is the only layer
-    /// Conduck controls for arbitrary BYO gateways, and it beats session-start
-    /// bootstrap files (OpenClaw injects `TOOLS.md` at session START only — an
-    /// edit never reaches a running session). It also rides on attachment-LESS
-    /// turns — "write me a report.md" with nothing attached is exactly the turn
-    /// the reference splices above can't cover.
+    /// Conduck controls for arbitrary BYO gateways, it is the ONE surface that
+    /// reaches every gateway kind (custom gateways get no standing-instructions
+    /// file at all), and it beats session-start bootstrap files (OpenClaw
+    /// injects `TOOLS.md` at session START only — an edit never reaches a
+    /// running session). It also rides on attachment-LESS turns — "write me a
+    /// report.md" with nothing attached is exactly the turn the reference
+    /// splices above can't cover.
     ///
-    /// Why the wording: the request may visibly carry inline images, so it must
-    /// NOT claim "this channel has no attachments" — the claim is strictly about
-    /// the reply direction (attachment directives don't reach the user). The
-    /// `[Conduck file transfer]` tag gives gateway-side agent instructions
-    /// (e.g. the conduck-connect `TOOLS.md` block) a deterministic marker to
-    /// scope on, so a rule like "no MEDIA: in Conduck sessions" can be gated to
-    /// Conduck turns and never leak into the same agent's WhatsApp/Telegram
-    /// channels, where MEDIA: is correct.
-    /// Why "on a line of its own": it is the ONE structural difference between
-    /// a handover and a passing mention. `MissingOutputNotice` uses exactly that
-    /// property to decide whether a named-but-absent file is worth telling the
-    /// user about — a filename in prose ("I read your config.yaml", "this uses
-    /// Node.js") always shares its line with other words, while a delivered
-    /// artifact can stand alone. Asking for the shape here is what makes the
-    /// diagnostic possible without a language-specific verb heuristic, and it
-    /// costs a compliant agent nothing. Non-compliance degrades to the previous
-    /// behaviour: the chip still appears (the detector reads filenames wherever
-    /// they sit), only the failure notice stays silent.
-    static let fileDeliveryInstruction =
-        "[Conduck file transfer] To return a file, write it to the root of your working directory and state its exact filename in plain text in your reply, on a line of its own. Attachment directives (MEDIA: lines or similar) do not reach this user — only files named in plain reply text are delivered."
+    /// THE PATH IS RENDERED BARE — it must never pass through `wireDisplayName`,
+    /// which strips `/` and would hand the agent a folder name it cannot open.
+    /// Safety rests on the same argument as `spliceServerFileRefs`' storedKey:
+    /// the key is STRUCTURALLY INERT by construction (`OutboxKey.mint` emits a
+    /// UUID, one `/`, `out-`, and lowercase hex — no newline, space, quote,
+    /// backtick or bracket), so it can never add a line or forge a second
+    /// `[Conduck …]` marker.
+    static func outboxLocationLine(_ key: String) -> String {
+        "[Conduck file transfer] Files you produce for this reply go in: \(key)"
+    }
 
-    /// Append `fileDeliveryInstruction` to a fully-spliced turn text. LAST in
+    /// Append the outbox-location line to a fully-spliced turn text. LAST in
     /// the text-body order (base → text-file fences → server refs → image refs →
     /// dual-text refs → THIS), newest user turn only — see `assembleMessages`.
-    static func spliceFileDeliveryInstruction(_ base: String) -> String {
-        base.isEmpty ? fileDeliveryInstruction : [base, fileDeliveryInstruction].joined(separator: "\n\n")
+    static func spliceOutboxLocation(_ base: String, key: String) -> String {
+        let line = outboxLocationLine(key)
+        return base.isEmpty ? line : [base, line].joined(separator: "\n\n")
     }
 
     /// The dispatch SURFACE a converse request originates from, gating the
@@ -845,8 +865,8 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
 
     /// The single per-turn SPOKEN-SUMMARY instruction for voice surfaces
     /// (CarPlay + Apple Watch). Appended once — newest user turn only, via
-    /// `assembleMessages` when `surface == .spoken` — AFTER the file-delivery
-    /// instruction (when a ready lane also splices it).
+    /// `assembleMessages` when `surface == .spoken` — AFTER the outbox-location
+    /// line (when a ready lane with an outbox also splices it).
     ///
     /// Why it exists: a voice-surface reply is HEARD aloud on a compact,
     /// hands-busy device, so an agent that recites a file's full contents,
@@ -857,9 +877,9 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// Why the `[Conduck voice]` tag: it MIRRORS the `[Conduck file transfer]`
     /// tag's purpose — a deterministic marker gateway-side agent instructions
     /// can scope on (a rule keyed to Conduck voice turns never leaks into the
-    /// same agent's read-first channels). Unlike the delivery instruction, this
-    /// clause makes NO delivery promise — no working-directory contract, no
-    /// filename-in-reply requirement tied to a file lane — so it rides even
+    /// same agent's read-first channels). Unlike the outbox-location line, this
+    /// clause makes NO delivery promise — it names no folder and requires no
+    /// file lane — so it rides even
     /// when the surface has NO file lane at all (the agent can still create an
     /// artifact in its own workspace, and the clause only shapes how the reply
     /// is spoken). That lane-independence is why it splices unconditionally on
@@ -868,10 +888,10 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         "[Conduck voice] The user will likely hear this reply aloud on a compact, hands-busy device (Apple Watch or in the car) rather than read it. If your work produces a file or another long artifact, say its exact filename and summarize the useful result in one to three short spoken-friendly sentences. Never read long file contents, code, or URLs aloud."
 
     /// Append `spokenSummaryInstruction` to a fully-spliced turn text. Splices
-    /// AFTER `spliceFileDeliveryInstruction` (when the lane is ready) so the
-    /// text-body order on a ready-lane spoken turn reads
-    /// … → delivery instruction → THIS, newest user turn only — see
-    /// `assembleMessages`. Mirrors `spliceFileDeliveryInstruction`.
+    /// AFTER `spliceOutboxLocation` (when the lane is ready and this dispatch
+    /// holds an outbox) so the text-body order on such a spoken turn reads
+    /// … → outbox location → THIS, newest user turn only — see
+    /// `assembleMessages`. Mirrors `spliceOutboxLocation`.
     static func spliceSpokenSummaryInstruction(_ base: String) -> String {
         base.isEmpty ? spokenSummaryInstruction : [base, spokenSummaryInstruction].joined(separator: "\n\n")
     }
@@ -930,17 +950,19 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// is the cheaper read for description/Q&A). Rendered as:
     ///
     ///     You can already see the attached image(s); the file(s) below are there only if you're asked to modify or process them — don't open them just to describe or answer questions about them:
-    ///     - "image.heic" (saved as a1b2c3d4__image.heic)
+    ///     - "sunset-over-tallinn.heic" (saved as a1b2c3d4__sunset-over-tallinn.heic)
     ///
     /// `filename` carries the original's TRUE extension so the agent's tooling
-    /// knows it's a `.heic` / `.png` / `.dng`, not a fabricated `.jpg`. Its
-    /// PROVENANCE differs per entry point, and both are possible on the same
-    /// wire: the COMPOSER synthesizes a position-based name (`image.<ext>` for
-    /// the first, `image-N.<ext>` after — a picked image's real filename never
-    /// travels), while the SHARE DRAIN passes the REAL shared name through when
-    /// the manifest carries one (`SharedInboxDrainer` — deterministic across
-    /// re-drains, which is what keeps the re-PUT idempotent). So this name is
-    /// untrusted on the share route → `wireDisplayName` + quotes, exactly as in
+    /// knows it's a `.heic` / `.png` / `.dng`, not a fabricated `.jpg`. An image
+    /// keeps the REAL name its source gave it, sanitised by the same mint
+    /// documents already use — on every route: the composer, and the SHARE DRAIN
+    /// when the manifest carries one (`SharedInboxDrainer`, deterministic across
+    /// re-drains, which is what keeps the re-PUT idempotent). **Reason:** the
+    /// user names their own file out loud in a voice product, and an agent that
+    /// cannot find the name it was told fails the turn. A source that genuinely
+    /// has no name — a photo pick, a camera shot, a pasted bitmap — gets a
+    /// synthesized one instead, so this name is ALWAYS untrusted →
+    /// `wireDisplayName` + quotes, exactly as in
     /// `spliceServerFileRefs`. Joined to the base with `"\n\n"` — the same idiom
     /// `spliceServerFileRefs` uses — so a turn's assembled text reads base →
     /// text-file fences → server-file refs → image refs.
@@ -1062,6 +1084,112 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         case "text/plain": return "file.txt"
         default: return "file.txt"
         }
+    }
+}
+
+/// The per-dispatch OUTPUT-BOX path: the folder Conduck names on the wire for
+/// one reply's files, and the only place an automatic download chip may come
+/// from.
+///
+/// CONDUCK NAMES IT AND CREATES NOTHING. That is the whole design, and it is
+/// measured rather than assumed: a client-created folder is owned by whatever
+/// user the WebDAV lane runs as, and on the two most common self-hosted
+/// gateways that is not the user the agent runs as — so a *successful* MKCOL
+/// yields a directory the agent can neither write into nor replace, which is
+/// strictly worse than no directory at all. The agent creating the folder is
+/// what makes it the agent's. Naming a path, by contrast, requires no
+/// credential, no capability and no round trip, which is why the Watch can do
+/// it too.
+///
+/// WHAT FRESHNESS MEANS HERE, stated honestly: a fresh unguessable per-dispatch
+/// path buys PROBABILISTIC TEMPORAL ISOLATION — nothing written before this
+/// dispatch can be sitting in it — and it buys NEITHER proof of prior emptiness
+/// NOR provenance. The same principal writes the file and the reply, so a file
+/// found in the box proves only that it was put there after this turn was
+/// named. A device holding the file-server credential adds a server-observed
+/// absence assertion before dispatch
+/// (`BackgroundFileTransfer.witnessCollectionAbsent`); a device that does not
+/// (the Watch) names the path anyway, because the value of the name does not
+/// depend on having witnessed anything.
+///
+/// PER-DISPATCH, never per-conversation: a stable folder loses attribution the
+/// moment two requests overlap, a filename is reused, a write lands late, or a
+/// turn is retried. A RETRY therefore mints a FRESH box — reusing the failed
+/// dispatch's path lets a late file from an abandoned attempt appear as this
+/// turn's output, which destroys the only property the design has.
+///
+/// Shape: `<conversationID>/out-<32 lowercase hex>`. Two segments, not three:
+/// the conversation folder is where inbound files already live and is what
+/// makes attribution exact, and every extra level is another chance an agent's
+/// write tool refuses a relative path. No leading-dot component — a hidden
+/// directory is worse for an agent that must `ls` and write there. The `out-`
+/// prefix exists so the connector's disk-sweep guard can whitelist the box with
+/// a one-token change.
+nonisolated enum OutboxKey {
+    /// Hex characters of per-dispatch entropy — 32, i.e. 128 bits. Randomness
+    /// is the SOLE basis of temporal isolation now that nothing creates the
+    /// folder, so there is nothing left to economise against.
+    static let nonceHexCharacters = 32
+
+    /// The path component prefix. Frozen: `conduck-connect`'s cleanup guard
+    /// whitelists artifacts by this prefix, so renaming it makes every
+    /// successful doctor run report its own boxes as litter.
+    static let componentPrefix = "out-"
+
+    /// Name the box for ONE dispatch. Pure, total, and free — no network, no
+    /// credential, no capability claim. Every call returns a different path.
+    ///
+    /// THERE IS EXACTLY ONE MINT, AND IT IS UNGATED, so every surface names a box
+    /// the same way. The tempting gate — `folderCapable`, the lane's ability to
+    /// accept a nested PUT — measures the wrong thing: Conduck neither creates
+    /// the box nor writes into it, so the only client operation this path ever
+    /// sees is a PROPFIND, which a lane that refuses nested PUTs answers
+    /// perfectly well. Gating on it made two surfaces on ONE lane disagree —
+    /// phone, Mac and CarPlay got no file return where the Watch, which cannot
+    /// read that flag at all, still named a box.
+    ///
+    /// The real gate is a MEASUREMENT, not a stored flag, and it lives one layer
+    /// out: a device holding the file-server credential must witness the path
+    /// absent before it may put it on the wire
+    /// (`BackgroundFileTransfer.mintWitnessedOutboxKey`), which is itself a
+    /// PROPFIND and therefore tests the exact capability the box depends on, on
+    /// the lane itself, at the moment it matters.
+    ///
+    /// The alphabet is deliberately a subset of `FileServerClient.makeStoredKey`'s
+    /// safe set (`[A-Za-z0-9._-]` plus the single `/`), so the rendered path is
+    /// structurally inert on the wire: it cannot contain a newline, space,
+    /// quote, backtick or bracket, and therefore cannot add a line or forge a
+    /// `[Conduck …]` scoping marker in the turn text that carries it bare.
+    static func mint(conversationID: UUID) -> String {
+        "\(conversationID.uuidString)/\(componentPrefix)\(randomNonceHex())"
+    }
+
+    /// `nonceHexCharacters` of lowercase hex from the system CSPRNG.
+    ///
+    /// Two full `UInt64` draws rather than a UUID: a v4 UUID spends six of its
+    /// bits on version/variant tags, so it would deliver 122 bits under a name
+    /// that promises 128.
+    private static func randomNonceHex() -> String {
+        var out = ""
+        out.reserveCapacity(nonceHexCharacters)
+        for _ in 0..<(nonceHexCharacters / 16) {
+            out += hex16(UInt64.random(in: UInt64.min...UInt64.max))
+        }
+        return out
+    }
+
+    /// One `UInt64` as exactly 16 zero-padded lowercase hex digits. Hand-rolled
+    /// rather than `String(format:)` because the format-string length modifier
+    /// for a 64-bit value is platform-dependent and a silently truncated nonce
+    /// would halve the entropy without failing anything.
+    private static func hex16(_ value: UInt64) -> String {
+        let digits = Array("0123456789abcdef")
+        var out = ""
+        out.reserveCapacity(16)
+        for shift in stride(from: 60, through: 0, by: -4) {
+            out.append(digits[Int((value >> UInt64(shift)) & 0xF)])
+        }
+        return out
     }
 }
 
