@@ -11,7 +11,8 @@
 //    exact canonical disclosure, text turns untouched.
 // 3. Presentation truth table (`DeclinedTurnPresentation`): confident vs
 //    hedged copy, poisoned-chat gating on the dispatch-time fact, generic and
-//    legacy fallbacks.
+//    legacy fallbacks — plus (3b) the wordless-turn hint, whose whole value is
+//    what it stays SILENT about, so most of its cases assert absence.
 // 4. Store transitions (`failTurn` / `beginRetry` / clear-on-sent): the
 //    guarded writer race rules and the atomic retry claim.
 // Plus the REAL migration test: a v3 SQLite store opened under the v4 model.
@@ -160,7 +161,8 @@ final class WSDDeclinedTurnTests: XCTestCase {
             failureWireCode: "image_unsupported",
             turnHasOwnImages: true,
             hadHistoryImages: nil,
-            hasResendableNonPhotoContent: true
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .absent
         )
         XCTAssertEqual(confident.kind, .photoDeclined(confident: true))
         XCTAssertEqual(confident.title, "Photo declined")
@@ -172,7 +174,8 @@ final class WSDDeclinedTurnTests: XCTestCase {
             failureWireCode: nil,
             turnHasOwnImages: true,
             hadHistoryImages: nil,
-            hasResendableNonPhotoContent: false
+            hasResendableNonPhotoContent: false,
+            wordlessTurn: .absent
         )
         XCTAssertEqual(hedged.kind, .photoDeclined(confident: false))
         XCTAssertEqual(hedged.title, "No reply")
@@ -185,7 +188,8 @@ final class WSDDeclinedTurnTests: XCTestCase {
             failureWireCode: "image_unsupported",
             turnHasOwnImages: false,
             hadHistoryImages: true,
-            hasResendableNonPhotoContent: true
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .absent
         )
         XCTAssertEqual(confident.kind, .historyBlocked(confident: true))
         XCTAssertEqual(confident.title, "Chat blocked by an earlier photo")
@@ -197,7 +201,8 @@ final class WSDDeclinedTurnTests: XCTestCase {
             failureWireCode: "image_unsupported",
             turnHasOwnImages: false,
             hadHistoryImages: nil,
-            hasResendableNonPhotoContent: true
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .absent
         )
         XCTAssertEqual(noFact.kind, .historyBlocked(confident: false))
         XCTAssertEqual(noFact.title, "This chat may be blocked by an earlier photo")
@@ -208,7 +213,8 @@ final class WSDDeclinedTurnTests: XCTestCase {
             failureWireCode: nil,
             turnHasOwnImages: false,
             hadHistoryImages: true,
-            hasResendableNonPhotoContent: true
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .absent
         )
         XCTAssertEqual(noCode.kind, .historyBlocked(confident: false))
     }
@@ -222,7 +228,8 @@ final class WSDDeclinedTurnTests: XCTestCase {
             failureWireCode: "totally_made_up",
             turnHasOwnImages: true,
             hadHistoryImages: nil,
-            hasResendableNonPhotoContent: true
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .absent
         )
         XCTAssertEqual(presentation.kind, .photoDeclined(confident: false))
     }
@@ -234,7 +241,8 @@ final class WSDDeclinedTurnTests: XCTestCase {
             failureWireCode: nil,
             turnHasOwnImages: false,
             hadHistoryImages: nil,
-            hasResendableNonPhotoContent: true
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .absent
         )
         XCTAssertEqual(known.kind, .generic)
         XCTAssertEqual(known.title, "No reply")
@@ -249,7 +257,8 @@ final class WSDDeclinedTurnTests: XCTestCase {
             failureWireCode: nil,
             turnHasOwnImages: false,
             hadHistoryImages: nil,
-            hasResendableNonPhotoContent: true
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .absent
         )
         XCTAssertEqual(legacy.kind, .generic)
         XCTAssertEqual(legacy.body, "This message wasn't delivered.")
@@ -265,7 +274,8 @@ final class WSDDeclinedTurnTests: XCTestCase {
                 failureWireCode: nil,
                 turnHasOwnImages: false,
                 hadHistoryImages: nil,
-                hasResendableNonPhotoContent: true
+                hasResendableNonPhotoContent: true,
+                wordlessTurn: .absent
             )
             XCTAssertFalse(refused.offersRetry, "\(terminal) is terminal — no Try again")
             XCTAssertEqual(refused.body, terminal.descriptionWithRecovery)
@@ -286,12 +296,134 @@ final class WSDDeclinedTurnTests: XCTestCase {
                 failureWireCode: nil,
                 turnHasOwnImages: false,
                 hadHistoryImages: nil,
-                hasResendableNonPhotoContent: true
+                hasResendableNonPhotoContent: true,
+                wordlessTurn: .absent
             )
             XCTAssertTrue(refused.offersRetry,
                           "\(recoverable) turns on state the row instructs the user to change — Try again is how they act on it")
             XCTAssertEqual(refused.body, recoverable.descriptionWithRecovery)
         }
+    }
+
+    // MARK: - 3b. The wordless-turn hint
+
+    /// The copy is asserted verbatim ONCE here; every other case asserts only
+    /// presence or absence, so a reword touches one line rather than nine.
+    private let wordlessHint = "This message had no text. Some agents reply with nothing when they get a file but no question — send it again with a question."
+
+    private func classifyWordless(_ error: AppError?) -> DeclinedTurnPresentation {
+        DeclinedTurnPresentation.classify(
+            failureCode: error?.errorCode,
+            failureWireCode: nil,
+            turnHasOwnImages: false,
+            hadHistoryImages: nil,
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .present
+        )
+    }
+
+    func testWordlessTurnDerivationTrimsAndRequiresAnAttachment() {
+        XCTAssertEqual(.present, DeclinedTurnPresentation.WordlessTurn.of(text: "", attachmentCount: 1))
+        XCTAssertEqual(.present, DeclinedTurnPresentation.WordlessTurn.of(text: "  \n\t ", attachmentCount: 2),
+                       "whitespace the user cannot see is not a message")
+        XCTAssertEqual(.absent, DeclinedTurnPresentation.WordlessTurn.of(text: "what is this?", attachmentCount: 1))
+        XCTAssertEqual(.absent, DeclinedTurnPresentation.WordlessTurn.of(text: "", attachmentCount: 0),
+                       "no attachment means there is nothing to send again")
+    }
+
+    func testHintAppearsOnlyWhereTheGatewayAnsweredAndFailed() {
+        // The four classes meaning the gateway's own program answered and
+        // something went wrong producing a reply — `.remoteAgentServiceUnavailable`
+        // is the one a Cloudflare-fronted adapter actually delivers, because the
+        // edge replaces the origin's 5xx body and its wire code with an HTML page.
+        for error in [AppError.apiFailure(message: "boom"),
+                      .remoteAgentServerError,
+                      .remoteAgentUnexpectedStatus(status: 599),
+                      .remoteAgentServiceUnavailable] {
+            XCTAssertEqual(classifyWordless(error).hint, wordlessHint,
+                           "\(error) is a reply-production failure — the footnote applies")
+        }
+    }
+
+    func testHintStaysSilentOnEveryUnrelatedFailure() {
+        // Nothing here turns on whether the user typed a question, and a
+        // footnote on any of them sends someone to chase a fault that is not
+        // theirs. Timeouts are in this list deliberately: an agent given no
+        // instruction could plausibly spin, but a timeout already tells a
+        // complete story and widening the claim is how a hint becomes noise.
+        for error in [AppError.remoteAgentCertUntrusted,
+                      .remoteAgentAuthFailed,
+                      .remoteAgentTimeout,
+                      .remoteAgentRateLimited,
+                      .remoteAgentOutOfCredits,
+                      .remoteAgentUnreachable,
+                      .remoteAgentModelRequired] {
+            XCTAssertNil(classifyWordless(error).hint, "\(error) has nothing to do with an empty prompt")
+        }
+        // A legacy row carries no taxonomy to reason about. `offersRetry` treats
+        // unknown as retryable because re-firing is free; a hint POINTS
+        // somewhere, and pointing on an unknown class is a guess.
+        XCTAssertNil(classifyWordless(nil).hint)
+    }
+
+    func testHintRequiresTheWordlessTurnItself() {
+        let withWords = DeclinedTurnPresentation.classify(
+            failureCode: AppError.remoteAgentServiceUnavailable.errorCode,
+            failureWireCode: nil,
+            turnHasOwnImages: false,
+            hadHistoryImages: nil,
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .absent
+        )
+        XCTAssertNil(withWords.hint, "the same failure on a turn that carried a question says nothing")
+    }
+
+    func testHintNeverJoinsThePhotoArms() {
+        // A photo sent with no caption IS a wordless turn, so both arms are
+        // reachable with `.present` — and both already name a cause and a fix
+        // that a weaker guess underneath would only dilute.
+        let declined = DeclinedTurnPresentation.classify(
+            failureCode: AppError.remoteAgentVisionUnsupported.errorCode,
+            failureWireCode: "image_unsupported",
+            turnHasOwnImages: true,
+            hadHistoryImages: nil,
+            hasResendableNonPhotoContent: false,
+            wordlessTurn: .present
+        )
+        XCTAssertEqual(declined.kind, .photoDeclined(confident: true))
+        XCTAssertNil(declined.hint)
+
+        let poisoned = DeclinedTurnPresentation.classify(
+            failureCode: AppError.remoteAgentVisionUnsupported.errorCode,
+            failureWireCode: "image_unsupported",
+            turnHasOwnImages: false,
+            hadHistoryImages: true,
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .present
+        )
+        XCTAssertEqual(poisoned.kind, .historyBlocked(confident: true))
+        XCTAssertNil(poisoned.hint, "this failure is about an EARLIER photo — the footnote would name the wrong turn")
+    }
+
+    func testHintChangesNothingElseAboutThePresentation() {
+        // The footnote is additive. If it can move the actions or the toast it
+        // has stopped being a footnote.
+        let error = AppError.remoteAgentServiceUnavailable
+        let hinted = classifyWordless(error)
+        let plain = DeclinedTurnPresentation.classify(
+            failureCode: error.errorCode,
+            failureWireCode: nil,
+            turnHasOwnImages: false,
+            hadHistoryImages: nil,
+            hasResendableNonPhotoContent: true,
+            wordlessTurn: .absent
+        )
+        XCTAssertEqual(hinted.title, plain.title)
+        XCTAssertEqual(hinted.body, plain.body)
+        XCTAssertEqual(hinted.offersRetry, plain.offersRetry)
+        XCTAssertEqual(hinted.troubleshootCode, plain.troubleshootCode)
+        XCTAssertEqual(hinted.toast, plain.toast,
+                       "the toast is a one-line glance surface — the hint waits on the row")
     }
 
     // MARK: - 4. Store transitions

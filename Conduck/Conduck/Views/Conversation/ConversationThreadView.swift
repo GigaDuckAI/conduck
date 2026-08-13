@@ -1326,7 +1326,10 @@ private struct MessageBubble: View, Equatable {
             turnHasOwnImages: message.attachments.contains { $0.isImage && !$0.isServerReference },
             hadHistoryImages: message.failureHadHistoryImages,
             hasResendableNonPhotoContent: !message.text.isEmpty
-                || message.attachments.contains { $0.isText || $0.isServerFile }
+                || message.attachments.contains { $0.isText || $0.isServerFile },
+            // The rule itself lives on `WordlessTurn` so it can be tested; note
+            // it counts EVERY attachment, unlike `turnHasOwnImages` above.
+            wordlessTurn: .of(text: message.text, attachmentCount: message.attachments.count)
         )
     }
 
@@ -1352,6 +1355,17 @@ private struct MessageBubble: View, Equatable {
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.trailing)
                 .fixedSize(horizontal: false, vertical: true)
+            // A FOOTNOTE, and tertiary rather than the body's secondary for that
+            // reason: the body is what the gateway's verdict supports, this is
+            // something only the client knows about its own request. Quieter is
+            // the whole containment — it must never read as the diagnosis.
+            if let hint = presentation.hint {
+                Text(hint)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // Actions stack vertically (trailing) — the photo-recovery labels
             // are long, and a horizontal row overflows the narrow popover.
             VStack(alignment: .trailing, spacing: 6) {
@@ -1399,7 +1413,10 @@ private struct MessageBubble: View, Equatable {
         )
         .frame(maxWidth: 520, alignment: .trailing)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(Text(verbatim: "\(presentation.title). \(presentation.body)"))
+        // Title carries no terminal period, the body and hint both do — hence the
+        // explicit ". " after the title and a plain space before the hint.
+        .accessibilityLabel(Text(verbatim: "\(presentation.title). \(presentation.body)"
+            + (presentation.hint.map { " \($0)" } ?? "")))
     }
 
     // MARK: - Output-discovery fault row (the file server could not be read)
