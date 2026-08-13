@@ -1529,6 +1529,15 @@ final class MenuBarCoordinator {
                     fileLaneID: nil,
                     handedOffServerAttachmentIDs: [],
                     conversationID: self.windowViewModel?.conversationID,
+                    // A FRESH identity, not one carried from anywhere: this retry
+                    // stages no attachments (`attachments` / `stagedAttachmentIDs` /
+                    // `handedOffServerAttachmentIDs` are all empty), so there are no
+                    // pre-minted file-server keys for it to align with — the only
+                    // thing `pendingConversationID` exists to keep in step. It is
+                    // read at all only when this dispatch MINTS a conversation
+                    // (`conversationID == nil`, the menu bar's new-chat case); an
+                    // append ignores it.
+                    pendingConversationID: UUID(),
                     stagingGeneration: UUID(),
                     stagedAttachmentIDs: []
                 ))
