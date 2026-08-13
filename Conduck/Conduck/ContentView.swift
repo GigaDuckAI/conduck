@@ -163,7 +163,8 @@ struct ContentView: View {
                         attachments: dispatch.attachments,
                         expectedRef: dispatch.ref,
                         expectedFileLaneID: dispatch.fileLaneID,
-                        expectedConversationID: dispatch.conversationID
+                        expectedConversationID: dispatch.conversationID,
+                        mintConversationID: dispatch.pendingConversationID
                     )
                 },
                 isRemoteAgentConfigured: isRemoteAgentConfigured,
@@ -444,7 +445,8 @@ struct ContentView: View {
                                     attachments: dispatch.attachments,
                                     expectedRef: dispatch.ref,
                                     expectedFileLaneID: dispatch.fileLaneID,
-                                    expectedConversationID: dispatch.conversationID
+                                    expectedConversationID: dispatch.conversationID,
+                                    mintConversationID: dispatch.pendingConversationID
                                 )
                             },
                             onVoiceResult: handleTranscriptionResult,
@@ -646,6 +648,14 @@ struct ContentView: View {
     /// detail VM (`syncDetailVM` → nil).
     private func startNewConversation() {
         composerDraft = ""
+        #if os(iOS)
+        // A fresh new-chat session gets a fresh pre-minted conversation
+        // identifier, so its first attachment cannot land in the folder of the
+        // chat that came before it. No-ops while staging is live (the tap
+        // arrived on top of files already minted against the current one) — a
+        // real conversation switch below rotates through teardown instead.
+        attachmentCoordinator.beginNewChatSession()
+        #endif
         currentConversationID = nil
         hostMascot = MascotShuffleBag.next()  // fresh shuffle-bag pose for the new empty state
         // Drop the PREVIOUS chat's hand-pick synchronously, before the refresh
@@ -1048,13 +1058,23 @@ struct ContentView: View {
     /// turn in an empty state). The SHARED detail VM owns the in-flight UX,
     /// so the on-screen thread renders the optimistic bubble, the thinking
     /// indicator, and the Cancel affordance for the same turn.
+    ///
+    /// `mintConversationID` is the identifier a composer dispatch already minted
+    /// its file-server keys under, so the row this creates adopts the folder
+    /// those files are in. It is deliberately SEPARATE from
+    /// `expectedConversationID`, the nil-means-new-chat ownership sentinel — one
+    /// says "create this identifier", the other says "the composer sealed against
+    /// this visible conversation", and conflating them turns every new-chat send
+    /// into a rejected dispatch. The voice path has no dispatch and passes
+    /// neither, so its mint takes a fresh identifier.
     private func sendTurn(
         _ text: String,
         modality: TurnModality = .voice,
         attachments: [PendingAttachment] = [],
         expectedRef: RemoteAgentRef? = nil,
         expectedFileLaneID: String? = nil,
-        expectedConversationID: UUID? = nil
+        expectedConversationID: UUID? = nil,
+        mintConversationID: UUID? = nil
     ) async -> Bool {
         // A sealed composer dispatch may target either one established
         // conversation or a genuine new-chat mint. Never reinterpret nil as
@@ -1076,7 +1096,10 @@ struct ContentView: View {
         // thread is locked to this backend.
         if currentConversationID == nil {
             let mintRef = expectedRef ?? pickerSelectedRef
-            if let fresh = try? await ConversationStore.shared.createConversation(backend: mintRef.rawString) {
+            if let fresh = try? await ConversationStore.shared.createConversation(
+                id: mintConversationID ?? UUID(),
+                backend: mintRef.rawString
+            ) {
                 // Hand the row's identity to the header memo BEFORE the selection
                 // moves: `currentConversationID` going non-nil gates the picker
                 // off and hands the title to `detailVM`, whose fresh VM would

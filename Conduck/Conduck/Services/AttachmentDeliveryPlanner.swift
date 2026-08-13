@@ -139,19 +139,21 @@ enum AttachmentDeliveryPlanner {
 /// The shared I/O preparation seam for composer text/code attachments.
 ///
 /// Both Apple composers feed the planner's decision through this helper so a
-/// brand-new conversation (`conversationID == nil`) behaves exactly like an
-/// established one: a READY file lane still produces an upload request, but its
-/// `storedKey` is flat because no conversation folder exists yet. Keeping the
-/// upload request beside the staged tile also makes the contract deterministic
-/// in XCTest without performing a network PUT.
+/// brand-new conversation behaves exactly like an established one: a READY file
+/// lane produces an upload request either way, and the key is namespaced either
+/// way — a composer with no conversation row yet resolves the folder through
+/// `ComposerMintFolder` against the identifier it has already committed to.
+/// Keeping the upload request beside the staged tile also makes the contract
+/// deterministic in XCTest without performing a network PUT.
 struct TextAttachmentStagePreparation {
     struct UploadRequest: Equatable {
         /// Stable app-temporary copy of the ORIGINAL picked bytes. The upload
         /// must read this URL, never a re-encoded copy of `extractedText`.
         let localURL: URL
-        /// Pre-minted server handle. A VM-less first turn deliberately has no
-        /// folder prefix; established conversations use their UUID folder when
-        /// the server's nested-write probe passed.
+        /// Pre-minted server handle, folder-prefixed with the conversation
+        /// identifier whenever the server's nested-write probe passed. The flat
+        /// (`conversationID == nil`) shape is reachable only from a caller that
+        /// has no identifier to give — no production composer does.
         let storedKey: String
     }
 
@@ -163,9 +165,9 @@ enum TextAttachmentStagePreparer {
     /// Prepare one already-extracted text/code attachment for a composer.
     ///
     /// The caller resolves READY by the effective `RemoteAgentRef`, then passes
-    /// the resulting Boolean here. `conversationID` is optional by design: nil
-    /// means the first turn has not minted its conversation yet, not that the
-    /// file lane is unavailable.
+    /// the resulting Boolean here. `conversationID` stays optional so a caller
+    /// with genuinely no identifier can still stage; nil means "mint flat", never
+    /// "the file lane is unavailable".
     static func prepare(
         sourceURL: URL,
         extracted: TextFileExtractor.ExtractedFile,
