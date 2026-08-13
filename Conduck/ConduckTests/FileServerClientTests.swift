@@ -465,11 +465,222 @@ final class FileServerClientTests: XCTestCase {
 
     func testBuildPropfindRequestUsesPropfindVerbAndDepthHeader() {
         let snap = makeSnapshot()
-        let req = FileServerClient.buildPropfindRequest(snapshot: snap, depth: 1)
+        let key = "11111111-2222-3333-4444-555555555555/out-0123456789abcdef"
+        let req = FileServerClient.buildPropfindRequest(snapshot: snap, collectionKey: key, depth: 1)
 
         XCTAssertEqual(req.httpMethod, "PROPFIND", "directory listing uses the WebDAV PROPFIND verb")
         XCTAssertEqual(req.value(forHTTPHeaderField: "Depth"), "1", "PROPFIND must carry the Depth header")
         XCTAssertNotNil(req.value(forHTTPHeaderField: "Authorization"))
+        // The collection is a PARAMETER, not the base URL: a listing aimed at the
+        // served root answers with every file every conversation ever uploaded,
+        // which is the one thing the per-dispatch box exists to prevent.
+        XCTAssertEqual(req.url?.absoluteString, "https://fileserver.example.test/" + key,
+                       "PROPFIND targets base/collectionKey, and the `/` stays a real separator")
+        XCTAssertEqual(req.url, FileServerClient.listingCollectionURL(snapshot: snap, collectionKey: key),
+                       "the request builder and the href resolver must agree on what was asked for")
+    }
+
+    func testBuildPropfindRequestWithEmptyCollectionTargetsTheServedRoot() {
+        let snap = makeSnapshot()
+        let req = FileServerClient.buildPropfindRequest(snapshot: snap, collectionKey: "", depth: 0)
+        XCTAssertEqual(req.url?.absoluteString, "https://fileserver.example.test",
+                       "an empty collection key is the deliberate whole-server listing")
+    }
+
+    // MARK: - ensureFreshCollection (201, and nothing else)
+
+    /// The MKCOL sequence for an outbox: a best-effort parent, then a leaf that
+    /// must have been created by THIS call.
+    private func recordMkcolStatuses(
+        leaf: Int?,
+        parent: Int = 201,
+        recorder: FileLaneRequestRecorder
+    ) {
+        MockURLProtocol.requestHandler = { request in
+            let url = request.url!
+            recorder.record(method: request.httpMethod ?? "", url: url)
+            let isLeaf = url.absoluteString.contains("/out-")
+            if isLeaf {
+                guard let leaf else { throw URLError(.cannotConnectToHost) }
+                return (HTTPURLResponse(url: url, statusCode: leaf, httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+            }
+            return (HTTPURLResponse(url: url, statusCode: parent, httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+    }
+
+    /// A `201` on the leaf is the ONLY success. NOT the dispatch path — the
+    /// per-dispatch box is NAMED by Conduck and CREATED by the agent, because a
+    /// client-created directory belongs to whoever the WebDAV lane runs as and
+    /// the agent usually is not that user. What is pinned here is the primitive
+    /// itself: 201-only is the one expression of "created by this call" in the
+    /// client, and any future collection Conduck genuinely must own needs it.
+    func testEnsureFreshCollectionRequiresTwoOhOneOnTheLeaf() async {
+        let snap = makeSnapshot()
+        let key = "11111111-2222-3333-4444-555555555555/out-0123456789abcdef"
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+
+        for (status, expected) in [(201, true), (200, false), (204, false), (405, false),
+                                   (403, false), (409, false), (500, false)] {
+            let recorder = FileLaneRequestRecorder()
+            recordMkcolStatuses(leaf: status, recorder: recorder)
+            let fresh = await FileServerClient.ensureFreshCollection(
+                snapshot: snap, collectionKey: key, session: session)
+            XCTAssertEqual(fresh, expected,
+                           "MKCOL \(status) on a freshly-random key must read as fresh == \(expected)")
+        }
+    }
+
+    /// `405 already exists` is a COLLISION. Called out on its own because the
+    /// shipped `mkcolConclusive` idiom accepts it, so anything that reuses that
+    /// idiom while meaning "created" is silently wrong.
+    func testEnsureFreshCollectionTreatsMethodNotAllowedAsCollisionNotSuccess() async {
+        let snap = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        recordMkcolStatuses(leaf: 405, recorder: recorder)
+
+        let fresh = await FileServerClient.ensureFreshCollection(
+            snapshot: snap,
+            collectionKey: "11111111-2222-3333-4444-555555555555/out-0123456789abcdef",
+            session: session)
+
+        XCTAssertFalse(fresh, "405 means the collection was already there — never fresh")
+    }
+
+    /// A transport failure is not a creation. Fails closed.
+    func testEnsureFreshCollectionFailsClosedOnTransportError() async {
+        let snap = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        recordMkcolStatuses(leaf: nil, recorder: recorder)
+
+        let fresh = await FileServerClient.ensureFreshCollection(
+            snapshot: snap,
+            collectionKey: "11111111-2222-3333-4444-555555555555/out-0123456789abcdef",
+            session: session)
+
+        XCTAssertFalse(fresh, "a MKCOL that never got an answer proves no freshness")
+    }
+
+    /// The parent conversation folder is ensured best-effort FIRST — a WebDAV
+    /// MKCOL into a missing parent is a 409, so a conversation whose first file
+    /// is an agent output would otherwise never get a box.
+    func testEnsureFreshCollectionCreatesTheParentBeforeTheLeaf() async {
+        let snap = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        // The parent already exists (405) — which is CORRECT for a long-lived
+        // per-conversation folder, and is exactly why only the leaf is strict.
+        recordMkcolStatuses(leaf: 201, parent: 405, recorder: recorder)
+
+        let fresh = await FileServerClient.ensureFreshCollection(
+            snapshot: snap,
+            collectionKey: "11111111-2222-3333-4444-555555555555/out-0123456789abcdef",
+            session: session)
+
+        XCTAssertTrue(fresh, "a 405 on the SHARED parent must not veto a freshly-created leaf")
+        let calls = recorder.calls
+        XCTAssertEqual(calls.count, 2, "one parent MKCOL, then one leaf MKCOL")
+        XCTAssertTrue(calls.allSatisfy { $0.method == "MKCOL" })
+        XCTAssertEqual(calls.first?.url.absoluteString,
+                       "https://fileserver.example.test/11111111-2222-3333-4444-555555555555",
+                       "the parent is the conversation folder")
+        XCTAssertTrue(calls.last?.url.absoluteString.hasSuffix("/out-0123456789abcdef") == true,
+                      "the leaf is the box itself")
+    }
+
+    // MARK: - The pre-dispatch absence witness (404, and nothing else)
+
+    /// The verdict rule: ONLY a `404` witnesses that this dispatch's box is not
+    /// there yet. `207` is the interesting refusal — it means either a collision
+    /// on 128 bits of fresh entropy or a namespace that answers everything, and
+    /// under both readings the folder cannot vouch for what turns up in it.
+    func testAbsenceIsWitnessedOnlyByAFourOhFour() {
+        XCTAssertTrue(FileServerClient.absenceWitnessed(status: 404))
+        for status in [200, 204, 207, 301, 302, 401, 403, 405, 409, 500, 503] {
+            XCTAssertFalse(FileServerClient.absenceWitnessed(status: status),
+                           "status \(status) is not a witnessed absence")
+        }
+    }
+
+    /// The wire shape: `PROPFIND` at `Depth: 0` against the box itself. Depth 0
+    /// because the question is about the collection, not its children — a
+    /// listing would be a strictly larger answer to a smaller question, and on a
+    /// catch-all host a much more expensive one.
+    func testAbsenceWitnessIssuesOnePropfindAtDepthZeroOnTheBox() async {
+        let snap = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        let key = "11111111-2222-3333-4444-555555555555/out-0123456789abcdef0123456789abcdef"
+        var depthHeaders: [String] = []
+
+        MockURLProtocol.requestHandler = { request in
+            recorder.record(method: request.httpMethod ?? "", url: request.url!)
+            depthHeaders.append(request.value(forHTTPHeaderField: "Depth") ?? "")
+            return (HTTPURLResponse(url: request.url!, statusCode: 404,
+                                    httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+
+        let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
+            snapshot: snap, collectionKey: key, session: session)
+
+        XCTAssertTrue(witnessed, "a definite miss on the box is the witness")
+        XCTAssertEqual(recorder.calls.count, 1, "exactly one request — no negative control, no listing")
+        XCTAssertEqual(recorder.calls.first?.method, "PROPFIND")
+        XCTAssertEqual(depthHeaders, ["0"], "Depth: 0 — the collection itself, not its children")
+        XCTAssertEqual(recorder.calls.first?.url.absoluteString,
+                       "https://fileserver.example.test/" + key,
+                       "aimed at the exact box, never the served root")
+    }
+
+    /// Every non-404 answer fails CLOSED. `false` costs one turn without
+    /// automatic delivery; a wrong `true` costs the user a file that is not
+    /// theirs, so the asymmetry decides the polarity.
+    func testAbsenceWitnessFailsClosedOnEveryOtherStatus() async {
+        let snap = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let key = "11111111-2222-3333-4444-555555555555/out-0123456789abcdef0123456789abcdef"
+
+        for status in [200, 207, 401, 403, 405, 500] {
+            MockURLProtocol.requestHandler = { request in
+                (HTTPURLResponse(url: request.url!, statusCode: status,
+                                 httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+            }
+            let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
+                snapshot: snap, collectionKey: key, session: session)
+            XCTAssertFalse(witnessed, "status \(status) must not read as a witnessed absence")
+        }
+    }
+
+    /// A transport failure witnesses nothing. Freshness that was not observed is
+    /// not freshness — including when the failure is a refused certificate,
+    /// which reaches here as an ordinary throw and needs no separate arm because
+    /// the answer to every failure is the same one Bool.
+    func testAbsenceWitnessFailsClosedOnTransportError() async {
+        let snap = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
+
+        let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
+            snapshot: snap,
+            collectionKey: "11111111-2222-3333-4444-555555555555/out-0123456789abcdef0123456789abcdef",
+            session: session)
+
+        XCTAssertFalse(witnessed, "a request that never got an answer proves no absence")
+    }
+
+    /// A root-level collection has no parent to create.
+    func testParentCollectionKeyIsNilAtTheServedRoot() {
+        XCTAssertNil(FileServerClient.parentCollectionKey(of: "out-0123456789abcdef"))
+        XCTAssertEqual(FileServerClient.parentCollectionKey(of: "conv/out-abc"), "conv")
+        XCTAssertEqual(FileServerClient.parentCollectionKey(of: "a/b/c"), "a/b")
     }
 
     func testRequestURLsEncodeStoredKeyAgainstBaseRoot() {
@@ -633,5 +844,277 @@ final class FileServerClientTests: XCTestCase {
         guard case .fileTransferUnreachable = result.failure else {
             return XCTFail("A cold tunnel must stay retryable (got \(String(describing: result.failure))).")
         }
+    }
+
+    // MARK: - The witness runs on the dispatch critical path
+
+    private static let witnessBoxKey =
+        "11111111-2222-3333-4444-555555555555/out-0123456789abcdef0123456789abcdef"
+
+    /// EVERY send on a configured lane awaits the witness before the converse
+    /// request is even built — including a pure-text turn that was never going to
+    /// involve a file. On the lane's ordinary interactive budget a file server
+    /// that is simply not answering (a NAS behind a VPN that is down) stalls the
+    /// user's every turn by that full budget; the witness therefore carries its
+    /// own, much shorter deadline.
+    func testAbsenceWitnessRequestCarriesItsOwnShortDeadline() async {
+        let snap = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let deadlines = TimeoutRecorder()
+
+        MockURLProtocol.requestHandler = { request in
+            deadlines.record(request.timeoutInterval)
+            return (HTTPURLResponse(url: request.url!, statusCode: 404,
+                                    httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+        _ = await BackgroundFileTransfer.witnessCollectionAbsent(
+            snapshot: snap, collectionKey: Self.witnessBoxKey, session: session)
+
+        XCTAssertEqual(deadlines.values, [Constants.fileServerAbsenceWitnessTimeout],
+                       "the pre-dispatch witness runs on its own deadline, not the lane's")
+        XCTAssertLessThan(Constants.fileServerAbsenceWitnessTimeout,
+                          Constants.fileServerProbeTimeout,
+                          "a liveness check the user never asked for must not cost what a "
+                          + "download the user is waiting for may")
+
+        // The POST-reply listing keeps the interactive budget — it runs once, off
+        // the send path, and a user watching for their file can wait.
+        XCTAssertEqual(
+            FileServerClient.buildPropfindRequest(
+                snapshot: snap, collectionKey: Self.witnessBoxKey, depth: 1).timeoutInterval,
+            Constants.fileServerProbeTimeout)
+    }
+
+    /// The verdict is a function of the STATUS LINE, so the body is never read.
+    /// Draining it spent up to the listing cap of async iterations per send for
+    /// bytes nothing inspects — and it turned a `404` that happened to carry a
+    /// large body into "not witnessed", disabling file return on a server that
+    /// answered the question correctly.
+    func testAbsenceWitnessIgnoresAnOverCapBodyOnADefiniteMiss() async {
+        let snap = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let huge = Data(repeating: 0x41, count: FileServerClient.listingMaxBytes + 1)
+
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!, huge)
+        }
+        let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
+            snapshot: snap, collectionKey: Self.witnessBoxKey, session: session)
+
+        XCTAssertTrue(witnessed,
+                      "a definite miss is a definite miss whatever the server padded it with")
+    }
+
+    /// A `207` still fails closed with an over-cap body — the body is irrelevant
+    /// in BOTH directions, which is what makes ignoring it safe.
+    func testAbsenceWitnessStillFailsClosedOnATwoOhSevenWithAHugeBody() async {
+        let snap = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 207,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!,
+             Data(repeating: 0x41, count: FileServerClient.listingMaxBytes + 1))
+        }
+        let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
+            snapshot: snap, collectionKey: Self.witnessBoxKey, session: session)
+        XCTAssertFalse(witnessed)
+    }
+
+    // MARK: - What gates the outbox mint
+
+    /// `folderCapable` measures whether the CLIENT may nested-PUT. Conduck never
+    /// creates the box and never writes into it — the agent does — so the only
+    /// client operation the box ever sees is a PROPFIND, which a nested-PUT-hostile
+    /// lane answers perfectly well. Gating the mint on it left phone, Mac and
+    /// CarPlay with no file return on a lane where the Watch, which is never told
+    /// the flag, named a box anyway: two surfaces on ONE lane disagreeing.
+    func testTheMintIsGatedOnTheWitnessNotOnNestedPutCapability() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+        let conversationID = UUID()
+
+        let key = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+            conversationID: conversationID,
+            snapshot: makeSnapshot(folderCapable: false),
+            session: session)
+
+        XCTAssertNotNil(key, "a lane that refuses nested PUTs can still be listed")
+        XCTAssertEqual(key?.hasPrefix(conversationID.uuidString + "/" + OutboxKey.componentPrefix), true)
+    }
+
+    /// And the gate that IS consulted still holds: no witnessed absence, no box,
+    /// no line on the wire — on a fully folder-capable lane.
+    func testAFailedWitnessMintsNoBoxEvenOnAFolderCapableLane() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 207,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+        let key = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+            conversationID: UUID(),
+            snapshot: makeSnapshot(folderCapable: true),
+            session: session)
+        XCTAssertNil(key, "freshness that was not witnessed is not freshness")
+    }
+
+    // MARK: - The staged test certifies the RETURN direction too
+
+    /// Script a staged test that passes every byte-moving stage, with PROPFIND
+    /// answered by `propfind` — `nil` throws, standing in for a transport
+    /// failure.
+    private func scriptStagedTest(propfind: @escaping (URLRequest) throws -> Int) {
+        MockURLProtocol.requestHandler = { request in
+            let url = request.url!
+            let ok = { (status: Int, body: Data) in
+                (HTTPURLResponse(url: url, statusCode: status,
+                                 httpVersion: "HTTP/1.1", headerFields: nil)!, body)
+            }
+            switch request.httpMethod {
+            case "PUT": return ok(201, Data())
+            case "GET":
+                let nested = url.absoluteString.contains("__conduck_probe__/")
+                return ok(200, Data((nested ? "conduck-nested-probe" : "conduck-probe").utf8))
+            case "DELETE": return ok(204, Data())
+            case "PROPFIND": return ok(try propfind(request), Data())
+            default: return ok(200, Data())
+            }
+        }
+    }
+
+    /// PROPFIND is the SOLE delivery authority — it gates every dispatch (the
+    /// absence witness) and reads every reply's folder — so a staged test that
+    /// never issued one certified half a lane as fully green. The user then got
+    /// no file return at all, permanently, with no signal anywhere they could act
+    /// on.
+    func testStagedTestFailsWhenTheServerCannotAnswerPropfind() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        // A plain-HTTP store, or an nginx-DAV without the ext module: PUT and GET
+        // are perfect, PROPFIND is not implemented.
+        scriptStagedTest(propfind: { _ in 405 })
+
+        let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
+
+        XCTAssertFalse(result.success)
+        XCTAssertEqual(result.reachedStage, .listing,
+                       "every byte-moving stage passed; the return direction is what failed")
+        XCTAssertEqual(result.failure?.errorCode, AppError.fileTransferNotAFileServer.errorCode)
+    }
+
+    /// A catch-all host that answers every path with a `207` passes the listing
+    /// itself and can never witness an absence, so it can never mint a box. It
+    /// fails the same stage.
+    func testStagedTestFailsWhenTheNamespaceAnswersEverything() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(propfind: { _ in 207 })
+
+        let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
+
+        XCTAssertFalse(result.success)
+        XCTAssertEqual(result.reachedStage, .listing)
+    }
+
+    /// The probe asks the two questions the dispatch path asks, in the shape it
+    /// asks them: `Depth: 0` on a collection that exists, then `Depth: 0` on one
+    /// that cannot.
+    func testStagedTestPassesWhenPropfindWorksAndCanSayNo() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        var depths: [String] = []
+        scriptStagedTest(propfind: { request in
+            recorder.record(method: "PROPFIND", url: request.url!)
+            depths.append(request.value(forHTTPHeaderField: "Depth") ?? "")
+            return request.url!.absoluteString.contains("__conduck_absent_") ? 404 : 207
+        })
+
+        let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
+
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(result.reachedStage, .listing, "a full pass now reaches the listing stage")
+        XCTAssertNil(result.failure)
+        XCTAssertTrue(result.folderCapable)
+
+        let propfinds = recorder.calls
+        XCTAssertEqual(propfinds.count, 2, "one collection that exists, one that cannot")
+        XCTAssertEqual(propfinds.first?.url.absoluteString, "https://fileserver.example.test",
+                       "the first asks a collection that certainly exists — the served root")
+        XCTAssertTrue(propfinds.last?.url.absoluteString.contains("__conduck_absent_") == true)
+        XCTAssertEqual(depths, ["0", "0"],
+                       "Depth: 0 — a yes/no question must not enumerate the user's files")
+    }
+
+    /// A transport failure on the listing probe is NOT a verdict. It narrows
+    /// nothing that could be persisted wrong, and failing an otherwise clean
+    /// five-request sequence on the fifth request's hiccup would be a test that
+    /// lies about the server.
+    func testStagedTestTolerantOfATransportHiccupOnTheListingProbe() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(propfind: { _ in throw URLError(.timedOut) })
+
+        let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
+
+        XCTAssertTrue(result.success, "nothing was learned, so nothing is claimed")
+        XCTAssertEqual(result.reachedStage, .listing)
+    }
+}
+
+/// Records the `timeoutInterval` of every request a mocked session issued.
+/// Locked for the same reason `FileLaneRequestRecorder` is — `startLoading` runs
+/// off the test's thread.
+final class TimeoutRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [TimeInterval] = []
+
+    var values: [TimeInterval] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func record(_ value: TimeInterval) {
+        lock.lock()
+        storage.append(value)
+        lock.unlock()
+    }
+}
+
+/// Records the requests a `MockURLProtocol`-backed session actually issued, so a
+/// test can assert on the SEQUENCE rather than only on the verdict. Shared by
+/// the MKCOL-freshness cases here and the listing/negative-control cases in
+/// `OutboxNegativeControlTests`.
+///
+/// `@unchecked Sendable` behind a lock: `URLProtocol.startLoading` runs off the
+/// test's thread, so an unsynchronised array would be a data race.
+final class FileLaneRequestRecorder: @unchecked Sendable {
+    struct Call {
+        let method: String
+        let url: URL
+    }
+
+    private let lock = NSLock()
+    private var storage: [Call] = []
+
+    var calls: [Call] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func record(method: String, url: URL) {
+        lock.lock()
+        storage.append(Call(method: method, url: url))
+        lock.unlock()
     }
 }

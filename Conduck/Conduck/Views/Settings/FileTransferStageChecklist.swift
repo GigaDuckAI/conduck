@@ -4,7 +4,8 @@
 // FileTransferStageChecklist.swift
 //
 // Agent File Transfer. The staged test-result checklist (Reachability &
-// TLS → Authentication → Write a test file → Read it back), extracted from
+// TLS → Authentication → Write a test file → Read it back → List a folder),
+// extracted from
 // `FileTransferSetupGuideView` so the editor's pushed file-transfer page
 // (`GatewayFileTransferPage`) and the composer's setup sheet share ONE
 // rendering. Pure presentation: it takes a `FileTransferTestResult?` and draws
@@ -12,11 +13,12 @@
 //
 // The "single line at rest + Show details on failure" gating is the HOST's
 // concern (each caller owns a `showDetails` @State), so this view stays dumb and
-// reusable — it always renders the full four-stage list when shown.
+// reusable — it always renders the full stage list when shown.
 
 import SwiftUI
 
-/// The four-stage file-transfer test checklist. `result == nil` → every stage
+/// The file-transfer test checklist, one row per `FileTransferTestStage`.
+/// `result == nil` → every stage
 /// renders pending (empty circle); a result lights stages up to `reachedStage`
 /// (passed) and marks the reached stage passed/failed, with the failure detail
 /// inline under the stage it stopped on.
@@ -98,6 +100,10 @@ struct FileTransferStageChecklist: View {
             return LocalizedStringResource("fileTransfer.test.stage.write", defaultValue: "Write a test file")
         case .read:
             return LocalizedStringResource("fileTransfer.test.stage.read", defaultValue: "Read it back")
+        case .listing:
+            // The return direction, in the user's terms: this is the capability
+            // that decides whether files an agent produces ever reach the device.
+            return LocalizedStringResource("fileTransfer.test.stage.listing", defaultValue: "List a folder")
         }
     }
 }
