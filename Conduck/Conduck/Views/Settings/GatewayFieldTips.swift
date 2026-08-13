@@ -96,6 +96,30 @@ enum GatewayFieldTips {
         )
     )
 
+    /// Default for new chats — the one tip that annotates a SECTION rather than a
+    /// field, because the thing needing explanation is the relationship between
+    /// this setting and the sticky last-used gateway, not the row's value.
+    ///
+    /// Deliberately does NOT claim the setting drives Apple Watch, CarPlay or the
+    /// share sheet: the Watch Ask flow and CarPlay both have their own choosers,
+    /// and the share sheet pre-selects the first configured gateway rather than
+    /// this one. Naming only the Action Button and Shortcuts keeps it true.
+    static let defaultForNewChats = GatewayFieldTip(
+        symbol: "clock.arrow.circlepath",
+        accessibilityLabel: LocalizedStringResource(
+            "settings.personalAI.tip.newChats.a11y",
+            defaultValue: "About New chats use"
+        ),
+        title: LocalizedStringResource(
+            "settings.personalAI.tip.newChats.title",
+            defaultValue: "Where new chats start"
+        ),
+        message: LocalizedStringResource(
+            "settings.personalAI.tip.newChats.message",
+            defaultValue: "A new chat on this device continues on the gateway you last used, so you don’t have to pick it again each time. This setting is where the first one starts, and where the Action Button and Shortcuts send when nothing asked you to choose."
+        )
+    )
+
     /// Model — which brain answers. Self-hosted lanes never see this row.
     static let model = GatewayFieldTip(
         symbol: "cpu",

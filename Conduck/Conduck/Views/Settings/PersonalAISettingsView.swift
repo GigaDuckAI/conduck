@@ -128,10 +128,19 @@ struct PersonalAISettingsView: View {
             }
             .buttonStyle(.plain)
         } header: {
-            Text(LocalizedStringResource(
-                "settings.personalAI.newChats.header",
-                defaultValue: "New chats use"
-            ))
+            // The tip sits in the HEADER, not the row: the row is a full-width
+            // Button whose `contentShape` claims every point in it, and
+            // `InfoTipButton`'s placement contract forbids nesting a tip inside a
+            // row action (its taps would go to the row). Its trailing slot is
+            // taken by the amber value + chevron, so the header is the one spot
+            // that keeps the tip a separate, actionable sibling.
+            HStack(spacing: 0) {
+                Text(LocalizedStringResource(
+                    "settings.personalAI.newChats.header",
+                    defaultValue: "New chats use"
+                ))
+                InfoTipButton(tip: GatewayFieldTips.defaultForNewChats)
+            }
         }
     }
 

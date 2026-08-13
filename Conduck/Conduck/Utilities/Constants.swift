@@ -1171,6 +1171,30 @@ enum Constants {
     /// gateway broadcast envelope's `defaultBackendRef` slot.
     static let remoteAgentWatchDefaultBackendKey = "remoteAgent.watchDefaultBackend"
 
+    /// App Groups UserDefaults key for the **last-used gateway** — the gateway
+    /// the most recent conversation on THIS device was actually started on.
+    /// Stores a `RemoteAgentRef.rawString`; ABSENT = "no chat started here yet",
+    /// which is a legitimate answer and falls back to the device-local default.
+    ///
+    /// **App-Group ONLY — NEVER iCloud KVS.** A gateway picked on one device must
+    /// not re-aim another device's picker; this mirrors the default pointer's
+    /// device-local posture (`remoteAgentDefaultBackendKVSKey`).
+    ///
+    /// **It is a picker HINT, never a routing authority.** Only the two new-chat
+    /// picker seeds consume it as a pre-selection
+    /// (`ContentView.refreshGatewayRoster` / `MainWindowView.refreshConfiguredBackends`),
+    /// and both validate it against the configured roster before showing it. A
+    /// send always routes on the conversation's own sealed `backend`, never on
+    /// this. Two more sites read the RAW slot without pre-selecting from it — the
+    /// inbound-KVS handler (to spot a peer's Forget of a built-in) and
+    /// `clearLastUsedRemoteAgentRefIfPointing`.
+    ///
+    /// Deliberately a SINGLETON key, not a `…(for:)` per-ref helper: the per-ref
+    /// families are enumerated by `gatewayOwnedKeyPrefixes` /
+    /// `gatewayUserStateKeyPrefixes`, and a global slot must never match those
+    /// per-uuid purge scans.
+    static let remoteAgentLastUsedBackendKey = "remoteAgent.lastUsedBackend"
+
     /// Default backend for fresh installs / when no default pointer is stored.
     /// `.openclaw` is the reference gateway (mirrors `sttActivePresetIDDefault`).
     static let remoteAgentDefaultBackendDefault: RemoteAgentBackend = .openclaw

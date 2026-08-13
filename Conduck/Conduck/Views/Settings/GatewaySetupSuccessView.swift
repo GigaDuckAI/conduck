@@ -213,6 +213,12 @@ struct GatewaySetupSuccessView: View {
             // New-chats routing — names the gateway when it's the default, else a
             // quiet pointer to the Settings selector (mirrors the connect step's
             // default-vs-not copy).
+            //
+            // States that this gateway IS the default, never that the next chat
+            // will use it: a new chat continues on the gateway the last one was
+            // started on (`NewChatGatewaySeed`), so with another gateway used more
+            // recently, "New chats · Using X" would be a plain falsehood — the same
+            // one the chooser footer was reworded to avoid.
             if isDefault, let name = gatewayName {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Image(systemName: "bubble.left.and.bubble.right.fill")
@@ -220,7 +226,7 @@ struct GatewaySetupSuccessView: View {
                         .accessibilityHidden(true)
                     (Text(LocalizedStringResource(
                         "gateway.setup.success.newChats.usingPrefix",
-                        defaultValue: "New chats · Using ")) // xcstrings: gateway-setup-success
+                        defaultValue: "Default for new chats · ")) // xcstrings: gateway-setup-success
                         + Text(verbatim: name))
                         .onboardingScaledFont(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)

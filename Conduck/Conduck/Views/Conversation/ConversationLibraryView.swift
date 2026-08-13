@@ -55,6 +55,16 @@ struct ConversationLibraryView: View {
     /// stop a background roster refresh from reinstating the Settings default
     /// over that choice. Called after the `selectedRef` binding is written.
     let onPickBackend: () -> Void
+    /// Notify the host that a NEW chat was started here, so it can retire the
+    /// previous hand-pick and re-seed the picker.
+    ///
+    /// Must be an ACTION callback, not something the host derives from
+    /// `selectedConversationID`: `startNewConversation()` only writes `nil`, so
+    /// pressing New while already on the empty state is a nil → nil write that no
+    /// `onChange` observes — and that is exactly the "pick a gateway, change your
+    /// mind, press New again" gesture. All four iPad entry points (list callback,
+    /// sidebar button, detail toolbar, ⌘N) funnel through that one function.
+    let onStartNewConversation: () -> Void
     /// Open the host's Settings sheet, optionally deep-linked to a category. The
     /// host owns the sheet; passing `.voice` lands directly on Settings → Voice
     /// (the mic-gate redirect). `nil` opens the root list.
@@ -536,6 +546,9 @@ struct ConversationLibraryView: View {
         attachmentCoordinator.beginNewChatSession()
         selectedConversationID = nil
         hostMascot = MascotShuffleBag.next()  // fresh shuffle-bag pose for the new empty state
+        // Last: the host retires the previous hand-pick and re-seeds the picker.
+        // Fires even when the selection was already nil, which `onChange` cannot.
+        onStartNewConversation()
     }
 
     /// Route a spoken turn's STT Result: on success POPULATE the composer draft

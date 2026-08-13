@@ -3187,6 +3187,13 @@ actor SettingsManager {
     /// Set the ref-based default pointer (built-in OR custom), DEVICE-LOCAL —
     /// App Groups only, NO iCloud KVS write (each device owns its default).
     /// No-op when unchanged.
+    ///
+    /// This is the PROGRAMMATIC re-point — the Forget fallbacks and the
+    /// first-gateway bootstrap. It deliberately leaves the sticky last-used
+    /// pointer alone: those callers are the app choosing a default on the user's
+    /// behalf, and the gateway the user last worked on may be a different,
+    /// still-configured one that they never asked to give up. When the USER picks
+    /// a default, call `applyUserChosenDefault` instead.
     func setDefaultRemoteAgentRef(_ newRef: RemoteAgentRef) {
         guard newRef != defaultRemoteAgentRef() else { return }
         defaults.set(newRef.rawString, forKey: Constants.remoteAgentDefaultBackendKVSKey)
@@ -3201,6 +3208,30 @@ actor SettingsManager {
         // on an ACTUAL change. `clearActiveConversation()` also posts
         // `.settingsDidChangeRemotely`, so no separate post is needed here.
         clearActiveConversation()
+    }
+
+    /// The USER picked a default in the chooser. One actor turn, three effects.
+    ///
+    /// Distinct from `setDefaultRemoteAgentRef` because only a deliberate choice
+    /// retires the sticky last-used pointer. The programmatic re-points (Forget
+    /// fallback, first-gateway bootstrap) must NOT, or forgetting gateway A would
+    /// silently discard a last-used naming a perfectly healthy gateway B.
+    ///
+    /// Both remaining steps run even when the chosen ref EQUALS the stored default:
+    ///
+    ///   - the clear, because a user whose setting looks ignored re-taps the
+    ///     gateway already checked, and that gesture has to work;
+    ///   - the post, because it is the only thing that makes the surfaces re-seed.
+    ///     Without it the re-tap clears storage and nothing re-reads it — on macOS
+    ///     `selectedRef` and `pendingNewConversationRef` would both stay on the
+    ///     retired gateway and the very next send would mint there, so the setting
+    ///     would be not merely ignored-looking but actually ignored.
+    func applyUserChosenDefault(_ newRef: RemoteAgentRef) {
+        clearLastUsedRemoteAgentRef()
+        let changed = newRef != defaultRemoteAgentRef()
+        // Posts `.settingsDidChangeRemotely` itself, via `clearActiveConversation()`.
+        setDefaultRemoteAgentRef(newRef)
+        if !changed { postSettingsDidChangeRemotely() }
     }
 
     // MARK: - Apple Watch default override (App-Group ONLY — never iCloud KVS)
@@ -3242,6 +3273,123 @@ actor SettingsManager {
     /// value that rides the broadcast envelope's `defaultBackendRef` slot.
     func watchEffectiveDefaultRef() -> RemoteAgentRef {
         watchDefaultOverrideRef() ?? defaultRemoteAgentRef()
+    }
+
+    // MARK: - Last-used gateway (App-Group ONLY — never iCloud KVS)
+
+    /// The gateway the most recent conversation on THIS device was started on, or
+    /// `nil` for "none yet". Seeds the new-chat picker ahead of the device-local
+    /// default, so a new chat continues where the last one left off.
+    ///
+    /// **A HINT, NEVER A ROUTING AUTHORITY.** The two picker seeds validate the
+    /// result against the configured roster before displaying it, and a send always
+    /// routes on the conversation's own sealed `backend`. A half-configured ref
+    /// (URL but no token) is therefore returned deliberately — the seed site is
+    /// what rejects it. Do not hand this to anything that dispatches.
+    ///
+    /// **SELF-HEALS BY IGNORING, NOT REMOVING.** A ref with no stored evidence is
+    /// reported absent, but the stored string is left alone. Removing it buys
+    /// nothing — the pointer is rewritten on every accepted mint, and the seed site
+    /// range-checks it anyway — while a restored backup whose gateway URL is still
+    /// downloading from iCloud KVS reads as evidence-free on first launch and would
+    /// lose the pointer permanently, never recovering once KVS lands. This is a
+    /// deliberate divergence from `watchDefaultOverrideRef()`, which deletes only
+    /// because it feeds a broadcast envelope that must not carry a dead ref.
+    /// Intent-driven removals happen at their source instead: `clearRemoteAgent`,
+    /// `setDefaultRemoteAgentRef`, and a confirmed inbound deletion.
+    ///
+    /// Evidence, not `configuredRemoteAgentRefs().contains`, for the same reason
+    /// `defaultRemoteAgentRef()` uses it: the configured predicate fails closed on
+    /// an unreadable Keychain, which would report every gateway gone before first
+    /// unlock.
+    func lastUsedRemoteAgentRef() -> RemoteAgentRef? {
+        #if DEBUG
+        // QA runs must not inherit a pre-selection from whatever the founder last
+        // used, or `-ConduckQADefaultBackend` stops being authoritative. This
+        // short-circuit is the getter's ONLY difference from the shared reader —
+        // the inbound-KVS handler deliberately skips it, because a peer's Forget
+        // must still retire the founder's real pointer during a QA run.
+        if QAMode.isActive { return nil }
+        #endif
+        return storedLastUsedRefIfEvidenced()
+    }
+
+    /// The stored last-used ref, or `nil` when it is absent, unparseable, or has no
+    /// evidence behind it. Shared by `lastUsedRemoteAgentRef()` and the inbound-KVS
+    /// peer-Forget check so the two can never disagree about what a live pointer is.
+    ///
+    /// NO built-in exemption — the OPPOSITE of `defaultRemoteAgentRef()`. That
+    /// exemption exists because `deleteCustomGateway` deliberately re-points the
+    /// default AT a built-in, so a fresh built-in pointer must survive having no
+    /// evidence yet. Nothing ever re-points last-used, so an evidence-free built-in
+    /// is simply a stale suggestion for a gateway the user has since forgotten —
+    /// and built-in refs are reused on reconfiguration, so honouring it could
+    /// pre-select a ref that now means a completely different server.
+    private func storedLastUsedRefIfEvidenced() -> RemoteAgentRef? {
+        guard let raw = defaults.string(forKey: Constants.remoteAgentLastUsedBackendKey),
+              let ref = RemoteAgentRef(rawString: raw),
+              hasStoredRemoteAgentEvidence(ref) else {
+            return nil
+        }
+        return ref
+    }
+
+    /// Record the gateway a conversation was just started on. Called ONLY from the
+    /// two picker-bearing mint paths, and only once the turn is locally accepted.
+    ///
+    /// Does NOT post `.settingsDidChangeRemotely` — unlike its sibling
+    /// `setWatchDefaultOverrideRef`, whose post exists to re-broadcast to the wrist.
+    /// The omission is deliberate: this fires on every first send, and a post here
+    /// would kick a roster refresh each time (the macOS refresh has no
+    /// conversation guard, so it would churn the picker mid-thread).
+    func setLastUsedRemoteAgentRef(_ newRef: RemoteAgentRef) {
+        #if DEBUG
+        if QAMode.isActive { return }
+        #endif
+        let next = newRef.rawString
+        guard next != defaults.string(forKey: Constants.remoteAgentLastUsedBackendKey) else { return }
+        defaults.set(next, forKey: Constants.remoteAgentLastUsedBackendKey)
+    }
+
+    /// Drop the last-used pointer. Called where the user has made a fresh statement
+    /// of gateway intent that supersedes it — choosing a default, forgetting a
+    /// gateway — and on a CONFIRMED inbound deletion. Never on ambiguous absence;
+    /// that is `lastUsedRemoteAgentRef()`'s ignore-but-retain policy.
+    func clearLastUsedRemoteAgentRef() {
+        #if DEBUG
+        // Guarded like the getter and setter: a QA-mode default choice, Forget, or
+        // inbound mirror must not delete the real App-Group pointer.
+        if QAMode.isActive { return }
+        #endif
+        defaults.removeObject(forKey: Constants.remoteAgentLastUsedBackendKey)
+    }
+
+    /// Clear a last-used pointer that names `ref`, leaving any other value intact.
+    /// For deletion events, which invalidate only their own gateway.
+    func clearLastUsedRemoteAgentRefIfPointing(at ref: RemoteAgentRef) {
+        guard defaults.string(forKey: Constants.remoteAgentLastUsedBackendKey) == ref.rawString else { return }
+        clearLastUsedRemoteAgentRef()
+    }
+
+    /// Everything the new-chat gateway picker needs, read in ONE actor turn.
+    ///
+    /// The four values MUST describe one moment. Read separately, each `await` is a
+    /// suspension the picker can be re-seeded across: a refresh could sample the
+    /// default, suspend, have Settings re-point it and clear last-used underneath,
+    /// then resume and seed the value it read before the change — which the next
+    /// send would seal. `defaultRemoteAgentRef()` can also WRITE (its config-sync
+    /// bootstrap), so the reads are not even side-effect-free.
+    ///
+    /// Mirrors `remoteAgentSnapshot()` / `activeSTTSnapshot()`. All four component
+    /// calls are synchronous and actor-isolated, so this composes with no interior
+    /// suspension and no reentrancy.
+    func newChatPickerSnapshot() -> NewChatPickerSnapshot {
+        NewChatPickerSnapshot(
+            configuredRefs: configuredRemoteAgentRefs(),
+            badgeRoster: gatewayBadgeRoster(),
+            defaultRef: defaultRemoteAgentRef(),
+            lastUsedRef: lastUsedRemoteAgentRef()
+        )
     }
 
     // MARK: - Apple Watch session-policy override (App-Group ONLY — never iCloud KVS)
@@ -5165,6 +5313,26 @@ actor SettingsManager {
         guard change.reason.deliversRemoteValues else { return }
         let changedKeys = change.changedKeys
 
+        // Snapshot BEFORE any mirroring below. A peer's Forget of a BUILT-IN has no
+        // roster entry to vanish — it shows up only as the gateway's evidence
+        // disappearing through the URL / auth-scheme / model mirrors. Only a
+        // TRANSITION counts, which is why the value is captured here rather than
+        // tested at the end: a pointer whose gateway has not arrived yet (restored
+        // backup, KVS still downloading) is evidence-free the whole way through, and
+        // treating that end state as a removal would delete it permanently — the
+        // exact loss `lastUsedRemoteAgentRef()`'s ignore-but-retain policy exists to
+        // prevent.
+        //
+        // Gated on the reason so the ONLY consumer's precondition is also this
+        // capture's: `hasStoredRemoteAgentEvidence` runs the keychain + remote-agent
+        // migrations and decodes the roster, and doing that on every unrelated
+        // language or voice push would both waste the work and pull those migrations
+        // ahead of the seeding step below, whose ordering is pinned by its own doc.
+        var lastUsedBuiltInHadEvidence: RemoteAgentRef?
+        if case .serverChange = change.reason {
+            lastUsedBuiltInHadEvidence = storedLastUsedRefIfEvidenced().flatMap { $0.isBuiltin ? $0 : nil }
+        }
+
         // The `testedLocally` seed must land BEFORE the fileServer mirror below
         // can write a remote `available=true` into defaults — after that write,
         // a local `available=true` no longer proves this device tested locally.
@@ -5437,7 +5605,26 @@ actor SettingsManager {
             } else {
                 defaults.removeObject(forKey: Constants.customGatewaysRegistryKey)
             }
-            retireVanishedCustomGateways(previous: previousRoster, current: persistedCustomGateways())
+            let currentRoster = persistedCustomGateways()
+            retireVanishedCustomGateways(previous: previousRoster, current: currentRoster)
+            // A peer's Forget also retires the gateway as this device's new-chat
+            // pre-selection, because a custom UUID can be recreated and the stale
+            // pointer would then name a different server.
+            //
+            // `.serverChange` ONLY — deliberately narrower than the badge retire
+            // above. An initial-sync change can deliver a roster older than a
+            // gateway this device just created, which is indistinguishable from a
+            // Forget. The badge retire tolerates that guess because a wrong record
+            // is invisible and self-prunes; discarding the last-used pointer has no
+            // such undo, and losing it silently is exactly the failure the
+            // ignore-but-retain policy in `lastUsedRemoteAgentRef()` exists to
+            // avoid.
+            if case .serverChange = change.reason {
+                let surviving = Set(currentRoster.map(\.id))
+                for gone in previousRoster where !surviving.contains(gone.id) {
+                    clearLastUsedRemoteAgentRefIfPointing(at: .custom(gone.id))
+                }
+            }
             didChange = true
         }
 
@@ -5485,6 +5672,21 @@ actor SettingsManager {
                 }
                 didChange = true
             }
+        }
+
+        // The built-in half of "a peer forgot this gateway" (the custom half is the
+        // roster-diff above): evidence that was present when this change arrived is
+        // gone now, so the pre-selection is retired for the same reason — built-in
+        // refs are reused when the lane is set up again, and a surviving pointer
+        // would name a different server than the one the user last chose.
+        //
+        // `.serverChange` only, matching the custom branch: an initial-sync change
+        // can deliver state older than this device's own setup, which is
+        // indistinguishable from a removal.
+        if case .serverChange = change.reason,
+           let ref = lastUsedBuiltInHadEvidence,
+           !hasStoredRemoteAgentEvidence(ref) {
+            clearLastUsedRemoteAgentRef()
         }
 
         if didChange {

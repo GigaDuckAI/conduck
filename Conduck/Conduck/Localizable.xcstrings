@@ -5395,7 +5395,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "New chats · Using "
+            "value" : "Default for new chats · "
           }
         }
       }
@@ -9660,7 +9660,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "New chats start on this gateway. Existing chats keep the one they started on."
+            "value" : "New chats start here until you use a different gateway, then they follow that one. Existing chats keep the one they started on."
           }
         }
       }
@@ -9760,6 +9760,39 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Custom gateways"
+          }
+        }
+      }
+    },
+    "settings.personalAI.tip.newChats.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About New chats use"
+          }
+        }
+      }
+    },
+    "settings.personalAI.tip.newChats.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A new chat on this device continues on the gateway you last used, so you don’t have to pick it again each time. This setting is where the first one starts, and where the Action Button and Shortcuts send when nothing asked you to choose."
+          }
+        }
+      }
+    },
+    "settings.personalAI.tip.newChats.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Where new chats start"
           }
         }
       }

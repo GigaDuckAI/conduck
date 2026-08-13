@@ -53,9 +53,10 @@ struct MainWindowView: View {
 
     @State private var selectedConversationID: UUID?
     /// Session-local gateway-picker selection for the NEXT new macOS
-    /// conversation. Seeded from the persisted default; the picker drives it AND
-    /// writes through to `coordinator.pendingNewConversationRef` so the next
-    /// minted conversation actually binds to the chosen gateway.
+    /// conversation. Seeded by `NewChatGatewaySeed` (the gateway the last chat was
+    /// started on, else the persisted default); the picker drives it AND writes
+    /// through to `coordinator.pendingNewConversationRef` so the next minted
+    /// conversation actually binds to the chosen gateway.
     @State private var selectedRef: RemoteAgentRef = .builtin(Constants.remoteAgentDefaultBackendDefault)
     /// True once the user has picked a gateway BY HAND for the chat currently
     /// being composed. It makes that choice outrank the persisted Settings
@@ -617,7 +618,8 @@ struct MainWindowView: View {
         selectedConversationID = nil
         hostMascot = MascotShuffleBag.next()  // fresh shuffle-bag pose for the new empty state
         // Drop the PREVIOUS chat's hand-pick synchronously, before the refresh
-        // below can observe it — a genuinely fresh chat starts on the default.
+        // below can observe it — a genuinely fresh chat starts from the seed
+        // ladder (last-used, else the default), not the previous chat's pick.
         userPickedRefForNewChat = false
         coordinator.pendingNewConversationRef = selectedRef
         Task { await refreshConfiguredBackends() }
@@ -632,22 +634,27 @@ struct MainWindowView: View {
     /// suspended — the resumed task then overwrote a gateway the user had since
     /// chosen, visibly in the title bar and in the ref the next send seals.
     private func refreshConfiguredBackends() async {
-        let refs = await SettingsManager.shared.configuredRemoteAgentRefs()
-        let roster = await SettingsManager.shared.gatewayBadgeRoster()
-        let persistedDefault = await SettingsManager.shared.defaultRemoteAgentRef()
+        // ONE actor turn for all four values — see the twin in
+        // `ContentView.refreshGatewayRoster()`. Do NOT split this into separate
+        // awaits or move a read below the guards: each suspension is a window in
+        // which a resumed refresh can move the picker under the user, which is the
+        // bug the hand-pick flag exists to close.
+        let snapshot = await SettingsManager.shared.newChatPickerSnapshot()
+        let refs = snapshot.configuredRefs
 
         configuredRefs = refs
-        customGateways = roster
+        customGateways = snapshot.badgeRoster
         guard !gatewaySelectionLocked else { return }
-        // A hand-pick outranks the persisted default until this chat is minted or
-        // the user starts another one. It yields only when the picked gateway is
-        // no longer configured at all — and then to the default, or to the first
-        // configured ref if the default is not configured either, never to
-        // another invalid selection.
+        // A hand-pick outranks the seed until this chat is minted or the user
+        // starts another one. It yields only when the picked gateway is no longer
+        // configured at all — and then to the seed ladder, never to another
+        // invalid selection.
         if !userPickedRefForNewChat || !refs.contains(selectedRef) {
-            selectedRef = refs.contains(persistedDefault)
-                ? persistedDefault
-                : (refs.first ?? persistedDefault)
+            selectedRef = NewChatGatewaySeed.resolve(
+                configured: refs,
+                lastUsed: snapshot.lastUsedRef,
+                persistedDefault: snapshot.defaultRef
+            )
             userPickedRefForNewChat = false
         }
         // Keep the pending mint-ref in sync with the visible picker label so a
