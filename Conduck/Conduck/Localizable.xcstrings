@@ -4,6 +4,63 @@
     "" : {
 
     },
+    "…" : {
+
+    },
+    "[Image]" : {
+
+    },
+    "%@ is answering…" : {
+
+    },
+    "%@ is having issues. Try again in a moment." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ is having issues. Try again in a moment."
+          }
+        }
+      }
+    },
+    "%lld" : {
+
+    },
+    "⌘⇧1 — Ask by voice or text: press again to send" : {
+
+    },
+    "⌘⇧2 — Screenshot & Ask: drag a region, then ask; both send together" : {
+
+    },
+    "A notification is how Conduck reaches you the moment your reply is ready." : {
+
+    },
+    "A photo in this chat was too large for your gateway. Start a new voice chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A photo in this chat was too large for your gateway. Start a new voice chat."
+          }
+        }
+      }
+    },
+    "About" : {
+
+    },
+    "Action Button" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Action Button"
+          }
+        }
+      }
+    },
     "activity.a11y.newReply" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -99,140 +156,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Waiting for a reply…"
-          }
-        }
-      }
-    },
-    "conversation.row.youSaid" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "You: %@"
-          }
-        }
-      }
-    },
-    "quitGuard.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Quitting now ends the request. The answer can't be recovered — you'd have to ask again."
-          }
-        }
-      }
-    },
-    "quitGuard.button.keepWaiting" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Keep Waiting"
-          }
-        }
-      }
-    },
-    "quitGuard.button.quit" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Quit Anyway"
-          }
-        }
-      }
-    },
-    "quitGuard.multiple.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld conversations are still waiting on answers"
-          }
-        }
-      }
-    },
-    "quitGuard.single.named.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ is still working on “%@”"
-          }
-        }
-      }
-    },
-    "quitGuard.single.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your personal AI is still answering"
-          }
-        }
-      }
-    },
-    "…" : {
-
-    },
-    "[Image]" : {
-
-    },
-    "%@ is answering…" : {
-
-    },
-    "%@ is having issues. Try again in a moment." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ is having issues. Try again in a moment."
-          }
-        }
-      }
-    },
-    "%lld" : {
-
-    },
-    "⌘⇧1 — Ask by voice or text: press again to send" : {
-
-    },
-    "⌘⇧2 — Screenshot & Ask: drag a region, then ask; both send together" : {
-
-    },
-    "A notification is how Conduck reaches you the moment your reply is ready." : {
-
-    },
-    "A photo in this chat was too large for your gateway. Start a new voice chat." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A photo in this chat was too large for your gateway. Start a new voice chat."
-          }
-        }
-      }
-    },
-    "About" : {
-
-    },
-    "Action Button" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Action Button"
           }
         }
       }
@@ -1244,6 +1167,17 @@
         }
       }
     },
+    "conversation.row.youSaid" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You: %@"
+          }
+        }
+      }
+    },
     "Conversations" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1982,6 +1916,17 @@
         }
       }
     },
+    "diagnostics.connection.gateway.incomplete.detail" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Setup isn't finished on this device — open it in Personal AI to finish, or forget it."
+          }
+        }
+      }
+    },
     "diagnostics.connection.gateway.none" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2011,17 +1956,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "No gateway can send on this device until you finish one above, or connect another in Personal AI."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.incomplete.detail" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Setup isn't finished on this device — open it in Personal AI to finish, or forget it."
           }
         }
       }
@@ -3895,6 +3829,28 @@
         }
       }
     },
+    "fileTransfer.found.onFileServer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Found on your file server"
+          }
+        }
+      }
+    },
+    "fileTransfer.found.sizeOnFileServer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ · found on your file server"
+          }
+        }
+      }
+    },
     "fileTransfer.guide.docsLink" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4881,6 +4837,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Authentication"
+          }
+        }
+      }
+    },
+    "fileTransfer.test.stage.listing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "List a folder"
           }
         }
       }
@@ -6694,6 +6661,72 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Quit Conduck"
+          }
+        }
+      }
+    },
+    "quitGuard.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Quitting now ends the request. The answer can't be recovered — you'd have to ask again."
+          }
+        }
+      }
+    },
+    "quitGuard.button.keepWaiting" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Keep Waiting"
+          }
+        }
+      }
+    },
+    "quitGuard.button.quit" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Quit Anyway"
+          }
+        }
+      }
+    },
+    "quitGuard.multiple.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld conversations are still waiting on answers"
+          }
+        }
+      }
+    },
+    "quitGuard.single.named.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is still working on “%2$@”"
+          }
+        }
+      }
+    },
+    "quitGuard.single.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your personal AI is still answering"
           }
         }
       }
@@ -11843,17 +11876,6 @@
         }
       }
     },
-    "settings.status.incomplete.a11y" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Setup incomplete on this device"
-          }
-        }
-      }
-    },
     "settings.status.incomplete" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11861,6 +11883,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Needs setup"
+          }
+        }
+      }
+    },
+    "settings.status.incomplete.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Setup incomplete on this device"
           }
         }
       }
@@ -15573,7 +15606,18 @@
         }
       }
     },
-    "thread.missingOutput.action.checkAgain" : {
+    "thread.outputs.action.checkAgain" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check for returned files"
+          }
+        }
+      }
+    },
+    "thread.outputs.action.checkAgainShort" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
@@ -15584,7 +15628,7 @@
         }
       }
     },
-    "thread.missingOutput.action.reviewSetup" : {
+    "thread.outputs.action.reviewSetup" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
@@ -15595,18 +15639,29 @@
         }
       }
     },
-    "thread.missingOutput.body" : {
+    "thread.outputs.action.searchMentioned" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "This reply names a file that isn't in the folder Conduck reads. It may still be on its way, saved somewhere else, or the folder may not be the one your agent writes to."
+            "value" : "Search for files this reply mentions"
           }
         }
       }
     },
-    "thread.missingOutput.checking" : {
+    "thread.outputs.action.searchMentionedShort" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Search mentioned files"
+          }
+        }
+      }
+    },
+    "thread.outputs.checking" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
@@ -15617,7 +15672,29 @@
         }
       }
     },
-    "thread.missingOutput.result.couldNotCheck" : {
+    "thread.outputs.fault.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck couldn't check whether this reply returned any files. Nothing is lost — the folder is still on your server."
+          }
+        }
+      }
+    },
+    "thread.outputs.fault.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read your file server"
+          }
+        }
+      }
+    },
+    "thread.outputs.result.couldNotCheck" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
@@ -15628,24 +15705,13 @@
         }
       }
     },
-    "thread.missingOutput.result.stillMissing" : {
+    "thread.outputs.result.noneFound" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Checked again — still not there."
-          }
-        }
-      }
-    },
-    "thread.missingOutput.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "File not on your file server"
+            "value" : "No returned files were discovered."
           }
         }
       }
@@ -16245,10 +16311,10 @@
     "Works on every Apple Watch" : {
 
     },
-    "Yes, it's running" : {
+    "Yes — it's running and I can reach it" : {
 
     },
-    "Yes — it's running and I can reach it" : {
+    "Yes, it's running" : {
 
     },
     "Yesterday" : {
