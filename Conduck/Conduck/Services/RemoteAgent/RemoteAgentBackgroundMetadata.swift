@@ -92,6 +92,21 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
     /// Optional for backward compatibility with tasks enqueued before v7.
     let fileTransferLaneID: String?
 
+    /// The per-dispatch output folder (`<conversationID>/out-<hex>`) this turn
+    /// named on the wire. Rides the task metadata for the same reason
+    /// `fileTransferLaneID` does: it is a DISPATCH-TIME fact that cannot be
+    /// reconstructed when the reply lands, and this is the ONLY channel that
+    /// survives a process kill mid-turn — a relaunched delegate has nothing but
+    /// `taskDescription` to tell it which folder this reply was told to write
+    /// into. Carries no secret: a folder path, no credential, no URL.
+    ///
+    /// `nil` = unknown (a task enqueued before this field existed, a surface
+    /// that mints no folder). Nil is UNKNOWN, never EMPTY — the landing path
+    /// persists nil and the row selects itself out of the automatic pass rather
+    /// than concluding the reply produced nothing. ADDITIVE + TOLERANT — same
+    /// `decodeIfPresent` rationale as `shareEnvelopeID`.
+    let outputBoxKey: String?
+
     /// The gateway CONFIG signature captured at dispatch
     /// (`GatewayChatSuccess.signature`). Rides the task metadata for the same
     /// reason `requestHadHistoryImages` does: it is a DISPATCH-TIME fact that
@@ -110,11 +125,11 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
 
     /// Explicit memberwise init with `shareEnvelopeID` / `userMessageID` /
     /// `stampsActiveConversation` / `requestHadHistoryImages` /
-    /// `dispatchChatSignature` DEFAULTED to `nil` so the existing construction
-    /// sites (CarPlay uploader, the converse `send(...)`'s non-share callers,
-    /// tests) stay byte-identical — only sites that know the value pass one. (A
-    /// synthesized memberwise init can't carry a default, hence the hand-written
-    /// one.)
+    /// `outputBoxKey` / `dispatchChatSignature` DEFAULTED to `nil` so the
+    /// existing construction sites (CarPlay uploader, the converse `send(...)`'s
+    /// non-share callers, tests) stay byte-identical — only sites that know the
+    /// value pass one. (A synthesized memberwise init can't carry a default,
+    /// hence the hand-written one.)
     init(
         bodyPath: String,
         conversationID: String,
@@ -125,6 +140,7 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
         stampsActiveConversation: Bool? = nil,
         requestHadHistoryImages: Bool? = nil,
         fileTransferLaneID: String? = nil,
+        outputBoxKey: String? = nil,
         dispatchChatSignature: String? = nil
     ) {
         self.bodyPath = bodyPath
@@ -136,6 +152,7 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
         self.stampsActiveConversation = stampsActiveConversation
         self.requestHadHistoryImages = requestHadHistoryImages
         self.fileTransferLaneID = fileTransferLaneID
+        self.outputBoxKey = outputBoxKey
         self.dispatchChatSignature = dispatchChatSignature
     }
 

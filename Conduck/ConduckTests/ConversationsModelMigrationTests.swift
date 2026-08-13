@@ -3,18 +3,20 @@
 // Conduck
 // ConversationsModelMigrationTests.swift
 //
-// REAL v5 → v6 lightweight-migration coverage for the Conversations Core Data
-// model. v6 is strictly additive — it adds two OPTIONAL Attachment attributes
-// (`previewData` Binary, `previewKind` String) — so automatic lightweight
-// migration must open a v5 on-disk store unchanged and default the new columns
-// to nil on legacy rows. v5 shipped (commit 66176a7e) and is installed on the
-// founder's devices, so this is a live upgrade path, not a hypothetical.
+// REAL step-by-step lightweight-migration coverage for the Conversations Core
+// Data model — one test per adjacent version pair. Every version is strictly
+// ADDITIVE (new OPTIONAL attributes only, which is also what CloudKit requires),
+// so automatic lightweight migration must open the older on-disk store unchanged
+// and default each new column to nil on the rows already there. Each shipped
+// version is installed on the founder's devices, so every pair is a live upgrade
+// path, not a hypothetical.
 //
-// The test loads BOTH model versions explicitly from the compiled `.momd` in
+// Each test loads BOTH model versions explicitly from the compiled `.momd` in
 // the host app bundle (the `Conversations <N>.mom` layout, same as
-// WSDDeclinedTurnTests), writes a real SQLite store under v5, then reopens it
-// under v6 with inferred lightweight migration and reads the migrated row's new
-// attributes back via KVC. On-disk SQLite in a temp dir; cleaned in tearDown.
+// WSDDeclinedTurnTests), writes a real SQLite store under the older model, then
+// reopens the SAME file under the newer one with inferred lightweight migration
+// and reads the migrated row's new attributes back via KVC. On-disk SQLite in a
+// temp dir; cleaned in tearDown.
 
 import XCTest
 import CoreData
@@ -202,6 +204,73 @@ final class ConversationsModelMigrationTests: XCTestCase {
 
             XCTAssertEqual(message.value(forKey: "fileTransferLaneID") as? String, "input-lane-id")
             XCTAssertEqual(message.value(forKey: "outputScanLaneID") as? String, "lane-id")
+        }
+    }
+
+    func testV7StoreMigratesToV8WithNilOutputBoxKey() async throws {
+        let v7 = try model(named: "Conversations 7.mom")
+        let v8 = try model(named: "Conversations 8.mom")
+        let conversationID = UUID()
+        let messageID = UUID()
+
+        do {
+            let container = try await loadStore(model: v7)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let conversation = NSEntityDescription.insertNewObject(
+                    forEntityName: "Conversation",
+                    into: context
+                )
+                conversation.setValue(conversationID, forKey: "id")
+                conversation.setValue("openclaw", forKey: "backend")
+                conversation.setValue(Date(), forKey: "createdAt")
+                conversation.setValue(Date(), forKey: "lastActivityAt")
+                conversation.setValue(conversationID.uuidString, forKey: "sessionID")
+
+                let message = NSEntityDescription.insertNewObject(
+                    forEntityName: "Message",
+                    into: context
+                )
+                message.setValue(messageID, forKey: "id")
+                message.setValue("agent", forKey: "role")
+                message.setValue("pending output", forKey: "text")
+                message.setValue(Date(), forKey: "createdAt")
+                message.setValue("mac", forKey: "sourceDevice")
+                message.setValue(false, forKey: "outputScanDone")
+                message.setValue("lane-id", forKey: "outputScanLaneID")
+                message.setValue(conversation, forKey: "conversation")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v8)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+            let message = try XCTUnwrap(
+                context.fetch(request).first,
+                "the v7 message row must survive migration"
+            )
+            XCTAssertEqual(message.value(forKey: "text") as? String, "pending output")
+            XCTAssertEqual(message.value(forKey: "outputScanDone") as? Bool, false)
+            XCTAssertEqual(message.value(forKey: "outputScanLaneID") as? String, "lane-id")
+            // A pending v7 row migrates to "lane known, folder UNKNOWN" — which
+            // is exactly the state that must select the row OUT of the automatic
+            // pass rather than closing it as "produced nothing".
+            XCTAssertNil(message.value(forKey: "outputBoxKey") as? String)
+
+            message.setValue("\(conversationID.uuidString)/out-0123456789abcdef", forKey: "outputBoxKey")
+            try context.save()
+
+            XCTAssertEqual(
+                message.value(forKey: "outputBoxKey") as? String,
+                "\(conversationID.uuidString)/out-0123456789abcdef"
+            )
         }
     }
 }
