@@ -2396,6 +2396,64 @@ actor SettingsManager {
         /// per-conversation `<convID>/<8hex>__<name>` keys; false → flat
         /// `<8hex>__<name>` keys (a gateway that rejects nested PUTs).
         let folderCapable: Bool
+        /// Whether this gateway may put files on the device automatically
+        /// (default true). A PERMISSION, not a capability: `available` and
+        /// `folderCapable` describe what the server can do, this describes what
+        /// the user allows it to do.
+        ///
+        /// RESERVED — NOTHING READS IT. No dispatch, delivery or UI path
+        /// branches on this value on any surface, and none is meant to yet;
+        /// there is no user control that sets it either. Do not add a
+        /// `if snapshot.autoDeliver` without the seat policy that gives it a
+        /// meaning, and do not delete it as dead weight.
+        ///
+        /// It is stored, synced, named in the pairing payload
+        /// (`PairingPayload.FileServer.autoDeliver` parses it; no import path
+        /// applies it, because there is nothing yet to apply), couriered to the Watch
+        /// (`RemoteAgentBroadcastEnvelope.fileTransferAutoDeliver`) and placed on
+        /// this snapshot now — with no reader — because those five surfaces are
+        /// the expensive half: each is a persisted key, a synced key or a locked
+        /// wire shape, so adding the property late means a migration, a payload
+        /// revision and an envelope revision, while adding the eventual `if` is
+        /// one line. Riding the snapshot is part of that: a later reader gets the
+        /// permission from the SAME atomic read as `available` / `folderCapable`,
+        /// so it can never pair a permission from one moment with a readiness
+        /// from another, and it costs no second actor hop.
+        let autoDeliver: Bool
+        /// How a delivered file's name is treated
+        /// (`Constants.fileServerFilenamePolicyPreserve` is the only value
+        /// today). RESERVED on exactly the terms `autoDeliver` above is —
+        /// stored, synced, on the payload and on the envelope, read by nothing —
+        /// so the retrofit that gives it meaning changes behaviour without
+        /// touching storage, sync, the payload or the Watch envelope again. An
+        /// unrecognised stored value resolves to the default.
+        let filenamePolicy: String
+
+        /// Explicit memberwise init so the two delivery-policy fields can carry
+        /// their defaults — a synthesized memberwise init can't default a `let`.
+        /// The defaults are the SAME ones `getFileServerAutoDeliver` /
+        /// `getFileServerFilenamePolicy` return for an unset ref, so a synthetic
+        /// snapshot (the staged Test Connection's draft tuple, test fixtures)
+        /// describes the same permission a real one would.
+        init(
+            baseURL: URL,
+            username: String,
+            credential: String,
+            certFingerprintHex: String?,
+            available: Bool,
+            folderCapable: Bool,
+            autoDeliver: Bool = true,
+            filenamePolicy: String = Constants.fileServerFilenamePolicyPreserve
+        ) {
+            self.baseURL = baseURL
+            self.username = username
+            self.credential = credential
+            self.certFingerprintHex = certFingerprintHex
+            self.available = available
+            self.folderCapable = folderCapable
+            self.autoDeliver = autoDeliver
+            self.filenamePolicy = filenamePolicy
+        }
 
         /// Opaque per-process fingerprint of the lane's IDENTITY — url +
         /// credential + pin, the fields a config edit changes; excludes the
@@ -2625,6 +2683,34 @@ actor SettingsManager {
         postSettingsDidChangeRemotely()
     }
 
+    /// Read a ref's "may this gateway put files on my device automatically"
+    /// permission. Default TRUE when unset, so every existing ref keeps today's
+    /// behaviour and only an explicit user `false` is ever stored.
+    /// (`object(forKey:) as? Bool ?? true` documents the default-true intent.)
+    func getFileServerAutoDeliver(for ref: RemoteAgentRef) -> Bool {
+        (defaults.object(forKey: Constants.fileServerAutoDeliverKey(for: ref)) as? Bool) ?? true
+    }
+
+    /// Read a ref's delivered-filename policy. Returns
+    /// `Constants.fileServerFilenamePolicyPreserve` when unset OR when the
+    /// stored value is one this build does not recognise — resolving forward to
+    /// the known default is what keeps a newer device's write from stranding an
+    /// older one's file lane.
+    func getFileServerFilenamePolicy(for ref: RemoteAgentRef) -> String {
+        let stored = defaults.string(forKey: Constants.fileServerFilenamePolicyKey(for: ref))
+        guard let stored, Self.fileServerFilenamePolicies.contains(stored) else {
+            return Constants.fileServerFilenamePolicyPreserve
+        }
+        return stored
+    }
+
+    /// Every filename policy this build understands. One entry today; the set
+    /// exists so `getFileServerFilenamePolicy` can reject an unknown value
+    /// rather than hand a meaningless string to the delivery path.
+    private static let fileServerFilenamePolicies: Set<String> = [
+        Constants.fileServerFilenamePolicyPreserve
+    ]
+
     /// Read a ref's "THIS device ran a passing staged Test Connection" flag.
     /// Default false. App Groups ONLY (device-local provenance — `available`
     /// stops proving local testing once the inbound KVS mirror ships). Gates
@@ -2685,8 +2771,20 @@ actor SettingsManager {
     /// synced), `keepImagesInline.` is the retired legacy bool,
     /// and `testedLocally.`/`folderProbeRevision.`/`folderProbeAttempt.` are
     /// device-local probe provenance — all mirror-banned.
-    private static let fileServerMirroredURLPrefix = "fileServer.url."
-    private static let fileServerMirroredBoolPrefixes = ["fileServer.available.", "fileServer.folderCapable."]
+    ///
+    /// `autoDeliver.` and `filenamePolicy.` ARE mirrored. They are per-gateway
+    /// PROPERTIES — a decision about the gateway, like `imageHistory.policy.` —
+    /// and a user (later, a seat policy) who forbids automatic delivery on one
+    /// device means it on all of them; a permission that applied only where it
+    /// was typed would be worthless as a policy. They are not device-local
+    /// provenance, which is the one thing this list bans.
+    private static let fileServerMirroredStringPrefixes = [
+        "fileServer.url.", Constants.fileServerFilenamePolicyKeyPrefix
+    ]
+    private static let fileServerMirroredBoolPrefixes = [
+        "fileServer.available.", "fileServer.folderCapable.",
+        Constants.fileServerAutoDeliverKeyPrefix
+    ]
 
     /// Revoke a ref's file-transfer READINESS as one actor-level operation —
     /// the single choke point every config-identity mutation (URL save,
@@ -2792,11 +2890,17 @@ actor SettingsManager {
     /// silent-probe markers re-arm either way (an identity change orphans a
     /// recorded silent verdict; a carried pass is a fresh staged verdict that
     /// supersedes one).
+    ///
+    /// `autoDeliver` / `filenamePolicy` are nil-means-unchanged, exactly like
+    /// `folderCapable`: a config save carries them only when the caller is
+    /// changing them, and the whole tuple still lands in ONE actor hop.
     func commitFileTransferConfig(
         url: URL,
         pin: String?,
         folderCapable: Bool?,
         available: Bool,
+        autoDeliver: Bool? = nil,
+        filenamePolicy: String? = nil,
         for ref: RemoteAgentRef
     ) {
         // Write fence (see `setRemoteAgentURL(_:)`) — this method writes the
@@ -2838,6 +2942,11 @@ actor SettingsManager {
             iCloudStore.set(folderCapable, forKey: capKey)
         }
 
+        // Before the availability flip, for the same reason `folderCapable` is:
+        // no durable state may pair Ready with a delivery policy the commit
+        // hadn't landed yet.
+        writeFileDeliveryPolicy(autoDeliver: autoDeliver, filenamePolicy: filenamePolicy, for: ref)
+
         if available {
             defaults.set(true, forKey: availKey)
             iCloudStore.set(true, forKey: availKey)
@@ -2867,6 +2976,8 @@ actor SettingsManager {
     func commitFileTransferVerdict(
         available: Bool,
         folderCapable: Bool?,
+        autoDeliver: Bool? = nil,
+        filenamePolicy: String? = nil,
         for ref: RemoteAgentRef
     ) {
         if let folderCapable {
@@ -2874,6 +2985,7 @@ actor SettingsManager {
             defaults.set(folderCapable, forKey: capKey)
             iCloudStore.set(folderCapable, forKey: capKey)
         }
+        writeFileDeliveryPolicy(autoDeliver: autoDeliver, filenamePolicy: filenamePolicy, for: ref)
         let availKey = Constants.fileTransferAvailableKey(for: ref)
         defaults.set(available, forKey: availKey)
         iCloudStore.set(available, forKey: availKey)
@@ -2882,6 +2994,49 @@ actor SettingsManager {
             clearFolderProbeMarkers(for: ref)
         }
         postSettingsDidChangeRemotely()
+    }
+
+    /// Commit a ref's DELIVERY POLICY — the auto-deliver permission and the
+    /// filename policy — in ONE actor hop, one notification. The entry point for
+    /// a policy change that is not part of a config save or a staged verdict
+    /// (there is no UI for it yet; the B2B seat layer is what will call it).
+    ///
+    /// Deliberately NOT two per-key setters. Both fields ride
+    /// `FileTransferSnapshot`, so a dispatch that read between two loose hops
+    /// could observe one field's new value paired with the other's old one —
+    /// the same class of half-state `commitFileTransferConfig` and
+    /// `commitFileTransferVerdict` exist to prevent. Nil means unchanged, so a
+    /// caller changing one field cannot silently reset the other.
+    func commitFileDeliveryPolicy(
+        autoDeliver: Bool? = nil,
+        filenamePolicy: String? = nil,
+        for ref: RemoteAgentRef
+    ) {
+        writeFileDeliveryPolicy(autoDeliver: autoDeliver, filenamePolicy: filenamePolicy, for: ref)
+        postSettingsDidChangeRemotely()
+    }
+
+    /// Dual-write whichever delivery-policy fields the caller supplied. Private
+    /// and notification-free: it is the shared body of the three commit hops
+    /// above, and every one of them posts exactly once. An unrecognised
+    /// `filenamePolicy` is refused rather than stored — a value no build
+    /// understands would sync to every device and resolve to the default
+    /// everywhere anyway, so storing it only creates a lie in the store.
+    private func writeFileDeliveryPolicy(
+        autoDeliver: Bool?,
+        filenamePolicy: String?,
+        for ref: RemoteAgentRef
+    ) {
+        if let autoDeliver {
+            let key = Constants.fileServerAutoDeliverKey(for: ref)
+            defaults.set(autoDeliver, forKey: key)
+            iCloudStore.set(autoDeliver, forKey: key)
+        }
+        if let filenamePolicy, Self.fileServerFilenamePolicies.contains(filenamePolicy) {
+            let key = Constants.fileServerFilenamePolicyKey(for: ref)
+            defaults.set(filenamePolicy, forKey: key)
+            iCloudStore.set(filenamePolicy, forKey: key)
+        }
     }
 
     /// Atomic file-server snapshot for a ref. Single actor hop — mirrors
@@ -2900,7 +3055,9 @@ actor SettingsManager {
             credential: credential,
             certFingerprintHex: getFileServerCertFingerprint(for: ref),
             available: getFileTransferAvailable(for: ref),
-            folderCapable: getFileServerFolderCapable(for: ref)
+            folderCapable: getFileServerFolderCapable(for: ref),
+            autoDeliver: getFileServerAutoDeliver(for: ref),
+            filenamePolicy: getFileServerFilenamePolicy(for: ref)
         )
     }
 
@@ -4046,6 +4203,12 @@ actor SettingsManager {
             // posture as `fileTransferAvailable`, which the legacy single-apply
             // path also ignores.
             fileTransferLaneID: fileLane?.durableLaneID,
+            // The per-gateway delivery properties, from the SAME lane read as
+            // the two fields above — a permission shipped beside a different
+            // moment's readiness is exactly the pairing this single read exists
+            // to prevent. Nil with no READY lane: "unstated", not "denied".
+            fileTransferAutoDeliver: fileLane?.autoDeliver,
+            fileTransferFilenamePolicy: fileLane?.filenamePolicy,
             activeSessionID: snapshot.activeSessionID,
             timestamp: Date().timeIntervalSinceReferenceDate
         )
@@ -4160,6 +4323,13 @@ actor SettingsManager {
                 // prove which lane that turn belongs to. The wrist can't derive
                 // it (the file-server credential never syncs there).
                 fileTransferLaneID: fileLane?.durableLaneID,
+                // Per-ref delivery PROPERTIES, from the same lane read: what the
+                // user permits this gateway to do, as opposed to what the server
+                // is capable of. Nil with no READY lane means "unstated" — the
+                // reader applies its own default rather than reading a missing
+                // permission as a denial.
+                fileTransferAutoDeliver: fileLane?.autoDeliver,
+                fileTransferFilenamePolicy: fileLane?.filenamePolicy,
                 activeSessionID: snapshot.activeSessionID,
                 timestamp: now
             )
@@ -4827,9 +4997,10 @@ actor SettingsManager {
         // `folderProbeRevision.` / `folderProbeAttempt.` — never in KVS).
         ensureFileServerTestedLocallySeeded()
         let iCloudSnapshot = iCloudStore.dictionaryRepresentation()
-        for (key, value) in iCloudSnapshot where key.hasPrefix(Self.fileServerMirroredURLPrefix) {
-            if let url = value as? String, !url.isEmpty {
-                defaults.set(url, forKey: key)
+        for (key, value) in iCloudSnapshot
+        where Self.fileServerMirroredStringPrefixes.contains(where: { key.hasPrefix($0) }) {
+            if let string = value as? String, !string.isEmpty {
+                defaults.set(string, forKey: key)
             }
         }
         for (key, value) in iCloudSnapshot
@@ -4883,6 +5054,8 @@ actor SettingsManager {
         "fileServer.certFingerprint.", "fileServer.testedLocally.",
         "fileServer.folderProbeRevision.", "fileServer.folderProbeAttempt.",
         "fileServer.keepImagesInline.",
+        Constants.fileServerAutoDeliverKeyPrefix,
+        Constants.fileServerFilenamePolicyKeyPrefix,
         Constants.imageHistoryPolicyKeyPrefix
     ]
 
@@ -4903,6 +5076,11 @@ actor SettingsManager {
     /// prefix sweep erases it — `clearFileTransferConfig` (the built-in path)
     /// never does. A device upgraded from a build that wrote it would otherwise
     /// keep offering Forget on a built-in with nothing left to remove.
+    ///
+    /// `autoDeliver.` and `filenamePolicy.` are excluded on that same reasoning:
+    /// only the custom-gateway sweep erases them, so probing them would pin a
+    /// permanently-"removable" built-in the moment the user changed a delivery
+    /// permission once.
     static let gatewayUserStateKeyPrefixes = [
         "remoteAgent.url.", "remoteAgent.authScheme.", "remoteAgent.model.",
         "remoteAgent.certFingerprint.", "remoteAgent.transportHint.",
@@ -5264,24 +5442,28 @@ actor SettingsManager {
         }
 
         // Mirror remote FILE-SERVER config changes (`fileServer.url.*` /
-        // `fileServer.available.*` / `fileServer.folderCapable.*`) into App
+        // `fileServer.filenamePolicy.*` / `fileServer.available.*` /
+        // `fileServer.folderCapable.*` / `fileServer.autoDeliver.*`) into App
         // Groups `defaults` so the durable reads (`getFileServerURL`,
-        // `getFileTransferAvailable`, `getFileServerFolderCapable` — the last
-        // two read defaults ONLY) reflect the cloud value. Without this, a
+        // `getFileTransferAvailable`, `getFileServerFolderCapable`,
+        // `getFileServerAutoDeliver`, `getFileServerFilenamePolicy` — all but
+        // the first read defaults ONLY) reflect the cloud value. Without this, a
         // second device holds URL + credential (KVS fallback + iCloud
         // Keychain) but never `available` → `fileTransferReadySnapshot` stays
         // nil and uploads silently skip until the user re-runs Test Connection
         // there. Suffixes are dynamic (`custom_<uuid>`) → prefix scans over
-        // the SHARED `Self.fileServerMirrored*Prefix` lists (one source of
+        // the SHARED `Self.fileServerMirrored*Prefixes` lists (one source of
         // truth with the `performInitialSync` hydration; the mirror-ban
         // rationale lives on those constants).
-        for key in changedKeys where key.hasPrefix(Self.fileServerMirroredURLPrefix) {
-            if let value = iCloudStore.string(forKey: key), !value.isEmpty {
-                defaults.set(value, forKey: key)
-            } else {
-                defaults.removeObject(forKey: key)
+        for prefix in Self.fileServerMirroredStringPrefixes {
+            for key in changedKeys where key.hasPrefix(prefix) {
+                if let value = iCloudStore.string(forKey: key), !value.isEmpty {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+                didChange = true
             }
-            didChange = true
         }
 
         // Bool variant of the block above (presence-check, then `bool(forKey:)`

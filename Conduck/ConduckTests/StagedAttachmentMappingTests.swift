@@ -325,6 +325,7 @@ final class StagedAttachmentMappingTests: XCTestCase {
                 text: "read it",
                 ref: .builtin(.openclaw),
                 conversationID: conversationID,
+                pendingConversationID: UUID(),
                 stagingGeneration: stagingGeneration
             )
         )
@@ -353,6 +354,7 @@ final class StagedAttachmentMappingTests: XCTestCase {
                 text: "inspect both",
                 ref: .builtin(.openclaw),
                 conversationID: conversationID,
+                pendingConversationID: UUID(),
                 stagingGeneration: stagingGeneration
             )
         )
@@ -396,6 +398,7 @@ final class StagedAttachmentMappingTests: XCTestCase {
                 text: "",
                 ref: .builtin(.openclaw),
                 conversationID: conversationID,
+                pendingConversationID: UUID(),
                 stagingGeneration: stagingGeneration
             )
         )
@@ -407,6 +410,7 @@ final class StagedAttachmentMappingTests: XCTestCase {
                 text: "",
                 ref: .builtin(.openclaw),
                 conversationID: conversationID,
+                pendingConversationID: UUID(),
                 stagingGeneration: stagingGeneration
             )
         )
@@ -455,6 +459,7 @@ final class StagedAttachmentMappingTests: XCTestCase {
             [StagedAttachment]().makeDispatch(
                 text: "sealed before upload join",
                 route: capturedRoute,
+                pendingConversationID: UUID(),
                 stagingGeneration: UUID()
             )
         )

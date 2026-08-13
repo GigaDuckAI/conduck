@@ -8,9 +8,10 @@
 // over HTTPS, exposed via Tailscale Serve / Cloudflare Tunnel). The device is
 // a thin CLIENT: it PUTs file bytes to the server ROOT as `<storedKey>`, GETs
 // them back, probes existence with a GET (NEVER a HEAD — see below), DELETEs
-// orphans, and (V1.1) lists with PROPFIND. GigaDuck ships NO server binary; the
-// app is a pure WebDAV client, and standing up the server is the user's job
-// (Quick connect via `conduck-connect`, or the setup guide's manual steps).
+// orphans, MKCOLs collections, and lists ONE exact collection with PROPFIND.
+// GigaDuck ships NO server binary; the app is a pure WebDAV client, and
+// standing up the server is the user's job (Quick connect via
+// `conduck-connect`, or the setup guide's manual steps).
 //
 // Mirrors the split in `RemoteAgentClient` / `RemoteAgentClient+TestConnection`:
 //   - The `build*Request(...)` helpers are pure URL/header assembly so the
@@ -19,23 +20,45 @@
 //     that lives on the `URLSession` the caller hands the request to
 //     (`BackgroundFileTransfer` for transfers, the ephemeral session built
 //     here for the staged test).
-//   - THREE methods touch the network, and ALL THREE answer server-trust
-//     challenges: `runConnectionTest(...)` (the staged test),
-//     `probeReachability(...)` and `probeFolderCapability(...)`. Each builds its
-//     own session through the single `makeProbeSession(...)` recipe, which
-//     clones the ephemeral 15 s cert-pinned `URLSession` pattern from
+//   - THE TRUST-READING RULE, and it is a rule rather than a roster because a
+//     roster goes stale the first time a lane is added: EVERY lane that builds
+//     its own cert-pinned session AND turns the answer into something the user
+//     reads MUST read that session's `AttemptTrustSignals` back. A trust refusal
+//     that goes unread degrades to "host is down", which is the one misreading
+//     this taxonomy exists to prevent — so audit every such lane, never only the
+//     one you came for.
+//     Four of them live in this file — `runConnectionTest(...)` (the staged
+//     test), `probeReachability(...)`, `probeFolderCapability(...)` and
+//     `probeListingCapability(...)` — each
+//     built through the single `makeProbeSession(...)` recipe, which clones the
+//     ephemeral 15 s cert-pinned `URLSession` pattern from
 //     `RemoteAgentClient+TestConnection.swift` so the `RemoteAgentTrustEvaluator`
 //     SPKI-pinning delegate is installed for THAT probe only, never on
-//     `URLSession.shared` — and each reads the resulting verdicts back through
-//     its own `AttemptTrustSignals` source. Audit all three, not just the named
-//     one: a trust refusal that goes unread inside a probe degrades to "host is
-//     down", which is the one misreading this taxonomy exists to prevent.
+//     `URLSession.shared`. Two more live on `BackgroundFileTransfer`'s own
+//     ephemeral session and take its evaluator explicitly: the existence probe
+//     (`probeExistsWithLength`) and the strict directory listing
+//     (`listCollection`). The pure halves of both — `classifyProbe`,
+//     `parseListing` — live here.
+//     ONE DOCUMENTED EXEMPTION: the pre-dispatch absence assertion
+//     (`BackgroundFileTransfer.witnessCollectionAbsent`, verdict rule
+//     `absenceWitnessed`) runs on the same pinned session but has NO verdict to
+//     read — its whole answer is one Bool, every failure maps to `false`, and
+//     `false` shows the user nothing at all, so there is no taxonomy for a
+//     certificate refusal to be misfiled into. The exemption is the absence of a
+//     user-facing claim, not an oversight.
+//     `ensureCollection` / `performMkcol` / `ensureFreshCollection` take the
+//     CALLER's session and report a status only, so the caller that owns the
+//     session owns the trust reading for them. NOTHING calls
+//     `ensureFreshCollection` on the dispatch path — the per-dispatch output box
+//     is NAMED by Conduck and CREATED by the agent (see `OutboxKey`), because a
+//     client-created directory belongs to whoever the WebDAV lane runs as and
+//     the agent usually is not that user.
 //
 // Why GET-never-HEAD for existence: a read-only HEAD/GET 200 on a
 // gateway that exposes a Control-UI HTML page false-positives existence; rclone
 // serve webdav answers GET on a real file with the bytes (200/206) and 404 on a
 // missing one, so a GET is the only reliable existence signal. The staged test
-// goes further (reachability → auth → write → read → delete) precisely because
+// goes further (reachability → auth → write → read → delete → list) precisely because
 // a bare read-only 200 is not trustworthy on its own.
 //
 // AND A GET IS ONLY THE PRECONDITION — NO VERDICT COMES FROM A STATUS ALONE.
@@ -54,6 +77,20 @@
 //     an EXACT byte-echo of bytes they just wrote, which is strictly stronger.
 // `probeStatusPrefilter` is a status map, and its name says so: it is legal only
 // where one of those byte-echoes decides immediately after it.
+//
+// THE DIRECTORY LISTING IS THE SAME PROBLEM IN A DIFFERENT SHAPE, and it is the
+// one path with nothing downstream to correct it: a name that survives the
+// listing becomes a download chip, so the listing IS the authority on what an
+// agent produced. `parseListing` therefore fails closed on everything that is
+// not a bounded, complete, well-formed `207` naming direct children of the exact
+// collection that was asked for, and its caller (`BackgroundFileTransfer
+// .listCollection`) requires the lane to DEMONSTRATE a definite miss on a
+// sibling collection that cannot exist before any entry is believed. Three
+// verdicts, never conflated: entries (the folder was read), absent (the folder
+// is not there), unusable (nothing was learned). An empty listing is a FACT
+// about a folder that was read, so it can only be reached through every one of
+// those gates — a malformed body, a non-`207`, or a lane that cannot say no is
+// `.unusable`, never an empty folder.
 //
 // Privacy invariants (see the spec's Privacy & Security section): the storedKey, the base
 // URL, the basic-auth credential, and filenames are NEVER logged, printed, or
@@ -229,10 +266,13 @@ enum FileReachabilityOutcome: Equatable, Sendable {
     case certKeyUnpinnable
 }
 
-/// One entry from a PROPFIND `Depth: 1` directory listing. Built NOW + unit-
-/// tested (`FileServerPropfindTests`) but the in-app browser that consumes
-/// it is deferred to V1.1 — the minimal output path uses a single
-/// GET existence probe, not a listing.
+/// One entry from a PROPFIND `Depth: 1` directory listing.
+///
+/// `byteSize` stays `Int` (not the probe path's `Int64`) because it is carried
+/// straight into `AttachmentRecord.byteSize`, which is `Int`: widening here
+/// would only move the one narrowing conversion a hop further from the
+/// filesystem constraint it describes. `Int` is 64-bit on every platform this
+/// app ships to, so nothing is lost.
 struct FileServerEntry: Equatable, Sendable {
     /// Last path component of the entry's `<D:href>` (the stored name).
     let name: String
@@ -243,15 +283,87 @@ struct FileServerEntry: Equatable, Sendable {
     let byteSize: Int
 }
 
-/// The four stages of the staged Test Connection, in order. `Int` raw value =
+/// Why a directory listing could not be believed. EVERY case means the same
+/// thing to the caller — the app learned nothing about what the agent produced,
+/// so the turn stays open — and they are kept apart because they name different
+/// server faults and a test that cannot tell them apart cannot prove the parser
+/// fails closed for the RIGHT reason.
+///
+/// No case carries a filename, a key, a URL, or a body: a refusal is a taxonomy
+/// value, and the privacy invariants at the top of this file apply to it.
+enum FileTransferListingRefusal: Equatable, Sendable {
+    /// The request never produced an HTTP response (DNS, timeout, refused,
+    /// cancelled). Nothing about the folder was learned.
+    case transport
+    /// This device refused the server's certificate. Split from `.transport`
+    /// for the reason `FileProbeOutcome.certRefused` is split from `.unknown`:
+    /// the remedy is a certificate, not a retry, and folding the two tells the
+    /// user their file server is down when it is answering.
+    case certificateRefused(FileServerClient.CertificateRefusal)
+    /// `401` / `403` — the credential was rejected, or a rule covers the whole
+    /// namespace.
+    case unauthorized
+    /// `5xx` — the server is sick. Transient; the caller may re-list.
+    case serverError
+    /// Any other non-`207` status. A `200` lands here and MUST: a Control-UI /
+    /// SSO wall answers every path with its own HTML at `200`, and the whole
+    /// point of requiring `207` is that a wall cannot manufacture one.
+    case notMultiStatus
+    /// The `207` body is not a complete, well-formed `DAV: multistatus`
+    /// document, or one of its `<response>` elements could not be understood in
+    /// full. Partial understanding is refused rather than truncated, because a
+    /// truncated listing is indistinguishable from a real short one.
+    case malformedBody
+    /// The body ran past `FileServerClient.listingMaxBytes`.
+    case bodyTooLarge
+    /// The body named more than `FileServerClient.listingMaxEntries` resources.
+    /// Refused rather than truncated: an outbox holding more than the cap is not
+    /// one reply's output, and a silently truncated listing looks complete.
+    case tooManyEntries
+    /// An `<href>` did not resolve to a direct child of the collection that was
+    /// asked for, on the same origin — a foreign host, a grandchild, a parent
+    /// escape, or a name whose percent-encoding hides a path separator.
+    case entryOutsideCollection
+    /// Two entries claimed the same name. Impossible in one real collection, so
+    /// the body is describing something other than a directory.
+    case duplicateEntry
+    /// The lane failed its negative control: a sibling collection that cannot
+    /// exist was answered with something other than a definite miss, so this
+    /// server's answer about the real collection carries no information.
+    case namespaceAnswersEverything
+}
+
+/// What ONE PROPFIND of ONE collection established. THE THREE CASES ARE NEVER
+/// CONFLATED, and that is the whole contract:
+///
+///   - `.entries` — the folder was READ. An empty array is a positive fact
+///     ("this folder holds nothing right now"), reachable only through a
+///     bounded, complete, well-formed `207` whose entries are all direct
+///     children, on a lane that demonstrated it can say no.
+///   - `.absent` — the folder is NOT THERE (`404`). Says nothing about the
+///     server's health; says everything about the folder Conduck minted.
+///   - `.unusable` — nothing was learned. The caller must not close the turn.
+///
+/// Collapsing any two of them is the failure this type exists to prevent: an
+/// unreadable server reading as "the agent produced nothing" closes a turn on
+/// evidence nobody has.
+enum FileServerListingVerdict: Equatable, Sendable {
+    case entries([FileServerEntry])
+    case absent
+    case unusable(FileTransferListingRefusal)
+}
+
+/// The stages of the staged Test Connection, in order. `Int` raw value =
 /// stage ordinal so the Settings UI can render a determinate per-stage
 /// result list and `FileTransferTestResult.reachedStage` can report how far the
-/// probe got before a failure (or `.read` on a full pass).
+/// probe got before a failure (or `.listing` on a full pass).
 ///
-/// Note: the actual probe runs a 5th step — a best-effort DELETE cleanup of the
-/// tiny probe file — AFTER `.read`, but that cleanup is never surfaced as a
-/// user-facing stage (its failure does not fail the test; an orphaned 12-byte
-/// probe file is harmless and the user owns the server).
+/// Note: the probe also runs two steps that are NOT user-facing stages — a
+/// best-effort DELETE cleanup of the tiny probe file, and the nested-write
+/// capability probe — because neither can fail the test: an orphaned 12-byte
+/// probe file is harmless on the user's own server, and a lane that refuses
+/// nested PUTs works fine on flat keys. The listing stage IS user-facing,
+/// because there is no fallback behind it.
 enum FileTransferTestStage: Int, Equatable, Sendable, CaseIterable {
     /// TCP/TLS reachability — can we open a connection to the file-server host
     /// at all (DNS resolves, cert validates / pins, port answers)?
@@ -264,16 +376,24 @@ enum FileTransferTestStage: Int, Equatable, Sendable, CaseIterable {
     /// Read — can we GET the probe file back and get a 2xx (proving the write
     /// actually landed and is served, not a Control-UI HTML 200)?
     case read
+    /// List — can the server answer a `PROPFIND`, and can it say NO to one? This
+    /// is the whole return direction: Conduck names a per-dispatch output folder,
+    /// asserts it absent with a `PROPFIND` before the turn goes out, and reads it
+    /// with a `PROPFIND` after the reply lands. A lane that cannot do both
+    /// delivers nothing an agent produces, ever — so a test that stopped at
+    /// `.read` certified half a lane as fully green and left the user with no
+    /// signal anywhere.
+    case listing
 }
 
 /// Result of a staged Test Connection: how far it got + whether the full
-/// reachability→auth→write→read sequence passed + the mapped failure (nil on
-/// success). `fileTransferAvailable` is set true ONLY when `success`.
+/// reachability→auth→write→read→listing sequence passed + the mapped failure
+/// (nil on success). `fileTransferAvailable` is set true ONLY when `success`.
 struct FileTransferTestResult: Equatable, Sendable {
-    /// The furthest stage reached — on success this is `.read`; on failure it
+    /// The furthest stage reached — on success this is `.listing`; on failure it
     /// is the stage that failed (everything before it passed).
     let reachedStage: FileTransferTestStage
-    /// True only on a full pass through all four stages.
+    /// True only on a full pass through every stage.
     let success: Bool
     /// The taxonomy error on failure (nil on success). Never names the
     /// credential.
@@ -337,6 +457,15 @@ enum FileServerClient {
     /// overflows on its own, and diagnosing that from an opaque 5xx is far worse
     /// than reserving the room up front.
     static let storedKeyComponentMaxCharacters = 200
+
+    /// The WebDAV-safe alphabet every minted key component is mapped into, and
+    /// the SAME set `validatedOutboxEntryName` measures an inbound listing entry
+    /// against. One declaration so the mint and the validator can never disagree
+    /// about what a safe path component is — a validator holding its own copy
+    /// would keep accepting names the mint has stopped producing.
+    static let storedKeySafeCharacters = Set(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    )
 
     /// Longest dot-suffix still treated as an extension worth preserving.
     ///
@@ -423,7 +552,7 @@ enum FileServerClient {
             .lowercased()
         let shortID = String(hex.prefix(8))
 
-        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        let allowed = storedKeySafeCharacters
         let sanitized = String(originalName.map { allowed.contains($0) ? $0 : "_" })
         let safeName = sanitized.isEmpty ? "file" : sanitized
 
@@ -499,7 +628,7 @@ enum FileServerClient {
             .lowercased()
         let shortID = String(hex.prefix(8))
 
-        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        let allowed = storedKeySafeCharacters
         let sanitized = String(originalName.map { allowed.contains($0) ? $0 : "-" })
         let safeName = sanitized.isEmpty ? "file" : sanitized
 
@@ -598,6 +727,63 @@ enum FileServerClient {
         session: URLSession
     ) async {
         _ = await performMkcol(snapshot: snapshot, collectionKey: collectionKey, session: session)
+    }
+
+    /// MKCOL `collectionKey` and require it to have been CREATED BY THIS CALL —
+    /// `201`, and nothing else. The strictest available way to obtain a
+    /// collection provably created at a known instant.
+    ///
+    /// **NOT ON THE DISPATCH PATH, deliberately, and do not put it back.** The
+    /// per-dispatch output box is named by Conduck and created by the AGENT
+    /// (`OutboxKey`). Measured across six live gateways: a client-created box is
+    /// obeyed on 4 of 6 while a box the client only names is obeyed on 5 of 6 at
+    /// full marks — and the two that fail the first are the two most common
+    /// self-hosted gateways. The mechanism is ownership: the WebDAV lane
+    /// typically runs as root with a `0022` umask, so a client MKCOL yields a
+    /// root-owned `0755` directory while the agent runs as an ordinary user. A
+    /// *successful* MKCOL is therefore WORSE than a failed one — it produces a
+    /// directory the agent can neither write into nor delete, and best-effort
+    /// softening does not help because the harm comes from success. The
+    /// pre-dispatch freshness evidence comes instead from
+    /// `BackgroundFileTransfer.witnessCollectionAbsent`, which observes absence
+    /// without changing who owns anything.
+    ///
+    /// Retained because the 201-only distinction is a real primitive with no
+    /// other expression in this file, and a future collection Conduck genuinely
+    /// must own (never one an agent has to write into) needs exactly it.
+    ///
+    /// `405` IS A COLLISION, NOT A SUCCESS, and that inversion is the whole
+    /// reason this exists next to `ensureCollection`. The shipped MKCOL idiom
+    /// reads "2xx or 405" as "the collection now exists", which is right for a
+    /// long-lived per-conversation folder and wrong for anything whose value is
+    /// its freshness: a freshly-random key that already exists was not minted by
+    /// this call. Every other status and every transport failure is also
+    /// `false`.
+    ///
+    /// The PARENT is ensured best-effort first, and the asymmetry is deliberate:
+    /// a WebDAV MKCOL into a missing parent is a `409` (RFC 4918 §9.3), the
+    /// per-conversation folder is deliberately long-lived and SHARED with every
+    /// upload that conversation ever made, so `405 already exists` is the
+    /// correct answer for it. Only the leaf has to be new.
+    static func ensureFreshCollection(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        collectionKey: String,
+        session: URLSession
+    ) async -> Bool {
+        if let parent = parentCollectionKey(of: collectionKey) {
+            await ensureCollection(snapshot: snapshot, collectionKey: parent, session: session)
+        }
+        return await performMkcol(
+            snapshot: snapshot, collectionKey: collectionKey, session: session) == 201
+    }
+
+    /// The collection holding `collectionKey`, or nil when it already sits at
+    /// the served root (nothing to create).
+    static func parentCollectionKey(of collectionKey: String) -> String? {
+        var components = collectionKey.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard components.count > 1 else { return nil }
+        components.removeLast()
+        return components.joined(separator: "/")
     }
 
     /// MKCOL `collectionKey` and report the HTTP status (nil on transport
@@ -699,20 +885,33 @@ enum FileServerClient {
         return request
     }
 
-    /// `PROPFIND <baseURL>` with a `Depth` header — directory listing (V1.1
-    /// browser; parser is `parsePropfindBody`). Built + unit-tested now so the
-    /// 207 multistatus path is ready when the browser ships.
+    /// `PROPFIND <baseURL>/<collectionKey>` with a `Depth` header — a listing of
+    /// ONE EXACT collection.
+    ///
+    /// The collection is a PARAMETER, never the base URL by default: the listing
+    /// is the authority on what a single reply produced, and a request aimed at
+    /// the served root would answer with every file every conversation ever
+    /// uploaded. An empty `collectionKey` targets the root, which only a
+    /// deliberate whole-server listing may ask for.
     ///
     /// The request body is the standard `<D:propfind><D:allprop/></D:propfind>`
     /// envelope so any compliant WebDAV server returns the property set.
-    /// `timeoutInterval = fileServerProbeTimeout` (a listing is interactive).
+    ///
+    /// `timeout` defaults to `fileServerProbeTimeout` — a listing is interactive
+    /// and happens after a reply landed, so it may take the lane's ordinary
+    /// budget. The pre-dispatch absence witness passes its own much shorter one:
+    /// it is the same request shape but it runs BEFORE every turn, so it is the
+    /// one PROPFIND whose deadline is a latency budget rather than a patience
+    /// budget.
     static func buildPropfindRequest(
         snapshot: SettingsManager.FileTransferSnapshot,
-        depth: Int
+        collectionKey: String,
+        depth: Int,
+        timeout: TimeInterval = Constants.fileServerProbeTimeout
     ) -> URLRequest {
-        var request = URLRequest(url: snapshot.baseURL)
+        var request = URLRequest(url: listingCollectionURL(snapshot: snapshot, collectionKey: collectionKey))
         request.httpMethod = "PROPFIND"
-        request.timeoutInterval = Constants.fileServerProbeTimeout
+        request.timeoutInterval = timeout
         request.setValue(
             basicAuthHeaderValue(username: snapshot.username, password: snapshot.credential),
             forHTTPHeaderField: "Authorization"
@@ -1155,7 +1354,20 @@ enum FileServerClient {
 
     /// Parse a WebDAV `207 Multi-Status` body into `[FileServerEntry]`.
     /// TOLERANT by contract — NEVER throws. Any malformed / unexpected / empty
-    /// XML yields `[]` so a flaky server can never crash the (V1.1) browser.
+    /// XML yields `[]` so a flaky server can never crash a caller that is only
+    /// rendering.
+    ///
+    /// NO PRODUCTION CALLER: it is kept for the deferred in-app file browser,
+    /// which is the only consumer its tolerance is correct for.
+    ///
+    /// **MUST NEVER BACK A DELIVERY DECISION.** It cannot see the HTTP status, it
+    /// keeps whatever entries completed before a parse fault, it ignores
+    /// per-resource `<propstat><status>`, and it discards the parent path — so a
+    /// non-`207`, a truncated body and an empty directory are all `[]`, and an
+    /// href can name a file outside the folder that was asked for. That is
+    /// acceptable for a browser a user is looking at and disqualifying for the
+    /// path that decides what to download unattended. `parseListing` is the one
+    /// that decides; this one only renders.
     ///
     /// Strategy: a lightweight `XMLParser` delegate that, namespace-agnostically
     /// (matching the LOCAL element name so it works whether the server uses the
@@ -1175,13 +1387,402 @@ enum FileServerClient {
         return delegate.entries
     }
 
-    // MARK: - Staged Test Connection (the only network-touching method)
+    // MARK: - Strict directory listing (the authority on agent output)
+
+    /// Most `<response>` elements one listing may describe. Refused, never
+    /// truncated — see `FileTransferListingRefusal.tooManyEntries`.
+    ///
+    /// The listing caps live beside the parser that enforces them rather than in
+    /// `Constants`, because a cap that drifts from its enforcement is a cap that
+    /// silently stops holding.
+    static let listingMaxEntries = 200
+
+    /// Most bytes of `207` body one listing may occupy (256 KiB). The read is
+    /// bounded on the wire by `BackgroundFileTransfer`; this is the same bound
+    /// stated where the parse happens, so a caller that hands over an
+    /// unbounded body is refused rather than parsed.
+    static let listingMaxBytes = 256 * 1024
+
+    /// The URL `PROPFIND` targets for `collectionKey` — the ONE place the
+    /// request builder and the href resolver agree on what was asked for. A
+    /// listing that resolved hrefs against a different URL than it requested
+    /// would accept entries from a folder it never asked about.
+    static func listingCollectionURL(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        collectionKey: String
+    ) -> URL {
+        collectionKey.isEmpty ? snapshot.baseURL : snapshot.baseURL.appending(path: collectionKey)
+    }
+
+    /// The negative-control key for a LISTING: a sibling collection of
+    /// `collectionKey`, under the same parent, that cannot exist.
+    ///
+    /// A sibling rather than `negativeControlKey`'s root-relative file key,
+    /// because the two ask different questions. That one asks "can this server
+    /// 404 a missing FILE at the root"; this one has to ask "can this server 404
+    /// a missing COLLECTION in the very directory whose listing I am about to
+    /// believe" — servers route on both the method and the prefix, so a control
+    /// that lands somewhere else can take a different code path and answer a
+    /// question nobody asked.
+    ///
+    /// Minted fresh per call with 16 hex of entropy and never persisted: a
+    /// cached verdict is a verdict about a server that has since changed, and
+    /// the whole point of the control is that it is contemporaneous with the
+    /// listing it vouches for.
+    static func negativeControlCollectionKey(siblingOf collectionKey: String) -> String {
+        let nonce = String(
+            UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(16)
+        )
+        let stem = "__conduck_absent_\(nonce)"
+        var components = collectionKey.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard !components.isEmpty else { return stem }
+        components.removeLast()
+        components.append(stem)
+        return components.joined(separator: "/")
+    }
+
+    /// Whether a `PROPFIND Depth: 0` answer WITNESSES that the dispatch box is
+    /// not there yet — the pre-dispatch freshness assertion.
+    ///
+    /// ONLY a `404`, and the polarity is the point. This runs against a path
+    /// carrying `OutboxKey.nonceHexCharacters` of fresh entropy, so a healthy
+    /// server has exactly one honest answer; a `207` means either a collision
+    /// (astronomically unlikely, therefore far more likely a bug in the mint) or
+    /// a namespace that answers everything, and in both readings the folder
+    /// cannot vouch for what is found in it later. Every other status and every
+    /// transport failure is likewise NOT a witness: freshness that was not
+    /// observed is not freshness, and the cost of refusing is one turn without
+    /// automatic delivery.
+    ///
+    /// WHAT IT REPLACES, and why it is both weaker and better. Creating the box
+    /// (`MKCOL 201`) was a server-observed CREATION event, which is strictly
+    /// stronger evidence. It is not used, because creating the directory makes
+    /// it owned by whoever the WebDAV lane runs as, and the agent that must
+    /// write into it usually runs as somebody else — so the stronger evidence
+    /// came bundled with the failure it was evidence about. This assertion buys
+    /// a server-observed ABSENCE at the same one-request cost and changes
+    /// nothing about who owns the directory.
+    ///
+    /// Shares its definition with `negativeControlProvesNotFound` so the app can
+    /// never hold two ideas of what a definite miss looks like.
+    static func absenceWitnessed(status: Int) -> Bool {
+        negativeControlProvesNotFound(status: status)
+    }
+
+    /// THE listing verdict, from one PROPFIND response. Pure — the network half
+    /// (the bounded read and the negative control) is
+    /// `BackgroundFileTransfer.listCollection`.
+    ///
+    /// THE THING THIS EXISTS TO PREVENT: a server that is not answering about
+    /// the folder Conduck minted, read as if it were. Every gate below closes a
+    /// specific way that happens, and every one of them fails to `.unusable`
+    /// rather than to an empty folder, because "the agent produced nothing" is a
+    /// conclusion that CLOSES a turn and must never be reachable from a response
+    /// nobody understood.
+    ///
+    ///   - **Status.** Only `207` is a listing. `404` is `.absent` — its own
+    ///     verdict, because the box Conduck created being gone is a different
+    ///     fact from the server being unreadable, and only one of them is worth
+    ///     telling the user about. Every other status is a refusal, `200`
+    ///     emphatically included: a uniform-`200` SSO wall answers every path
+    ///     with its own HTML, and requiring `207` is what a wall cannot fake.
+    ///   - **Completeness.** `XMLParser.parse()`'s `Bool` DECIDES here. A body
+    ///     that faults mid-document is `.malformedBody`, never the entries that
+    ///     completed before the fault — a truncated listing looks exactly like a
+    ///     real short one, and the difference is a file silently missing from
+    ///     the user's device.
+    ///   - **Shape.** The root element must be `multistatus`, every `<response>`
+    ///     must carry exactly one `<href>`, and nesting is bounded. A response
+    ///     that cannot be understood IN FULL refuses the whole listing rather
+    ///     than being skipped, because a skipped response is an entry that
+    ///     vanished without anyone deciding it should.
+    ///   - **Per-resource status.** Properties are read only out of a `2xx`
+    ///     `<propstat>`; a resource whose own `<status>` is not `2xx`, or whose
+    ///     every propstat failed, is dropped. RFC 4918 lets a `207` carry
+    ///     not-found rows, and emitting one as a normal entry mints a chip for a
+    ///     file the server just said it does not have.
+    ///   - **Provenance.** Every href is resolved against the REQUESTED URL and
+    ///     must land on the same origin as a DIRECT child of it — matched from
+    ///     the END of the path, so a proxy that strips its own mount point does
+    ///     not turn a good listing into a permanent refusal
+    ///     (`isRequestedCollectionTail`). The collection itself is suppressed (a
+    ///     `Depth: 1` of a non-root collection always emits itself; a
+    ///     name-emptiness test only catches the ROOT case). Grandchildren,
+    ///     parents and foreign hosts refuse the listing.
+    ///   - **Separators.** The path is split into components BEFORE each one is
+    ///     percent-decoded, and a component that decodes to something containing
+    ///     a separator, a NUL, or a dot segment refuses the listing. Decoding
+    ///     first is how `%2E%2E%2F%2E%2E%2Fetc%2Fpasswd` becomes a single entry
+    ///     named `../../etc/passwd`, and `URL.appending(path:)` does not
+    ///     normalise dot segments back out.
+    ///   - **Bounds.** Body bytes and response count are capped, and a duplicate
+    ///     name refuses the listing — one real collection cannot hold two.
+    ///   - **Directories** are dropped: a nested folder is not a deliverable.
+    ///
+    /// What this function deliberately does NOT do is judge the NAME. That is
+    /// `validatedOutboxEntryName`'s job and it is a separate question: this one
+    /// answers "is this a direct child of the folder I asked about", that one
+    /// answers "is this a name I am willing to mint a key for".
+    ///
+    /// PRIVACY: takes a body and a URL, returns entries or a taxonomy value.
+    /// Nothing here logs, and no refusal carries a name or a path.
+    static func parseListing(
+        status: Int,
+        body: Data,
+        requestedURL: URL
+    ) -> FileServerListingVerdict {
+        switch status {
+        case 207:
+            break
+        case 404:
+            // The one non-207 that is a fact about the FOLDER rather than about
+            // the server. Sound to act on because absence mints nothing: a wrong
+            // `.absent` costs a row telling the user to check their server,
+            // while a wrong `.entries` costs them a downloaded file that is not
+            // theirs.
+            return .absent
+        case 401, 403:
+            return .unusable(.unauthorized)
+        case 500...599:
+            return .unusable(.serverError)
+        default:
+            return .unusable(.notMultiStatus)
+        }
+
+        guard body.count <= listingMaxBytes else { return .unusable(.bodyTooLarge) }
+        guard !body.isEmpty else { return .unusable(.malformedBody) }
+        guard let baseComponents = listingPathComponents(of: requestedURL) else {
+            return .unusable(.malformedBody)
+        }
+
+        let delegate = StrictListingParserDelegate(maxResponses: listingMaxEntries)
+        let parser = XMLParser(data: body)
+        parser.delegate = delegate
+        parser.shouldProcessNamespaces = false   // match local names; tolerate any/no prefix
+        // An untrusted body must not be able to make the parser fetch anything.
+        parser.shouldResolveExternalEntities = false
+        let completed = parser.parse()
+
+        // The delegate's own refusal is read FIRST: it aborts the parse to stop
+        // work, so `completed` is false for its cases too, and reporting them all
+        // as malformed would lose the one that says the folder is simply too big.
+        if let refusal = delegate.refusal { return .unusable(refusal) }
+        guard completed, parser.parserError == nil, delegate.sawMultistatus else {
+            return .unusable(.malformedBody)
+        }
+
+        var entries: [FileServerEntry] = []
+        var seen = Set<String>()
+        for response in delegate.responses {
+            guard let resolved = resolveListingHref(
+                response.href, requestedURL: requestedURL, baseComponents: baseComponents
+            ) else {
+                return .unusable(.entryOutsideCollection)
+            }
+            // The collection's own row is resolved and dropped BEFORE its
+            // per-resource status is consulted: it is not a candidate either way,
+            // and a server that reports the collection itself oddly must not
+            // refuse a listing that is otherwise fine.
+            guard case let .child(name) = resolved else { continue }
+            guard seen.insert(name).inserted else { return .unusable(.duplicateEntry) }
+            guard response.isUsableResource else { continue }
+            guard !response.isDirectory else { continue }
+            entries.append(FileServerEntry(name: name, isDirectory: false, byteSize: response.byteSize))
+        }
+        return .entries(entries)
+    }
+
+    /// Whether an entry name from a listing may become a stored key, and the
+    /// name itself when it may. **REJECTS, NEVER REPAIRS** — `nil` means "do not
+    /// deliver this file", not "clean it up".
+    ///
+    /// WHY NOT `makeStoredKey`. That is a MINTER: it prepends `<8hex>__` and a
+    /// folder, so running a server-supplied name through it produces a key that
+    /// does not exist on the server and a file that can never be fetched. The
+    /// name here already exists — the only question is whether Conduck is
+    /// willing to address it — so the answer has to be yes or no.
+    ///
+    /// Every rule is the property the mint GUARANTEES, asserted rather than
+    /// imposed, so a name from a server is held to exactly the standard a name
+    /// Conduck minted meets (`ConverseWireTests
+    /// .testStoredKeyIsStructurallyInertForEveryHostileName` pins the mint side):
+    ///
+    ///   - the mint's own alphabet, `storedKeySafeCharacters` — which also makes
+    ///     the name structurally inert in the wire block, unable to open a line,
+    ///     a fence, a bullet or a `[Conduck …]` marker
+    ///   - a single path component: no `/`, so a name can never become a path
+    ///   - never `.` or `..`, never leading `.` (a hidden file) or `-` (a name
+    ///     that reads as a CLI option to the agent's own tooling)
+    ///   - within `storedKeyComponentMaxCharacters`, the filesystem budget
+    ///   - an extension on `allowedExtensions` — the outbound TYPE gate, which
+    ///     is what keeps a `.mobileconfig` or a live `.sqlite` out of the lane
+    ///
+    /// `allowedExtensions` is a parameter so the gate is testable without the
+    /// detector and so a caller with a narrower policy can pass one; the default
+    /// IS the shipped outbound allowlist, because a second copy of that list is
+    /// a second thing to keep in step.
+    static func validatedOutboxEntryName(
+        _ name: String,
+        allowedExtensions: Set<String> = FileTransferOutputDetector.outputAllowlist
+    ) -> String? {
+        guard !name.isEmpty, name.count <= storedKeyComponentMaxCharacters else { return nil }
+        guard !name.contains("/") else { return nil }
+        guard name.allSatisfy({ storedKeySafeCharacters.contains($0) }) else { return nil }
+        guard name != ".", name != ".." else { return nil }
+        guard !name.hasPrefix("."), !name.hasPrefix("-") else { return nil }
+        let ext = probeKeyExtension(name)
+        guard !ext.isEmpty, allowedExtensions.contains(ext) else { return nil }
+        return name
+    }
+
+    /// Where one resolved `<href>` sits relative to the collection that was
+    /// listed. Nothing else is representable, which is the point: an href is
+    /// either the folder itself, a direct child of it, or a refusal.
+    private enum ResolvedListingHref {
+        case collectionItself
+        case child(String)
+    }
+
+    /// Resolve one `<href>` against the requested collection.
+    ///
+    /// Returns nil — refusing the WHOLE listing — for a foreign origin, a
+    /// grandchild, a parent, an unparseable reference, or any component that
+    /// decodes to a separator, a NUL or a dot segment. Refusing wholesale rather
+    /// than dropping the row is deliberate: an href that is not a plain direct
+    /// child means this body is not describing the folder that was asked about,
+    /// and quietly keeping its siblings would let a server hand over a curated
+    /// subset of a listing the client believes is complete.
+    ///
+    /// Relative references resolve against the collection WITH a trailing slash,
+    /// which is what makes `report.pdf` a child rather than a sibling. RFC 3986
+    /// resolution removes dot segments as it goes, so a `../..` href lands
+    /// outside the base and is refused by the direct-child test; a
+    /// percent-ENCODED one survives resolution intact and is refused by the
+    /// component decode below.
+    ///
+    /// THE MATCH IS ANCHORED AT THE END, NOT AT THE START, and that is the one
+    /// place this is deliberately looser than "the href begins with what I
+    /// asked for". A reverse proxy that strips its own mount point — Caddy's
+    /// `handle_path /files/*`, an nginx `proxy_pass` with a trailing slash — hands
+    /// the WebDAV server a shortened path, so a base of `https://host/files` gets
+    /// back hrefs of `/<conv>/out-<hex>/report.pdf`. Demanding the full prefix
+    /// refuses every row of a perfectly good listing and leaves the user with a
+    /// permanent "Couldn't read your file server". Requiring the href's PARENT to
+    /// be a non-empty tail of the requested path keeps every property that
+    /// matters: same origin, exactly one component past the folder, and a parent
+    /// that still ends in the freshly-minted `out-<32 hex>` component, so a
+    /// listing of the served root, of the conversation folder, or of any other
+    /// directory is refused exactly as before.
+    private static func resolveListingHref(
+        _ href: String,
+        requestedURL: URL,
+        baseComponents: [String]
+    ) -> ResolvedListingHref? {
+        let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let absoluteBase = requestedURL.absoluteString
+        let collectionBase = absoluteBase.hasSuffix("/")
+            ? requestedURL
+            : (URL(string: absoluteBase + "/") ?? requestedURL)
+        guard let resolved = URL(string: trimmed, relativeTo: collectionBase)?.absoluteURL,
+              sameListingOrigin(resolved, requestedURL),
+              let components = listingPathComponents(of: resolved) else {
+            return nil
+        }
+        // The collection's own row is tested FIRST. Under a stripped prefix an
+        // href can satisfy both readings (its components tail-match the base, and
+        // so does its parent), and calling that the folder rather than a child of
+        // a shorter folder is the reading that cannot invent an entry.
+        if isRequestedCollectionTail(components, of: baseComponents) {
+            return .collectionItself
+        }
+        guard let name = components.last,
+              isRequestedCollectionTail(Array(components.dropLast()), of: baseComponents) else {
+            return nil
+        }
+        return .child(name)
+    }
+
+    /// Whether `candidate` names the requested collection as the server sees it:
+    /// the whole requested path, or the tail of it that survives a path-stripping
+    /// proxy.
+    ///
+    /// A tail, never a head and never a subsequence, so what is accepted always
+    /// ends where the request ended. On the collection this actually decides in
+    /// production — the per-dispatch box, whose path ends in `out-<32 hex>` —
+    /// that means even the shortest accepted match pins an entry's immediate
+    /// parent to 128 bits of freshly-minted entropy. An EMPTY candidate matches
+    /// only an empty base; otherwise a server answering about its own root would
+    /// satisfy every listing.
+    private static func isRequestedCollectionTail(
+        _ candidate: [String],
+        of baseComponents: [String]
+    ) -> Bool {
+        guard !candidate.isEmpty else { return baseComponents.isEmpty }
+        guard candidate.count <= baseComponents.count else { return false }
+        return Array(baseComponents.suffix(candidate.count)) == candidate
+    }
+
+    /// The percent-DECODED path components of `url`, or nil when any of them is
+    /// something a path component may not be.
+    ///
+    /// SPLIT FIRST, DECODE SECOND. That order is the whole function: decoding
+    /// first turns `%2F` into a real separator and `%2E%2E` into a dot segment,
+    /// so a single component carries an entire path the split cannot see.
+    private static func listingPathComponents(of url: URL) -> [String]? {
+        let encodedPath = url.absoluteURL.path(percentEncoded: true)
+        var components: [String] = []
+        for encoded in encodedPath.split(separator: "/", omittingEmptySubsequences: true) {
+            guard let decoded = String(encoded).removingPercentEncoding,
+                  !decoded.isEmpty,
+                  decoded != ".",
+                  decoded != "..",
+                  !decoded.contains("/"),
+                  !decoded.contains("\\"),
+                  !decoded.unicodeScalars.contains(where: { $0.value == 0 }) else {
+                return nil
+            }
+            components.append(decoded)
+        }
+        return components
+    }
+
+    /// Whether two URLs share scheme, host and effective port. The listing
+    /// requires it because an href on another host is not describing the file
+    /// server the user configured, whatever it claims about the path.
+    private static func sameListingOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard let leftScheme = lhs.scheme?.lowercased(),
+              let rightScheme = rhs.scheme?.lowercased(),
+              leftScheme == rightScheme,
+              let leftHost = lhs.host()?.lowercased(),
+              let rightHost = rhs.host()?.lowercased(),
+              leftHost == rightHost else {
+            return false
+        }
+        return listingPort(lhs) == listingPort(rhs)
+    }
+
+    /// A URL's port, with the scheme's default filled in so `https://h/x` and
+    /// `https://h:443/x` are one origin rather than two.
+    private static func listingPort(_ url: URL) -> Int {
+        if let port = url.port { return port }
+        switch url.scheme?.lowercased() {
+        case "https": return 443
+        case "http": return 80
+        default: return -1
+        }
+    }
+
+    // MARK: - Staged Test Connection (builds its own trust-reading session)
 
     /// Run the staged Test Connection against `snapshot`'s file-server:
-    /// **reachability → auth → write(PUT tiny probe) → read(GET) → delete(cleanup)**.
+    /// **reachability → auth → write(PUT tiny probe) → read(GET) → delete(cleanup)
+    /// → listing(PROPFIND)**.
     /// Sets `fileTransferAvailable` (caller side) only on a full pass — a
     /// read-only 200 false-positives on a Control-UI HTML page, so availability
-    /// requires the write+read round-trip to actually land.
+    /// requires the write+read round-trip to actually land, and the listing
+    /// stage requires the lane to answer the two PROPFINDs the return direction
+    /// is built on (see `probeListingCapability`).
     ///
     /// - The probe file is `__conduck_probe_<8hex>.txt` with a tiny known body;
     ///   it is GET-read back, then best-effort DELETEd. A DELETE failure does
@@ -1536,13 +2137,166 @@ enum FileServerClient {
             )
         }
 
-        // Full pass (connectivity). `folderCapable` rides alongside the verdict.
+        // --- Stage 5: listing (the whole RETURN direction) ---
+        // Everything above certifies bytes going OUT. This certifies the one
+        // capability bytes coming BACK depend on, and it is fatal for the same
+        // reason the read stage is: a green test is a claim about the lane, and a
+        // lane that cannot answer a PROPFIND silently delivers nothing an agent
+        // ever produces. Indeterminate is NOT a failure — a transport hiccup on
+        // the fifth request of an otherwise clean sequence proves nothing, and
+        // this stage narrows nothing that could be persisted wrong.
+        switch await probeListingCapability(snapshot: snapshot, session: session, signals: signals) {
+        case .capable, .indeterminate:
+            break
+        case .rejected:
+            return FileTransferTestResult(
+                reachedStage: .listing,
+                success: false,
+                failure: .fileTransferNotAFileServer,
+                folderCapable: folderCapable
+            )
+        case .certificateRefused(let refusal):
+            // At `.reachability`, for the reason the nested probe's refusal is:
+            // a certificate verdict is about the CONNECTION, and the file lane
+            // tells one story about certificates wherever one is observed.
+            return FileTransferTestResult(
+                reachedStage: .reachability,
+                success: false,
+                failure: refusal.fileTransferError
+            )
+        }
+
+        // Full pass (connectivity + listing). `folderCapable` rides alongside.
         return FileTransferTestResult(
-            reachedStage: .read,
+            reachedStage: .listing,
             success: true,
             failure: nil,
             folderCapable: folderCapable
         )
+    }
+
+    /// What the LISTING-capability probe learned. Shaped like
+    /// `FolderProbeOutcome` and for the same reasons — `indeterminate` says "try
+    /// again later" where `certificateRefused` says "no later probe will do
+    /// better", and folding the two is how a trust refusal disappears into a
+    /// feature narrowing.
+    enum ListingProbeOutcome: Equatable {
+        /// The server answered `207` for a collection that exists AND `404` for
+        /// one that cannot. Both directions of the return lane are available.
+        case capable
+        /// The server ANSWERED, and its answer proves the return lane cannot
+        /// work: no `PROPFIND` support at all, or a namespace that answers
+        /// everything so an absence can never be witnessed.
+        case rejected
+        /// Nothing was learned (a transport failure carrying no certificate
+        /// verdict). Never persisted as a verdict and never fails the test.
+        case indeterminate
+        /// This device refused the server's certificate.
+        case certificateRefused(CertificateRefusal)
+    }
+
+    /// Probe whether `snapshot`'s file-server can support the RETURN direction,
+    /// with the two PROPFINDs the dispatch path itself issues:
+    ///
+    ///   1. `PROPFIND Depth: 0` of the served root — must be `207`. A collection
+    ///      that certainly exists is the only way to ask "do you speak PROPFIND
+    ///      at all"; a `405`/`501` here is a plain-HTTP store or an nginx-DAV
+    ///      without the ext module, which PUTs and GETs perfectly and can never
+    ///      list anything.
+    ///   2. `PROPFIND Depth: 0` of a sibling that cannot exist — must be `404`.
+    ///      This is byte-for-byte the pre-dispatch absence witness
+    ///      (`FileServerClient.absenceWitnessed`), so a lane that fails it fails
+    ///      EVERY dispatch's witness and gets no output box, forever. A catch-all
+    ///      host that `207`s or `200`s every path lands here.
+    ///
+    /// Both are `Depth: 0`, non-mutating, and cost one tiny request each — the
+    /// question is about the collection itself, and a `Depth: 1` of the served
+    /// root would make the server enumerate every file the user owns to answer a
+    /// yes/no question.
+    ///
+    /// Session posture and the trust-reading rule mirror `probeFolderCapability`:
+    /// when `session` is nil this builds the ephemeral cert-pinned session and
+    /// reads ITS evaluator; a caller supplying a session supplies `signals` too,
+    /// because a probe cannot read an evaluator it did not build and without one
+    /// a refused certificate is indistinguishable from a dead host.
+    static func probeListingCapability(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        session: URLSession? = nil,
+        signals: (@Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals)? = nil
+    ) async -> ListingProbeOutcome {
+        let probeSession: URLSession
+        let ownsSession: Bool
+        let attemptSignals: @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals
+        if let session {
+            probeSession = session
+            ownsSession = false
+            attemptSignals = Self.probeSignals(override: signals, evaluator: nil)
+        } else {
+            let built = makeProbeSession(pinnedFingerprintHex: snapshot.certFingerprintHex)
+            probeSession = built.session
+            ownsSession = true
+            attemptSignals = Self.probeSignals(override: signals, evaluator: built.evaluator)
+        }
+        defer { if ownsSession { probeSession.invalidateAndCancel() } }
+
+        // Step 1 — a collection that exists must answer `207`.
+        switch await propfindStatus(
+            snapshot: snapshot, collectionKey: "", session: probeSession, signals: attemptSignals
+        ) {
+        case .status(207):
+            break
+        case .status:
+            return .rejected
+        case .certificate(let refusal):
+            return .certificateRefused(refusal)
+        case .noAnswer:
+            return .indeterminate
+        }
+
+        // Step 2 — a collection that cannot exist must answer `404`.
+        let controlKey = negativeControlCollectionKey(siblingOf: "")
+        switch await propfindStatus(
+            snapshot: snapshot, collectionKey: controlKey, session: probeSession, signals: attemptSignals
+        ) {
+        case .status(let status):
+            return absenceWitnessed(status: status) ? .capable : .rejected
+        case .certificate(let refusal):
+            return .certificateRefused(refusal)
+        case .noAnswer:
+            return .indeterminate
+        }
+    }
+
+    /// What one capability PROPFIND came back as. Three cases because the caller
+    /// treats them differently, and the split has to survive the `-999` that a
+    /// certificate refusal and a benign cancellation share.
+    private enum PropfindProbeAnswer {
+        case status(Int)
+        case certificate(CertificateRefusal)
+        case noAnswer
+    }
+
+    /// Issue one `PROPFIND Depth: 0` and report only its status. The body cannot
+    /// change a capability verdict, so it is never read — the status line is the
+    /// whole answer, and a catch-all host's login page must not be buffered to
+    /// learn that it sent one.
+    private static func propfindStatus(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        collectionKey: String,
+        session: URLSession,
+        signals: @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals
+    ) async -> PropfindProbeAnswer {
+        let request = buildPropfindRequest(snapshot: snapshot, collectionKey: collectionKey, depth: 0)
+        do {
+            let status = try await BackgroundFileTransfer.statusOnlyResponse(
+                session: session, request: request)
+            return .status(status)
+        } catch {
+            if let refusal = certificateRefusal(error, signals: signals()) {
+                return .certificate(refusal)
+            }
+            return .noAnswer
+        }
     }
 
     /// Outcome of the folder-capability probe. `rejected` is the ONLY value that
@@ -1789,6 +2543,221 @@ enum FileServerClient {
         signals: RemoteAgentTrustEvaluator.AttemptTrustSignals
     ) -> AppError {
         certificateRefusal(error, signals: signals)?.fileTransferError ?? .fileTransferUnreachable
+    }
+}
+
+// MARK: - Strict listing parser delegate
+
+/// `XMLParser` delegate for `FileServerClient.parseListing`. Collects one
+/// `Response` per `<response>` element and REFUSES the document the moment it
+/// meets something it cannot account for.
+///
+/// The contrast with `PropfindParserDelegate` below is the point. That one
+/// accumulates whatever it can and reports no failure, which is right for a
+/// browser and wrong for the authority on what an agent produced. This one:
+///
+///   - requires `multistatus` as the root element
+///   - requires every `<response>` to sit DIRECTLY under it, and refuses the
+///     document for one that does not — a row in an unrecognised wrapper is a
+///     row nobody understood, and dropping it would report a file that exists as
+///     an empty folder
+///   - requires exactly one `<href>` per `<response>`
+///   - keeps property values only from a `2xx` `<propstat>`, and records the
+///     response-level `<status>` separately, so RFC 4918's not-found rows can be
+///     dropped instead of emitted as ordinary entries
+///   - bounds element nesting and response count, aborting the parse rather
+///     than accumulating
+///   - records WHY it stopped, so the caller can tell "too many entries" from
+///     "this is not a multistatus document"
+///
+/// Namespace-agnostic on local names (`D:`, `d:`, or unprefixed `DAV:`) —
+/// prefixes are a serialization choice and a listing that refused one would
+/// refuse real servers.
+private final class StrictListingParserDelegate: NSObject, XMLParserDelegate {
+
+    /// One `<response>`, reduced to what a listing decision needs.
+    struct Response {
+        var href: String
+        var isDirectory: Bool
+        var byteSize: Int
+        /// Whether the resource itself is usable: no non-`2xx` response-level
+        /// `<status>`, and at least one `2xx` `<propstat>`.
+        var isUsableResource: Bool
+    }
+
+    /// Deepest element nesting accepted. A `207` describing one flat collection
+    /// nests a handful deep; anything past this is a body doing something other
+    /// than listing a directory, and refusing it keeps the work bounded.
+    private static let maxElementDepth = 32
+
+    private(set) var responses: [Response] = []
+    private(set) var sawMultistatus = false
+    private(set) var refusal: FileTransferListingRefusal?
+
+    private let maxResponses: Int
+
+    /// Open-element local names, outermost first. Every scoping question below
+    /// ("is this `<status>` the resource's or a propstat's?") is answered from
+    /// this rather than from a bag of booleans that can drift out of step.
+    private var stack: [String] = []
+
+    // Per-`<response>` accumulators.
+    private var hrefCount = 0
+    private var href = ""
+    private var resourceStatusIs2xx = true
+    private var usablePropstats = 0
+    private var propstatCount = 0
+    private var isDirectory = false
+    private var byteSize = 0
+
+    // Per-`<propstat>` accumulators, merged into the response only on a `2xx`.
+    private var propstatStatusIs2xx = false
+    private var propstatIsDirectory = false
+    private var propstatByteSize = 0
+
+    // Element-text capture.
+    private var capturing = false
+    private var charBuffer = ""
+
+    init(maxResponses: Int) {
+        self.maxResponses = maxResponses
+        super.init()
+    }
+
+    /// Lowercased local name, stripping any `prefix:`.
+    private func localName(_ elementName: String) -> String {
+        if let colon = elementName.lastIndex(of: ":") {
+            return String(elementName[elementName.index(after: colon)...]).lowercased()
+        }
+        return elementName.lowercased()
+    }
+
+    private func refuse(_ reason: FileTransferListingRefusal, _ parser: XMLParser) {
+        if refusal == nil { refusal = reason }
+        parser.abortParsing()
+    }
+
+    /// `<getcontentlength>` as a plain decimal byte count, or nil when it is
+    /// anything else. Stricter than `Int.init` on purpose — that accepts signed
+    /// forms and non-ASCII digit scalars, none of which a server should send —
+    /// and nil renders as "no size" on the chip, which is better than a wrong
+    /// one sailing past the large-download confirm.
+    private static func contentLength(_ text: String) -> Int? {
+        guard !text.isEmpty, text.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+        return Int(text)
+    }
+
+    /// Whether a `<status>` line (`HTTP/1.1 200 OK`) reports success. Anything
+    /// unparseable is NOT success — a status nobody can read is not permission
+    /// to emit the row it covers.
+    private func statusIs2xx(_ line: String) -> Bool {
+        for field in line.split(separator: " ", omittingEmptySubsequences: true) {
+            guard field.count == 3, field.allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let code = Int(field) else { continue }
+            return (200...299).contains(code)
+        }
+        return false
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String]
+    ) {
+        let local = localName(elementName)
+        if stack.isEmpty {
+            guard local == "multistatus" else { return refuse(.malformedBody, parser) }
+            sawMultistatus = true
+        }
+        guard stack.count < Self.maxElementDepth else { return refuse(.malformedBody, parser) }
+        stack.append(local)
+
+        switch local {
+        case "response" where stack.count == 2:
+            hrefCount = 0
+            href = ""
+            resourceStatusIs2xx = true
+            usablePropstats = 0
+            propstatCount = 0
+            isDirectory = false
+            byteSize = 0
+        case "propstat":
+            propstatCount += 1
+            propstatStatusIs2xx = false
+            propstatIsDirectory = false
+            propstatByteSize = 0
+        case "collection":
+            // Only inside a `<resourcetype>`, so a stray element of that name
+            // elsewhere cannot mark a file as a folder.
+            if stack.dropLast().last == "resourcetype" { propstatIsDirectory = true }
+        case "href", "getcontentlength", "status":
+            capturing = true
+            charBuffer = ""
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if capturing { charBuffer += string }
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        let local = localName(elementName)
+        guard stack.last == local else { return refuse(.malformedBody, parser) }
+        stack.removeLast()
+        let parent = stack.last
+        let text = charBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        capturing = false
+
+        switch local {
+        case "href" where parent == "response":
+            hrefCount += 1
+            href = text
+        case "getcontentlength" where parent == "prop":
+            if let value = Self.contentLength(text) { propstatByteSize = value }
+        case "status" where parent == "propstat":
+            propstatStatusIs2xx = statusIs2xx(text)
+        case "status" where parent == "response":
+            resourceStatusIs2xx = statusIs2xx(text)
+        case "propstat":
+            // Properties count only when the server said they were found.
+            if propstatStatusIs2xx {
+                usablePropstats += 1
+                if propstatIsDirectory { isDirectory = true }
+                if propstatByteSize > 0 { byteSize = propstatByteSize }
+            }
+        case "response" where parent == "multistatus":
+            guard hrefCount == 1 else { return refuse(.malformedBody, parser) }
+            guard responses.count < maxResponses else { return refuse(.tooManyEntries, parser) }
+            responses.append(Response(
+                href: href,
+                isDirectory: isDirectory,
+                byteSize: byteSize,
+                // No propstat at all means the response stated nothing about the
+                // resource, which is not evidence that it is there.
+                isUsableResource: resourceStatusIs2xx && usablePropstats > 0
+            ))
+        case "response":
+            // A `<response>` anywhere but directly under `<multistatus>` REFUSES
+            // the document. RFC 4918 puts it exactly one level down, so a deeper
+            // one means this body has a structure nobody here understood — and
+            // the only two ways to handle a row you did not understand are to
+            // refuse the answer or to lose a file. Silently dropping it made
+            // `<multistatus><sync><response>report.pdf</response></sync></…>`
+            // read as "the folder is empty", which past the grace window stamps
+            // the turn done forever with no row and no way back.
+            return refuse(.malformedBody, parser)
+        default:
+            break
+        }
     }
 }
 

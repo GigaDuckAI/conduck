@@ -1519,11 +1519,22 @@ final class WatchRecordingService {
             // watchOS (the keep-images-inline flag is App-Group-only on iOS)
             // but passed anyway — zero call-site churn if the flag ever
             // broadcasts.
+            //
+            // `dispatchFileLaneID` names the lane THIS dispatch owns, and the
+            // wrist must pass it like every other surface: with it nil, no prior
+            // record's storedKeys are recognised as reachable, so a thread that
+            // ever held a server file replays with an honesty note claiming its
+            // own files "are not available in the current file-transfer lane"
+            // even when nothing about the lane changed. The value is resolved
+            // here rather than left to the uploader for the same reason the
+            // uploader captures it: it is a dispatch-time fact.
             let priorTurns = try await ConversationHistoryAssembler.assemble(
                 conversationID: conversationID,
                 excludingUserMessageID: userRecord.id,
                 excludingNewUserText: trimmed,
-                boundRef: RemoteAgentRef(rawString: ref)
+                boundRef: RemoteAgentRef(rawString: ref),
+                dispatchFileLaneID: WatchSettingsReader.shared
+                    .remoteAgentFileLane(for: ref).laneID
             )
 
             // Persist in-flight markers for wrist-drop restoration.

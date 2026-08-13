@@ -1585,7 +1585,7 @@ final class ConverseWireTests: XCTestCase {
         // HALF TWO — the block adds no attacker-controlled bytes. Every line of
         // the spliced block is either Conduck's own fixed text or a bullet whose
         // variable parts are substrings of the agent's own reply.
-        let header = "The following file(s) are in your working directory — use them for this request. Each input lives under its conversation folder at the path shown:"
+        let header = "The following file(s) are in your working directory — use them for this request:"
         for line in content.components(separatedBy: "\n") {
             if line == replyText || line.isEmpty || line == header { continue }
             let variable = line
@@ -1657,13 +1657,17 @@ final class ConverseWireTests: XCTestCase {
                       "the floor marker itself must ride the wire")
     }
 
-    // MARK: - Phase B: server-file ref line + the per-turn delivery instruction
+    // MARK: - Phase B: server-file ref line + the per-turn outbox location
 
-    /// The non-image server-file ref line tells the agent inputs live under the
-    /// conversation folder. It is a pure INPUT reference: output guidance moved
-    /// to the single per-turn `fileDeliveryInstruction` (next tests) because
-    /// this line also replays on every prior turn — an output clause here would
-    /// duplicate across the whole resent history.
+    /// The non-image server-file ref line names each input's authoritative
+    /// path. It is a pure INPUT reference: output guidance lives in the single
+    /// per-turn outbox-location line (next tests) because this line also
+    /// replays on every prior turn AND on both roles — an output clause here
+    /// would duplicate across the whole resent history carrying stale paths.
+    ///
+    /// It also states no path SHAPE, because there is not one: a flat-key lane
+    /// mints `<8hex>__<name>`, a folder-capable one prefixes the conversation,
+    /// and a replayed agent output sits under its own dispatch's outbox.
     func testServerFileRefLineIsInputOnly() throws {
         let messages = RemoteAgentClient.assembleMessages(
             priorTurns: [],
@@ -1676,14 +1680,19 @@ final class ConverseWireTests: XCTestCase {
         let content = try XCTUnwrap(wire[0]["content"] as? String)
         XCTAssertTrue(content.contains("working directory"), "the working-directory line is retained")
         XCTAssertFalse(content.contains("write any output files"),
-                       "output guidance must NOT ride the (replayed) ref line — it lives in the per-turn delivery instruction")
+                       "output guidance must NOT ride the (replayed) ref line — it lives in the per-turn outbox location")
+        XCTAssertFalse(content.contains("Files you produce for this reply go in:"),
+                       "the outbox location must NOT ride the replayed ref line")
+        XCTAssertFalse(content.contains("Each input lives under its conversation folder"),
+                       "the header must not claim a path shape that only holds on a folder-capable lane")
         XCTAssertTrue(content.contains("1F2E3D4C-5B6A-7890-ABCD-EF0123456789/a1b2c3d4__report.pdf"),
                       "the input's full per-conversation path is named")
     }
 
-    /// READY file lane → the delivery instruction rides the newest user turn,
-    /// exactly once, LAST in the text body — even with attachments present.
-    func testFileDeliveryInstructionRidesNewestTurnOnceWhenLaneReady() throws {
+    /// READY file lane + a box → the outbox-location line rides the newest user
+    /// turn, exactly once, LAST in the text body — even with attachments.
+    func testOutboxLocationRidesNewestTurnOnceWhenLaneReady() throws {
+        let box = "1F2E3D4C-5B6A-7890-ABCD-EF0123456789/out-\(String(repeating: "a", count: 32))"
         let messages = RemoteAgentClient.assembleMessages(
             priorTurns: [
                 .init(role: "user", content: .text("earlier question")),
@@ -1691,137 +1700,157 @@ final class ConverseWireTests: XCTestCase {
             ],
             newUserText: "summarize this",
             newUserServerFileRefs: [(originalName: "report.pdf", storedKey: "conv/a1b2c3d4__report.pdf")],
-            fileServerReady: true
+            fileServerReady: true,
+            outboxKey: box
         )
         let wire = try Self.encodeWire(messages)
-        // Prior turns never gain the instruction (historical duplication guard).
+        // Prior turns never gain the line (historical duplication guard).
         for prior in wire.dropLast() {
             let text = (prior["content"] as? String) ?? ""
             XCTAssertFalse(text.contains("[Conduck file transfer]"),
-                           "the delivery instruction must never ride a replayed prior turn")
+                           "the outbox location must never ride a replayed prior turn")
         }
         let content = try XCTUnwrap(wire.last?["content"] as? String)
         XCTAssertEqual(content.components(separatedBy: "[Conduck file transfer]").count - 1, 1,
-                       "exactly ONE delivery instruction on the newest turn")
-        XCTAssertTrue(content.contains("state its exact filename in plain text"),
-                      "the instruction names the plain-text-filename contract")
-        XCTAssertTrue(content.contains("MEDIA:"),
-                      "the instruction must warn off channel-attachment directives by name")
+                       "exactly ONE outbox location on the newest turn")
+        XCTAssertTrue(content.contains("[Conduck file transfer] Files you produce for this reply go in: \(box)"),
+                      "the frozen line rides verbatim with the path BARE. Got: \(content)")
         // LAST in the text body: after the server-file ref block.
         let refIdx = try XCTUnwrap(content.range(of: "conv/a1b2c3d4__report.pdf")).lowerBound
-        let instrIdx = try XCTUnwrap(content.range(of: "[Conduck file transfer]")).lowerBound
-        XCTAssertTrue(refIdx < instrIdx, "the delivery instruction is LAST in the assembled text body")
+        let lineIdx = try XCTUnwrap(content.range(of: "[Conduck file transfer]")).lowerBound
+        XCTAssertTrue(refIdx < lineIdx, "the outbox location is LAST in the assembled text body")
     }
 
-    /// The instruction rides ATTACHMENT-LESS turns too when the lane is ready —
+    /// The line rides ATTACHMENT-LESS turns too when the lane is ready —
     /// "write me a report.md" with nothing attached is exactly the turn the
     /// reference splices can't cover.
-    func testFileDeliveryInstructionRidesAttachmentlessTurnWhenLaneReady() throws {
+    func testOutboxLocationRidesAttachmentlessTurnWhenLaneReady() throws {
         let messages = RemoteAgentClient.assembleMessages(
             priorTurns: [],
             newUserText: "write me a summary as report.md",
-            fileServerReady: true
+            fileServerReady: true,
+            outboxKey: "conv/out-0123456789abcdef0123456789abcdef"
         )
         let wire = try Self.encodeWire(messages)
         let content = try XCTUnwrap(wire[0]["content"] as? String)
         XCTAssertTrue(content.hasPrefix("write me a summary as report.md"), "base text leads")
         XCTAssertTrue(content.contains("[Conduck file transfer]"),
-                      "a ready lane puts the instruction on every turn, attachments or not")
+                      "a ready lane with a box puts the line on every turn, attachments or not")
     }
 
-    /// No ready lane (the default) → zero instruction bytes on the wire, with
-    /// or without attachments (the common no-lane user pays nothing).
-    func testNoFileDeliveryInstructionWithoutReadyLane() throws {
+    /// No ready lane (the default) → zero location bytes on the wire, with or
+    /// without attachments (the common no-lane user pays nothing) — AND a box
+    /// handed in without a lane changes nothing, because nothing could list it.
+    func testNoOutboxLocationWithoutReadyLane() throws {
         let bare = RemoteAgentClient.assembleMessages(priorTurns: [], newUserText: "just a question")
         let withRefs = RemoteAgentClient.assembleMessages(
             priorTurns: [],
             newUserText: "process this",
             newUserServerFileRefs: [(originalName: "a.pdf", storedKey: "conv/ab12cd34__a.pdf")])
-        for messages in [bare, withRefs] {
+        let boxButNoLane = RemoteAgentClient.assembleMessages(
+            priorTurns: [],
+            newUserText: "just a question",
+            fileServerReady: false,
+            outboxKey: "conv/out-0123456789abcdef0123456789abcdef")
+        for messages in [bare, withRefs, boxButNoLane] {
             let wire = try Self.encodeWire(messages)
             let content = try XCTUnwrap(wire[0]["content"] as? String)
             XCTAssertFalse(content.contains("[Conduck file transfer]"),
-                           "without a ready lane the instruction must not ride")
+                           "without a ready lane the outbox location must not ride")
         }
     }
 
-    /// Image turn (`.parts`) — the instruction lands in the TEXT part and the
-    /// wording stays reply-direction-only: the request visibly carries inline
-    /// images, so the instruction must not claim the channel has no attachments.
-    func testFileDeliveryInstructionInTextPartOfImageTurn() throws {
+    /// A READY lane with NO box → no line either. There is nothing to name, and
+    /// naming nothing would be a promise the reply side cannot check.
+    func testNoOutboxLocationWhenReadyLaneMintedNoBox() throws {
+        let messages = RemoteAgentClient.assembleMessages(
+            priorTurns: [], newUserText: "just a question", fileServerReady: true)
+        let content = try XCTUnwrap(try Self.encodeWire(messages)[0]["content"] as? String)
+        XCTAssertEqual(content, "just a question",
+                       "a ready lane with no box adds no bytes at all. Got: \(content)")
+    }
+
+    /// Image turn (`.parts`) — the line lands in the TEXT part and stays
+    /// reply-direction-only: the request visibly carries inline images, so it
+    /// must not claim the channel has no attachments.
+    func testOutboxLocationInTextPartOfImageTurn() throws {
         let messages = RemoteAgentClient.assembleMessages(
             priorTurns: [],
             newUserText: "save a description of this as notes.md",
             newUserImageDataURIs: ["data:image/jpeg;base64,AAAA"],
-            fileServerReady: true
+            fileServerReady: true,
+            outboxKey: "conv/out-0123456789abcdef0123456789abcdef"
         )
         let wire = try Self.encodeWire(messages)
         let parts = try XCTUnwrap(wire[0]["content"] as? [[String: Any]])
         let textPart = try XCTUnwrap(parts.first(where: { ($0["type"] as? String) == "text" }))
         let text = try XCTUnwrap(textPart["text"] as? String)
         XCTAssertTrue(text.contains("[Conduck file transfer]"),
-                      "the instruction rides the text part of an image turn")
+                      "the outbox location rides the text part of an image turn")
         XCTAssertFalse(text.contains("cannot carry attachments"),
                        "wording must stay reply-direction-only (inline request images DO exist)")
     }
 
     // MARK: - Spoken-summary instruction (voice surfaces: CarPlay + Watch)
 
-    /// The FOUR-CELL splice matrix over (surface, fileServerReady):
-    ///  standard+notReady → neither clause; standard+ready → delivery only;
-    ///  spoken+notReady   → spoken only;    spoken+ready   → delivery + spoken.
+    /// The FOUR-CELL splice matrix over (surface, ready lane + box):
+    ///  standard+notReady → neither clause; standard+boxed → location only;
+    ///  spoken+notReady   → spoken only;    spoken+boxed   → location + spoken.
     func testSpokenSummaryMatrixOverSurfaceAndReadiness() throws {
         let file = "[Conduck file transfer]"
         let voice = "[Conduck voice]"
+        let box = "conv/out-0123456789abcdef0123456789abcdef"
 
         // standard + notReady → neither.
         let standardNotReady = try Self.encodeWire(RemoteAgentClient.assembleMessages(
             priorTurns: [], newUserText: "q", fileServerReady: false, surface: .standard))
         let sNR = try XCTUnwrap(standardNotReady.last?["content"] as? String)
-        XCTAssertFalse(sNR.contains(file), "standard+notReady carries no delivery clause")
+        XCTAssertFalse(sNR.contains(file), "standard+notReady carries no location clause")
         XCTAssertFalse(sNR.contains(voice), "standard+notReady carries no spoken clause")
 
-        // standard + ready → delivery only.
+        // standard + boxed → location only.
         let standardReady = try Self.encodeWire(RemoteAgentClient.assembleMessages(
-            priorTurns: [], newUserText: "q", fileServerReady: true, surface: .standard))
+            priorTurns: [], newUserText: "q", fileServerReady: true,
+            outboxKey: box, surface: .standard))
         let sR = try XCTUnwrap(standardReady.last?["content"] as? String)
-        XCTAssertTrue(sR.contains(file), "standard+ready carries the delivery clause")
-        XCTAssertFalse(sR.contains(voice), "standard+ready carries no spoken clause")
+        XCTAssertTrue(sR.contains(file), "standard+boxed carries the location clause")
+        XCTAssertFalse(sR.contains(voice), "standard+boxed carries no spoken clause")
 
         // spoken + notReady → spoken only.
         let spokenNotReady = try Self.encodeWire(RemoteAgentClient.assembleMessages(
             priorTurns: [], newUserText: "q", fileServerReady: false, surface: .spoken))
         let spNR = try XCTUnwrap(spokenNotReady.last?["content"] as? String)
-        XCTAssertFalse(spNR.contains(file), "spoken+notReady carries no delivery clause (no file lane)")
+        XCTAssertFalse(spNR.contains(file), "spoken+notReady carries no location clause (no file lane)")
         XCTAssertTrue(spNR.contains(voice), "spoken+notReady STILL carries the spoken clause (lane-independent)")
 
-        // spoken + ready → delivery + spoken.
+        // spoken + boxed → location + spoken.
         let spokenReady = try Self.encodeWire(RemoteAgentClient.assembleMessages(
-            priorTurns: [], newUserText: "q", fileServerReady: true, surface: .spoken))
+            priorTurns: [], newUserText: "q", fileServerReady: true,
+            outboxKey: box, surface: .spoken))
         let spR = try XCTUnwrap(spokenReady.last?["content"] as? String)
-        XCTAssertTrue(spR.contains(file), "spoken+ready carries the delivery clause")
-        XCTAssertTrue(spR.contains(voice), "spoken+ready carries the spoken clause")
+        XCTAssertTrue(spR.contains(file), "spoken+boxed carries the location clause")
+        XCTAssertTrue(spR.contains(voice), "spoken+boxed carries the spoken clause")
     }
 
-    /// On a spoken + ready turn, the spoken clause is spliced AFTER the delivery
-    /// instruction (order: … → delivery → spoken).
+    /// On a spoken + boxed turn, the spoken clause is spliced AFTER the outbox
+    /// location (order: … → location → spoken).
     func testSpokenSummaryFollowsDeliveryInstructionWhenBothPresent() throws {
         let messages = RemoteAgentClient.assembleMessages(
             priorTurns: [], newUserText: "summarize this",
-            fileServerReady: true, surface: .spoken)
+            fileServerReady: true, outboxKey: "conv/out-0123456789abcdef0123456789abcdef", surface: .spoken)
         let wire = try Self.encodeWire(messages)
         let content = try XCTUnwrap(wire.last?["content"] as? String)
         let deliveryIdx = try XCTUnwrap(content.range(of: "[Conduck file transfer]")).lowerBound
         let spokenIdx = try XCTUnwrap(content.range(of: "[Conduck voice]")).lowerBound
         XCTAssertTrue(deliveryIdx < spokenIdx,
-                      "the spoken clause splices AFTER the delivery instruction")
+                      "the spoken clause splices AFTER the outbox location")
         // Full spoken-clause text is present verbatim (spoken-friendly guidance).
         XCTAssertTrue(content.contains("summarize the useful result in one to three short spoken-friendly sentences"),
                       "the spoken clause carries its summarize-don't-recite guidance")
     }
 
     /// The spoken clause rides the NEWEST turn only — replayed prior turns never
-    /// carry it (mirrors the delivery-instruction historical-duplication guard).
+    /// carry it (mirrors the outbox-location historical-duplication guard).
     func testSpokenSummaryRidesNewestTurnOnly() throws {
         let messages = RemoteAgentClient.assembleMessages(
             priorTurns: [
@@ -1842,7 +1871,7 @@ final class ConverseWireTests: XCTestCase {
     }
 
     /// The spoken clause rides the TEXT part of an image turn (`.parts`), same as
-    /// the delivery instruction — never a bare-string fallback that would drop
+    /// the outbox location — never a bare-string fallback that would drop
     /// the images.
     func testSpokenSummaryInTextPartOfImageTurn() throws {
         let messages = RemoteAgentClient.assembleMessages(
@@ -2186,11 +2215,11 @@ final class ConverseWireTests: XCTestCase {
         XCTAssertTrue(lanelessText.contains("(Conduck file transfer)"),
                       "the folded form is what rides — visibly inert, still readable")
 
-        // Ready lane → exactly ONE marker on the wire: Conduck's own.
+        // Ready lane + a box → exactly ONE marker on the wire: Conduck's own.
         let ready = RemoteAgentClient.assembleMessages(
             priorTurns: [], newUserText: "hi",
             newUserTextFileBlocks: [(filename: hostile, text: "BODY")],
-            fileServerReady: true)
+            fileServerReady: true, outboxKey: "conv/out-0123456789abcdef0123456789abcdef")
         let readyText = try XCTUnwrap(try Self.encodeWire(ready)[0]["content"] as? String)
         XCTAssertEqual(readyText.components(separatedBy: "[Conduck file transfer]").count - 1, 1,
                        "the only marker on the wire is the one Conduck splices itself")

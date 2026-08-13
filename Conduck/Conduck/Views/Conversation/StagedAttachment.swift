@@ -173,10 +173,14 @@ struct StagedAttachment: Identifiable, Equatable {
         /// and hand the synthesized `Equatable` those buffers to compare on every
         /// strip diff. `processedJPEG` is the inline-base64 + persisted-draft
         /// copy; `thumbnail`/`width`/`height`/`byteSize` are the processed-image
-        /// metadata for the persisted draft; `filename` is the display name with
-        /// the original's sniffed extension (e.g. `image.heic` / `image-2.png`),
-        /// carried forward so the wire "saved as" splice names the file by its
-        /// true format. The upload rides a determinate background PUT tracked in
+        /// metadata for the persisted draft; `filename` is the name the user gave
+        /// the picked file, and `ComposerImageName.unnamed` supplies a numbered
+        /// `image…` name only where the source genuinely has none (a photo-library
+        /// pick, a camera shot, a pasted bitmap). Only that fallback carries an
+        /// extension sniffed from the original's bytes; a name the user supplied
+        /// is passed through as given, extension included, so the wire "saved as"
+        /// splice names the file the way the user does — the same rule a staged
+        /// document follows. The upload rides a determinate background PUT tracked in
         /// `serverUploadState`, but — unlike `.serverFile` — it NEVER blocks
         /// Send: the inline base64 is always available as a fallback, so at send
         /// time the storedKey is included only if the upload already landed
@@ -245,6 +249,21 @@ struct StagedAttachment: Identifiable, Equatable {
         self.serverOwnerRef = serverOwnerRef
         self.serverOwnerSnapshot = serverOwnerSnapshot
         self.serverUploadState = serverUploadState
+    }
+
+    /// The name this tile shows and uploads under, or nil for a kind that has
+    /// none (loading / failed / an inline-only image whose bytes arrived without
+    /// a filename). Read by `ComposerImageName.unnamed` so a synthesized name is
+    /// numbered around the names already on screen.
+    var stagedFilename: String? {
+        switch kind {
+        case .dualImage(_, _, _, _, _, let filename): return filename
+        case .dualText(_, _, let filename, _): return filename
+        case .serverFile(_, let originalName, _): return originalName
+        case .needsSetup(_, let originalName, _, _): return originalName
+        case .file(let url): return url.lastPathComponent
+        case .loading, .image, .failed: return nil
+        }
     }
 
     /// True while the bytes are still being fetched — gates Send.
@@ -390,6 +409,70 @@ struct StagedAttachment: Identifiable, Equatable {
         case .needsSetup: return nil
         case .loading, .failed: return nil
         }
+    }
+}
+
+/// Which conversation folder a composer's file-server keys are minted under.
+///
+/// A composer stages attachments before the conversation row exists, so the
+/// bound view model is nil for the whole of a new chat's first turn. Every mint
+/// path therefore resolves the folder through here against the composer's
+/// pre-minted `pendingConversationID` — the identifier the host later hands to
+/// `ConversationStore.createConversation(id:backend:)`, so the row adopts the
+/// folder its files are already in.
+///
+/// ONE helper for every path — the two composers' `mintStoredKey`, the two
+/// `TextAttachmentStagePreparer.prepare` call sites, the needs-setup promotion
+/// and the upload-retry fallback — because a path that resolves the folder its
+/// own way splits one turn's files across two folders on the user's server.
+enum ComposerMintFolder {
+    /// The conversation identifier this composer's keys belong to: the bound
+    /// conversation when one exists, else the identifier the composer already
+    /// committed to for the chat it is about to mint.
+    static func conversationID(bound: UUID?, pending: UUID) -> UUID {
+        bound ?? pending
+    }
+
+    /// The `folder` argument for `FileServerClient.makeStoredKey`. Nil only when
+    /// the gateway's nested-PUT probe failed, which is the one case where a key
+    /// must stay flat at the served root.
+    static func storedKeyFolder(bound: UUID?, pending: UUID, folderCapable: Bool) -> String? {
+        guard folderCapable else { return nil }
+        return conversationID(bound: bound, pending: pending).uuidString
+    }
+}
+
+/// Names for an image whose source never gave it one — a photo-library pick
+/// (`PhotosPickerItem` vends bytes, not a filename), a camera shot, a pasted
+/// bitmap. A file the user picked or dropped keeps its own name and never comes
+/// here.
+enum ComposerImageName {
+    /// The name a staged image tile takes: the user's own, whenever the source
+    /// carried one, exactly as a staged document does.
+    static func resolve(
+        originalName: String?,
+        extension ext: String,
+        staged: [StagedAttachment]
+    ) -> String {
+        if let originalName {
+            let trimmed = originalName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return unnamed(extension: ext, avoiding: Set(staged.compactMap(\.stagedFilename)))
+    }
+
+    /// The first unused `image.<ext>` / `image-N.<ext>` for this strip.
+    ///
+    /// Numbered around the names already staged rather than from a count of
+    /// them: a count recomputed from the live array repeats a label the moment
+    /// an earlier tile is removed, leaving two tiles claiming to be the same
+    /// file.
+    static func unnamed(extension ext: String, avoiding taken: Set<String>) -> String {
+        let first = "image.\(ext)"
+        guard taken.contains(first) else { return first }
+        var index = 2
+        while taken.contains("image-\(index).\(ext)") { index += 1 }
+        return "image-\(index).\(ext)"
     }
 }
 
@@ -541,6 +624,17 @@ struct ComposerTurnDispatch: Sendable {
     /// Established conversation identity sealed by the composer. Nil is valid
     /// only for a genuine new-chat mint.
     let conversationID: UUID?
+    /// The identifier the composer already minted its file-server keys under.
+    ///
+    /// A SEPARATE field from `conversationID`, never a substitute for it:
+    /// `conversationID` is the nil-means-new-chat sentinel that
+    /// `ComposerDispatchOwnership.matches` and `ComposerMintOwnership.resolve`
+    /// branch on, so putting a pre-minted identifier there would make every
+    /// new-chat send read as a conversation switch — rejected, and the fresh row
+    /// deleted. A host that mints a conversation for this dispatch passes this
+    /// value to `ConversationStore.createConversation(id:backend:)`; a host that
+    /// appends to an established conversation ignores it.
+    let pendingConversationID: UUID
     /// Per-composer staging generation captured with the exact item ids. Hosts
     /// treat this as opaque ownership evidence; no credential/config enters it.
     let stagingGeneration: UUID
@@ -559,6 +653,7 @@ struct ComposerTurnDispatch: Sendable {
         fileLaneID: String?,
         handedOffServerAttachmentIDs: Set<UUID>,
         conversationID: UUID?,
+        pendingConversationID: UUID,
         stagingGeneration: UUID,
         stagedAttachmentIDs: Set<UUID>
     ) {
@@ -567,6 +662,7 @@ struct ComposerTurnDispatch: Sendable {
         self.ref = ref
         self.fileLaneID = fileLaneID
         self.conversationID = conversationID
+        self.pendingConversationID = pendingConversationID
         self.stagingGeneration = stagingGeneration
         self.stagedAttachmentIDs = stagedAttachmentIDs
         self.handedOffServerAttachmentIDs = handedOffServerAttachmentIDs
@@ -616,6 +712,7 @@ extension Array where Element == StagedAttachment {
         text: String,
         ref: RemoteAgentRef,
         conversationID: UUID?,
+        pendingConversationID: UUID,
         stagingGeneration: UUID
     ) -> ComposerTurnDispatch? {
         guard serverOwnershipMatches(ref) else { return nil }
@@ -637,6 +734,7 @@ extension Array where Element == StagedAttachment {
             fileLaneID: landedLaneIDs.first,
             handedOffServerAttachmentIDs: handedOffServerAttachmentIDs,
             conversationID: conversationID,
+            pendingConversationID: pendingConversationID,
             stagingGeneration: stagingGeneration,
             stagedAttachmentIDs: Set(map(\.id))
         )
@@ -648,12 +746,14 @@ extension Array where Element == StagedAttachment {
     func makeDispatch(
         text: String,
         route: ComposerDispatchRoute,
+        pendingConversationID: UUID,
         stagingGeneration: UUID
     ) -> ComposerTurnDispatch? {
         makeDispatch(
             text: text,
             ref: route.ref,
             conversationID: route.conversationID,
+            pendingConversationID: pendingConversationID,
             stagingGeneration: stagingGeneration
         )
     }

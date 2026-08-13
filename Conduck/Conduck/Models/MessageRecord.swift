@@ -57,10 +57,11 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
     /// still has this identity.
     let fileTransferLaneID: String?
     /// Whether the retroactive output-file scan has run to a CONCLUSIVE finish
-    /// on this turn (v5 model). Set true only when every probe in a scan pass
-    /// returned a definitive verdict, so a marked turn is never re-scanned;
-    /// false = an explicitly pending scan or a transient probe failure (retry on
-    /// the next thread open). Every surface is admitted only by explicit false
+    /// on this turn (v5 model). Set true only when a pass both READ the turn's
+    /// output folder and did so past the grace horizon (`scanMayClose`), so a
+    /// marked turn is never re-listed; false = an explicitly pending scan, a
+    /// folder the app could not read, or a pass that ran too early (retry on the
+    /// next thread open). Every surface is admitted only by explicit false
     /// paired with `outputScanLaneID`, atomically stored with a reply whose
     /// dispatch latched a READY file lane. Legacy/ownerless nil rows stay
     /// excluded rather than guessing the currently configured server.
@@ -73,6 +74,19 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
     /// rows remain nil and are not scanned: guessing the currently configured
     /// lane could attach a file from an unrelated server.
     let outputScanLaneID: String?
+    /// The per-dispatch output folder this reply's turn was told to write into
+    /// (`<conversationID>/out-<hex>`), stored verbatim so a different device —
+    /// or this one days later — can list exactly that folder. Written in the
+    /// SAME save as `outputScanLaneID`, which is what makes the pair
+    /// recoverable rather than half-lost after a process death.
+    ///
+    /// Nil means UNKNOWN, never EMPTY. A row that syncs from CloudKit before
+    /// this attribute lands, a Watch-originated turn (the wrist has no
+    /// file-server credential, so it can neither mint nor create a folder), and
+    /// every legacy row all read nil — and a nil selects the row OUT of the
+    /// automatic pass rather than closing it, because "no folder recorded"
+    /// cannot be distinguished from "folder recorded but not yet synced".
+    let outputBoxKey: String?
     /// Image / text-file attachments on this turn, ordered by `sequence`.
     /// Empty for text-only turns. The snapshots carry thumbnails + extracted
     /// text — never the full image bytes (loaded on demand).
@@ -91,6 +105,7 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
         fileTransferLaneID: String? = nil,
         outputScanDone: Bool? = nil,
         outputScanLaneID: String? = nil,
+        outputBoxKey: String? = nil,
         attachments: [AttachmentRecord] = []
     ) {
         self.id = id
@@ -105,6 +120,7 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
         self.fileTransferLaneID = fileTransferLaneID
         self.outputScanDone = outputScanDone
         self.outputScanLaneID = outputScanLaneID
+        self.outputBoxKey = outputBoxKey
         self.attachments = attachments
     }
 
@@ -139,6 +155,12 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
         // prove which server accepted its dispatch and therefore stays excluded
         // from recovery.
         self.outputScanLaneID = managedObject.value(forKey: "outputScanLaneID") as? String
+        // `outputBoxKey` (v8 model): nil-tolerant, and nil is UNKNOWN rather
+        // than EMPTY. A v7 row, a Watch-originated turn, and a CloudKit row
+        // that syncs before this attribute lands all read nil — none of them
+        // has proven "this reply produced no files", so a nil selects the row
+        // out of the automatic pass instead of closing it.
+        self.outputBoxKey = managedObject.value(forKey: "outputBoxKey") as? String
 
         // Map the unordered `attachments` relationship into snapshots and sort
         // by `sequence` (the model relationship is NOT ordered — CloudKit

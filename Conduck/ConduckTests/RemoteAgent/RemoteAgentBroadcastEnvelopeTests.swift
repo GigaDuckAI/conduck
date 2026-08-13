@@ -718,4 +718,84 @@ final class RemoteAgentBroadcastEnvelopeTests: XCTestCase {
         XCTAssertEqual(decoded.token, "legacy-tok")
         XCTAssertEqual(decoded.timestamp, 88.0, accuracy: 0.0001)
     }
+
+    // MARK: - Per-gateway delivery policy
+
+    func testDeliveryPolicyRoundTrips() throws {
+        let url = try XCTUnwrap(URL(string: "https://gateway.local:18789"))
+        let original = RemoteAgentBroadcastEnvelope(
+            backendRef: "openclaw",
+            url: url,
+            name: nil,
+            model: nil,
+            colorID: nil,
+            monogram: nil,
+            token: nil,
+            certFingerprintHex: nil,
+            fileTransferAvailable: true,
+            fileTransferAutoDeliver: false,
+            fileTransferFilenamePolicy: Constants.fileServerFilenamePolicyPreserve,
+            activeSessionID: nil,
+            timestamp: 1.0
+        )
+
+        let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: original.encodedDict()))
+
+        XCTAssertEqual(decoded.fileTransferAutoDeliver, false)
+        XCTAssertEqual(decoded.fileTransferFilenamePolicy, Constants.fileServerFilenamePolicyPreserve)
+    }
+
+    func testDeliveryPolicyIsOmittedWhenUnstated() throws {
+        let url = try XCTUnwrap(URL(string: "https://gateway.local:18789"))
+        let envelope = RemoteAgentBroadcastEnvelope(
+            backendRef: "openclaw",
+            url: url,
+            name: nil,
+            model: nil,
+            colorID: nil,
+            monogram: nil,
+            token: nil,
+            certFingerprintHex: nil,
+            activeSessionID: nil,
+            timestamp: 1.0
+        )
+
+        let dict = envelope.encodedDict()
+
+        // Omit-nil, not a false-ish sentinel: an absent key must be the SAME
+        // wire an un-upgraded sender produces, so both read as "unstated".
+        XCTAssertNil(dict["fileTransferAutoDeliver"])
+        XCTAssertNil(dict["fileTransferFilenamePolicy"])
+    }
+
+    func testMissingDeliveryPolicyDecodesAsUnstatedNotDenied() throws {
+        // An un-upgraded iPhone's envelope. Decoding `false` here would switch
+        // automatic delivery off across a whole paired watch on first contact.
+        let dict: [String: Any] = [
+            "backend": "openclaw",
+            "url": "https://gw.example.test",
+            "timestamp": 5.0,
+        ]
+
+        let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: dict))
+
+        XCTAssertNil(decoded.fileTransferAutoDeliver)
+        XCTAssertNil(decoded.fileTransferFilenamePolicy)
+    }
+
+    func testWrongTypedDeliveryPolicyDecodesAsUnstated() throws {
+        let dict: [String: Any] = [
+            "backend": "openclaw",
+            "url": "https://gw.example.test",
+            "timestamp": 5.0,
+            "fileTransferAutoDeliver": "no",
+            "fileTransferFilenamePolicy": 7,
+        ]
+
+        let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: dict))
+
+        XCTAssertNil(decoded.fileTransferAutoDeliver, "a wrong-typed value must not strand the envelope")
+        XCTAssertNil(decoded.fileTransferFilenamePolicy)
+        XCTAssertEqual(decoded.backendRef, "openclaw", "the rest of the envelope still decodes")
+    }
 }

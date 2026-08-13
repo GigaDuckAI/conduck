@@ -1338,6 +1338,27 @@ enum Constants {
     /// HEAD-free GET probes where the user is waiting, NOT a bulk transfer.
     static let fileServerProbeTimeout: TimeInterval = 15
 
+    /// Per-request AND resource timeout (seconds) for the PRE-DISPATCH absence
+    /// witness — the one file-server request that runs BEFORE a turn goes out.
+    ///
+    /// Its own, much shorter deadline because it is the only probe in this lane
+    /// that a user pays for without having asked for anything: every dispatch on
+    /// a configured lane awaits it, including a pure-text turn that was never
+    /// going to involve a file. On `fileServerProbeTimeout` a file server that is
+    /// simply not answering right now — a NAS behind a VPN that is down — would
+    /// stall EVERY send by that full budget before the request even reaches the
+    /// gateway.
+    ///
+    /// 4 s is sized for what the request actually is: one liveness round-trip to
+    /// a host the user's own device usually reaches over a tunnel or a tailnet
+    /// (sub-second when healthy, low seconds through a cold Cloudflare Tunnel),
+    /// not a download. Failing it is FAIL-CLOSED AND CHEAP — no location line
+    /// goes on the wire, no automatic delivery happens for that turn, and the
+    /// manual "search mentioned files" affordance still reaches the files — so
+    /// the cost of cutting a slow server off is one turn's automatic delivery,
+    /// while the cost of waiting is every turn's latency.
+    static let fileServerAbsenceWitnessTimeout: TimeInterval = 4
+
     /// How many LEADING body bytes an existence probe reads before it cancels
     /// the underlying task and decides. 1 KiB, because the decision the prefix
     /// feeds is made at the DOCUMENT START — a login page's doctype/root element
@@ -1446,9 +1467,61 @@ enum Constants {
     /// device's composer mints matching keys. NOT a user-facing toggle — it is a
     /// silent capability flag (flat keys are a transparent fallback, never an
     /// error surfaced to the user).
+    ///
+    /// IT GOVERNS THE OUTBOUND DIRECTION ONLY, and the boundary is worth stating
+    /// because it used to be crossed: this flag does NOT gate the per-dispatch
+    /// output box. That box is NAMED by Conduck and CREATED by the agent, so the
+    /// client never PUTs into it and never MKCOLs it — the only client operation
+    /// against it is a PROPFIND, which a lane that refuses nested PUTs answers
+    /// perfectly well. Gating the box here left phone/Mac/CarPlay with no file
+    /// return on a lane where the Watch (which cannot read this flag at all)
+    /// still named one. What actually gates the box is the pre-dispatch absence
+    /// witness — a PROPFIND that has to come back `404` — which measures the one
+    /// capability the box depends on, per dispatch, on the lane itself.
     static func fileServerFolderCapableKey(for ref: RemoteAgentRef) -> String {
         "fileServer.folderCapable." + ref.storageKeySuffix
     }
+
+    /// App Groups UserDefaults **and** iCloud KVS key PREFIX for a SPECIFIC
+    /// ref's "may this gateway put files on my device automatically" flag
+    /// (Bool, default TRUE). Format `fileServer.autoDeliver.<suffix>`.
+    ///
+    /// A per-gateway PROPERTY, not a capability verdict: `available` and
+    /// `folderCapable` say what the server CAN do, this says what the user (and
+    /// later, a B2B seat policy) PERMITS it to do. Default true keeps today's
+    /// behaviour for every existing ref, and the only value worth storing is the
+    /// user's explicit `false`.
+    ///
+    /// Single-sourced as a prefix because the inbound KVS mirror scans by
+    /// prefix — suffixes are dynamic (`custom_<uuid>`), so a scan is the only
+    /// way to reach them, and a second copy of the literal would drift.
+    static let fileServerAutoDeliverKeyPrefix = "fileServer.autoDeliver."
+
+    /// App Groups UserDefaults **and** iCloud KVS key for a SPECIFIC ref's
+    /// auto-delivery permission. Format `fileServer.autoDeliver.<suffix>`.
+    static func fileServerAutoDeliverKey(for ref: RemoteAgentRef) -> String {
+        fileServerAutoDeliverKeyPrefix + ref.storageKeySuffix
+    }
+
+    /// App Groups UserDefaults **and** iCloud KVS key PREFIX for a SPECIFIC
+    /// ref's delivered-filename policy (String, default
+    /// `fileServerFilenamePolicyPreserve`). Format
+    /// `fileServer.filenamePolicy.<suffix>`. Same prefix-scan rationale as
+    /// `fileServerAutoDeliverKeyPrefix`.
+    static let fileServerFilenamePolicyKeyPrefix = "fileServer.filenamePolicy."
+
+    /// App Groups UserDefaults **and** iCloud KVS key for a SPECIFIC ref's
+    /// delivered-filename policy. Format `fileServer.filenamePolicy.<suffix>`.
+    static func fileServerFilenamePolicyKey(for ref: RemoteAgentRef) -> String {
+        fileServerFilenamePolicyKeyPrefix + ref.storageKeySuffix
+    }
+
+    /// The only filename policy that exists: keep the name the agent gave the
+    /// file. Stored as a raw string rather than an enum so an UNKNOWN value
+    /// written by a future build degrades to this default on an older one
+    /// instead of stranding the whole per-ref config — the same tolerant
+    /// posture every other synced per-ref value takes.
+    static let fileServerFilenamePolicyPreserve = "preserve"
 
     /// App Groups UserDefaults key (NO KVS — device-local provenance, like the
     /// cert pin) for a SPECIFIC ref's "THIS device ran a passing staged Test

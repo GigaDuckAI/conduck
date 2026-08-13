@@ -1083,7 +1083,7 @@ final class CarPlayRecordingService {
 
             // Capture the exact READY file lane BEFORE history assembly. The
             // same immutable identity decides which historical storedKeys may
-            // ride, enables the newest-turn delivery instruction, and pins
+            // ride, gates the newest-turn outbox location, and pins
             // later output recovery.
             let fileTransferLane = await SettingsManager.shared
                 .fileTransferReadySnapshot(for: snapshot.ref)
@@ -1118,6 +1118,17 @@ final class CarPlayRecordingService {
                 }
             }
 
+            // Name THIS turn's output box here rather than inside the uploader:
+            // the uploader receives only the lane's opaque identity, while this
+            // caller holds the whole snapshot — the credential the absence
+            // assertion needs and the folder capability the mint is gated on.
+            // Hoisted AFTER the revalidation above so the folder is named on the
+            // lane this turn actually dispatches over.
+            let outboxKey = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+                conversationID: conversationID,
+                snapshot: fileTransferLane
+            )
+
             try CarPlayConverseUploader.shared.uploadConverse(
                 backend: snapshot.backend,
                 ref: snapshot.ref,
@@ -1133,6 +1144,7 @@ final class CarPlayRecordingService {
                 // turn in the same thread.
                 userMessageID: userRecord.id,
                 fileTransferLaneID: fileTransferLane?.durableLaneID,
+                outboxKey: outboxKey,
                 turnToken: currentTurnToken
             )
         } catch {

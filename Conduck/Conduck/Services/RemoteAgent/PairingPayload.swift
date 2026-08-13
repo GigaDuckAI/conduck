@@ -90,6 +90,51 @@ struct PairingPayload: Equatable, Sendable {
         let url: URL
         /// Machine-minted shared credential — nonempty by contract.
         let credential: String
+
+        /// Whether this gateway may put files on the device automatically — the
+        /// wire form of the per-gateway `fileServer.autoDeliver.<ref>` property.
+        ///
+        /// RESERVED, and reserved literally: no code path reads it. `conduck-connect`
+        /// emits no such key today, the import path stores nothing from it, and the
+        /// per-gateway property it names is itself unread (see
+        /// `SettingsManager.FileTransferSnapshot.autoDeliver`). It is parsed now
+        /// because `PAYLOAD.md` locks v1 to additions that are COMPATIBLE but never
+        /// REPURPOSED — so the field name is the one thing that cannot be chosen
+        /// late, and fixing the shape before a reader exists costs nothing.
+        ///
+        /// nil means UNSTATED, never an explicit `false`: a missing key is what
+        /// every code in existence produces, and reading that as "this gateway
+        /// forbids automatic delivery" would switch a permission off across every
+        /// import. A wrong-typed value lands on nil for the same reason — see
+        /// `parseOrThrow`.
+        let autoDeliver: Bool?
+
+        /// How a delivered file's name is treated — the wire form of the
+        /// per-gateway `fileServer.filenamePolicy.<ref>` property. RESERVED on
+        /// exactly the terms `autoDeliver` is, and nil likewise means "unstated,
+        /// the app keeps its own default" rather than an empty policy.
+        ///
+        /// Held to `filenamePolicyToken` on the way in: a policy is a token from a
+        /// closed machine-minted vocabulary, so an off-shape value is unusable
+        /// anyway, and bounding it here keeps an untrusted code from carrying an
+        /// unbounded string toward App-Group defaults and iCloud KVS.
+        let filenamePolicy: String?
+
+        /// Explicit memberwise init so the two reserved properties can default to
+        /// nil. Every construction site — the parser's own, the export round-trip
+        /// suite — predates them and must keep compiling as the two-field block it
+        /// was written against; a synthesized memberwise init cannot default a `let`.
+        init(
+            url: URL,
+            credential: String,
+            autoDeliver: Bool? = nil,
+            filenamePolicy: String? = nil
+        ) {
+            self.url = url
+            self.credential = credential
+            self.autoDeliver = autoDeliver
+            self.filenamePolicy = filenamePolicy
+        }
     }
 
     let kind: Kind
@@ -243,7 +288,18 @@ struct PairingPayload: Equatable, Sendable {
             guard let credential = fsDict["credential"] as? String, !credential.isEmpty else {
                 throw PairingParseError.malformed
             }
-            fileServer = FileServer(url: fsURL, credential: credential)
+            // Reserved per-gateway delivery properties. Missing OR wrong-typed →
+            // nil ("unstated"), never a coerced default and never an error: the
+            // contract's compatible-addition promise is only worth something if an
+            // older parser survives a newer wizard's extra keys, and these two are
+            // absent from every code minted today. Same posture as the sibling wire
+            // surface, `RemoteAgentBroadcastEnvelope.decode(from:)`.
+            fileServer = FileServer(
+                url: fsURL,
+                credential: credential,
+                autoDeliver: fsDict["autoDeliver"] as? Bool,
+                filenamePolicy: filenamePolicyToken(fsDict["filenamePolicy"])
+            )
         }
 
         // transport — pure hint: unknown raw value → nil, never an error.
@@ -298,6 +354,35 @@ struct PairingPayload: Equatable, Sendable {
             throw PairingParseError.malformed
         }
     }
+
+    /// Accept a filename-policy value ONLY in its canonical token shape — a short
+    /// `[a-z0-9-]` word — else nil. A policy is compared for equality against a
+    /// closed vocabulary and used for nothing else, so anything off that shape is
+    /// already unusable, and nil ("unstated, keep the default") is both the honest
+    /// reading and the safe one: it bounds what a hand-crafted code can push toward
+    /// App-Group defaults and iCloud KVS.
+    ///
+    /// MEMBERSHIP in the vocabulary this build understands is deliberately NOT
+    /// checked here. `SettingsManager.getFileServerFilenamePolicy` already resolves
+    /// an unrecognised stored value forward to the default, and duplicating that set
+    /// in the parser would make a newer wizard's token unparseable rather than merely
+    /// unapplied — the opposite of what a compatible addition is for.
+    ///
+    /// Off-shape is never an error. Rejecting a whole pairing string over a reserved
+    /// field nothing reads would trade a working import for a field that changes no
+    /// behaviour.
+    private static func filenamePolicyToken(_ value: Any?) -> String? {
+        guard let token = value as? String, !token.isEmpty,
+              token.count <= maxFilenamePolicyLength else {
+            return nil
+        }
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
+        return token.allSatisfy { allowed.contains($0) } ? token : nil
+    }
+
+    /// Far above any plausible policy token (`preserve` is 8) and far below the
+    /// point where a rejected value would have cost anything to keep.
+    private static let maxFilenamePolicyLength = 32
 
     // MARK: - Display
 

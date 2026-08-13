@@ -243,10 +243,16 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
         // Optional + defaulted → source-compatible; nil falls back wide.
         userMessageID: UUID? = nil,
         // Stable one-way identity of THIS turn's exact READY file lane,
-        // captured by the caller. Non-nil both enables the per-turn delivery
-        // instruction and rides recovery metadata so a later capable device
-        // probes only that physical lane; nil never guesses a replacement.
+        // captured by the caller. Non-nil is the precondition for the per-turn
+        // outbox-location line and rides recovery metadata so a later capable
+        // device probes only that physical lane; nil never guesses a replacement.
         fileTransferLaneID: String?,
+        // The folder this turn names for its reply's files, minted and witnessed
+        // absent by the caller (`CarPlayRecordingService`, which holds the whole
+        // snapshot — this uploader sees only the lane's opaque identity, and can
+        // therefore neither assert absence nor read the folder capability). Nil
+        // = no box, so no line and no automatic delivery for this turn.
+        outboxKey: String?,
         turnToken: UInt64
     ) throws {
         let endpoint = url.appending(path: "v1/chat/completions")
@@ -262,13 +268,14 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
         // key is OMITTED from JSON, byte-identical to today's wire). CarPlay is
         // a SPOKEN surface (`surface: .spoken`) — the reply is heard aloud in
         // the car — so the newest turn carries the spoken-summary clause; when
-        // the bound gateway also has a ready file lane, the delivery
-        // instruction rides first (delivery → spoken).
+        // the bound gateway also has a ready file lane AND this turn holds a
+        // box, the location line rides first (location → spoken).
         let body = ConverseRequest(
             messages: RemoteAgentClient.assembleMessages(
                 priorTurns: priorTurns,
                 newUserText: newUserText,
                 fileServerReady: fileTransferLaneID != nil,
+                outboxKey: outboxKey,
                 surface: .spoken
             ),
             stream: false,
@@ -289,7 +296,10 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
             // Dispatch-time fact for the failure classification (the
             // delegate classifies long after `priorTurns` is gone).
             requestHadHistoryImages: ConverseRequest.containsImageParts(priorTurns),
-            fileTransferLaneID: fileTransferLaneID
+            fileTransferLaneID: fileTransferLaneID,
+            // The folder named on the wire above, carried so a reply landing
+            // after a relaunch still knows where this turn's files were invited.
+            outputBoxKey: outboxKey
         )
         let metadataString: String
         do {
@@ -507,6 +517,9 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
         // Exact dispatch-time file lane. Old in-flight metadata decodes nil and
         // intentionally gets no output-recovery work.
         let fileTransferLaneID = metadata?.fileTransferLaneID
+        // The folder this dispatch named on the wire. Nil is UNKNOWN, never
+        // EMPTY — an old blob, or a turn that never named one.
+        let outputBoxKey = metadata?.outputBoxKey
         let turnToken = entry?.turnToken
 
         // --- Transport error path ---
@@ -661,7 +674,8 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
                         agentText: reply,
                         conversationID: cid,
                         sourceDevice: "carplay",
-                        outputScanLaneID: fileTransferLaneID
+                        outputScanLaneID: fileTransferLaneID,
+                        outputBoxKey: outputBoxKey
                     )
                 } else {
                     // Backward-compatible landing for a pre-upgrade in-flight

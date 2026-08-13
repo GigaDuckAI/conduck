@@ -7,8 +7,8 @@
 // copies to the clipboard (`GatewayAdapterBriefView.clipboardBrief`). The brief
 // is pointer-first (it delegates to the hosted build brief, narrowed to stop
 // before exposure/pairing — the app owns those) with a self-contained fallback
-// aligned to contract revision 1.6, so its load-bearing points must not silently
-// drift: the two raw `.md` URLs, the workflow-ownership boundary, the COMPLETE
+// aligned to a pinned contract revision, so its load-bearing points must not
+// silently drift: the two raw `.md` URLs, the workflow-ownership boundary, the COMPLETE
 // runnable adapter-check invocation (download + `CI=1` + `CONDUCK_TOKEN` +
 // explicit loopback URL — a bare `--check-adapter` blocks on an interactive
 // prompt, and one without `CI=1` hangs on a PASS), the wire shape,
@@ -199,5 +199,81 @@ final class GatewayAdapterBriefTests: XCTestCase {
             GatewayAdapterBriefView.clipboardBrief.contains("say so in the reply or return an error"),
             "clipboardBrief carries the pre-1.3 image rule, which permits rejecting on historical images"
         )
+    }
+
+    // MARK: - Revision pin
+
+    /// The brief's fallback list is a COPY of the published contract's adapter
+    /// half, and its alignment is recorded in one source comment
+    /// (`aligned to contract revision <n.n>`). A comment cannot be read through
+    /// `@testable import`, so this reads the source file — the same way the site's
+    /// post-build verifier reads its own per-file markers — and compares the pin
+    /// against `CONTRACT_REVISION`, the one place the current revision lives.
+    ///
+    /// This exists because the pin drifted once already, unseen: the site's
+    /// `verify-contract-artifacts.mjs` deliberately leaves the app out of its
+    /// revision sweep on the stated grounds that the app "carries no pinned
+    /// revision literal to compare" — which the comment below makes false — so a
+    /// contract bump could ship with the app still handing developers the previous
+    /// revision's instructions.
+    ///
+    /// The website lives in the surrounding monorepo, NOT in this repository, so a
+    /// standalone checkout of the app has nothing to compare against and SKIPS,
+    /// mirroring the verifier's own posture toward files outside its repo. The
+    /// skip names what went unverified rather than passing quietly — a silent skip
+    /// here would be indistinguishable from agreement, which is the failure this
+    /// test is for.
+    func testClipboardBriefRevisionPinMatchesPublishedContract() throws {
+        // #filePath → .../GigaDuck/Conduck/Conduck/ConduckTests/<thisFile>
+        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let projectContainer = testsDirectory.deletingLastPathComponent() // .../Conduck/Conduck
+        let viewSourceURL = projectContainer
+            .appending(path: "Conduck/Views/Settings/GatewayAdapterBriefView.swift")
+
+        let viewSource = try XCTUnwrap(
+            try? String(contentsOf: viewSourceURL, encoding: .utf8),
+            "Could not read \(viewSourceURL.path) — update this guard's path derivation."
+        )
+        let pinned = try XCTUnwrap(
+            Self.firstCapturedRevision(in: viewSource, pattern: #"aligned to contract revision (\d+\.\d+)"#),
+            "GatewayAdapterBriefView.swift no longer states which contract revision the "
+                + "fallback brief is aligned to — restore the pin, don't drop it."
+        )
+
+        // .../GigaDuck/Conduck/Conduck → .../GigaDuck (monorepo root), where the
+        // website sits beside the app repository when both are checked out.
+        let monorepoRoot = projectContainer
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let contractsURL = monorepoRoot.appending(path: "website/src/lib/adapter-contracts.ts")
+        guard let contractsSource = try? String(contentsOf: contractsURL, encoding: .utf8) else {
+            throw XCTSkip(
+                "No website source at \(contractsURL.path) — the clipboard brief's pin "
+                    + "(revision \(pinned)) was NOT verified against the published contract."
+            )
+        }
+        let published = try XCTUnwrap(
+            Self.firstCapturedRevision(in: contractsSource, pattern: #"CONTRACT_REVISION = '(\d+\.\d+)'"#),
+            "Could not read CONTRACT_REVISION from \(contractsURL.path)."
+        )
+
+        XCTAssertEqual(
+            pinned, published,
+            "The clipboard brief claims alignment to contract revision \(pinned) but the "
+                + "published contract is \(published). Re-read the contract's changelog, move "
+                + "whatever it requires in `clipboardBrief`, then bump the pin."
+        )
+    }
+
+    /// First capture group of `pattern` in `text`, or nil.
+    private static func firstCapturedRevision(in text: String, pattern: String) -> String? {
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+            let range = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+        return String(text[range])
     }
 }

@@ -52,7 +52,7 @@ struct ConversationThreadView: View {
     let viewModel: ConversationDetailViewModel
 
     /// The host-owned Settings VM, borrowed for ONE thing: the "Review file
-    /// setup" route out of the missing-output notice. Passed in rather than
+    /// setup" route out of the output-discovery fault row. Passed in rather than
     /// minted here because every host already owns a stable instance, and the
     /// file-transfer editor is a buffered editor whose unsaved-changes state
     /// must not be duplicated across two live view models.
@@ -129,7 +129,7 @@ struct ConversationThreadView: View {
     /// bytes) and hand the adopted scratch file up here; the latest tap wins.
     @State private var filePreview = FilePreviewCoordinator()
 
-    /// The file-transfer setup sheet, opened from a missing-output notice.
+    /// The file-transfer setup sheet, opened from an output-discovery fault row.
     /// Owned HERE and not per row, exactly like `filePreview`: the rows live in
     /// a recycling `LazyVStack`, so a row-owned sheet would be torn down by a
     /// scroll while presented.
@@ -181,12 +181,12 @@ struct ConversationThreadView: View {
         .sheet(isPresented: $vm.showingGatewaySheet) {
             gatewayLockSheet
         }
-        // "Review file setup" from a missing-output notice. A SHEET, not a
+        // "Review file setup" from an output-discovery fault row. A SHEET, not a
         // navigation push: a mid-conversation diagnostic must let the user peek
         // at the setup and land back in the thread, never eject them into
         // Settings (same reasoning as `TroubleshootButton`). On dismiss the
         // lane identity is re-resolved, so a repointed or removed server retires
-        // its notices immediately rather than on the next unrelated reload.
+        // its fault rows immediately rather than on the next unrelated reload.
         .sheet(isPresented: $showingFileSetup, onDismiss: {
             Task { await viewModel.refreshFileLaneDerivedState() }
         }) {
@@ -288,8 +288,11 @@ struct ConversationThreadView: View {
                             boundRef: viewModel.boundRef,
                             speakState: speaker.speakState(for: message.id),
                             usedFallbackVoice: speaker.usedFallbackVoice(for: message.id),
-                            showsMissingOutputNotice: viewModel.missingOutputNoticeIDs.contains(message.id),
+                            showsOutputDiscoveryFault: viewModel.outputDiscoveryFaultIDs.contains(message.id),
                             outputRecheckState: viewModel.outputRecheckStates[message.id],
+                            canRecheckOutputs: ConversationDetailViewModel.canRecheckOutputs(message),
+                            canSearchMentionedFiles: ConversationDetailViewModel
+                                .canSearchMentionedFiles(message),
                             awaitsCloneContinuation: awaitsCloneContinuation(message),
                             filePreview: filePreview,
                             onCopy: { viewModel.copy(message) },
@@ -298,6 +301,7 @@ struct ConversationThreadView: View {
                             onResendWithoutPhoto: { Task { await viewModel.resendWithoutPhoto(message) } },
                             onKeepChattingWithoutPhotos: { Task { await viewModel.enableHideEarlierPhotos() } },
                             onRecheckOutputs: { Task { await viewModel.recheckOutputs(for: message) } },
+                            onSearchMentionedFiles: { Task { await viewModel.searchMentionedFiles(for: message) } },
                             onOpenFileSetup: { showingFileSetup = true }
                         )
                         .equatable()
@@ -1050,13 +1054,22 @@ private struct MessageBubble: View, Equatable {
     /// — the transparency half of the never-silent-voice-fallback contract.
     /// Only ever true on assistant bubbles. Drives the footer fallback caption.
     let usedFallbackVoice: Bool
-    /// This reply named a file on a line of its own that the user's file server
-    /// definitively does not have. Derived by the VM (`MissingOutputNotice`) —
-    /// never persisted, never computed here: the derivation walks
-    /// adversary-controlled reply text and must not run inside `body`.
-    let showsMissingOutputNotice: Bool
-    /// Outcome of the user's last "Check again" on this turn, if any.
+    /// This reply's output folder could not be READ — the only discovery outcome
+    /// the user is told about. An empty or absent folder is the ordinary shape of
+    /// a reply that produced nothing and shows no row at all. Derived by the VM,
+    /// never persisted and never computed here.
+    let showsOutputDiscoveryFault: Bool
+    /// Outcome of the user's last manual look at this turn, if any.
     let outputRecheckState: ConversationDetailViewModel.OutputRecheckState?
+    /// Whether this turn has an output folder a tap could re-read. False for a
+    /// wrist-originated turn and for a lane that cannot hold a nested collection
+    /// — those keep the name search and lose only the folder re-read.
+    let canRecheckOutputs: Bool
+    /// Whether this turn has a file lane the name search could probe. False for
+    /// every turn sent with no file server configured — the majority
+    /// configuration — where the search verb would answer a tap with nothing at
+    /// all. Derived by the VM from the same fields its handler guards on.
+    let canSearchMentionedFiles: Bool
     /// This turn is a freshly cloned trailing turn whose automatic continuation
     /// has not been attempted yet. The row is genuinely `failed` in the store —
     /// the correct fail-safe if the dispatch never happens — but "No reply / this
@@ -1080,11 +1093,13 @@ private struct MessageBubble: View, Equatable {
     /// poisoned chat — the user keeps typing, earlier photos ride as the
     /// canonical disclosure from the next send on).
     let onKeepChattingWithoutPhotos: () -> Void
-    /// Re-probe this turn's output window against the file server, on demand
-    /// (the missing-output row's "Check again").
+    /// Re-read this turn's output folder on demand ("Check again").
     let onRecheckOutputs: () -> Void
-    /// Open the bound gateway's file-transfer setup (the missing-output row's
-    /// "Review file setup").
+    /// Probe the filenames this reply mentioned, at the served root ("Search
+    /// mentioned files") — the tail recovery for a gateway that ignored the
+    /// folder it was given.
+    let onSearchMentionedFiles: () -> Void
+    /// Open the bound gateway's file-transfer setup ("Review file setup").
     let onOpenFileSetup: () -> Void
 
     @State private var didCopy = false
@@ -1105,8 +1120,10 @@ private struct MessageBubble: View, Equatable {
             && lhs.boundRef == rhs.boundRef
             && lhs.speakState == rhs.speakState
             && lhs.usedFallbackVoice == rhs.usedFallbackVoice
-            && lhs.showsMissingOutputNotice == rhs.showsMissingOutputNotice
+            && lhs.showsOutputDiscoveryFault == rhs.showsOutputDiscoveryFault
             && lhs.outputRecheckState == rhs.outputRecheckState
+            && lhs.canRecheckOutputs == rhs.canRecheckOutputs
+            && lhs.canSearchMentionedFiles == rhs.canSearchMentionedFiles
             && lhs.awaitsCloneContinuation == rhs.awaitsCloneContinuation
     }
 
@@ -1151,8 +1168,14 @@ private struct MessageBubble: View, Equatable {
             // never a fabricated assistant bubble and never part of outbound
             // history. Same structural place the failed-turn row occupies on
             // the user side.
-            if !isUser, showsMissingOutputNotice {
-                missingOutputRow
+            if !isUser, showsOutputDiscoveryFault {
+                outputDiscoveryFaultRow
+            } else if !isUser {
+                // The progress + verdict of a manual look on a turn with no fault
+                // row to carry it — the common path, since a fault row is rare.
+                // Without this a tap from the footer menu would report nothing at
+                // all.
+                outputLookStatusLine
             }
         }
         .fullScreenCoverCompat(item: $fullScreenStartIndex) { startIndex in
@@ -1196,10 +1219,15 @@ private struct MessageBubble: View, Equatable {
                         ForEach(serverFileAttachments) { attachment in
                             ServerFileDownloadChip(
                                 attachment: attachment,
+                                messageID: message.id,
                                 boundRef: boundRef,
                                 expectedLaneID: isUser
                                     ? message.fileTransferLaneID
                                     : message.outputScanLaneID,
+                                // Only an AGENT chip has a box to have come out
+                                // of; a user chip is a file this device uploaded
+                                // and needs no provenance hedge.
+                                outputBoxKey: isUser ? nil : message.outputBoxKey,
                                 filePreview: filePreview,
                                 isUserBubble: isUser
                             )
@@ -1217,7 +1245,7 @@ private struct MessageBubble: View, Equatable {
                     bubbleBody
                 }
 
-                footer
+                footerWithOutputActions
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -1336,35 +1364,40 @@ private struct MessageBubble: View, Equatable {
         .accessibilityLabel(Text(verbatim: "\(presentation.title). \(presentation.body)"))
     }
 
-    // MARK: - Missing-output row (agent named a file that isn't there)
+    // MARK: - Output-discovery fault row (the file server could not be read)
 
-    /// Persistent inline row under an agent turn whose reply handed over a
-    /// filename the file server does not have. Deliberately QUIETER than the
-    /// delivery-error row: this is not a failure of the message, it is a fact
-    /// about the user's own setup, and it is a heuristic verdict on top of that.
-    /// Neutral tint, no warning red, no accusation — the file may still be on
-    /// its way, saved somewhere else, or the served folder may not be the one
-    /// the agent writes into, and the copy says exactly that instead of calling
-    /// the agent a liar.
+    /// Persistent inline row under an agent turn whose output folder could not be
+    /// READ. Deliberately QUIETER than the delivery-error row: this is not a
+    /// failure of the message, it is a fact about the user's own setup. Neutral
+    /// tint, no warning red, no accusation.
     ///
-    /// Two actions, both of which can actually change the outcome: re-ask the
-    /// server now, or go look at the setup. "Check again" is the only path that
-    /// re-probes a permanently-closed turn, which is why it exists at all.
-    private var missingOutputRow: some View {
+    /// WHAT IT NEVER SAYS, and the reason the whole row is rare: it makes no
+    /// claim about what the agent did. A folder that is empty, or that is not
+    /// there at all, shows NO row — nothing creates it in advance, so that is
+    /// what an ordinary reply with no files looks like, and it conflates
+    /// "produced nothing", "ignored the instruction", "a mkdir failed" and "wrote
+    /// somewhere else". This row appears only when the app could not read the
+    /// server: a refused certificate, a rejected credential, a wall that answers
+    /// everything, a host that is down.
+    ///
+    /// Three actions, all of which can change the outcome: re-read the folder,
+    /// look for the names the reply mentioned somewhere else on the server, or go
+    /// fix the setup.
+    private var outputDiscoveryFaultRow: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 5) {
                 Image(systemName: "questionmark.folder")
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
                 Text(LocalizedStringResource(
-                    "thread.missingOutput.title",
-                    defaultValue: "File not on your file server"))
+                    "thread.outputs.fault.title",
+                    defaultValue: "Couldn't read your file server"))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.textSecondary)
             }
             Text(LocalizedStringResource(
-                "thread.missingOutput.body",
-                defaultValue: "This reply names a file that isn't in the folder Conduck reads. It may still be on its way, saved somewhere else, or the folder may not be the one your agent writes to."))
+                "thread.outputs.fault.body",
+                defaultValue: "Conduck couldn't check whether this reply returned any files. Nothing is lost — the folder is still on your server."))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
                 .multilineTextAlignment(.leading)
@@ -1376,37 +1409,55 @@ private struct MessageBubble: View, Equatable {
                             .controlSize(.small)
                             .tint(AppColors.textTertiary)
                         Text(LocalizedStringResource(
-                            "thread.missingOutput.checking",
+                            "thread.outputs.checking",
                             defaultValue: "Checking…"))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.textTertiary)
                     }
                 } else {
-                    Button(action: onRecheckOutputs) {
-                        HStack(spacing: 3) {
-                            Image(systemName: "arrow.clockwise")
-                            Text(LocalizedStringResource(
-                                "thread.missingOutput.action.checkAgain",
-                                defaultValue: "Check again"))
+                    if canRecheckOutputs {
+                        Button(action: onRecheckOutputs) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.clockwise")
+                                Text(LocalizedStringResource(
+                                    "thread.outputs.action.checkAgainShort",
+                                    defaultValue: "Check again"))
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppColors.brandAmber)
                         }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppColors.brandAmber)
+                        .inlineLinkButton()
                     }
-                    .inlineLinkButton()
+                    // Same gate as the footer menu's copy: the handler returns
+                    // immediately without a lane, so an ungated button answers a
+                    // tap with nothing at all. A fault row implies a listing,
+                    // which implies a lane — this is belt-and-braces against the
+                    // two ever parting.
+                    if canSearchMentionedFiles {
+                        Button(action: onSearchMentionedFiles) {
+                            Text(LocalizedStringResource(
+                                "thread.outputs.action.searchMentionedShort",
+                                defaultValue: "Search mentioned files"))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(AppColors.brandAmber)
+                        }
+                        .inlineLinkButton()
+                    }
                 }
                 Button(action: onOpenFileSetup) {
                     Text(LocalizedStringResource(
-                        "thread.missingOutput.action.reviewSetup",
+                        "thread.outputs.action.reviewSetup",
                         defaultValue: "Review file setup"))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.brandAmber)
                 }
                 .inlineLinkButton()
             }
-            // The re-check verdict, and ONLY when it says something the row
-            // doesn't already: a check that never got an answer is a materially
-            // different claim from a clean repeat 404, and reporting the former
-            // as the latter would be the one lie this row must never tell.
+            // The verdict of the last manual look, and ONLY when it says
+            // something the row doesn't already: a look that never got an answer
+            // is a materially different claim from a folder the server read out
+            // clean, and reporting the former as the latter would be the one lie
+            // this row must never tell.
             if let resultCaption {
                 Text(resultCaption)
                     .font(.caption2)
@@ -1428,24 +1479,55 @@ private struct MessageBubble: View, Equatable {
         .accessibilityElement(children: .contain)
     }
 
-    /// Caption for the last "Check again" outcome. A SUCCESS has no caption:
-    /// the chip appears and the whole row retires, so there is nothing left to
-    /// annotate.
+    /// Progress + verdict for a manual look started from the footer menu, on a
+    /// turn with no fault row to carry them. Renders nothing at all in the
+    /// resting state, which is almost always — this is a transient answer to a
+    /// question the user just asked, not a standing diagnostic.
+    @ViewBuilder
+    private var outputLookStatusLine: some View {
+        if outputRecheckState == .checking {
+            HStack(spacing: 5) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(AppColors.textTertiary)
+                Text(LocalizedStringResource(
+                    "thread.outputs.checking",
+                    defaultValue: "Checking…"))
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+            }
+            .frame(maxWidth: 520, alignment: .leading)
+        } else if let resultCaption {
+            Text(resultCaption)
+                .font(.caption2)
+                .foregroundStyle(AppColors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 520, alignment: .leading)
+        }
+    }
+
+    /// Caption for the last manual look. A SUCCESS has no caption: the chip
+    /// appears, so there is nothing left to annotate.
     private var resultCaption: LocalizedStringResource? {
         switch outputRecheckState {
-        case .stillMissing:
+        case .noneFound:
+            // DISCOVERY, never a claim about the agent. The server answered and
+            // there was nothing to hand over — which is equally consistent with a
+            // reply that produced nothing, one that wrote somewhere else, and one
+            // whose write tool failed silently. Saying "the agent produced
+            // nothing" would pick one of those out of no evidence.
             return LocalizedStringResource(
-                "thread.missingOutput.result.stillMissing",
-                defaultValue: "Checked again — still not there.")
+                "thread.outputs.result.noneFound",
+                defaultValue: "No returned files were discovered.")
         case .couldNotCheck:
             // Deliberately names NO cause. This one state covers a lane that no
-            // longer matches the turn's, a re-check the app itself declined
-            // because another pass held the turn, a settings edit mid-probe, and
-            // a genuine transport/auth/certificate failure. Only the last is a
+            // longer matches the turn's, a look the app itself declined because
+            // another pass held the turn, a settings edit mid-request, and a
+            // genuine transport/auth/certificate failure. Only the last is a
             // server the app could not reach, so naming reachability would send
             // most users to debug a server that is working perfectly.
             return LocalizedStringResource(
-                "thread.missingOutput.result.couldNotCheck",
+                "thread.outputs.result.couldNotCheck",
                 defaultValue: "Couldn't finish the check just now.")
         case .checking, nil:
             return nil
@@ -1471,6 +1553,63 @@ private struct MessageBubble: View, Equatable {
             // macOS trackpad-selection fix. See `AgentMarkdownBody`.
             AgentMarkdownBody(messageID: message.id, text: message.text)
                 .equatable()
+        }
+    }
+
+    /// Whether the footer has a manual-look verb to offer at all. Both flags are
+    /// false on a user row (the VM's predicates require an agent role) and on an
+    /// agent row with no file lane.
+    private var showsOutputActionsMenu: Bool {
+        canRecheckOutputs || canSearchMentionedFiles
+    }
+
+    /// The footer, carrying the manual-look menu ONLY when it has something to
+    /// put in it.
+    ///
+    /// ATTACHED CONDITIONALLY, and that is the whole point: a `.contextMenu`
+    /// whose body evaluates to nothing still runs the long-press lift animation
+    /// and then presents an EMPTY sheet. Attached unconditionally with its
+    /// contents gated instead, a long press on the user's own sent message — and
+    /// on any agent turn with no file lane, the majority configuration — lifts
+    /// the bubble and offers nothing.
+    ///
+    /// ON THE FOOTER, not on the bubble, and that is deliberate too: the agent
+    /// bubble's body is a Textual document with its own long-press/right-click
+    /// selection, and a context menu over it would compete with the shipped
+    /// selection gesture. The footer is the row's action strip already (Copy,
+    /// Speak), so it is both conflict-free and where a user looks for verbs.
+    ///
+    /// Within an agent row that HAS a lane, the entry stays available whether or
+    /// not the app decided to show a diagnostic row — including a turn whose
+    /// folder was never named (a wrist-originated turn, a lane that cannot hold a
+    /// nested collection), which is exactly the population that gets no automatic
+    /// delivery. An affordance that appears only on a row the app decided to show
+    /// is one the user cannot find when they need it.
+    @ViewBuilder
+    private var footerWithOutputActions: some View {
+        if showsOutputActionsMenu {
+            footer.contextMenu {
+                if canRecheckOutputs {
+                    Button(action: onRecheckOutputs) {
+                        Label(
+                            LocalizedStringResource(
+                                "thread.outputs.action.checkAgain",
+                                defaultValue: "Check for returned files"),
+                            systemImage: "arrow.clockwise")
+                    }
+                }
+                if canSearchMentionedFiles {
+                    Button(action: onSearchMentionedFiles) {
+                        Label(
+                            LocalizedStringResource(
+                                "thread.outputs.action.searchMentioned",
+                                defaultValue: "Search for files this reply mentions"),
+                            systemImage: "magnifyingglass")
+                    }
+                }
+            }
+        } else {
+            footer
         }
     }
 
@@ -1777,9 +1916,11 @@ private struct InlineTextFileChip: View {
 // MARK: - ServerFileDownloadChip (assistant output file)
 
 /// Chip for a server-reference attachment on EITHER bubble role — an agent
-/// output file the client detected + probed (assistant), or a file the user
-/// sent (user; its bytes live on the file-server too, so it previews the same
-/// way). A tap downloads the real bytes from the user's gateway file-server
+/// output file found by listing the folder this dispatch named, or turned up by
+/// a user-tapped name search (assistant), or a file the user sent (user; its
+/// bytes live on the file-server too, so it previews the same way). `outputBoxKey`
+/// is what separates the first case from the second at render time, so the chip
+/// can say which one it is. A tap downloads the real bytes from the user's gateway file-server
 /// via `BackgroundFileTransfer.shared.downloadFile`, adopts them into
 /// `AgentDownloadScratch` (clean leaf name + type-carrying extension), and
 /// hands the file to the thread's shared `FilePreviewCoordinator` for a Quick
@@ -1798,6 +1939,10 @@ private struct InlineTextFileChip: View {
 /// + error state surfaces in the UI.
 private struct ServerFileDownloadChip: View {
     let attachment: AttachmentRecord
+    /// The turn this chip hangs on. Carried so a completed download can patch
+    /// the row's preview — the ONE thing that makes an agent file viewable on
+    /// the Watch, which has no download capability by design.
+    let messageID: UUID
     /// Conversation's bound gateway — resolves the file-server snapshot. Nil
     /// falls back to the Settings default ref.
     let boundRef: RemoteAgentRef?
@@ -1805,6 +1950,12 @@ private struct ServerFileDownloadChip: View {
     /// configured lane. Its mutable READY verdict gates new transfers, not
     /// access to an already-owned blob. Nil is unprovable and fails closed.
     let expectedLaneID: String?
+    /// The folder THIS reply named for its own output, when it named one. A
+    /// storedKey inside it is this reply's output; one outside it was found
+    /// elsewhere on the file server by a user-tapped name search and gets a
+    /// visibly weaker caption. Nil on a user chip, and on an agent turn that
+    /// named no folder — both of which mean the stronger claim is unsupported.
+    let outputBoxKey: String?
     /// The thread-level Quick Look presenter (single panel authority).
     let filePreview: FilePreviewCoordinator
     /// True on a user bubble — mirrors `InlineTextFileChip`'s role styling
@@ -2110,14 +2261,35 @@ private struct ServerFileDownloadChip: View {
     /// naming it, and one whose PDF parser broke — so the caption stops at the
     /// last provable fact and says nothing about the reply.
     ///
-    /// An ASSISTANT chip keeps the bare size: an output file the agent wrote is
-    /// on the file server by definition, so naming it there is noise. Nil when
-    /// there is nothing left to say (an assistant file of unknown size).
+    /// An ASSISTANT chip keeps the bare size when the file came out of THIS
+    /// reply's own output folder — a path minted for this turn and named on the
+    /// wire before the reply existed, so "this reply returned it" needs no
+    /// hedging. A chip whose key is NOT inside that folder was turned up by a
+    /// user-tapped name search somewhere on the file server, which says nothing
+    /// about which turn produced it or whether any turn did, so it says so.
+    /// Nil when there is nothing left to say (a box file of unknown size).
     private var idleCaption: String? {
         let size = attachment.byteSize > 0
             ? AttachmentChipStyle.formattedSize(attachment.byteSize)
             : nil
-        guard isUserBubble else { return size }
+        guard isUserBubble else {
+            guard !AttachmentRecord.isFromReplyOutputBox(
+                storedKey: attachment.storedKey,
+                outputBoxKey: outputBoxKey
+            ) else {
+                return size
+            }
+            let found = String(localized: LocalizedStringResource(
+                "fileTransfer.found.onFileServer",
+                defaultValue: "Found on your file server"))
+            guard let size else { return found }
+            return String(
+                format: String(localized: LocalizedStringResource(
+                    "fileTransfer.found.sizeOnFileServer",
+                    defaultValue: "%@ · found on your file server")),
+                size
+            )
+        }
         guard let size else {
             return String(localized: LocalizedStringResource(
                 "fileTransfer.sent.onFileServer",
@@ -2177,6 +2349,12 @@ private struct ServerFileDownloadChip: View {
                 let tempURL = try await BackgroundFileTransfer.shared.downloadFile(
                     snapshot: snapshot,
                     storedKey: attachment.storedKey ?? "")
+                // THE preview seam, and the only one: the bytes are already on
+                // local disk because the user asked for them, so a bounded read
+                // of the file this device just downloaded costs no network at
+                // all. It runs BEFORE the hand-off so a Quick Look dismissal
+                // that reclaims the scratch file cannot race the read.
+                await patchPreviewFromDownload(at: tempURL, snapshot: snapshot)
                 switch route {
                 case .preview:
                     await presentPreview(tempURL: tempURL, token: previewToken ?? 0)
@@ -2193,6 +2371,37 @@ private struct ServerFileDownloadChip: View {
                 presentGenericError()
             }
         }
+    }
+
+    /// Store a bounded preview of the file this tap just downloaded.
+    ///
+    /// WHAT IT IS FOR: the Watch. `AttachmentRecord.watchDisplayClass` lands
+    /// every previewless server file on `.serverPlaceholder`, and the wrist has
+    /// no download capability by design — so without this an agent's output is a
+    /// dead marker there forever. Nothing is fetched: the download already put
+    /// the bytes on this device, and the read is capped by the same per-file
+    /// budgets the preview builder has always enforced.
+    ///
+    /// BEST-EFFORT AND SILENT. A failure means "no preview", never a visible
+    /// error — the user asked for the file, not for the thumbnail, and the file
+    /// itself is already in hand. `applyPreviews` is first-writer-wins per field,
+    /// so a re-tap cannot churn the row or the iCloud record behind it.
+    private func patchPreviewFromDownload(
+        at url: URL,
+        snapshot: SettingsManager.FileTransferSnapshot
+    ) async {
+        guard let storedKey = attachment.storedKey, !storedKey.isEmpty,
+              let filename = attachment.filename else { return }
+        let patches = await FileTransferOutputDetector.previewPatchesForDownloadedFile(
+            at: url,
+            messageID: messageID,
+            storedKey: storedKey,
+            filename: filename,
+            mimeType: attachment.mimeType,
+            snapshot: snapshot
+        )
+        guard !patches.isEmpty else { return }
+        _ = try? await ConversationStore.shared.applyPreviews(patches)
     }
 
     /// Cause AND remedy. The chip has no Troubleshoot chip, no detail sheet and

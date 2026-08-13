@@ -528,6 +528,12 @@ struct ConversationLibraryView: View {
     /// a new store call.
     private func startNewConversation() {
         composerDraft = ""
+        // A fresh new-chat session gets a fresh pre-minted conversation
+        // identifier, so its first attachment cannot land in the folder of the
+        // chat that came before it. No-ops while staging is live (the tap
+        // arrived on top of files already minted against the current one) — a
+        // real conversation switch below rotates through teardown instead.
+        attachmentCoordinator.beginNewChatSession()
         selectedConversationID = nil
         hostMascot = MascotShuffleBag.next()  // fresh shuffle-bag pose for the new empty state
     }

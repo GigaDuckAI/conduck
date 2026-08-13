@@ -663,10 +663,17 @@ actor ConversationStore {
     /// Create a fresh conversation bound to `backend`. Sets `id`,
     /// `createdAt` = now, `lastActivityAt` = now, a freshly-minted local
     /// `sessionID` (UUID string), and a nil `title`.
-    func createConversation(backend: String) async throws -> ConversationRecord {
+    ///
+    /// `id` defaults to a fresh UUID, which is what every ordinary caller
+    /// wants. A caller passes its own only when it already committed to that
+    /// identifier BEFORE the row existed — the composer mints file-server
+    /// storage keys under `<conversationID>/` while the user is still staging
+    /// attachments, so the row it later creates has to adopt the identifier the
+    /// keys were minted against or that turn's first attachment lands in a
+    /// folder no conversation owns.
+    func createConversation(id: UUID = UUID(), backend: String) async throws -> ConversationRecord {
         try await ensureLoaded()
         let context = newWriteContext()
-        let id = UUID()
         let now = Date()
         let sessionID = UUID().uuidString
 
@@ -1330,6 +1337,16 @@ actor ConversationStore {
         /// a reply WITHOUT an exact user-turn id to flip (the Watch's standalone
         /// dispatch) — the paired-flip surfaces use `completeAgentTurn` instead.
         outputScanLaneID: String? = nil,
+        /// The per-dispatch output folder this reply's turn was told to write
+        /// into. Rides the SAME insert as `outputScanLaneID` for the reason in
+        /// that write's comment: a lane without its folder is unrecoverable,
+        /// not merely late. Persisted ONLY alongside a non-nil
+        /// `outputScanLaneID` — a folder with no owning lane could never be
+        /// listed against a proven server, so the pair is written or neither
+        /// is. Nil on every surface that cannot mint one (the Watch has no
+        /// file-server credential), and nil means UNKNOWN, which selects the
+        /// row out of the automatic pass rather than closing it.
+        outputBoxKey: String? = nil,
         attachments: [AttachmentDraft] = []
     ) async throws -> MessageRecord {
         try await ensureLoaded()
@@ -1384,14 +1401,16 @@ actor ConversationStore {
             message.setValue(sourceDevice, forKey: "sourceDevice")
             message.setValue(status, forKey: "status")
             message.setValue(fileTransferLaneID, forKey: "fileTransferLaneID")
-            // Explicit pending marker + owner identity, written in the SAME
-            // transaction as the reply itself: a process death between the two
-            // would otherwise leave a reply whose recovery lane was lost, which
-            // is unrecoverable rather than merely late. Both stay nil without a
-            // dispatch lane (see the parameter doc).
+            // Explicit pending marker + owner identity + the output folder the
+            // dispatch named, written in the SAME transaction as the reply
+            // itself: a process death between any two of them would otherwise
+            // leave a reply whose recovery lane or destination folder was lost,
+            // which is unrecoverable rather than merely late. All stay nil
+            // without a dispatch lane (see the parameter docs).
             if let outputScanLaneID {
                 message.setValue(false, forKey: "outputScanDone")
                 message.setValue(outputScanLaneID, forKey: "outputScanLaneID")
+                message.setValue(outputBoxKey, forKey: "outputBoxKey")
             }
             message.setValue(conversation, forKey: "conversation")
 
@@ -1435,6 +1454,7 @@ actor ConversationStore {
             // agree on retro-scan eligibility.
             outputScanDone: outputScanLaneID == nil ? nil : false,
             outputScanLaneID: outputScanLaneID,
+            outputBoxKey: outputScanLaneID == nil ? nil : outputBoxKey,
             attachments: Self.attachmentRecords(from: attachments, at: now)
         )
     }
@@ -1456,6 +1476,10 @@ actor ConversationStore {
         sourceDevice: String,
         agentMessageID: UUID = UUID(),
         outputScanLaneID: String? = nil,
+        /// The per-dispatch output folder this reply's turn was told to write
+        /// into. Same rule as `appendMessage`: written in the SAME save as the
+        /// lane identity, and only alongside a non-nil one.
+        outputBoxKey: String? = nil,
         attachments: [AttachmentDraft] = []
     ) async throws -> MessageRecord {
         try await ensureLoaded()
@@ -1490,13 +1514,16 @@ actor ConversationStore {
             message.setValue(sourceDevice, forKey: "sourceDevice")
             // A macOS foreground dispatch that latched a READY file lane must
             // remain recoverable if the process exits before its asynchronous
-            // output probe runs. Persist the one-way lane identity + explicit
-            // FALSE in the SAME transaction as the reply + sent flip. With no
-            // dispatch lane, BOTH fields remain nil; false-without-identity is
-            // therefore impossible for newly-written rows.
+            // output scan runs. Persist the one-way lane identity + explicit
+            // FALSE + the output folder the dispatch named, in the SAME
+            // transaction as the reply + sent flip. With no dispatch lane, ALL
+            // THREE fields remain nil; false-without-identity and
+            // folder-without-lane are therefore impossible for newly-written
+            // rows.
             if let outputScanLaneID {
                 message.setValue(false, forKey: "outputScanDone")
                 message.setValue(outputScanLaneID, forKey: "outputScanLaneID")
+                message.setValue(outputBoxKey, forKey: "outputBoxKey")
             }
             // `status` left unset → nil (agent replies carry no send-state, same
             // as the `appendMessage(status: nil)` agent-reply callers).
@@ -1524,6 +1551,7 @@ actor ConversationStore {
             status: nil,
             outputScanDone: outputScanLaneID == nil ? nil : false,
             outputScanLaneID: outputScanLaneID,
+            outputBoxKey: outputScanLaneID == nil ? nil : outputBoxKey,
             attachments: Self.attachmentRecords(from: attachments, at: now)
         )
     }
@@ -1991,12 +2019,13 @@ actor ConversationStore {
     ///
     /// Posts `.conversationsDidChange` ONCE, when either an attachment was
     /// inserted OR a turn's `outputScanDone` actually TRANSITIONED false → true.
-    /// The marker is user-visible state now that `MissingOutputNotice` derives
-    /// the "named a file, delivered nothing" row from it: without the second
-    /// condition, a deferred grace-window pass that confirms the miss would
-    /// write `true` to the store while every mounted thread kept rendering the
-    /// stale `false`, and the row would appear only on the next unrelated
-    /// reload. The post is gated on the TRANSITION, not on `markScanned` — a
+    /// The marker selects a turn INTO the automatic pass
+    /// (`retroScanCandidates` requires `outputScanDone == false`), and that pass
+    /// runs off each thread's in-memory `messages`. Without the second
+    /// condition, a deferred grace-window pass that closes a turn would write
+    /// `true` to the store while every mounted thread kept the stale `false` and
+    /// went on re-listing a folder already settled, until some unrelated reload
+    /// caught up. The post is gated on the TRANSITION, not on `markScanned` — a
     /// re-stamp of an already-true marker changes nothing, so a reload storm
     /// cannot be manufactured by repeatedly reconciling the same turn.
     func reconcileOutputScan(

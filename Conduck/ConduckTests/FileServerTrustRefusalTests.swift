@@ -135,8 +135,8 @@ final class FileServerTrustRefusalTests: XCTestCase {
         )
 
         XCTAssertTrue(result.success,
-                      "A cold tunnel during the OPTIONAL nested probe is not a reason to fail a connection test whose four real stages passed.")
-        XCTAssertEqual(result.reachedStage, .read)
+                      "A cold tunnel during the OPTIONAL nested probe is not a reason to fail a connection test whose real stages passed.")
+        XCTAssertEqual(result.reachedStage, .listing)
         XCTAssertNil(result.failure)
         XCTAssertFalse(result.folderCapable,
                        "It still narrows the capability — flat keys work fine, and the launch-time re-probe retries the upgrade later.")
@@ -258,6 +258,13 @@ final class FileServerTrustRefusalTests: XCTestCase {
     private static func flatStagesPass(_ request: URLRequest) throws -> (HTTPURLResponse, Data) {
         switch request.httpMethod {
         case "GET": return (http(request, 200), Data("conduck-probe".utf8))
+        // The listing stage: `207` for a collection that exists, `404` for the
+        // one that cannot. Scripted here so these cases keep testing what they
+        // are named for — a certificate refusal in ANOTHER probe — instead of
+        // failing on a lane that cannot say no.
+        case "PROPFIND":
+            let absent = (request.url?.absoluteString ?? "").contains("__conduck_absent_")
+            return (http(request, absent ? 404 : 207), Data())
         default: return (http(request, 201), Data())
         }
     }

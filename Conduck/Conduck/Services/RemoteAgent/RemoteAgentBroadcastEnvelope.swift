@@ -111,11 +111,13 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
     /// The `SettingsManager.FileTransferSnapshot.durableLaneID` of THIS ref's
     /// READY lane — the one-way SHA-256 over `baseURL + credential` that names
     /// the durable server namespace. The wrist stamps it onto the agent reply it
-    /// persists (`Message.outputScanLaneID` + `outputScanDone = false`), which
-    /// is the ONLY thing that makes a Watch-originated turn eligible for the
+    /// persists (`Message.outputScanLaneID` + `outputScanDone = false`), and
+    /// that stamp is what makes a Watch-originated turn eligible for the
     /// retroactive output scan a capable device runs when the thread is next
-    /// opened. Without it a wrist turn is permanently invisible to the scan even
-    /// though its request carried the file-delivery instruction.
+    /// opened. The wrist mints the turn's `outputBoxKey` itself — naming a
+    /// folder needs no credential — but the eligibility predicate demands BOTH,
+    /// so without this identity a wrist turn stays permanently invisible to the
+    /// scan even though its request named a folder on the wire.
     ///
     /// Couriered rather than derived: the file-server CREDENTIAL never syncs to
     /// the wrist, so the Watch cannot compute this digest itself, and shipping
@@ -130,6 +132,30 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
     /// exactly today's behavior (turn dispatched, never stamped, never scanned)
     /// rather than stranding the envelope. Never logged.
     let fileTransferLaneID: String?
+
+    /// Whether THIS gateway may put files on the device automatically — the
+    /// iPhone's `FileTransferSnapshot.autoDeliver`.
+    ///
+    /// RESERVED: nothing consults it — not on the wrist, and not on the iPhone
+    /// before it broadcasts (see the snapshot field's own doc, which is where the
+    /// reason it exists with no reader is written down). Couriered now for the
+    /// reason `fileTransferAvailable` is couriered — the wrist cannot evaluate the
+    /// permission itself, since the file-server credential never syncs there — so
+    /// the reader that arrives later needs no envelope change, which is the
+    /// expensive kind of change to make late.
+    ///
+    /// Omit-nil on the wire; a MISSING key decodes to nil, which every reader
+    /// treats as "unstated, use the default" rather than as `false`. That keeps
+    /// an un-upgraded sender at the default instead of switching automatic
+    /// delivery off across a whole paired watch on the first envelope.
+    let fileTransferAutoDeliver: Bool?
+
+    /// How a delivered file's name is treated on THIS gateway — the iPhone's
+    /// `FileTransferSnapshot.filenamePolicy`. Reserved on the same terms as
+    /// `fileTransferAutoDeliver` — read by nothing on either side — so a later
+    /// policy change never has to widen this envelope again. Omit-nil, and nil
+    /// means "unstated, use the default".
+    let fileTransferFilenamePolicy: String?
 
     /// Active conversation session ID (`spec.md "Settings & Storage"`).
     /// Optional — nil means no live session (first turn after backend /
@@ -165,6 +191,8 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         certFingerprintHex: String?,
         fileTransferAvailable: Bool = false,
         fileTransferLaneID: String? = nil,
+        fileTransferAutoDeliver: Bool? = nil,
+        fileTransferFilenamePolicy: String? = nil,
         activeSessionID: String?,
         timestamp: TimeInterval
     ) {
@@ -182,6 +210,8 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         // wire, the Watch's durable slots, or a persisted `outputScanLaneID`.
         // Every construction site (broadcaster + decoder) funnels through here.
         self.fileTransferLaneID = Self.sanitizedLaneID(fileTransferLaneID)
+        self.fileTransferAutoDeliver = fileTransferAutoDeliver
+        self.fileTransferFilenamePolicy = fileTransferFilenamePolicy
         self.activeSessionID = activeSessionID
         self.timestamp = timestamp
     }
@@ -247,6 +277,15 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         if let fileTransferLaneID {
             dict["fileTransferLaneID"] = fileTransferLaneID
         }
+        // Omit-nil for the same reason: "key absent" must read as "unstated",
+        // never as an explicit `false`/empty policy, so an un-upgraded sender
+        // and a sender with nothing to say produce the identical wire.
+        if let fileTransferAutoDeliver {
+            dict["fileTransferAutoDeliver"] = fileTransferAutoDeliver
+        }
+        if let fileTransferFilenamePolicy {
+            dict["fileTransferFilenamePolicy"] = fileTransferFilenamePolicy
+        }
         if let activeSessionID {
             dict["activeSessionID"] = activeSessionID
         }
@@ -294,6 +333,11 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         // pre-upgrade behavior, not a decode failure that would strand the
         // whole envelope. Shape enforcement happens in `init`.
         let fileTransferLaneID = dict["fileTransferLaneID"] as? String
+        // Missing OR wrong-typed → nil ("unstated"), never a coerced default.
+        // A reader that needs a value applies its own default, so an
+        // un-upgraded sender and a hostile type both land on today's behaviour.
+        let fileTransferAutoDeliver = dict["fileTransferAutoDeliver"] as? Bool
+        let fileTransferFilenamePolicy = dict["fileTransferFilenamePolicy"] as? String
         let sessionID = dict["activeSessionID"] as? String
         return RemoteAgentBroadcastEnvelope(
             backendRef: backendRef,
@@ -307,6 +351,8 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
             certFingerprintHex: fingerprint,
             fileTransferAvailable: fileTransferAvailable,
             fileTransferLaneID: fileTransferLaneID,
+            fileTransferAutoDeliver: fileTransferAutoDeliver,
+            fileTransferFilenamePolicy: fileTransferFilenamePolicy,
             activeSessionID: sessionID,
             timestamp: timestamp
         )

@@ -11,7 +11,7 @@
 //
 //  What this file pins (and why each can FAIL on a regression):
 //    • `runConnectionTest(session:)` staged verdicts driven by a MockURLProtocol
-//      session: reachability / auth / write / read-back, and that
+//      session: reachability / auth / write / read-back / listing, and that
 //      `success`+`folderCapable` flip ONLY on a full pass. A 5xx on the write is
 //      NOT treated as auth (it stays a retryable server error at the WRITE
 //      stage). The read-back round-trip is the false-positive guard: a read-only
@@ -88,11 +88,19 @@ final class FileServerConnectionTests: XCTestCase {
         (request.url?.absoluteString ?? "").contains(Self.nestedDirMarker)
     }
 
+    /// The healthy answer to the staged test's LISTING stage: `207` for a
+    /// collection that exists, `404` for the one that cannot. Every handler that
+    /// expects a full pass must script it — the return direction is a stage now,
+    /// and a `default:` arm answering `200` is a server that cannot say no.
+    private func propfindStatus(_ request: URLRequest) -> Int {
+        (request.url?.absoluteString ?? "").contains("__conduck_absent_") ? 404 : 207
+    }
+
     // MARK: - Staged verdicts: full pass
 
     /// Every stage 2xx + the nested probe also passes → success, reachedStage
-    /// == .read, no failure, folderCapable == true.
-    func testFullPassWithNestedCapableYieldsSuccessReadStageAndFolderCapable() async {
+    /// == .listing, no failure, folderCapable == true.
+    func testFullPassWithNestedCapableYieldsSuccessListingStageAndFolderCapable() async {
         let snap = makeSnapshot()
         MockURLProtocol.requestHandler = { request in
             switch request.httpMethod {
@@ -104,14 +112,15 @@ final class FileServerConnectionTests: XCTestCase {
                 let body = self.isNested(request) ? "conduck-nested-probe" : "conduck-probe"
                 return (self.http(request.url!, 200), Data(body.utf8))
             case "DELETE": return (self.http(request.url!, 204), Data())
+            case "PROPFIND": return (self.http(request.url!, self.propfindStatus(request)), Data())
             default:      return (self.http(request.url!, 200), Data())
             }
         }
 
         let result = await FileServerClient.runConnectionTest(snapshot: snap, session: session)
 
-        XCTAssertEqual(result.reachedStage, .read, "a full pass reaches the .read stage")
-        XCTAssertTrue(result.success, "all four stages 2xx + byte-echo → success")
+        XCTAssertEqual(result.reachedStage, .listing, "a full pass reaches the .listing stage")
+        XCTAssertTrue(result.success, "every byte-moving stage 2xx + byte-echo + a listable lane → success")
         XCTAssertNil(result.failure, "success carries no failure")
         XCTAssertTrue(result.folderCapable, "a 2xx nested PUT+GET with echoed bytes → folderCapable true")
     }
@@ -152,13 +161,16 @@ final class FileServerConnectionTests: XCTestCase {
             if request.httpMethod == "GET" {
                 return (self.http(request.url!, 200), Data("conduck-probe".utf8))
             }
+            if request.httpMethod == "PROPFIND" {
+                return (self.http(request.url!, self.propfindStatus(request)), Data())
+            }
             return (self.http(request.url!, 204), Data())  // DELETE cleanup
         }
 
         let result = await FileServerClient.runConnectionTest(snapshot: snap, session: session)
 
         XCTAssertTrue(result.success, "nested-probe rejection does NOT fail the connection test")
-        XCTAssertEqual(result.reachedStage, .read)
+        XCTAssertEqual(result.reachedStage, .listing)
         XCTAssertNil(result.failure)
         XCTAssertFalse(result.folderCapable,
                        "a 405 on the nested PUT narrows folderCapable to false (flat-key fallback)")
@@ -195,6 +207,8 @@ final class FileServerConnectionTests: XCTestCase {
             case "GET":
                 let body = self.isNested(request) ? "conduck-nested-probe" : "conduck-probe"
                 return (self.http(request.url!, 200), Data(body.utf8))
+            case "PROPFIND":
+                return (self.http(request.url!, self.propfindStatus(request)), Data())
             default:
                 return (self.http(request.url!, 204), Data())   // DELETE cleanup
             }

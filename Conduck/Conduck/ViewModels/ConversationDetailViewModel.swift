@@ -51,9 +51,11 @@ enum PendingAttachment: Sendable {
     /// is this-turn-only), and — when `storedKey` is non-nil (the eager upload
     /// landed) — splices a one-turn "saved as <filename>" image ref into the
     /// outgoing turn. `storedKey == nil` → inline-only (upload not ready /
-    /// failed), Send never gated on it. `filename` is the display name with the
-    /// original's TRUE extension (e.g. `image.heic`) so the wire splice names the
-    /// uploaded file by its real format. NOTE (intentional asymmetry): vision
+    /// failed), Send never gated on it. `filename` is the name the user's own
+    /// source carried, or the numbered `image…` name with the sniffed extension
+    /// that `ComposerImageName` supplies when the source has none — so the wire
+    /// splice names the uploaded file the way the user would. NOTE (intentional
+    /// asymmetry): vision
     /// reads `processedJPEG` while the uploaded file is the original — they are
     /// the same picture, different bytes.
     case dualImage(processedJPEG: Data, thumbnail: Data, width: Int, height: Int, byteSize: Int, storedKey: String?, filename: String)
@@ -97,11 +99,12 @@ import AppKit
 import UserNotifications
 #endif
 
-/// Process-wide ownership of output scans. A macOS reply claims its
-/// caller-generated message ID BEFORE persistence posts the reload notification;
-/// retro recovery must claim the same ID before probing. This closes the
-/// direct-versus-retro race inside one process without pretending Core Data /
-/// CloudKit provides a distributed compare-and-set across devices.
+/// Process-wide ownership of output scans, keyed by message ID. Every path that
+/// reads the server on behalf of ONE turn claims it first — the automatic retro
+/// pass, "Check again", and the name search — so two of them can never work the
+/// same turn at once, including from two windows of one macOS process. It does
+/// not pretend Core Data / CloudKit provides a distributed compare-and-set
+/// across devices; `reconcileOutputScan`'s transaction-local dedupe covers that.
 nonisolated final class OutputScanClaimRegistry: @unchecked Sendable {
     static let shared = OutputScanClaimRegistry()
 
@@ -133,54 +136,35 @@ nonisolated final class OutputScanClaimRegistry: @unchecked Sendable {
 /// Process-local circuit breaker for the retroactive output scan, keyed on the
 /// FILE LANE rather than on a turn or a filename.
 ///
-/// WHAT IT BOUNDS. A lane that can never answer `404` for a key that does not
-/// exist — an SPA `try_files $uri /index.html` fallback, a catch-all `403`, an
-/// SSO portal that `200`s everything — makes every existence probe
-/// non-definitive, so `FileTransferOutputDetector.scanMayClose` never opens and
-/// no turn ever closes. The per-turn hold map then hands the same pending turns
-/// back for as long as the thread stays open: against the user's own server, on
-/// their battery, with nothing on screen to say so.
+/// WHAT IT BOUNDS. A lane that cannot be read at all — a refused certificate, a
+/// rejected credential, an SSO portal that answers every path with its own HTML,
+/// a host that is down, or one that answers a folder which cannot exist and so
+/// fails the listing's negative control — makes every listing `.unusable`, so
+/// `FileTransferOutputDetector.scanMayClose` never opens and no turn ever
+/// closes. The per-turn hold map then hands the same pending turns back for as
+/// long as the thread stays open: against the user's own server, on their
+/// battery, with nothing on screen to say so.
 ///
 /// IT IS THE PER-LANE HALF OF A PAIR, and the halves bound different things.
 /// `retroStallBackoff` widens the cadence of ONE turn that keeps getting
-/// nowhere; that alone still lets a thread of twenty pending turns fan out over
-/// every candidate in every one of them before any of the ladders has climbed.
-/// This measures the LANE once, and a fault stops the remaining fan-out inside
-/// the same pass — the difference between the first stall costing one request
-/// and it costing two hundred.
+/// nowhere; that alone still lets a thread of twenty pending turns each spend a
+/// request before any of the ladders has climbed. This measures the LANE once,
+/// and a fault stops the remaining fan-out inside the same pass.
 ///
-/// IT MEASURES; IT DOES NOT INFER. A stalled pass has three causes that are
-/// indistinguishable from the view model, because `detect` collapses all of them
-/// into `conclusive == false`: a lane that cannot answer, a probe window the
-/// candidate cap could not hold, and one unreadable filename
-/// (`FileProbeOutcome.ambiguous`). Counting stalls would therefore silence a
-/// perfectly healthy lane on the strength of a single bad filename. So the
-/// breaker asks the LANE a question only the lane can answer — a GET of a
-/// `FileServerClient.negativeControlKey`, a key that provably does not exist —
-/// and takes a `404` as proof the namespace is still capable of saying no.
-/// Nothing about one candidate's spelling can change that answer.
+/// IT MEASURES; IT DOES NOT INFER, and the listing is what supplies the
+/// measurement. A stall no longer has to be diagnosed: `FileServerListingVerdict`
+/// separates "the folder is there and holds nothing", "the folder is not there"
+/// and "nothing was learned" at the source, so the breaker is consulted ONLY on
+/// the third. Counting stalls would silence a healthy lane on the strength of a
+/// young turn whose folder is legitimately still empty; reading the verdict
+/// cannot.
 ///
-/// TWO EXTENSIONS, AND WHY THE VERDICT IS AN `OR`. Servers route on extension:
-/// a handler map, an SSO rule that exempts static assets, an SPA fallback that
-/// only catches extensionless paths. One sample is hostage to one routing rule,
-/// so the lane counts as healthy if EITHER sample `404`s. That makes every wrong
-/// answer degrade toward "healthy" — toward the behaviour that exists without
-/// this breaker — rather than toward silencing a working server.
-///
-/// WHAT A MEASUREMENT COSTS, stated exactly because the OR and the shared probe
-/// path each add a request the shape of this ladder is sized against. A HEALTHY
-/// lane costs ONE request: the first sample `404`s and the second is never sent.
-/// A wall costs more, because `laneAnswersNotFound` deliberately reuses
-/// `BackgroundFileTransfer.probeExists`, which runs its OWN nested negative
-/// control before it will believe a `200` — so a uniform-`200` wall that survives
-/// the free provenance vetoes spends two requests per sample, i.e. FOUR. The
-/// shapes that settle without a control (a catch-all `403`, an HTML document
-/// under a non-HTML name) spend two. That worst case is paid once per backoff
-/// window — four requests an hour in the steady state, against the hundreds this
-/// type exists to remove — which is why the shared probe path is worth more than
-/// the saving: a bespoke health request could develop its own timeout, pinning
-/// posture or body-reading rule and then tell the user a different story about
-/// one server than the scan does.
+/// WHAT A MEASUREMENT COSTS: nothing. The listing that stalled IS the question a
+/// synthetic control used to ask, and a stronger version of it — a `207` is
+/// believed only after its own negative control, and a `404` is the server
+/// saying no about a real path. So a fault is recorded from the verdict in hand,
+/// with no second request, and no second route through the server that might not
+/// be the one that failed.
 ///
 /// PROCESS-LOCAL, DELIBERATELY. Nothing is persisted and no schema moves: the
 /// drain is per-process, and a relaunch buying one more full pass is the
@@ -190,17 +174,16 @@ nonisolated final class OutputScanClaimRegistry: @unchecked Sendable {
 /// a clean slate — "I just fixed my settings" needs no reset path, because the
 /// fixed lane is a different key.
 ///
-/// IT BACKS OFF; IT DOES NOT LATCH SHUT. A trip that only an explicit user
-/// action could clear would be a silent trap: a turn stuck pending on a walled
-/// lane is not `outputScanDone`, so it never surfaces the notice that carries
-/// the "Check again" button — the affordance does not exist for precisely the
-/// turns the breaker silences. And most real repairs are invisible to the app; a
-/// restarted server, a removed `try_files`, a fixed reverse proxy, a DNS record,
-/// an expired session behind the portal all leave the identity key untouched.
-/// So a measured fault stops the FAN-OUT immediately and permanently, and what
-/// replaces it is a single health request on a widening cadence (5 → 15 → 30 →
-/// 60 minutes). That is the request count cut by ~99% while recovery stays
-/// bounded at an hour with no user action at all.
+/// IT BACKS OFF; IT DOES NOT LATCH SHUT. Most real repairs are invisible to the
+/// app: a restarted server, a fixed reverse proxy, a DNS record, an expired
+/// session behind a portal all leave the identity key untouched, so a trip only
+/// an explicit user action could clear would be a silent trap. A measured fault
+/// stops the FAN-OUT immediately, and what replaces it is one listing on a
+/// widening cadence (5 → 15 → 30 → 60 minutes) — the request count cut by ~99%
+/// while recovery stays bounded at an hour with no user action at all. A tap
+/// (`recheckOutputs` / `searchMentionedFiles`) resets it outright, and those are
+/// reachable from a context menu on EVERY agent turn, so the affordance exists
+/// even for the turns the breaker is currently silencing.
 ///
 /// PRIVACY (see the spec's Privacy & Security section): the lane key is an
 /// opaque digest pair, never a URL and never a credential, and nothing in this
@@ -374,23 +357,22 @@ nonisolated final class FileLaneScanBreaker: @unchecked Sendable {
         lanes[ticket.lane] = state
     }
 
-    /// Record health WITHOUT spending a request, from the ONE thing the scan
-    /// produces that proves the lane is not walled on its own: a CONFIRMED FILE.
-    /// Every route to `FileProbeOutcome.exists` runs
-    /// `BackgroundFileTransfer.probeExistsWithLength`'s nested negative control
-    /// first, so a chip carries a `404` for a key that cannot exist — the
-    /// synthetic control's own question, already answered, about a real name.
+    /// Record health WITHOUT spending a request, from the thing the scan already
+    /// produces: a DEFINITE listing verdict.
     ///
-    /// A CLOSED TURN IS NOT ADMISSIBLE HERE, and the distinction is the whole
-    /// reason this doc is long. "The pass closed the turn" sounds like "every
-    /// probe came back definitive", but `FileTransferOutputDetector.detect`
-    /// returns `conclusive` with ZERO requests whenever the probe window is
-    /// empty — every candidate excluded as one of the conversation's own inbound
-    /// uploads, or the message already at its lifetime chip ceiling. That is a
-    /// fact about the REPLY, not about the server. Admitting it would let a
-    /// gateway that merely echoes a storedKey it was handed (see
-    /// `ConverseRequest.fileDeliveryInstruction`) pin its own lane healthy and
-    /// switch this breaker off for the rest of a pass.
+    /// `.entries` and `.absent` are both the server answering a real question
+    /// about a real path with a yes or a no — which is exactly what the synthetic
+    /// control was ever asked to establish, and stronger, because a `207` is
+    /// believed only after its own negative control and a `404` IS the server
+    /// saying no. So the listing is the measurement, and a second synthetic
+    /// request would only add traffic and a second route through the server that
+    /// might not be the one that failed.
+    ///
+    /// A CLOSED TURN IS NOT ADMISSIBLE, only a definite VERDICT is, and the
+    /// distinction still matters: `reconcileOutbox` can report `conclusive` for a
+    /// message already at its lifetime chip ceiling, which is a fact about the
+    /// MESSAGE rather than about the server. Reading health off the verdict
+    /// rather than off the close decision is what keeps that apart.
     func noteHealthyEvidence(lane: String, now: ContinuousClock.Instant = .now) {
         lock.lock()
         defer { lock.unlock() }
@@ -955,59 +937,13 @@ final class ConversationDetailViewModel {
         FileLaneScanBreaker.backoff(forConsecutiveFaults: stalls)
     }
 
-    /// The extensions the lane health check samples, in order. Both are on
-    /// `FileTransferOutputDetector.outputAllowlist`, because those are the only
-    /// names the detector ever asks a server about — an extensionless sample
-    /// would measure a route no real candidate takes. Two of them, one text and
-    /// one binary, because a server routes on extension and a single sample is
-    /// hostage to a single rule; the health verdict is their OR, so a lane is
-    /// declared bad only when neither route can say "not found". Ordered
-    /// cheapest-first in the only sense that matters: a healthy lane `404`s the
-    /// first and never pays for the second.
-    private static let laneHealthProbeExtensions = ["txt", "pdf"]
-
-    /// Ask the lane the ONE question that separates "this file is not there"
-    /// from "this server cannot tell me anything": GET a key that provably does
-    /// not exist and see whether it comes back `404`.
-    ///
-    /// Reuses the SAME probe path the scan itself uses
-    /// (`BackgroundFileTransfer.probeExists` → `FileServerClient.classifyProbe`),
-    /// deliberately: a bespoke health request could develop its own timeout,
-    /// pinning posture or body-reading rule and then tell the user a different
-    /// story about one server than the scan does. `.missing` is the only healthy
-    /// answer — `.exists` for a key that cannot exist is the walled lane's
-    /// signature, and everything else is a lane that did not answer.
-    ///
-    /// WHAT IT COSTS. A healthy lane: ONE request, because the first sample
-    /// `404`s and the second is never sent. A wall: up to four, because the
-    /// reused probe path runs its own nested negative control before it will
-    /// believe a `200`, so each of the two samples can spend two requests. That
-    /// is the price of the shared path and it is paid once per breaker backoff
-    /// window, never per turn — see `FileLaneScanBreaker`.
-    ///
-    /// PRIVACY (see the spec's Privacy & Security section): the sampled keys are
-    /// synthetic and content-free, and only the boolean escapes.
-    static func laneAnswersNotFound(
-        snapshot: SettingsManager.FileTransferSnapshot
-    ) async -> Bool {
-        for ext in laneHealthProbeExtensions {
-            let controlKey = FileServerClient.negativeControlKey(forExtension: ext)
-            let outcome = await BackgroundFileTransfer.shared.probeExists(
-                snapshot: snapshot,
-                storedKey: controlKey
-            )
-            if outcome == .missing { return true }
-        }
-        return false
-    }
-
-    // MARK: - "Named a file, delivered nothing" notice
+    // MARK: - Output discovery state
 
     /// The conversation's CURRENTLY configured READY file lane identity, or nil
-    /// when the bound gateway has no ready lane. `MissingOutputNotice` requires
-    /// an exact match against a turn's dispatch lane, so a removed or repointed
-    /// server silently retires every notice rather than warning about a setup
-    /// the user no longer has. Refreshed on every `reload()` AND on
+    /// when the bound gateway has no ready lane. A turn may only be listed
+    /// against the exact lane it was dispatched to, so a removed or repointed
+    /// server silently stops every automatic pass rather than reading a folder
+    /// on a setup the user no longer has. Refreshed on every `reload()` AND on
     /// `.settingsDidChangeRemotely` — a lane edit changes no conversation row,
     /// so nothing else would ever repaint this.
     var currentFileLaneID: String?
@@ -1041,86 +977,108 @@ final class ConversationDetailViewModel {
     /// bookkeeping only.
     @ObservationIgnored private var hasResolvedFileLaneIdentity = false
 
-    /// Agent-turn `Message.id`s whose reply named a file that the file server
-    /// definitively does not have. DERIVED, never persisted — see
-    /// `MissingOutputNotice`. Observable: the thread renders one inline row per
-    /// id.
-    var missingOutputNoticeIDs: Set<UUID> = []
+    /// Agent-turn `Message.id`s whose output folder could not be READ — the only
+    /// discovery outcome worth showing the user.
+    ///
+    /// WHAT IS DELIBERATELY NOT IN HERE: an empty folder, and an absent one. A
+    /// `404` is what an ordinary reply with no output looks like now that nothing
+    /// creates the folder in advance, and it conflates "produced nothing", "the
+    /// instruction was ignored", "a mkdir failed", "the agent wrote elsewhere"
+    /// and "the served root is not the workspace" — so a row on it would be an
+    /// accusation the app cannot support, on the most common turn there is. Only
+    /// `.unusable` (transport, non-`207`, malformed body, a lane that answers
+    /// everything) means the app learned nothing at all, and that IS worth a row
+    /// because the remedy is the user's.
+    ///
+    /// DERIVED AND EPHEMERAL, never persisted: it describes this process's last
+    /// attempt against a server that may be fixed a second later, and a stored
+    /// verdict about someone's own file server is exactly the state this design
+    /// refuses to keep. Observable — the thread renders one inline row per id.
+    var outputDiscoveryFaultIDs: Set<UUID> = []
 
-    /// Per-turn state of the user-initiated "Check again" re-probe. Absent =
-    /// nothing to report. Observable: drives the row's button + result caption.
+    /// Per-turn state of a user-initiated "Check again" / "Search mentioned
+    /// files". Absent = nothing to report. Observable: drives the row's button +
+    /// result caption.
     var outputRecheckStates: [UUID: OutputRecheckState] = [:]
 
-    /// What a manual re-check found. Deliberately three-valued: an empty result
-    /// from a lane-wide failure (bad credential, untrusted certificate, server
-    /// down, timeout) is NOT the same claim as an empty result from ten clean
-    /// 404s, and telling the user "still not there" when the app could not
-    /// reach the server at all would be a lie in the most expensive direction.
+    /// What a user-initiated look found. Deliberately three-valued: an empty
+    /// result from a lane-wide failure (bad credential, untrusted certificate,
+    /// server down, timeout) is NOT the same claim as an empty result from a
+    /// folder the server read out clean, and reporting the former as the latter
+    /// would be the lie this state exists to prevent.
     enum OutputRecheckState: Equatable, Sendable {
         case checking
-        /// Every probe answered, and the file is still absent.
-        case stillMissing
+        /// The server answered, and there was nothing to hand over.
+        ///
+        /// `chipCount` is the row's server-file chip census AT THE MOMENT OF THE
+        /// ANSWER, and it is what retires the caption. "Nothing found" is true
+        /// only about the look that produced it: a turn tapped inside the grace
+        /// window can still gain a chip a minute later from the automatic pass,
+        /// and the caption would then sit under a visible file contradicting it
+        /// for the rest of the session. A census that GREW means the row has
+        /// outrun the answer — see `liveRecheckStates`.
+        case noneFound(chipCount: Int)
         /// The lane could not be reached / would not answer, or it no longer
         /// matches the lane this turn was dispatched to.
         case couldNotCheck
     }
 
-    /// Cached per-reply derivation for the notice, keyed by agent-turn id. The
-    /// text half is the expensive, adversary-facing half (see
-    /// `FileTransferOutputDetector.extractCandidates`), and a reply's text is
-    /// immutable once persisted, so a reload storm must not re-derive it.
-    /// `@ObservationIgnored` — pure bookkeeping, never drives a view.
-    @ObservationIgnored private var noticeClaimsCache: [UUID: MissingOutputNotice.ReplyClaims] = [:]
+    /// Prune the manual-look captions a reload has invalidated. Pure + testable;
+    /// the single definition of when a transient answer stops being true.
+    ///
+    /// TWO reasons a caption dies. The row it annotates is GONE (a delete, a
+    /// clone, a CloudKit import that dropped it) — an orphaned caption would
+    /// otherwise float under whatever row inherited the position. Or the row has
+    /// OUTRUN the answer: "no returned files were discovered" is a report about
+    /// one look at one instant, and the automatic pass that lists the same folder
+    /// a minute later can find the agent's late write. Once a chip is on screen,
+    /// the caption underneath it is a contradiction, not a caveat.
+    ///
+    /// A census that merely stayed the same keeps the caption: the answer is
+    /// still the most recent thing anyone learned about that row.
+    static func liveRecheckStates(
+        _ states: [UUID: OutputRecheckState],
+        after messages: [MessageRecord]
+    ) -> [UUID: OutputRecheckState] {
+        guard !states.isEmpty else { return states }
+        var census: [UUID: Int] = [:]
+        for message in messages {
+            census[message.id] = message.attachments.count(where: \.isServerFile)
+        }
+        return states.filter { id, state in
+            guard let chipsNow = census[id] else { return false }
+            guard case .noneFound(let chipsThen) = state else { return true }
+            return chipsNow <= chipsThen
+        }
+    }
 
-    /// The inbound-exclusion token set the cache was built against. A new user
-    /// upload can newly EXCLUDE a token (the reply now merely echoes a file the
-    /// app itself put on the server), which would make every cached window
-    /// stale, so the whole cache is dropped when this changes. Rare by
-    /// construction — it moves only when the user attaches a file.
-    /// `@ObservationIgnored` — pure bookkeeping, never drives a view.
-    @ObservationIgnored private var noticeCacheInboundTokens: Set<String>?
-
-    /// Single-flight + trailing-pass guards for `refreshMissingOutputNotices`,
-    /// the same shape as `scheduleReload` / `runRetroOutputScan`: a CloudKit
-    /// import storm must drive at most two passes, not N.
-    /// `@ObservationIgnored` — pure bookkeeping, never drives a view.
-    @ObservationIgnored private var noticeRefreshInFlight = false
-    @ObservationIgnored private var noticeRefreshTrailingPass = false
-
-    /// The turn whose manual re-check is running, if any. VM-WIDE, not
-    /// per-message: a thread showing several notices must not let one tap per
-    /// row fan out into simultaneous bursts of ranged GETs against the user's
-    /// home server. `OutputScanClaimRegistry` separately keeps a re-check from
-    /// stacking with a retro pass on the SAME turn (and across windows in this
-    /// process). `@ObservationIgnored` — the observable
-    /// `outputRecheckStates` is what the row reads.
+    /// The turn whose manual look is running, if any. VM-WIDE, not per-message: a
+    /// thread of agent turns must not let one tap per row fan out into
+    /// simultaneous bursts against the user's home server.
+    /// `OutputScanClaimRegistry` separately keeps a manual look from stacking
+    /// with a retro pass on the SAME turn (and across windows in this process).
+    /// `@ObservationIgnored` — the observable `outputRecheckStates` is what the
+    /// row reads.
     @ObservationIgnored private var outputRecheckInFlightID: UUID?
 
-    /// Max turns examined per notice-refresh pass. Bounds the text work on a
-    /// long thread; only the newest turns can plausibly still be actionable,
-    /// and the cache makes repeat passes free.
-    private static let missingOutputNoticeCap = 20
-
-    /// Cache ceiling. A long-lived thread VM would otherwise retain one entry
-    /// per agent turn forever; the entries are tiny (a ≤10-token window plus a
-    /// Bool) but the bound is what makes that a fact rather than a hope.
-    private static let noticeClaimsCacheCeiling = 200
-
     enum RetroOutputScanRoute: Equatable {
-        case conclusiveWithoutProbe
         case probeCurrentLane
         case deferUntilMatchingLane
     }
 
     /// Result of the production per-candidate retro-scan executor. The executor
     /// owns the final route/preflight/claim boundary immediately before the
-    /// injected probe closure, which lets tests prove that a removed or
+    /// injected listing closure, which lets tests prove that a removed or
     /// repointed durable lane performs zero network work.
     enum RetroOutputCandidateExecution {
         case deferred
         case claimUnavailable
-        case local(ConversationStore.OutputScanReconciliation)
-        case probed(ConversationStore.OutputScanReconciliation)
+        /// The box was listed. The reconciliation is what to persist; the
+        /// verdict is what the lane breaker and the discovery row read.
+        case listed(
+            result: ConversationStore.OutputScanReconciliation,
+            verdict: FileServerListingVerdict
+        )
     }
 
     #if os(macOS)
@@ -1294,21 +1252,31 @@ final class ConversationDetailViewModel {
             if fetched != messages {
                 messages = fetched
             }
-            // Retroactive output scan (non-awaited): any modern dispatch that
-            // persisted an explicit pending marker + exact durable lane may
-            // recover if its asynchronous landing probe did not finish.
-            // Legacy ownerless rows deliberately remain untouched: guessing the
-            // currently configured lane could attach an unrelated file after a
-            // gateway was repointed. Guarded to a single in-flight pass; the
-            // per-instance attempted-set + durable `outputScanDone` marker stop
-            // re-probing on reload echoes.
+            // Output discovery (non-awaited): THE automatic lane. Every dispatch
+            // that persisted an explicit pending marker, an exact durable lane
+            // AND the folder it named is listed once here. Rows with no folder —
+            // a wrist-originated turn, a lane that cannot hold a nested
+            // collection, a dispatch whose freshness was never witnessed, or a
+            // row that synced before its attribute did — are selected OUT rather
+            // than closed: missing metadata means UNKNOWN, never EMPTY. Guarded
+            // to a single in-flight pass; the per-instance attempted-set + the
+            // durable `outputScanDone` marker stop re-listing on reload echoes.
             Task { [weak self] in await self?.runRetroOutputScan() }
-            // "Named a file, delivered nothing" is derived from the turns just
-            // fetched — including the durable scan marker a deferred pass may
-            // have flipped since the last render (which is why
-            // `reconcileOutputScan` posts on that transition). Non-awaited: it
-            // is a diagnostic, never a gate on showing the thread.
-            Task { [weak self] in await self?.refreshMissingOutputNotices() }
+            // A fault row belongs to a turn that is still on screen. Pruning
+            // here (compared before assigning, so a reload storm invalidates
+            // nothing) keeps a stale row from outliving the message it annotates.
+            let liveIDs = Set(messages.map(\.id))
+            let liveFaults = outputDiscoveryFaultIDs.intersection(liveIDs)
+            if liveFaults != outputDiscoveryFaultIDs {
+                outputDiscoveryFaultIDs = liveFaults
+            }
+            // Same pruning for the transient manual-look captions, plus the one
+            // thing a live-id filter cannot see: a row that has GAINED a chip
+            // since it was told "nothing found" now contradicts its own caption.
+            let survivingStates = Self.liveRecheckStates(outputRecheckStates, after: messages)
+            if survivingStates != outputRecheckStates {
+                outputRecheckStates = survivingStates
+            }
         } catch {
             loadError = String(localized: "Couldn't load this conversation. Try again.")
         }
@@ -1317,15 +1285,25 @@ final class ConversationDetailViewModel {
         isLoading = false
     }
 
-    /// Pure, unit-testable candidate filter for the retro output scan. Every
-    /// surface qualifies only with explicit false AND a durable lane identity,
-    /// atomically persisted when its dispatch latched a READY file lane. This
-    /// recovers a crash between reply persistence and an asynchronous scan
-    /// without probing legacy/v6 Watch, CarPlay, or Mac rows whose lane cannot
-    /// be proven.
-    /// Already-scanned and per-instance-attempted turns are excluded. Newest-first
-    /// (messages are createdAt-ascending), capped. Existing server refs do not
-    /// exclude a partial-success turn; store reconciliation dedupes them.
+    /// Pure, unit-testable candidate filter for the retro output scan. A turn
+    /// qualifies only with an explicit pending marker, a durable lane identity,
+    /// AND the folder that dispatch named — all three atomically persisted when
+    /// the dispatch latched a READY file lane.
+    ///
+    /// `outputBoxKey != nil` IS THE LOAD-BEARING CLAUSE, and its job is to select
+    /// rows OUT rather than close them. A reply with a lane but no folder can
+    /// arrive four ways — a wrist-originated turn (the Watch holds no
+    /// file-server credential and names no box), a lane that cannot hold a nested
+    /// collection, a dispatch whose pre-flight freshness assertion did not come
+    /// back a definite miss, and a row a device synced from CloudKit before the
+    /// attribute landed. Every one of them means UNKNOWN. Marking such a turn
+    /// scanned would make "we have not been told yet" permanently indistinguish-
+    /// able from "there was nothing", on the device least able to know.
+    ///
+    /// Already-scanned and per-instance-attempted turns are excluded.
+    /// Newest-first (messages are createdAt-ascending), capped. Existing server
+    /// refs do not exclude a partial-success turn; store reconciliation dedupes
+    /// them.
     static func retroScanCandidates(
         in messages: [MessageRecord],
         attempted: Set<UUID>,
@@ -1341,29 +1319,25 @@ final class ConversationDetailViewModel {
                     }
                     return message.outputScanDone == false
                         && message.outputScanLaneID != nil
+                        && message.outputBoxKey != nil
                 }
                 .prefix(cap)
         )
     }
 
-    /// Decide whether a candidate can finish locally, may probe the currently
-    /// configured lane, or must wait until its dispatch lane is restored.
-    /// Filename-free replies are locally conclusive even after lane removal or
-    /// repointing because they require no network evidence.
-    /// `async` ONLY because the candidate extraction is hopped off the main
-    /// actor: its regex is superlinear in reply length and reply text is
-    /// untrusted, so running it inline froze this pass (up to `retroScanCap`
-    /// replies) on every thread open. The routing decision itself is pure.
+    /// Whether a candidate may be listed against the currently configured lane,
+    /// or must wait until its dispatch lane is restored. Pure — nothing about the
+    /// reply's TEXT enters this decision, which is what keeps a pass over
+    /// `retroScanCap` turns free of any untrusted-input regex on every thread
+    /// open.
+    ///
+    /// There is no local-conclusion route: the only evidence about what a reply
+    /// produced lives in one folder on the user's server, so a turn either gets
+    /// its listing or waits.
     static func retroOutputScanRoute(
         for message: MessageRecord,
         currentLaneID: String?
-    ) async -> RetroOutputScanRoute {
-        let hasFilenameCandidates =
-            !(await FileTransferOutputDetector.extractCandidatesOffMainActor(from: message.text)).isEmpty
-        if !hasFilenameCandidates {
-            return .conclusiveWithoutProbe
-        }
-
+    ) -> RetroOutputScanRoute {
         guard let storedLaneID = message.outputScanLaneID,
               storedLaneID == currentLaneID else {
             return .deferUntilMatchingLane
@@ -1372,10 +1346,10 @@ final class ConversationDetailViewModel {
     }
 
     /// Execute the production decision boundary for one retro-scan candidate.
-    /// A network-capable route must pass the current-lane identity check before
-    /// it can claim the message or invoke `probe`; mismatched/removed lanes stay
-    /// pending and unattempted. Closure injection keeps the no-I/O guarantee
-    /// deterministic in XCTest while `runRetroOutputScan` uses the live detector.
+    /// The lane identity check comes before the claim and before `list` is
+    /// invoked; a mismatched/removed lane stays pending and unattempted. Closure
+    /// injection keeps the no-I/O guarantee deterministic in XCTest while
+    /// `runRetroOutputScan` uses the live listing lane.
     static func executeRetroOutputScanCandidate(
         _ candidate: MessageRecord,
         currentLaneID: String?,
@@ -1383,103 +1357,61 @@ final class ConversationDetailViewModel {
         laneStillMatches: () async -> Bool,
         claim: () -> Bool,
         didClaim: () -> Void,
-        probe: (_ excludedKeys: Set<String>) async -> (
-            drafts: [AttachmentDraft],
-            conclusive: Bool
-        )
+        list: (_ outboxKey: String, _ excludedKeys: Set<String>) async
+            -> FileTransferOutputDetector.OutboxReconciliation
     ) async -> RetroOutputCandidateExecution {
-        guard let expectedLaneID = candidate.outputScanLaneID else {
-            // Compiler-level backstop for callers that bypass candidate
-            // selection: ownerless rows can neither probe nor even receive a
-            // marker-only mutation.
+        // Compiler-level backstops for callers that bypass candidate selection.
+        // A row missing either half can neither be listed nor even receive a
+        // marker-only mutation: there is no folder to read, and closing it would
+        // turn "unknown" into "empty" permanently.
+        guard let expectedLaneID = candidate.outputScanLaneID,
+              let outboxKey = candidate.outputBoxKey else {
             return .deferred
         }
-        let route = await retroOutputScanRoute(
-            for: candidate,
-            currentLaneID: currentLaneID
-        )
-        switch route {
+        switch retroOutputScanRoute(for: candidate, currentLaneID: currentLaneID) {
         case .deferUntilMatchingLane:
             return .deferred
         case .probeCurrentLane:
             guard snapshotAvailable, await laneStillMatches() else {
                 return .deferred
             }
-        case .conclusiveWithoutProbe:
-            break
         }
 
         guard claim() else { return .claimUnavailable }
         didClaim()
 
-        switch route {
-        case .conclusiveWithoutProbe:
-            return .local(.init(
+        let excluded = Set(candidate.attachments.compactMap(\.storedKey))
+        let reconciliation = await list(outboxKey, excluded)
+        return .listed(
+            result: .init(
                 messageID: candidate.id,
-                drafts: [],
-                markScanned: true,
+                drafts: reconciliation.drafts,
+                markScanned: reconciliation.conclusive,
                 expectedLaneID: expectedLaneID
-            ))
-        case .probeCurrentLane:
-            let excluded = Set(candidate.attachments.compactMap(\.storedKey))
-            let scan = await probe(excluded)
-            return .probed(.init(
-                messageID: candidate.id,
-                drafts: scan.drafts,
-                markScanned: scan.conclusive,
-                expectedLaneID: expectedLaneID
-            ))
-        case .deferUntilMatchingLane:
-            return .deferred
-        }
-    }
-
-    /// One retro output-scan pass. Resolves the bound file-server snapshot ONCE,
-    /// probes each candidate turn's reply, and reconciles confirmed chips +
-    /// conclusive markers in a single store save. Aborts (no marking, no
-    /// attempted-set inserts) when the lane has no file transfer configured, and
-    /// aborts (no persist) if the lane is repointed mid-pass. Never logs reply
-    /// text / filenames / storedKeys.
-    /// Global per-pass SOURCE-download budget for retro-scan preview enrichment:
-    /// total bytes fetched across EVERY reply enriched in one retro pass. Larger
-    /// than the per-reply landing budget because a pass can span several
-    /// preview-less replies at once.
-    private static let retroPassPreviewSourceBudget: Int64 = 16 * 1024 * 1024   // 16 MiB
-    /// Global per-pass STORED-preview budget: total preview/thumbnail bytes
-    /// produced across a whole retro pass.
-    private static let retroPassPreviewStoredBudget = 1 * 1024 * 1024           // 1 MiB
-
-    /// Spawn the WS-2 preview-enrichment tail for a just-landed reply's output
-    /// chips (macOS FOREGROUND landing paths — the iOS background delegate spawns
-    /// its own inside `recordReply`). Detached + best-effort: never blocks the
-    /// reply UX, never surfaces errors; no-op when there are no output chips.
-    private func spawnPreviewEnrichment(
-        messageID: UUID?,
-        drafts: [AttachmentDraft],
-        ref: RemoteAgentRef,
-        snapshot: SettingsManager.FileTransferSnapshot
-    ) {
-        guard let messageID, !drafts.isEmpty else { return }
-        Task.detached {
-            await FileTransferOutputDetector.enrichPreviews(
-                drafts: drafts,
-                messageID: messageID,
-                ref: ref,
-                snapshot: snapshot
-            )
-        }
+            ),
+            verdict: reconciliation.verdict
+        )
     }
 
     #if os(macOS)
-    /// Persist a foreground Mac reply + sent flip before probing any output
-    /// filenames. Output chips are an asynchronous patch on the durable agent
-    /// bubble; a probe timeout can no longer hold the bubble, spinner, unread
-    /// cue, or a subsequent send hostage.
+    /// Persist a foreground Mac reply + sent flip, and record the folder this
+    /// dispatch named alongside its lane.
+    ///
+    /// NO OUTPUT DISCOVERY HERE. The reply's row carries `outputBoxKey`, so
+    /// listing that folder is the retro pass's job — and the store save below
+    /// posts `.conversationsDidChange`, which drives that pass in the same beat.
+    /// One implementation of "list the box and reconcile", with the grace window,
+    /// the hold ladder, the lane breaker and the identity guards around it.
     private func landMacForegroundReply(
         reply: String,
         userMessageID: UUID,
         dispatchRef: RemoteAgentRef,
         dispatchFileLane: SettingsManager.FileTransferSnapshot?,
+        /// The folder THIS dispatch named on the wire, captured at send time.
+        /// Rides the same store transaction as the lane below, and the store
+        /// drops it when that is nil. Pass BOTH or NEITHER: a folder with no
+        /// owning lane names a path nothing is allowed to read.
+        outputBoxKey: String?,
         /// The gateway config signature captured at DISPATCH. nil when the ref
         /// wasn't configured at send time (nothing to credit).
         dispatchChatSignature: String?,
@@ -1490,11 +1422,6 @@ final class ConversationDetailViewModel {
         let conversationID = self.conversationID
         let agentMessageID = UUID()
         let laneID = dispatchFileLane?.durableLaneID
-        // Claim before persistence: `completeAgentTurn` posts its reload before
-        // returning, so claiming afterward leaves a direct/retro race window.
-        let ownsOutputClaim = dispatchFileLane == nil
-            ? false
-            : OutputScanClaimRegistry.shared.claim(agentMessageID)
         let persist: @MainActor () async throws -> MessageRecord = {
             try await ConversationStore.shared.completeAgentTurn(
                 userMessageID: userMessageID,
@@ -1503,18 +1430,13 @@ final class ConversationDetailViewModel {
                 conversationID: conversationID,
                 sourceDevice: SourceDevice.current,
                 agentMessageID: agentMessageID,
-                outputScanLaneID: laneID
+                outputScanLaneID: laneID,
+                outputBoxKey: outputBoxKey
             )
         }
         let afterPersistBeforeRelease: @MainActor (MessageRecord) async -> Void = {
             [weak self] agentRecord in
             guard let self else { return }
-            // The immediate scan owns this turn for this VM instance.
-            // Insert before any suspension so the reload post emitted by
-            // `completeAgentTurn` cannot launch a parallel recovery pass.
-            if dispatchFileLane != nil {
-                self.retroScanAttempted.insert(agentRecord.id)
-            }
             // Implicit-only pointer: only a quick-capture turn stamps the
             // per-device pointer; explicit window/in-app turns never do.
             if stampsQuickPointer {
@@ -1545,102 +1467,23 @@ final class ConversationDetailViewModel {
                 speaks: speaksReply
             )
         }
-        let reconcileOutputs: (@MainActor (MessageRecord) async -> Void)?
-        if let dispatchFileLane, ownsOutputClaim {
-            reconcileOutputs = { [weak self] agentRecord in
-                let agentMessageID = agentRecord.id
-                defer { OutputScanClaimRegistry.shared.release(agentMessageID) }
-
-                // A filename-free reply is conclusive without network access,
-                // even if the user removed/repointed the lane after dispatch.
-                let hasCandidates =
-                    !(await FileTransferOutputDetector.extractCandidatesOffMainActor(from: reply)).isEmpty
-                if hasCandidates {
-                    guard await FileTransferOutputDetector.configuredLaneStillMatches(
-                        ref: dispatchRef,
-                        snapshot: dispatchFileLane
-                    ) else {
-                        self?.retroScanAttempted.remove(agentMessageID)
-                        return
-                    }
-                }
-                // Like the background landing path, this probe runs inside the
-                // turn's grace window by construction: it chips what already
-                // exists and leaves the turn pending rather than closing it on
-                // a 404 the agent's write may be a second away from disproving.
-                let scan = await FileTransferOutputDetector.reconciliationScan(
-                    reply: reply,
-                    conversationID: conversationID,
-                    snapshot: dispatchFileLane,
-                    excludedKeys: [],
-                    turnCreatedAt: agentRecord.createdAt
-                )
-                if hasCandidates {
-                    guard await FileTransferOutputDetector.configuredLaneStillMatches(
-                        ref: dispatchRef,
-                        snapshot: dispatchFileLane
-                    ) else {
-                        self?.retroScanAttempted.remove(agentMessageID)
-                        return
-                    }
-                }
-                let inserted: Bool
-                do {
-                    inserted = try await ConversationStore.shared.reconcileOutputScan([
-                        .init(
-                            messageID: agentMessageID,
-                            drafts: scan.drafts,
-                            markScanned: scan.conclusive,
-                            expectedLaneID: dispatchFileLane.durableLaneID
-                        )
-                    ])
-                } catch {
-                    // Store failure likewise preserves the pending marker.
-                    self?.retroScanAttempted.remove(agentMessageID)
-                    return
-                }
-                if !scan.conclusive {
-                    // The turn is pending because the age gate has not opened
-                    // yet (the landing probe cannot outrun it), so hold it to
-                    // that deadline rather than releasing it into the reload
-                    // path — an echo would otherwise re-probe the same stale
-                    // 404 milliseconds later and learn nothing.
-                    self?.holdRetroScan(
-                        [agentMessageID],
-                        until: agentRecord.createdAt
-                            .addingTimeInterval(FileTransferOutputDetector.outputScanGrace)
-                    )
-                }
-                guard inserted else { return }
-                self?.spawnPreviewEnrichment(
-                    messageID: agentMessageID,
-                    drafts: scan.drafts,
-                    ref: dispatchRef,
-                    snapshot: dispatchFileLane
-                )
-            }
-        } else {
-            reconcileOutputs = nil
-        }
         let releaseAwaitingUI: @MainActor () -> Void = { [weak self] in
             self?.isAwaitingReply = false
             self?.inFlightStartedAt = nil
         }
-        do {
-            return try await MacForegroundReplyLanding.persistThenScheduleOutputs(
-                dependencies: .init(
-                    persist: persist,
-                    afterPersistBeforeRelease: afterPersistBeforeRelease,
-                    reconcileOutputs: reconcileOutputs
-                ),
-                releaseAwaitingUI: releaseAwaitingUI
-            )
-        } catch {
-            if ownsOutputClaim {
-                OutputScanClaimRegistry.shared.release(agentMessageID)
-            }
-            throw error
-        }
+        // `reconcileOutputs` stays on the ordering primitive but production
+        // supplies none: discovery is the retro pass's single lane, and the
+        // reload this save posts drives it. The seam remains because the
+        // primitive's contract — persist, release the UI, THEN do slow optional
+        // work — is what its tests pin.
+        return try await MacForegroundReplyLanding.persistThenScheduleOutputs(
+            dependencies: .init(
+                persist: persist,
+                afterPersistBeforeRelease: afterPersistBeforeRelease,
+                reconcileOutputs: nil
+            ),
+            releaseAwaitingUI: releaseAwaitingUI
+        )
     }
     #endif
 
@@ -1665,17 +1508,17 @@ final class ConversationDetailViewModel {
     /// rule behind all three cases is one thing — an id comes back only at an
     /// instant where the answer can differ from the one just collected.
     enum RetroScanHoldVerdict: Equatable {
-        /// The probe window has genuinely moved on, so the next pass asks
+        /// The delivery window has genuinely moved on, so the next pass asks
         /// questions this one did not.
         case release
         /// Too young to close. Nothing can change until the age gate opens.
         case untilAgeGate(Date)
-        /// Neither closed nor productive — a window the cap could not hold, a
-        /// lane-wide failure, or a probe that answered nothing definitive about
-        /// one key. Re-running it is the definition of learning nothing, so it
-        /// waits out an interval that WIDENS with the streak (see
-        /// `retroStallBackoff`); the interval is carried on the case because it
-        /// is a property of this turn's history, not a constant.
+        /// Neither closed nor productive — a box holding more entries than one
+        /// pass may deliver, or a listing that could not be read at all. Re-
+        /// running it is the definition of learning nothing, so it waits out an
+        /// interval that WIDENS with the streak (see `retroStallBackoff`); the
+        /// interval is carried on the case because it is a property of this
+        /// turn's history, not a constant.
         case stalled(retryAfter: TimeInterval)
     }
 
@@ -1695,9 +1538,10 @@ final class ConversationDetailViewModel {
         if passStartedAt < ageGate {
             return .untilAgeGate(ageGate)
         }
-        // A confirmed file is excluded from the next window
-        // (`probePlan`), so the window WALKS — and the message's lifetime chip
-        // ceiling bounds how often that can happen.
+        // A delivered file is excluded from the next listing's window
+        // (`reconcileOutbox` drops keys already on the message), so the window
+        // WALKS — and the message's lifetime chip ceiling bounds how often that
+        // can happen.
         guard !confirmedAnything else { return .release }
         return .stalled(
             retryAfter: retroStallBackoff(forConsecutiveStalls: consecutiveStalls)
@@ -1804,19 +1648,16 @@ final class ConversationDetailViewModel {
     /// was supposed to stop fans out again against a lane already shown to be
     /// unable to answer.
     ///
-    /// SETTLED means the turn is done with, in either of the two ways a pass can
-    /// finish one: a locally conclusive filename-free reply (no network was ever
-    /// needed) or a probed turn the pass actually closed. A probed turn that came
-    /// back open is NOT settled — it is exactly the shape the suppression exists
-    /// to stop re-asking — and neither is a turn the loop never reached, which is
-    /// why the input is the whole candidate list rather than the results.
+    /// SETTLED means the turn is done with: a listed turn the pass actually
+    /// CLOSED. A listed turn that came back open is NOT settled — it is exactly
+    /// the shape the suppression exists to stop re-asking — and neither is a turn
+    /// the loop never reached, which is why the input is the whole candidate list
+    /// rather than the results.
     nonisolated static func retroScanParkSet(
         candidateIDs: [UUID],
-        localResults: [ConversationStore.OutputScanReconciliation],
-        probedResults: [ConversationStore.OutputScanReconciliation]
+        listedResults: [ConversationStore.OutputScanReconciliation]
     ) -> Set<UUID> {
-        let settled = Set(localResults.map(\.messageID))
-            .union(probedResults.filter(\.markScanned).map(\.messageID))
+        let settled = Set(listedResults.filter(\.markScanned).map(\.messageID))
         return Set(candidateIDs).subtracting(settled)
     }
 
@@ -1894,9 +1735,9 @@ final class ConversationDetailViewModel {
         )
         guard !candidates.isEmpty else { return }
 
-        // ONE instant for the whole pass, captured before any probe. The age
-        // gate is measured from when the pass STARTED, so a slow run of probes
-        // can never carry an early 404 past a deadline it did not meet.
+        // ONE instant for the whole pass, captured before any listing. The age
+        // gate is measured from when the pass STARTED, so a slow run of requests
+        // can never carry an early empty answer past a deadline it did not meet.
         let passStartedAt = Date()
         let createdAtByMessageID = Dictionary(
             candidates.map { ($0.id, $0.createdAt) },
@@ -1917,46 +1758,34 @@ final class ConversationDetailViewModel {
         }
         let currentLaneID = snapshot?.durableLaneID
 
-        // Inbound-exclusion token set once for the whole pass.
-        let inbound = FileTransferOutputDetector.inboundStoredKeyTokens(in: messages)
-
-        var localResults: [ConversationStore.OutputScanReconciliation] = []
-        var probedResults: [ConversationStore.OutputScanReconciliation] = []
-        var probedMessageIDs: [UUID] = []
+        var listedResults: [ConversationStore.OutputScanReconciliation] = []
+        var listedMessageIDs: [UUID] = []
         var claimedMessageIDs: [UUID] = []
+        // Turns whose folder this pass could not READ. Applied to the observable
+        // set in one write at the end, so a pass over twenty turns repaints once.
+        var faultedMessageIDs: Set<UUID> = []
+        var clearedFaultMessageIDs: Set<UUID> = []
         defer {
             for messageID in claimedMessageIDs {
                 OutputScanClaimRegistry.shared.release(messageID)
             }
         }
 
-        // Non-nil once the LANE — not this turn, not this filename — has been
-        // shown to be the thing that cannot answer. It ends the pass's fan-out
-        // and becomes the interval every turn the pass could not settle is
-        // parked for. See `FileLaneScanBreaker`.
+        // Non-nil once the LANE — not this turn — has been shown to be the thing
+        // that cannot answer. It ends the pass's fan-out and becomes the interval
+        // every turn the pass could not settle is parked for. See
+        // `FileLaneScanBreaker`.
         let laneKey = snapshot.map { FileLaneScanBreaker.laneKey(for: $0) }
         var laneSuppression: TimeInterval?
-        // Set when the lane identity moved under a health measurement. Ends the
-        // pass WITHOUT parking anything — the drift handling below is what
-        // decides those turns' fate.
-        var laneDrifted = false
         // A lane already known bad inside its backoff window costs this pass
-        // nothing at all: no fan-out, no health request, one dated hold.
-        //
-        // It skips the candidate loop ENTIRELY rather than running it with no
-        // lane, which would still close filename-free replies locally. That
-        // costs one `extractCandidatesOffMainActor` per candidate, and that
-        // regex is the documented superlinear hazard over adversary-controlled
-        // reply text — so the "cheap" version trades twenty network probes for
-        // twenty superlinear CPU passes on every reload echo, against a server
-        // that has already been shown to be unable to answer. The turns it
-        // leaves unmarked lose nothing a user can see: `outputScanDone` gates
-        // re-scanning, and they close on the pass after the lane recovers.
+        // nothing at all: no fan-out, no request, one dated hold. The turns it
+        // leaves unmarked lose nothing a user can see — `outputScanDone` gates
+        // re-listing, and they close on the pass after the lane recovers.
         if let laneKey {
             laneSuppression = FileLaneScanBreaker.shared.suppressionInterval(lane: laneKey)
         }
 
-        for candidate in candidates where laneSuppression == nil && !laneDrifted {
+        for candidate in candidates where laneSuppression == nil {
             let execution = await Self.executeRetroOutputScanCandidate(
                 candidate,
                 currentLaneID: currentLaneID,
@@ -1975,12 +1804,13 @@ final class ConversationDetailViewModel {
                     claimedMessageIDs.append(candidate.id)
                     retroScanAttempted.insert(candidate.id)
                 },
-                probe: { excluded in
-                    guard let snapshot else { return ([], false) }
-                    return await FileTransferOutputDetector.detect(
-                        reply: candidate.text,
+                list: { outboxKey, excluded in
+                    guard let snapshot else {
+                        return .init(drafts: [], conclusive: false, verdict: .unusable(.transport))
+                    }
+                    return await FileTransferOutputDetector.reconcileOutbox(
+                        outboxKey: outboxKey,
                         snapshot: snapshot,
-                        inboundTokens: inbound,
                         excludedKeys: excluded,
                         turnCreatedAt: candidate.createdAt,
                         scanStartedAt: passStartedAt
@@ -1989,61 +1819,50 @@ final class ConversationDetailViewModel {
             )
 
             switch execution {
-            case .local(let result):
-                localResults.append(result)
-            case .probed(let result):
-                probedResults.append(result)
-                probedMessageIDs.append(candidate.id)
-                guard let laneKey, let snapshot else { continue }
-                if !result.drafts.isEmpty {
-                    // FREE evidence, and stronger than the synthetic control: a
-                    // confirmed file carries the control's own `404` (every route
-                    // to `.exists` runs one) plus an honest answer about a real
-                    // name. See `noteHealthyEvidence` for why a CLOSED turn is
-                    // not admissible here — it can have probed nothing at all.
-                    FileLaneScanBreaker.shared.noteHealthyEvidence(lane: laneKey)
-                    continue
-                }
-                // Closed, but empty-handed. It proves nothing either way, so it
-                // neither records health nor spends a measurement: `evaluate`
-                // exists to explain a STALL, and this turn did not stall. Asking
-                // it here would let a lane still inside an old backoff window
-                // return `.suppress` and park the rest of the pass on the
-                // strength of a turn that may have just collected ten clean
-                // `404`s from that very lane.
-                if result.markScanned { continue }
-                // This turn stalled and nothing in this pass has yet shown the
-                // lane can answer. Ask the lane itself, ONCE, before spending
-                // the rest of the window on a server that may be incapable of
-                // saying "not found" — that shape stalls every remaining turn
-                // identically, and it is the whole reason this pass could
-                // otherwise run forever.
-                switch FileLaneScanBreaker.shared.evaluate(lane: laneKey) {
-                case .proceed:
-                    continue
-                case .suppress(let retryAfter):
-                    laneSuppression = retryAfter
-                case .measure(let ticket):
-                    let healthy = await Self.laneAnswersNotFound(snapshot: snapshot)
-                    // A lane edit mid-measurement invalidates the answer the
-                    // same way it invalidates a probe result: it describes a
-                    // server this conversation is no longer pointed at.
-                    guard let ref,
-                          await FileTransferOutputDetector.configuredLaneStillMatches(
-                            ref: ref,
-                            snapshot: snapshot
-                          ) else {
-                        // No verdict and no park: the drift handling below
-                        // already returns these turns to the pool so restoring
-                        // the original lane recovers them.
-                        FileLaneScanBreaker.shared.abandon(ticket)
-                        laneDrifted = true
-                        continue
+            case .listed(let result, let verdict):
+                listedResults.append(result)
+                listedMessageIDs.append(candidate.id)
+                switch verdict {
+                case .entries, .absent:
+                    // The server answered a real question about a real path with
+                    // a definite yes or no — which is precisely what the breaker's
+                    // synthetic control was ever asked to establish. So the
+                    // listing IS the health measurement, and a walled lane can no
+                    // longer masquerade as a healthy one: a `207` is believed only
+                    // after its own negative control, and a `404` is a server
+                    // saying no. No extra request buys anything here.
+                    clearedFaultMessageIDs.insert(candidate.id)
+                    if let laneKey {
+                        FileLaneScanBreaker.shared.noteHealthyEvidence(lane: laneKey)
                     }
-                    laneSuppression = FileLaneScanBreaker.shared.record(
-                        healthy ? .healthy : .faulted,
-                        ticket: ticket
-                    )
+                case .unusable:
+                    // The ONE discovery outcome the user is told about, because
+                    // it is the only one where the app learned nothing and the
+                    // remedy is theirs.
+                    faultedMessageIDs.insert(candidate.id)
+                    guard let laneKey else { continue }
+                    // Nothing in this pass has shown the lane can answer. Settle
+                    // it ONCE before spending the rest of the window on a server
+                    // that may be incapable of answering at all — that shape
+                    // stalls every remaining turn identically, and it is the
+                    // whole reason this pass could otherwise run forever.
+                    switch FileLaneScanBreaker.shared.evaluate(lane: laneKey) {
+                    case .proceed:
+                        continue
+                    case .suppress(let retryAfter):
+                        laneSuppression = retryAfter
+                    case .measure(let ticket):
+                        // The measurement already happened: this turn's listing
+                        // asked the lane and got no usable answer. Recording it
+                        // from the verdict in hand is both free and strictly more
+                        // faithful than a second synthetic request, which could
+                        // take a different route through the server than the one
+                        // that actually failed.
+                        laneSuppression = FileLaneScanBreaker.shared.record(
+                            .faulted,
+                            ticket: ticket
+                        )
+                    }
                 }
             case .deferred, .claimUnavailable:
                 continue
@@ -2062,33 +1881,43 @@ final class ConversationDetailViewModel {
         if let interval = laneSuppression {
             parked = Self.retroScanParkSet(
                 candidateIDs: candidates.map(\.id),
-                localResults: localResults,
-                probedResults: probedResults
+                listedResults: listedResults
             )
             parkRetroScanCandidates(parked, for: interval)
         }
 
-        // A lane drift after probes drops ONLY network-derived results. Locally
-        // conclusive filename-free replies remain safe to stamp. Remove dropped
-        // probe attempts so restoring the exact lane can retry in this VM.
-        var committedProbedResults: [ConversationStore.OutputScanReconciliation] = []
-        if !probedResults.isEmpty,
+        // A lane drift after the listings drops every network-derived result:
+        // they describe a server this conversation is no longer pointed at.
+        // Remove the dropped attempts so restoring the exact lane can retry in
+        // this VM.
+        var results: [ConversationStore.OutputScanReconciliation] = []
+        if !listedResults.isEmpty,
            let ref,
            let snapshot,
            await FileTransferOutputDetector.configuredLaneStillMatches(
                 ref: ref,
                 snapshot: snapshot
            ) {
-            committedProbedResults = probedResults
-        } else if !probedResults.isEmpty {
-            for messageID in probedMessageIDs {
+            results = listedResults
+        } else if !listedResults.isEmpty {
+            for messageID in listedMessageIDs {
                 retroScanAttempted.remove(messageID)
             }
         }
 
-        let results = localResults + committedProbedResults
+        // The discovery-fault set is the pass's own reading, so it is applied
+        // whether or not anything was persisted — a thread of turns whose folder
+        // could not be read has nothing to save and everything to say. ONE write
+        // for the whole pass; compared first so an unchanged set repaints nothing.
+        let nextFaults = outputDiscoveryFaultIDs
+            .subtracting(clearedFaultMessageIDs)
+            .union(faultedMessageIDs)
+        if nextFaults != outputDiscoveryFaultIDs {
+            outputDiscoveryFaultIDs = nextFaults
+        }
+
         guard !results.isEmpty else { return }
-        guard let inserted = try? await ConversationStore.shared.reconcileOutputScan(results) else {
+        guard (try? await ConversationStore.shared.reconcileOutputScan(results)) != nil else {
             for result in results {
                 retroScanAttempted.remove(result.messageID)
             }
@@ -2101,30 +1930,31 @@ final class ConversationDetailViewModel {
         for result in results where result.markScanned {
             retroScanStallStreak.removeValue(forKey: result.messageID)
         }
-        // An inconclusive network pass intentionally keeps the durable marker
-        // pending. WHY the turn is pending decides when it may be asked again,
-        // and the rule is the same in all three cases: an id comes back only at
-        // an instant where the answer can differ.
+        // An inconclusive pass intentionally keeps the durable marker pending.
+        // WHY the turn is pending decides when it may be asked again, and the
+        // rule is the same in every case: an id comes back only at an instant
+        // where the answer can differ.
         //   - The age gate has not opened yet ⇒ hold to `createdAt + grace`.
-        //     Re-probing before then can only repeat the same too-early verdict
-        //     against the user's home server.
-        //   - The pass CONFIRMED a file ⇒ release immediately. Its key is
-        //     excluded next time, so the window walks forward onto candidates
-        //     nothing has asked about yet; the lifetime chip ceiling
+        //     Re-listing before then can only repeat the same too-early answer
+        //     against the user's home server. This is the ordinary shape for a
+        //     freshly-landed turn: nothing creates the folder in advance, so the
+        //     first listing of a young turn is usually a `404` that a write
+        //     seconds away could disprove.
+        //   - The pass DELIVERED a file ⇒ release immediately. Its key is
+        //     excluded next time, so the window walks forward onto entries
+        //     nothing has handed over yet; the lifetime chip ceiling
         //     (`maxOutputChipsPerMessage`) bounds how far that can go.
-        //   - Nothing confirmed, nothing closed (a window the cap could not
-        //     hold, a lane-wide failure, or a probe that answered nothing
-        //     definitive about one key) ⇒ hold for this turn's place on the
-        //     `retroStallBackoff` ladder. The identical window against the
-        //     identical lane is the definition of learning nothing, and
-        //     releasing it here is what let a reload storm re-run it; the ladder
-        //     is what stops a turn that can NEVER be closed from re-running it
-        //     twelve times an hour for as long as the thread stays open.
-        //   - The LANE itself was measured and could not answer ⇒ already parked
-        //     above for the breaker's backoff, and skipped here: a stall hold
-        //     would silently undo the widening cadence that bounds a walled lane.
+        //   - Nothing delivered, nothing closed (a box holding more than one
+        //     pass may deliver, or a folder that could not be read) ⇒ hold for
+        //     this turn's place on the `retroStallBackoff` ladder. The identical
+        //     request against the identical lane is the definition of learning
+        //     nothing, and releasing it here is what let a reload storm re-run
+        //     it.
+        //   - The LANE itself could not answer ⇒ already parked above for the
+        //     breaker's backoff, and skipped here: a stall hold would silently
+        //     undo the widening cadence that bounds a walled lane.
         var stalled: [TimeInterval: [UUID]] = [:]
-        for result in committedProbedResults
+        for result in results
         where !result.markScanned && !parked.contains(result.messageID) {
             guard let createdAt = createdAtByMessageID[result.messageID] else {
                 retroScanAttempted.remove(result.messageID)
@@ -2161,43 +1991,16 @@ final class ConversationDetailViewModel {
             holdRetroScan(messageIDs, until: stalledAt.addingTimeInterval(retryAfter))
         }
 
-        // WS-2 preview enrichment for THIS pass's freshly-reconciled drafts ONLY
-        // (no backfill of older preview-less chips). ONE global budget threads
-        // across every reply in the pass, enforced SEQUENTIALLY. Reuses the same
-        // pre-resolved `snapshot` + identity guard: after the bounded downloads,
-        // the lane identity is re-checked so a mid-enrichment repoint can't apply
-        // old-server previews.
-        var sourceBudget = Self.retroPassPreviewSourceBudget
-        var storedBudget = Self.retroPassPreviewStoredBudget
-        var patches: [FileTransferOutputDetector.PreviewPatch] = []
-        guard inserted, let ref, let snapshot,
-              await FileTransferOutputDetector.configuredLaneStillMatches(
-                ref: ref,
-                snapshot: snapshot
-              ) else {
-            return
-        }
-        for result in committedProbedResults where !result.drafts.isEmpty {
-            if sourceBudget <= 0 || storedBudget <= 0 { break }
-            let built = await FileTransferOutputDetector.buildPreviewPatches(
-                for: result.drafts,
-                messageID: result.messageID,
-                snapshot: snapshot,
-                sourceBudget: &sourceBudget,
-                storedBudget: &storedBudget)
-            patches.append(contentsOf: built)
-        }
-        guard !patches.isEmpty else { return }
-        guard await FileTransferOutputDetector.configuredLaneStillMatches(
-            ref: ref,
-            snapshot: snapshot
-        ) else {
-            return
-        }
-        _ = try? await ConversationStore.shared.applyPreviews(patches)
+        // NO PREVIEW DOWNLOADS HERE, deliberately, and this was the largest
+        // automatic byte-mover in the product: the pass runs from `reload()`, so
+        // it fired on every CloudKit import echo, pulling slices of the user's
+        // files off their own server and into their iCloud and onto their wrist
+        // for content nobody had opened. A preview is now built from the bytes a
+        // chip TAP already downloaded — see
+        // `FileTransferOutputDetector.previewPatchesForDownloadedFile`.
     }
 
-    // MARK: - "Named a file, delivered nothing" notice
+    // MARK: - Lane identity
 
     /// Re-resolve the lane identity and everything derived from it. The single
     /// entry point for "the user may have just changed their file server" —
@@ -2215,164 +2018,138 @@ final class ConversationDetailViewModel {
     /// Gated on the identity actually MOVING, not on the notification: any
     /// settings write posts `.settingsDidChangeRemotely` (a voice preset, a KVS
     /// import echo), and letting unrelated churn drop every hold would hand the
-    /// probe window straight back to the storm that
+    /// listing window straight back to the storm that
     /// `retroStalledRetryInterval` exists to bound.
     ///
     /// "Moving" means EITHER half of the identity pair — the durable URL +
     /// credential namespace or the device-local certificate pin. A pin-only
     /// repair changes no durable id, but it is exactly what
-    /// `configuredLaneStillMatches` tests before it will let a probe result
+    /// `configuredLaneStillMatches` tests before it will let a listing result
     /// commit, so a release keyed on the durable half alone leaves the user who
     /// fixed their certificate waiting out an interval for no reason.
     func refreshFileLaneDerivedState() async {
         await refreshCurrentFileLaneID()
         let laneMoved = fileLaneIdentityMoved
         fileLaneIdentityMoved = false
-        if laneMoved {
-            releaseRetroScanHolds()
+        guard laneMoved else { return }
+        releaseRetroScanHolds()
+        // Every fault row describes an attempt against the lane that just moved,
+        // so it describes a setup that no longer exists. Drop them all and let
+        // the pass below say what is true of the NEW one.
+        if !outputDiscoveryFaultIDs.isEmpty {
+            outputDiscoveryFaultIDs = []
         }
-        await refreshMissingOutputNotices()
-        if laneMoved {
-            await runRetroOutputScan()
-        }
+        await runRetroOutputScan()
     }
 
-    /// Single-flight wrapper around `refreshMissingOutputNoticesPass`. A request
-    /// arriving mid-pass is served by one trailing pass rather than dropped —
-    /// the trailing pass matters because the request that most needs to land is
-    /// the one following a marker flip, which is exactly the moment a reload
-    /// storm is in progress.
-    func refreshMissingOutputNotices() async {
-        guard !noticeRefreshInFlight else {
-            noticeRefreshTrailingPass = true
-            return
-        }
-        noticeRefreshInFlight = true
-        defer { noticeRefreshInFlight = false }
-        repeat {
-            noticeRefreshTrailingPass = false
-            await refreshMissingOutputNoticesPass()
-        } while noticeRefreshTrailingPass
+    /// Whether this turn has an output folder a user tap could re-read. False for
+    /// a wrist-originated turn, a lane that cannot hold a nested collection, a
+    /// dispatch whose freshness was never witnessed, and a row that synced ahead
+    /// of its attribute — every one of which the manual name search still serves.
+    static func canRecheckOutputs(_ message: MessageRecord) -> Bool {
+        message.role == "agent"
+            && message.outputScanLaneID != nil
+            && message.outputBoxKey != nil
     }
 
-    /// Re-derive the whole notice set from the currently loaded turns. Purely
-    /// READ-side: no probe, no store write, no network — every input is already
-    /// on the device. A turn that no longer qualifies (a chip landed, the lane
-    /// was repointed, a re-check found the file) simply drops out.
+    /// Whether this turn has a file lane a name search could probe. MIRRORS the
+    /// DURABLE half of `searchMentionedFiles`'s own guard — role and lane; the
+    /// remaining clause is the transient one-tap-at-a-time lock, which is a
+    /// reason to ignore a tap, not a reason to hide the verb. It exists so the
+    /// menu item cannot drift from that guard: the handler returns immediately
+    /// on a turn with no lane, so
+    /// an ungated item is a verb that answers a tap with nothing at all — no
+    /// result, no caption, no error. That is the MAJORITY configuration, not an
+    /// edge: a turn sent with no file server configured persists no lane id, and
+    /// so does every row that predates the attribute.
     ///
-    /// PRIVACY (see the spec's Privacy & Security section): never logs reply
-    /// text, candidate filenames or storedKeys.
-    private func refreshMissingOutputNoticesPass() async {
-        let laneID = currentFileLaneID
-        let inbound = FileTransferOutputDetector.inboundStoredKeyTokens(in: messages)
-        // A changed inbound set invalidates every cached probe WINDOW (a newly
-        // uploaded file can newly exclude a token). Cheap to detect, rare to
-        // fire — the set moves only when the user attaches something.
-        if noticeCacheInboundTokens != inbound {
-            noticeClaimsCache.removeAll()
-            noticeCacheInboundTokens = inbound
-        }
-        if noticeClaimsCache.count > Self.noticeClaimsCacheCeiling {
-            noticeClaimsCache.removeAll()
-        }
+    /// Weaker than `canRecheckOutputs` by exactly one clause, deliberately: a
+    /// turn with a lane but no FOLDER — a wrist-originated turn, a lane that
+    /// cannot hold a nested collection, a dispatch whose freshness was never
+    /// witnessed — is precisely the population the automatic lane never serves,
+    /// so the name search is the only recovery it has.
+    static func canSearchMentionedFiles(_ message: MessageRecord) -> Bool {
+        message.role == "agent" && message.outputScanLaneID != nil
+    }
 
-        var surfaced: Set<UUID> = []
-        var examined = 0
-        // Newest-first: `messages` is createdAt-ascending, and only the recent
-        // end of a long thread is plausibly still actionable.
-        for message in messages.reversed() {
-            guard examined < Self.missingOutputNoticeCap else { break }
-            guard MissingOutputNotice.isEvaluable(message) else { continue }
-            examined += 1
+    /// Whether the bubble footer has any manual-look verb to offer at all — the
+    /// gate on ATTACHING the context menu, not just on filling it.
+    ///
+    /// A `.contextMenu` whose body evaluates to nothing still runs the long-press
+    /// lift animation and then presents an empty sheet, so "no items" has to mean
+    /// "no menu". Both clauses require an agent row, which is what keeps a user's
+    /// own sent message from lifting under a long press and offering nothing.
+    static func showsOutputActionsMenu(_ message: MessageRecord) -> Bool {
+        canRecheckOutputs(message) || canSearchMentionedFiles(message)
+    }
 
-            let claims: MissingOutputNotice.ReplyClaims
-            if let cached = noticeClaimsCache[message.id] {
-                claims = cached
-            } else {
-                // Both halves hop off the main actor: the candidate regex is
-                // superlinear-bounded-to-linear over adversary-controlled text,
-                // and the line scan walks the same string.
-                let candidates = await FileTransferOutputDetector
-                    .extractCandidatesOffMainActor(from: message.text)
-                claims = await MissingOutputNotice.replyClaimsOffMainActor(
-                    reply: message.text,
-                    candidates: candidates,
-                    inboundTokens: inbound
-                )
-                noticeClaimsCache[message.id] = claims
-            }
-
-            if MissingOutputNotice.shouldSurface(
-                message: message,
-                currentLaneID: laneID,
-                claims: claims
-            ) {
-                surfaced.insert(message.id)
-            }
-        }
-
-        if missingOutputNoticeIDs != surfaced {
-            missingOutputNoticeIDs = surfaced
-        }
-        // Drop stale result captions for rows that are no longer shown, so a
-        // "still not there" caption can't outlive the notice it belonged to.
-        // Compared before assigning: an unconditional write would invalidate
-        // every observing bubble on each pass of a reload storm.
-        let liveStates = outputRecheckStates.filter { surfaced.contains($0.key) }
-        if liveStates != outputRecheckStates {
-            outputRecheckStates = liveStates
+    /// Whether a folder re-read got a real ANSWER about the folder — the evidence
+    /// half of what the USER'S tap reports when it hands over no chips.
+    ///
+    /// READ FROM THE VERDICT, NEVER FROM `conclusive`. `conclusive` ANDs the
+    /// server's answer with the turn's AGE gate (`outputScanGrace`), and that
+    /// gate exists for one job only: stopping the AUTOMATIC pass from
+    /// PERMANENTLY closing a turn on a listing that arrived a beat after the
+    /// reply. It has no bearing on what a user who just asked is told. A tap ten
+    /// seconds after the reply that got a clean `207` or a clean `404` learned
+    /// exactly as much as one an hour later, and reporting it as "couldn't finish
+    /// the check" would name a fault that did not happen — on the impatient tap,
+    /// which is the common one.
+    ///
+    /// `.absent` counts as an answer for the same reason it closes a turn:
+    /// nothing creates the folder in advance, so a `404` is the server saying
+    /// there is nothing there.
+    static func folderReadAnswered(
+        _ reconciliation: FileTransferOutputDetector.OutboxReconciliation
+    ) -> Bool {
+        switch reconciliation.verdict {
+        case .entries, .absent: return true
+        case .unusable: return false
         }
     }
 
-    /// USER-INITIATED live re-probe of one turn's output window ("Check again").
+    /// USER-INITIATED re-read of one turn's output folder ("Check again").
     ///
-    /// A closed turn is never re-probed automatically — that is the whole point
+    /// A closed turn is never re-listed automatically — that is the whole point
     /// of the permanent marker. A deliberate tap is different: the user is
-    /// telling the app that something changed on their side, and re-asking is
-    /// the only way to find out. It is allowed to ADD chips to an already-closed
-    /// turn (`reconcileOutputScan` is indifferent to the marker), which is what
-    /// makes the notice self-retiring.
+    /// telling the app that something changed on their side, and re-asking is the
+    /// only way to find out. It is allowed to ADD chips to an already-closed turn
+    /// (`reconcileOutputScan` is indifferent to the marker).
     ///
-    /// ORDER IS LOAD-BEARING — `reconciliationScan` deliberately resolves no
+    /// ORDER IS LOAD-BEARING — `reconcileOutbox` deliberately resolves no
     /// settings of its own, so this caller owns both identity guards:
     ///   1. resolve the CURRENT ready lane and require it to be the exact lane
     ///      this turn was dispatched to (a repointed server must never answer
     ///      for an old turn);
-    ///   2. claim the turn, so a retro pass in this process cannot probe it
+    ///   2. claim the turn, so a retro pass in this process cannot list it
     ///      concurrently;
-    ///   3. probe;
-    ///   4. re-check the lane identity — a settings edit mid-probe invalidates
+    ///   3. list;
+    ///   4. re-check the lane identity — a settings edit mid-request invalidates
     ///      the result;
     ///   5. only then reconcile.
     ///
-    /// FAN-OUT: the re-probe of the tapped turn costs at most
-    /// `FileTransferOutputDetector.maxCandidates` sequential ranged GETs, and it
-    /// is followed by ONE retro pass over the turns the tap un-held — the tap
-    /// says "my server changed" about the whole thread, not about one row, and
-    /// that pass is what acts on it. Bounded the same way every pass is
-    /// (`retroScanCap` turns, the lane breaker ending the fan-out on the first
-    /// measured fault), and `outputRecheckInFlightID` makes it one tap at a time
-    /// for the whole thread — a user cannot turn a screen of notices into a burst
-    /// against their own server, and the button reports state so re-tapping while
-    /// it works does nothing.
+    /// FAN-OUT: one PROPFIND for the tapped turn, followed by ONE retro pass over
+    /// the turns the tap un-held — the tap says "my server changed" about the
+    /// whole thread, not about one row, and that pass is what acts on it.
+    /// `outputRecheckInFlightID` makes it one tap at a time for the whole thread.
     ///
     /// The result is DEVICE-LOCAL and stops here. Nothing about it is sent to
-    /// the gateway: a negative probe reported back would build a file-existence
-    /// oracle against the user's own server out of a diagnostic.
+    /// the gateway: a listing reported back would build a file-existence oracle
+    /// against the user's own server out of a diagnostic.
     func recheckOutputs(for message: MessageRecord) async {
         guard outputRecheckInFlightID == nil,
-              let laneID = message.outputScanLaneID else {
+              let laneID = message.outputScanLaneID,
+              let outboxKey = message.outputBoxKey else {
             return
         }
         outputRecheckInFlightID = message.id
-        outputRecheckStates[message.id] = .checking
+        // ONE transient answer on screen at a time. A caption is the reply to a
+        // question the user just asked, so a thread cannot accumulate a column of
+        // stale ones as they work down it.
+        outputRecheckStates = [message.id: .checking]
         defer { outputRecheckInFlightID = nil }
 
-        let rawBackend = try? await ConversationStore.shared
-            .fetchConversation(id: conversationID)?.backend
-        guard let ref = rawBackend.flatMap({ RemoteAgentRef(rawString: $0) }),
-              let snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref),
-              snapshot.durableLaneID == laneID else {
+        guard let (ref, snapshot) = await resolveTappedLane(matching: laneID) else {
             outputRecheckStates[message.id] = .couldNotCheck
             return
         }
@@ -2381,7 +2158,7 @@ final class ConversationDetailViewModel {
             return
         }
         defer { OutputScanClaimRegistry.shared.release(message.id) }
-
+        defer { handBackHeldTurnsAfterTap() }
         // A deliberate tap is the user asserting their server is worth asking
         // again, so it clears the lane breaker's backoff outright and hands back
         // every turn this VM had parked behind it. Without this the tap would
@@ -2389,34 +2166,184 @@ final class ConversationDetailViewModel {
         // hour on a lane the user has just told us to re-examine.
         FileLaneScanBreaker.shared.reset(lane: FileLaneScanBreaker.laneKey(for: snapshot))
         releaseRetroScanHolds()
-        // …and the hand-back has to land, on EVERY path out of here. The release
-        // above cancelled the armed wake (an empty hold map is what makes
-        // `armRetroScanWake` do that), and the two negative outcomes below return
-        // without a store write — so no `.conversationsDidChange`, no reload, and
-        // nothing at all scheduled for the turns this tap just un-held. A tap on
-        // one turn whose file is genuinely gone would otherwise DELETE the
-        // recovery of every other pending turn in the thread, which is the exact
-        // opposite of what the user asked for.
-        //
-        // `defer` rather than a call here, and the timing is the point: a defer
-        // body runs when this method exits, so the pass cannot interleave with
-        // the recheck's own probes at an `await` and double the fan-out at the
-        // user's server. Registered LAST, so it runs FIRST of the three defers
-        // and still observes the claim released — the spawned task is main-actor
-        // isolated and cannot enter until this method has finished returning.
-        defer {
-            Task { @MainActor [weak self] in
-                await self?.runRetroOutputScan()
-            }
-        }
 
-        let scan = await FileTransferOutputDetector.reconciliationScan(
-            reply: message.text,
-            conversationID: conversationID,
+        // The age ladder still applies, anchored on the turn's own `createdAt`:
+        // a tap on a turn that is minutes old closes it on a definite answer,
+        // and a tap seconds after the reply does not — a file the agent is about
+        // to write must survive an impatient tap exactly as it survives the
+        // automatic pass. `scanMayClose` refuses to close on `.unusable`
+        // regardless of age, so an unreadable server never closes anything.
+        let reconciliation = await FileTransferOutputDetector.reconcileOutbox(
+            outboxKey: outboxKey,
             snapshot: snapshot,
             excludedKeys: Set(message.attachments.compactMap(\.storedKey)),
             turnCreatedAt: message.createdAt
         )
+        // The row's own verdict, refreshed by the tap: a fault that has cleared
+        // must stop showing, and one that persists must keep showing.
+        applyDiscoveryVerdict(reconciliation.verdict, to: message.id)
+        await commitTappedOutputs(
+            reconciliation.drafts,
+            conclusive: reconciliation.conclusive,
+            for: message,
+            laneID: laneID,
+            ref: ref,
+            snapshot: snapshot,
+            // The CLOSE decision and the CAPTION are separate questions, and this
+            // is the seam where they part: `conclusive` still governs the
+            // permanent marker (age gate included), while what the user is told
+            // is whatever the server actually said.
+            reportedNothingWhen: Self.folderReadAnswered(reconciliation)
+        )
+    }
+
+    /// USER-INITIATED probe of the filenames this reply MENTIONED, at the served
+    /// root ("Search mentioned files").
+    ///
+    /// THE TAIL RECOVERY, and the only place reply prose can still schedule a
+    /// request. It is for the gateway that ignored the folder it was given and
+    /// wrote to its workspace root instead — a shape no listing of the box can
+    /// ever find, and one the user can see in the reply text while the app
+    /// cannot act on it.
+    ///
+    /// Available on every agent turn that HAS A FILE LANE — including one with no
+    /// folder at all (a wrist-originated turn, a flat lane), which is exactly the
+    /// population that gets no automatic delivery. A turn with no lane has no
+    /// server to search and is gated out of the menu entirely
+    /// (`canSearchMentionedFiles`), because the guard below can only return.
+    /// It never closes the turn: a name found at the root says nothing about the
+    /// folder this turn named.
+    ///
+    /// The chips it mints carry BARE storedKeys, so they cannot begin with the
+    /// reply's own box prefix and the thread renders them with visibly weaker
+    /// provenance — found on the file server, not produced by this reply.
+    func searchMentionedFiles(for message: MessageRecord) async {
+        guard outputRecheckInFlightID == nil,
+              message.role == "agent",
+              let laneID = message.outputScanLaneID else {
+            return
+        }
+        outputRecheckInFlightID = message.id
+        // ONE transient answer on screen at a time. A caption is the reply to a
+        // question the user just asked, so a thread cannot accumulate a column of
+        // stale ones as they work down it.
+        outputRecheckStates = [message.id: .checking]
+        defer { outputRecheckInFlightID = nil }
+
+        guard let (ref, snapshot) = await resolveTappedLane(matching: laneID) else {
+            outputRecheckStates[message.id] = .couldNotCheck
+            return
+        }
+        guard OutputScanClaimRegistry.shared.claim(message.id) else {
+            outputRecheckStates[message.id] = .couldNotCheck
+            return
+        }
+        defer { OutputScanClaimRegistry.shared.release(message.id) }
+        defer { handBackHeldTurnsAfterTap() }
+        FileLaneScanBreaker.shared.reset(lane: FileLaneScanBreaker.laneKey(for: snapshot))
+        releaseRetroScanHolds()
+
+        let candidates = await FileTransferOutputDetector
+            .extractCandidatesOffMainActor(from: message.text)
+        let scan = await FileTransferOutputDetector.probeNamedCandidates(
+            candidates: candidates,
+            snapshot: snapshot,
+            excludedKeys: Set(message.attachments.compactMap(\.storedKey))
+                .union(inboundStoredKeyTokens())
+        )
+        await commitTappedOutputs(
+            scan.drafts,
+            // A root search NEVER closes a turn: it asked a different question
+            // from the one the marker answers, so a clean "not at the root" says
+            // nothing about the folder this reply was told to write into.
+            conclusive: false,
+            for: message,
+            laneID: laneID,
+            ref: ref,
+            snapshot: snapshot,
+            // Probe evidence, with no age gate folded in: `probeNamedCandidates`
+            // reports whether every probe came back definitive, which is already
+            // "did the server answer" and nothing else.
+            reportedNothingWhen: scan.conclusive
+        )
+    }
+
+    /// The bound gateway's currently READY lane, required to be the exact one a
+    /// turn was dispatched to. Shared by both tap paths so they cannot drift on
+    /// which identity a manual look is allowed to read.
+    private func resolveTappedLane(
+        matching laneID: String
+    ) async -> (ref: RemoteAgentRef, snapshot: SettingsManager.FileTransferSnapshot)? {
+        let rawBackend = try? await ConversationStore.shared
+            .fetchConversation(id: conversationID)?.backend
+        guard let ref = rawBackend.flatMap({ RemoteAgentRef(rawString: $0) }),
+              let snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref),
+              snapshot.durableLaneID == laneID else {
+            return nil
+        }
+        return (ref, snapshot)
+    }
+
+    /// The hand-back a tap owes the rest of the thread, on EVERY path out.
+    /// `releaseRetroScanHolds` cancels the armed wake (an empty hold map is what
+    /// makes `armRetroScanWake` do that), and a negative outcome returns without
+    /// a store write — so no `.conversationsDidChange`, no reload, and nothing at
+    /// all scheduled for the turns the tap just un-held. A tap on one turn would
+    /// otherwise DELETE the recovery of every other pending turn in the thread.
+    ///
+    /// Registered as a `defer` rather than called inline, and the timing is the
+    /// point: the pass cannot then interleave with the tap's own request at an
+    /// `await` and double the fan-out at the user's server.
+    private func handBackHeldTurnsAfterTap() {
+        Task { @MainActor [weak self] in
+            await self?.runRetroOutputScan()
+        }
+    }
+
+    /// The conversation's own INBOUND uploads, as the tokens a root search must
+    /// not probe. The turn text hands the agent each uploaded file's stored name,
+    /// so a reply that merely echoes one would otherwise chip the user's own
+    /// upload back at them. Both the full key and its last path component,
+    /// because the candidate regex cannot cross a `/` and only ever surfaces the
+    /// leaf. Non-`user` unknown roles count as inbound — the conservative
+    /// direction, since a wrongly-suppressed chip beats a wrong chip.
+    ///
+    /// Only the ROOT search needs this: a folder listing reads a path minted for
+    /// one dispatch, which no inbound upload can be inside.
+    private func inboundStoredKeyTokens() -> Set<String> {
+        var tokens = Set<String>()
+        for message in messages where message.role != "agent" {
+            for attachment in message.attachments {
+                guard let key = attachment.storedKey else { continue }
+                tokens.insert(key)
+                if let slash = key.lastIndex(of: "/") {
+                    tokens.insert(String(key[key.index(after: slash)...]))
+                }
+            }
+        }
+        return tokens
+    }
+
+    /// Persist what a tap found and report the outcome on the row. Shared by both
+    /// tap paths: the identity re-check, the store write and the three-valued
+    /// caption are one policy, and two copies of it would drift on the one thing
+    /// that matters — never reporting "nothing there" for a server that did not
+    /// answer.
+    ///
+    /// `conclusive` decides only whether the turn is PERMANENTLY stamped scanned.
+    /// `reportedNothingWhen` is the separate evidence half — did the server
+    /// answer the question this look asked — and it is REQUIRED rather than
+    /// defaulted to `conclusive`, because the two are different questions and the
+    /// default was how the age gate leaked into the caption.
+    private func commitTappedOutputs(
+        _ drafts: [AttachmentDraft],
+        conclusive: Bool,
+        for message: MessageRecord,
+        laneID: String,
+        ref: RemoteAgentRef,
+        snapshot: SettingsManager.FileTransferSnapshot,
+        reportedNothingWhen serverAnswered: Bool
+    ) async {
         guard await FileTransferOutputDetector.configuredLaneStillMatches(
             ref: ref,
             snapshot: snapshot
@@ -2424,19 +2351,20 @@ final class ConversationDetailViewModel {
             outputRecheckStates[message.id] = .couldNotCheck
             return
         }
-        guard !scan.drafts.isEmpty else {
-            // `conclusive` here is the evidence half of the verdict — the turn
-            // is long past its age gate, so a non-conclusive pass means a probe
-            // came back non-definitive (auth / certificate / 5xx / transport).
-            // That is "could not check", never "still not there".
-            outputRecheckStates[message.id] = scan.conclusive ? .stillMissing : .couldNotCheck
+        guard !drafts.isEmpty else {
+            outputRecheckStates[message.id] = serverAnswered
+                // Census stamped now, so a later pass that actually finds
+                // something retires this caption instead of leaving it to
+                // contradict a visible chip (see `liveRecheckStates`).
+                ? .noneFound(chipCount: message.attachments.count(where: \.isServerFile))
+                : .couldNotCheck
             return
         }
         let inserted = (try? await ConversationStore.shared.reconcileOutputScan([
             .init(
                 messageID: message.id,
-                drafts: scan.drafts,
-                markScanned: true,
+                drafts: drafts,
+                markScanned: conclusive,
                 expectedLaneID: laneID
             )
         ])) ?? false
@@ -2444,18 +2372,25 @@ final class ConversationDetailViewModel {
             outputRecheckStates[message.id] = .couldNotCheck
             return
         }
-        // Same tail the automatic paths run, so a manually-recovered chip is not
-        // a second-class one (no preview on the wrist, no thumbnail).
-        spawnPreviewEnrichment(
-            messageID: message.id,
-            drafts: scan.drafts,
-            ref: ref,
-            snapshot: snapshot
-        )
-        // The insert posts `.conversationsDidChange`, so the reload re-derives
-        // the notice set and this row disappears on its own. Clear the caption
-        // now so the success frame never shows a stale one.
+        // The insert posts `.conversationsDidChange`, so the reload repaints the
+        // row on its own. Clear the caption now so the success frame never shows
+        // a stale one.
         outputRecheckStates[message.id] = nil
+    }
+
+    /// Fold one listing verdict into the observable fault set. Compared before
+    /// assigning so a repeat verdict repaints nothing.
+    private func applyDiscoveryVerdict(_ verdict: FileServerListingVerdict, to messageID: UUID) {
+        switch verdict {
+        case .entries, .absent:
+            if outputDiscoveryFaultIDs.contains(messageID) {
+                outputDiscoveryFaultIDs.remove(messageID)
+            }
+        case .unusable:
+            if !outputDiscoveryFaultIDs.contains(messageID) {
+                outputDiscoveryFaultIDs.insert(messageID)
+            }
+        }
     }
 
     /// Bulk-resolve a `HeaderIdentity` for every stored conversation the memo
@@ -3141,6 +3076,18 @@ final class ConversationDetailViewModel {
                         throw AppError.fileTransferNotConfigured
                     }
                 }
+                // Name THIS dispatch's output folder and witness that it is not
+                // there yet. AFTER the lane revalidation above, so the folder is
+                // named on the lane this send actually uses. Nil (no ready lane, a
+                // lane that cannot hold a nested collection, or an unwitnessed
+                // absence) → no location line and no automatic delivery for this
+                // turn; the same value is persisted with the reply below, so the
+                // wire and the row can never disagree about which folder was
+                // promised.
+                let outboxKey = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+                    conversationID: conversationID,
+                    snapshot: dispatchFileLane
+                )
                 // Pinning session for the LIVE hop. The pin is resolved from the
                 // DISPATCHED ref here, at send time, from the durable store —
                 // never captured earlier in the turn — so a re-pin between
@@ -3184,6 +3131,7 @@ final class ConversationDetailViewModel {
                     newUserImageFileRefs: newUserImageFileRefs,
                     newUserTextFileServerRefs: newUserTextFileServerRefs,
                     fileServerReady: dispatchFileLane != nil,
+                    outboxKey: outboxKey,
                     transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
                 )
                 // Cooperative-cancel check: a Cancel tapped between the reply
@@ -3197,6 +3145,8 @@ final class ConversationDetailViewModel {
                     userMessageID: userMessageID,
                     dispatchRef: snapshot.ref,
                     dispatchFileLane: dispatchFileLane,
+                    // The SAME folder the wire named — never a second mint.
+                    outputBoxKey: outboxKey,
                     dispatchChatSignature: dispatchChatSignature,
                     stampsQuickPointer: stampsQuickPointer,
                     surfacesInPopover: surfacesInPopover,
@@ -3328,8 +3278,9 @@ final class ConversationDetailViewModel {
         /// content part — the bytes already live in the agent's working folder).
         var serverFileRefs: [(originalName: String, storedKey: String)] = []
         /// New-turn DUAL-IMAGE server references (this-turn-only): the storedKey
-        /// + true-format display filename of each composer image whose eager
-        /// upload landed. Spliced into the new user turn's text as the "also saved
+        /// + display filename of each composer image whose eager upload landed
+        /// (the user's own name, or the numbered `image…` fallback — see
+        /// `ComposerImageName`). Spliced into the new user turn's text as the "also saved
         /// as <filename> (<storedKey>)" image line ALONGSIDE the inline
         /// `imageDataURIs` (vision sees the downsized JPEG; the uploaded file is
         /// the original). EPHEMERAL — never persisted on the draft (the image
@@ -3556,8 +3507,9 @@ final class ConversationDetailViewModel {
     /// (which re-uploads from the same source).
     /// STATIC (no instance state): the upload needs only the ref's snapshot, so a
     /// VM-less composer (brand-new conversation before its first turn) can stage +
-    /// eager-upload a server file too — it just mints a FLAT storedKey (no
-    /// conversation folder exists yet).
+    /// eager-upload a server file too — its key is minted under the composer's
+    /// `pendingConversationID`, the identifier the row it creates then adopts, so
+    /// that first turn's files are already in the folder that conversation owns.
     static func uploadServerFile(
         localURL: URL,
         storedKey: String,
@@ -3890,6 +3842,15 @@ final class ConversationDetailViewModel {
                         throw AppError.fileTransferNotConfigured
                     }
                 }
+                // A FRESH folder, never the abandoned attempt's. Reusing the
+                // failed dispatch's path lets a file written late by that attempt
+                // appear as this turn's output, which destroys the only property
+                // the design has — that everything in the folder was put there
+                // after this turn named it.
+                let outboxKey = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+                    conversationID: conversationID,
+                    snapshot: readyOutputLane
+                )
                 // Same pinning session as `sendUserTurn`'s macOS branch — a
                 // retry must reproduce the original send's TRUST posture, not
                 // just its wire shape. Pin resolved from the dispatched ref at
@@ -3928,6 +3889,7 @@ final class ConversationDetailViewModel {
                     newUserTextFileServerRefs: newUserTextFileServerRefs,
                     newUserUnavailableFileCount: unavailableFileCount,
                     fileServerReady: readyOutputLane != nil,
+                    outboxKey: outboxKey,
                     transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
                 )
                 guard !Task.isCancelled else { return }
@@ -3939,6 +3901,8 @@ final class ConversationDetailViewModel {
                     userMessageID: userMessageID,
                     dispatchRef: snapshot.ref,
                     dispatchFileLane: readyOutputLane,
+                    // The SAME folder the wire named — never a second mint.
+                    outputBoxKey: outboxKey,
                     dispatchChatSignature: dispatchChatSignature,
                     stampsQuickPointer: stampsQuickPointer,
                     surfacesInPopover: surfacesInPopover,

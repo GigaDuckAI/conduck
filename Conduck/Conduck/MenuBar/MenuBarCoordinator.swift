@@ -1389,8 +1389,16 @@ final class MenuBarCoordinator {
             return false
         }
         if windowViewModel == nil {
-            guard let fresh = try? await conversationStore
-                .createConversation(backend: dispatch.ref.rawString) else {
+            // The composer minted this turn's file-server keys under
+            // `pendingConversationID` before any row existed, so the row adopts
+            // that identifier and the files are already in its folder. Passing
+            // it here — and NOT through `dispatch.conversationID`, the
+            // nil-means-new-chat ownership sentinel the guards above branch on —
+            // is what keeps a new-chat send from reading as a conversation switch.
+            guard let fresh = try? await conversationStore.createConversation(
+                id: dispatch.pendingConversationID,
+                backend: dispatch.ref.rawString
+            ) else {
                 // Mint failed. The local-acceptance handshake leaves the window
                 // composer's draft and attachments intact; also surface the
                 // failure on the coordinator's existing error footer.

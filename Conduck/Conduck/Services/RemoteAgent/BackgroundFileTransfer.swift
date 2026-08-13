@@ -52,6 +52,27 @@
 //  guaranteed while the process executes, PAUSES across app suspension (resumes
 //  on next foreground), and is NOT recoverable after process death.
 //
+//  THE STRICT LISTING LANE (`listCollection`) is the one lane whose answer
+//  nothing downstream corrects — an entry it returns becomes a download chip the
+//  user taps. So it runs on the ephemeral cert-pinned session and reads THAT
+//  session's evaluator (a refused certificate must not degrade into "host is
+//  down" — see `FileServerClient`'s header for the rule that governs every such
+//  lane), bounds the body it will read, and requires the lane to answer a
+//  sibling collection that cannot exist with a definite miss before any entry is
+//  believed. The pure verdict rules live in `FileServerClient.parseListing`.
+//
+//  THE PRE-DISPATCH ABSENCE ASSERTION (`witnessCollectionAbsent`) is the only
+//  thing this driver does BEFORE a turn is sent, as opposed to the uploads that
+//  stage a turn's own attachments. Conduck NAMES the folder a reply's files go
+//  in and creates nothing — an agent-created directory is owned by the agent,
+//  and that is precisely what makes it writable — so the freshness evidence is a
+//  `PROPFIND Depth: 0` that must come back `404`. It fails closed on every other
+//  answer, and `false` simply means this turn goes out without a location line.
+//  Because every send waits on it — a pure-text turn included — it runs on its
+//  own short deadline and reads no response body at all: the verdict is the
+//  status line, and a probe the user never asked for must not be able to hold up
+//  a turn or stream a login page into memory.
+//
 //  PRIVACY: never log URLs, tokens, credentials, storedKeys,
 //  filenames, or reply bytes. Never reveal the credential in a thrown error.
 //
@@ -436,9 +457,15 @@ final class BackgroundFileTransfer: NSObject {
     /// The cost lands only where a file is actually FOUND: a missing candidate
     /// 404s and pays nothing, so the common shape — a reply naming several files
     /// of which one exists — spends one extra round trip per CHIP, not per
-    /// probe. A uniform-200 wall spends exactly one and then stops the pass:
+    /// probe. A uniform-200 wall spends exactly one and then stops the search:
     /// a failed control is `.unknown`, which is lane-wide, so
-    /// `FileTransferOutputDetector.detect` abandons the turn's window.
+    /// `FileTransferOutputDetector.probeNamedCandidates` abandons the rest of
+    /// the window.
+    ///
+    /// TWO CALLERS, NEITHER AUTOMATIC ON A REPLY: the retry gate (re-checking
+    /// the user's OWN uploaded inputs before a re-dispatch) and the user-tapped
+    /// name search. Automatic output discovery lists one folder
+    /// (`listCollection`) and never probes a name a reply wrote.
     ///
     /// PRIVACY (see the spec's Privacy & Security section): the evidence value
     /// carries the storedKey and up to a kilobyte of file content and is
@@ -567,8 +594,332 @@ final class BackgroundFileTransfer: NSObject {
             requestedKey: requestedKey)
     }
 
-    /// Bounded best-effort download of `storedKey`'s LEADING bytes for preview
-    /// enrichment (WS-2). Returns `(data, received)`: `data` is the file content
+    // MARK: - Strict directory listing (the authority on agent output)
+
+    /// Create `collectionKey` and require that THIS call created it (`201`).
+    ///
+    /// **NOT CALLED ON THE DISPATCH PATH.** The per-dispatch output box is named
+    /// by Conduck and created by the agent — see
+    /// `FileServerClient.ensureFreshCollection`'s header for the ownership
+    /// measurement that decided it, and `witnessCollectionAbsent` below for what
+    /// supplies the freshness evidence instead.
+    ///
+    /// False on a collision, on any other status, and on every transport failure
+    /// INCLUDING a certificate refusal — a refusal that reads as "not created"
+    /// costs nothing a refusal that read as "created" would not cost far more.
+    ///
+    /// Runs on the same ephemeral cert-pinned session as the probes, so the
+    /// MKCOL is subject to the pin like every other request in this lane.
+    func ensureFreshCollection(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        collectionKey: String
+    ) async -> Bool {
+        let (session, _) = Self.makeEphemeralSession(snapshot: snapshot)
+        defer { session.finishTasksAndInvalidate() }
+        return await FileServerClient.ensureFreshCollection(
+            snapshot: snapshot, collectionKey: collectionKey, session: session)
+    }
+
+    /// PROPFIND `Depth: 0` the exact dispatch box and require a definite `404` —
+    /// the pre-dispatch assertion that the folder this turn is about to name is
+    /// NOT ALREADY THERE.
+    ///
+    /// THE ONE THING IT BUYS: a server-observed absence at the instant the turn
+    /// starts. Without it the freshness of the box rests entirely on the mint's
+    /// entropy, which is an argument about probability rather than an
+    /// observation — and it would leave a catch-all host (one that answers every
+    /// path) indistinguishable from a healthy one until a reply landed and files
+    /// nobody wrote turned into download chips. `Depth: 0` because the question
+    /// is about the collection itself; a listing of children would be a strictly
+    /// larger answer to a smaller question.
+    ///
+    /// FAILS CLOSED, WITHOUT EXCEPTION. `false` on a `207` (collision, or a
+    /// namespace that answers everything), on every other status, and on every
+    /// transport failure including a refused certificate. A caller that gets
+    /// `false` must NOT put the location line on the wire — freshness that was
+    /// not witnessed is not freshness. The cost is one turn without automatic
+    /// delivery; the manual affordance still reaches the files.
+    ///
+    /// NO TRUST TAXONOMY, on purpose. Unlike `listCollection`, the whole answer
+    /// here is one Bool and `false` shows the user nothing, so there is no
+    /// verdict a certificate refusal could be misfiled into — nothing degrades
+    /// into "your host is down" because nothing is said at all. It still runs on
+    /// the pinned ephemeral session, so the pin applies exactly as it does to
+    /// every other request in this lane.
+    ///
+    /// IT IS ON THE DISPATCH CRITICAL PATH, which the deadline reflects. Every
+    /// send on a configured lane waits for this, INCLUDING a pure-text turn that
+    /// was never going to involve a file, so it runs on
+    /// `Constants.fileServerAbsenceWitnessTimeout` rather than the lane's
+    /// interactive budget — see that constant for the sizing argument. A slow or
+    /// dead file server therefore costs one turn's automatic delivery, never
+    /// every turn's latency.
+    ///
+    /// PRIVACY: never logs the URL, the collection key, or the response.
+    func witnessCollectionAbsent(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        collectionKey: String
+    ) async -> Bool {
+        let (session, _) = Self.makeEphemeralSession(
+            snapshot: snapshot, timeout: Constants.fileServerAbsenceWitnessTimeout)
+        defer { session.finishTasksAndInvalidate() }
+        return await Self.witnessCollectionAbsent(
+            snapshot: snapshot, collectionKey: collectionKey, session: session)
+    }
+
+    /// The assertion on a CALLER-SUPPLIED session — `internal static` so a
+    /// `URLProtocol`-stubbed session can drive the real request without a live
+    /// file server, the same seam shape as `listCollection`.
+    static func witnessCollectionAbsent(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        collectionKey: String,
+        session: URLSession
+    ) async -> Bool {
+        let request = FileServerClient.buildPropfindRequest(
+            snapshot: snapshot,
+            collectionKey: collectionKey,
+            depth: 0,
+            timeout: Constants.fileServerAbsenceWitnessTimeout)
+        // THE BODY IS NEVER READ, because the verdict is a function of the status
+        // line alone. Draining it would spend up to the listing cap of async
+        // iterations on the dispatch critical path for bytes nothing inspects —
+        // an SSO wall answering a 200 with its login page is the ordinary case —
+        // and it would turn an over-cap `404` into "not witnessed", disabling
+        // file return on a server that answered the question correctly.
+        guard let status = try? await Self.statusOnlyResponse(
+            session: session, request: request) else { return false }
+        return FileServerClient.absenceWitnessed(status: status)
+    }
+
+    /// Issue one request and take ONLY its status line, cancelling before a byte
+    /// of the body is consumed.
+    ///
+    /// For the callers whose verdict the body cannot influence. `bytes(for:)`
+    /// resumes when the HEADERS arrive, so cancelling the task before the first
+    /// iteration ends the transfer having read no body at all — the iterator is
+    /// then never touched, which is the same cancellation order the bounded
+    /// readers use so our own cancel can never surface as the bare `-999` a
+    /// certificate refusal throws.
+    static func statusOnlyResponse(
+        session: URLSession,
+        request: URLRequest
+    ) async throws -> Int {
+        let (bytes, response) = try await session.bytes(for: request)
+        bytes.task.cancel()
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        return http.statusCode
+    }
+
+    /// Name the box for ONE dispatch and, when this device can, witness that it
+    /// is not there yet. THE single seam every dispatch surface that holds the
+    /// file-server credential goes through, so the mint, the capability gate and
+    /// the freshness assertion can never drift apart between surfaces.
+    ///
+    /// Nil — meaning no box, no wire line, no automatic delivery for this turn —
+    /// when there is no ready lane, or when the absence assertion did not come
+    /// back a definite miss.
+    ///
+    /// THE WITNESS IS THE ONLY GATE, and `folderCapable` is deliberately not
+    /// consulted. That flag records whether the lane accepts a NESTED PUT from
+    /// the client, and the client neither creates this folder nor writes into it
+    /// — the agent does. The only client operation the box ever sees is a
+    /// PROPFIND, which is exactly what the witness issues, so the assertion below
+    /// measures the capability that actually decides. Reading `folderCapable`
+    /// here made two surfaces on ONE lane disagree: it withheld the box from
+    /// phone, Mac and CarPlay while the Watch, which is never told the flag,
+    /// named one anyway.
+    ///
+    /// FRESH ON EVERY CALL, which is what makes a RETRY safe: re-dispatching a
+    /// stored turn names a new folder, so a file written late by the abandoned
+    /// attempt can never surface as this turn's output.
+    ///
+    /// The Watch does not call this and must not: it holds no file-server
+    /// credential by design, and naming a path needs none. It calls
+    /// `OutboxKey.mint` directly and skips the assertion.
+    static func mintWitnessedOutboxKey(
+        conversationID: UUID,
+        snapshot: SettingsManager.FileTransferSnapshot?
+    ) async -> String? {
+        guard let snapshot else { return nil }
+        let key = OutboxKey.mint(conversationID: conversationID)
+        guard await Self.shared.witnessCollectionAbsent(
+            snapshot: snapshot, collectionKey: key
+        ) else { return nil }
+        return key
+    }
+
+    /// The same seam on a CALLER-SUPPLIED session, so a `URLProtocol`-stubbed
+    /// session can drive the real mint-then-witness sequence without a live file
+    /// server. Production goes through the parameterless form above, which owns
+    /// the short-deadline session.
+    static func mintWitnessedOutboxKey(
+        conversationID: UUID,
+        snapshot: SettingsManager.FileTransferSnapshot,
+        session: URLSession
+    ) async -> String? {
+        let key = OutboxKey.mint(conversationID: conversationID)
+        guard await Self.witnessCollectionAbsent(
+            snapshot: snapshot, collectionKey: key, session: session
+        ) else { return nil }
+        return key
+    }
+
+    /// PROPFIND `Depth: 1` of ONE exact collection, believed only on a lane that
+    /// proves it can say no.
+    ///
+    /// THE NEGATIVE CONTROL, and why it is shaped this way. A listing that is
+    /// believed mints download chips with nothing downstream to correct it, so
+    /// before any `.entries` verdict is returned this issues a SECOND PROPFIND —
+    /// same method, same depth, same session — against a sibling collection
+    /// under the same parent that cannot exist, and requires a definite `404`. A
+    /// `207` there means the server answers everything, so its `207` for the
+    /// real box says nothing about the real box.
+    ///
+    /// PER-LISTING, NEVER CACHED, AND IT DEFAULTS CLOSED. Not modelled on
+    /// `folderCapable`, whose getter answers `true` when unset: that polarity is
+    /// right for a capability the app narrows on proof and exactly wrong for a
+    /// verdict that means "this lane DEMONSTRATED it can say no". A transport
+    /// failure on the control disqualifies the listing rather than permitting
+    /// it, because a control that never ran proved nothing. Uncached because the
+    /// question is about the server as it is right now — a stored answer is an
+    /// answer about a server that has since changed — and because caching it
+    /// would need a persisted key, which the design deliberately does not have.
+    ///
+    /// `.absent` skips the control on purpose: a `404` for the box is itself the
+    /// server saying no, and absence mints nothing, so there is no positive
+    /// verdict for a control to corroborate.
+    ///
+    /// PRIVACY: never logs the URL, the collection key, entry names, or the
+    /// body; only the verdict leaves this function.
+    func listCollection(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        collectionKey: String
+    ) async -> FileServerListingVerdict {
+        let (session, evaluator) = Self.makeEphemeralSession(snapshot: snapshot)
+        defer { session.finishTasksAndInvalidate() }
+        return await Self.listCollection(
+            snapshot: snapshot, collectionKey: collectionKey, session: session, evaluator: evaluator)
+    }
+
+    /// The listing's whole decision procedure on a CALLER-SUPPLIED session —
+    /// `internal static` so a `URLProtocol`-stubbed session can drive the real
+    /// two-request sequence (the collection, then the negative control) without
+    /// a live file-server, the same seam shape as `probeExistsWithLength`.
+    ///
+    /// `evaluator` is nil for an injected session: a mock raises no server-trust
+    /// challenge, so there are no verdicts to read and a transport failure can
+    /// only be `.transport`. Production always passes the evaluator that
+    /// answered this attempt, because a certificate refusal and a benign
+    /// cancellation are both a bare `-999` and only the evaluator can tell them
+    /// apart — without it a refused certificate would reach the user as "your
+    /// file server is unreachable".
+    static func listCollection(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        collectionKey: String,
+        session: URLSession,
+        evaluator: RemoteAgentTrustEvaluator?
+    ) async -> FileServerListingVerdict {
+        let requestedURL = FileServerClient.listingCollectionURL(
+            snapshot: snapshot, collectionKey: collectionKey)
+        let verdict: FileServerListingVerdict
+        do {
+            let answer = try await Self.boundedListingResponse(
+                session: session,
+                request: FileServerClient.buildPropfindRequest(
+                    snapshot: snapshot, collectionKey: collectionKey, depth: 1))
+            guard !answer.exceededCap else { return .unusable(.bodyTooLarge) }
+            verdict = FileServerClient.parseListing(
+                status: answer.status, body: answer.body, requestedURL: requestedURL)
+        } catch {
+            return .unusable(Self.listingTransportRefusal(error, evaluator: evaluator))
+        }
+
+        // Only a POSITIVE reading needs corroborating. `.absent` and every
+        // refusal already fail closed on their own.
+        guard case .entries = verdict else { return verdict }
+
+        let controlKey = FileServerClient.negativeControlCollectionKey(siblingOf: collectionKey)
+        do {
+            let control = try await Self.boundedListingResponse(
+                session: session,
+                request: FileServerClient.buildPropfindRequest(
+                    snapshot: snapshot, collectionKey: controlKey, depth: 1))
+            guard FileServerClient.negativeControlProvesNotFound(status: control.status) else {
+                return .unusable(.namespaceAnswersEverything)
+            }
+        } catch {
+            return .unusable(Self.listingTransportRefusal(error, evaluator: evaluator))
+        }
+        return verdict
+    }
+
+    /// Issue one PROPFIND and read its body under a hard client-side cap.
+    ///
+    /// `bytes(for:)` (NOT `data(for:)`) for the reason `collectProbeEvidence`
+    /// uses it: the headers arrive before the body, so the read can be stopped
+    /// mid-stream. There is no bound on what a server may return for a PROPFIND
+    /// — a catch-all host can answer with a multi-megabyte page — and buffering
+    /// it whole on a listing the user never asked for is a jetsam risk on iOS.
+    /// One byte past the cap and the task is cancelled and the answer is
+    /// reported as over-cap, which the caller turns into a refusal rather than
+    /// parsing the truncated prefix.
+    ///
+    /// CANCELLATION ORDER IS LOAD-BEARING — cancel, leave the loop, never touch
+    /// the iterator again — so our own cancellation can never surface as the
+    /// bare `-999` a certificate refusal throws.
+    static func boundedListingResponse(
+        session: URLSession,
+        request: URLRequest,
+        maxBytes: Int = FileServerClient.listingMaxBytes
+    ) async throws -> (status: Int, body: Data, exceededCap: Bool) {
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            bytes.task.cancel()
+            throw URLError(.badServerResponse)
+        }
+        var body = Data()
+        var exceededCap = false
+        for try await byte in bytes {
+            guard body.count < maxBytes else {
+                exceededCap = true
+                bytes.task.cancel()
+                break
+            }
+            body.append(byte)
+        }
+        return (http.statusCode, body, exceededCap)
+    }
+
+    /// Which refusal a listing transport failure represents. Routed through the
+    /// SAME `RemoteAgentTrustEvaluator.classifyTransportError` every other probe
+    /// in this lane reads, so the listing can never tell the user a different
+    /// story about one certificate than the staged test does. No evaluator (an
+    /// injected session) or no recorded verdict means no certificate claim.
+    static func listingTransportRefusal(
+        _ error: Error,
+        evaluator: RemoteAgentTrustEvaluator?
+    ) -> FileTransferListingRefusal {
+        guard let evaluator, let urlError = error as? URLError else { return .transport }
+        let signals = evaluator.attemptSignals
+        guard signals != .empty else { return .transport }
+        guard let refusal = FileServerClient.CertificateRefusal(
+            RemoteAgentTrustEvaluator.classifyTransportError(urlError.code, signals: signals)
+        ) else {
+            return .transport
+        }
+        return .certificateRefused(refusal)
+    }
+
+    /// Bounded best-effort download of `storedKey`'s LEADING bytes.
+    ///
+    /// NO PRODUCTION CALLER. Previews are built from bytes a tap already
+    /// downloaded (`FileTransferOutputDetector.previewPatchesForDownloadedFile`),
+    /// so nothing pulls a partial file off the user's server unasked. Do not
+    /// wire this back onto a landing path.
+    ///
+    /// Returns `(data, received)`: `data` is the file content
     /// ONLY when the whole body arrived complete and ≤ `maxBytes` (else `nil` on
     /// any error, non-2xx, or the instant the accumulated bytes exceed
     /// `maxBytes`); `received` is the byte count ACTUALLY pulled off the server at
@@ -725,12 +1076,20 @@ final class BackgroundFileTransfer: NSObject {
     /// reference back is the only record of whose refusal a -999 was. Mirrors
     /// `FileServerClient.makeProbeSession`, which returns the same pair for the
     /// same reason. The caller owns invalidation.
-    private static func makeEphemeralSession(
-        snapshot: SettingsManager.FileTransferSnapshot
+    ///
+    /// `timeout` sets BOTH the per-request and the resource budget, and both,
+    /// because either one alone leaves the other as the real ceiling. It is a
+    /// parameter rather than a constant so the one probe that runs on the
+    /// dispatch critical path (the absence witness) can carry a deadline sized
+    /// for a liveness check instead of the interactive-download budget the rest
+    /// of the lane wants.
+    static func makeEphemeralSession(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        timeout: TimeInterval = Constants.fileServerProbeTimeout
     ) -> (session: URLSession, evaluator: RemoteAgentTrustEvaluator) {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = Constants.fileServerProbeTimeout
-        config.timeoutIntervalForResource = Constants.fileServerProbeTimeout
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout
         let evaluator = RemoteAgentTrustEvaluator(
             pinnedFingerprintHex: snapshot.certFingerprintHex)
         return (URLSession(configuration: config, delegate: evaluator, delegateQueue: nil), evaluator)

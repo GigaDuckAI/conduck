@@ -249,10 +249,30 @@ struct GatewayAdapterBriefView: View {
     /// source, never stales on a contract revision) — deliberately NARROWED to
     /// stop before that brief's exposure and pairing, because this guided flow
     /// owns those via `conduck-connect` — with a self-contained fallback list for
-    /// tools without web access, aligned to contract revision 1.6. The full
+    /// tools without web access, aligned to contract revision 1.7. The full
     /// contract is at `Constants.adapterContractURL`; both raw `.md` URLs are
     /// hardcoded inline below. `internal` so a content-lock test can read it via
     /// `@testable import`.
+    ///
+    /// **That revision number is the app's ONLY pinned contract literal, and it is
+    /// load-bearing.** The fallback list is a copy of the contract's adapter half,
+    /// so it goes stale silently — a copy has no way to notice its source moved.
+    /// Every bump means re-reading the published contract's changelog and deciding
+    /// what, if anything, in the list below has to move; the number records that
+    /// the reading happened, not merely that a contract exists.
+    /// `GatewayAdapterBriefTests` compares it against the site's `CONTRACT_REVISION`
+    /// when the website source is checked out beside the app, so keep the phrase
+    /// "aligned to contract revision <n.n>" intact — the test matches on it.
+    ///
+    /// Revision 1.7 rewrote the file lane's outbound half and moved NOTHING in this
+    /// list, which is the expected shape rather than a lucky escape: 1.7 changes no
+    /// request or response shape on either chat route, and the lane it does change
+    /// is a property of the AGENT and its file server (the agent now creates the
+    /// folder Conduck names, and naming a file in reply prose delivers nothing),
+    /// while this brief only ever asks for adapter code. The lane reaches the user
+    /// through `conduck-connect` and the engine's own standing instructions, so
+    /// importing it here would hand an autonomous coding agent work that is not its
+    /// to do — the same boundary the exposure/pairing rule below draws.
     ///
     /// **Workflow-ownership boundary — the load-bearing rule of this string.**
     /// This text is pasted into an AUTONOMOUS coding agent, so what it can act on

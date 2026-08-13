@@ -151,12 +151,30 @@ actor RemoteAgentClient {
         // reach (cross-lane clone) — see `assembleMessages`.
         newUserUnavailableFileCount: Int = 0,
         // True when the conversation's bound gateway has a READY file lane
-        // (`fileTransferReadySnapshot != nil`) — appends the per-turn
-        // file-delivery instruction to the newest user turn. REQUIRED (no
+        // (`fileTransferReadySnapshot != nil`) — the precondition for the
+        // per-turn outbox-location line on the newest user turn. REQUIRED (no
         // default) so every foreground call site is compiler-forced to decide:
-        // a silent default here would drop the instruction from exactly one
-        // dispatch surface and resurrect the lost-output-file bug there.
+        // a silent default here would drop the line from exactly one dispatch
+        // surface and resurrect the lost-output-file bug there.
         fileServerReady: Bool,
+        // THE folder this dispatch names for its reply's files
+        // (`OutboxKey.mint`), minted and — on a device holding the file-server
+        // credential — witnessed ABSENT by the caller. Nil = no box, so no line
+        // and no automatic delivery for this turn.
+        //
+        // MINTED BY THE CALLER, never here, for two reasons that both matter: a
+        // RETRY has to mint a fresh box (reusing the failed dispatch's path lets
+        // a late file from the abandoned attempt land as this turn's output),
+        // and the SAME value has to reach the reply's persisted row, which only
+        // the caller can arrange.
+        //
+        // THE `nil` DEFAULT IS NOT NEUTRAL. It exists for callers with no lane
+        // at all (tests, an unconfigured ref). A surface that dispatches on a
+        // READY lane and leaves this nil silently forfeits automatic file
+        // delivery there, with nothing to see at the call site — so every
+        // lane-capable dispatch surface passes a key, and one that does not is a
+        // bug.
+        outboxKey: String? = nil,
         transport: Transport
     ) async throws -> String {
         let request = Self.buildRequest(
@@ -172,10 +190,14 @@ actor RemoteAgentClient {
             newUserImageFileRefs: newUserImageFileRefs,
             newUserTextFileServerRefs: newUserTextFileServerRefs,
             newUserUnavailableFileCount: newUserUnavailableFileCount,
-            fileServerReady: fileServerReady
+            fileServerReady: fileServerReady,
+            outboxKey: outboxKey
         )
 
 #if DEBUG
+        // The SAME `outboxKey` the request was built from — never a second
+        // mint. A fresh mint here would make the shape log describe a request
+        // that was never issued, and would name a second folder nobody watches.
         let diagMessages = Self.assembleMessages(
             priorTurns: priorTurns,
             newUserText: newUserText,
@@ -185,7 +207,8 @@ actor RemoteAgentClient {
             newUserImageFileRefs: newUserImageFileRefs,
             newUserTextFileServerRefs: newUserTextFileServerRefs,
             newUserUnavailableFileCount: newUserUnavailableFileCount,
-            fileServerReady: fileServerReady
+            fileServerReady: fileServerReady,
+            outboxKey: outboxKey
         )
         RemoteAgentDiagnostics.log.log("send(fg): \(RemoteAgentDiagnostics.shapeSummary(diagMessages, bodyBytes: request.httpBody?.count ?? 0), privacy: .public)")
         let diagStart = Date()
@@ -272,19 +295,23 @@ actor RemoteAgentClient {
         // 0 is the truthful value there rather than an unexamined one. A future
         // surface that re-sends stored turns must pass this.
         newUserUnavailableFileCount: Int = 0,
-        // READY file lane on the bound gateway → append the per-turn
-        // file-delivery instruction (`ConverseRequest.fileDeliveryInstruction`)
-        // to the NEWEST user turn only. Rides on attachment-LESS turns too —
-        // "write me a report.md" with nothing attached is the turn the
-        // reference splices can't cover. Defaulted `false` for tests and any
-        // surface whose bound gateway has no ready lane; every lane-capable
-        // dispatch surface (incl. CarPlay + Watch — a capable device that
-        // later opens the thread renders a download chip for the voice turn
-        // via the retroactive output-scan) passes it truthfully.
+        // READY file lane on the bound gateway → the precondition for the
+        // per-turn outbox-location line on the NEWEST user turn. Defaulted
+        // `false` for tests and any surface whose bound gateway has no ready
+        // lane; every lane-capable dispatch surface (incl. CarPlay + Watch — a
+        // capable device that later opens the thread renders a download chip
+        // for the voice turn via the retroactive output-scan) passes it
+        // truthfully.
         fileServerReady: Bool = false,
+        // The folder this dispatch names for its reply's files. The line rides
+        // ONLY when a ready lane and a key are BOTH present: without a lane
+        // nothing can list the box, and without a key there is no box to name.
+        // Rides on attachment-LESS turns too — "write me a report.md" with
+        // nothing attached is the turn the reference splices can't cover.
+        outboxKey: String? = nil,
         // The dispatch surface. `.spoken` (CarPlay + Watch) appends the
         // per-turn spoken-summary clause (`ConverseRequest.spokenSummaryInstruction`)
-        // to the newest user turn AFTER the delivery instruction, telling the
+        // to the newest user turn AFTER the outbox-location line, telling the
         // agent to summarize spoken-friendly rather than recite file contents
         // aloud. Defaulted `.standard` so read-first surfaces (foreground
         // composer, ConverseIntent, background iOS) stay byte-identical.
@@ -329,15 +356,16 @@ actor RemoteAgentClient {
             fileCount: newUserUnavailableFileCount
         )
         // LAST in the text body, and ONLY here — never in the splice helpers
-        // (they also run on replayed prior turns, which would duplicate the
-        // instruction across the whole resent history). Order on the newest
-        // turn: delivery instruction (when the lane is ready) THEN the spoken
-        // clause (on a spoken surface) — so a spoken + ready turn carries both,
-        // delivery first. The matrix: standard+notReady → neither;
-        // standard+ready → delivery only; spoken+notReady → spoken only;
-        // spoken+ready → delivery + spoken.
-        if fileServerReady {
-            splicedText = ConverseRequest.spliceFileDeliveryInstruction(splicedText)
+        // (they also run on replayed prior turns AND on both roles, so a clause
+        // there would duplicate across the whole resent history carrying the
+        // stale paths of turns that are already finished). Order on the newest
+        // turn: outbox location (when the lane is ready and this dispatch holds
+        // a box) THEN the spoken clause (on a spoken surface) — so such a
+        // spoken turn carries both, location first. The matrix:
+        // notReady → neither location; ready+noBox → no location either (there
+        // is nothing to name); ready+box → the location line.
+        if fileServerReady, let outboxKey {
+            splicedText = ConverseRequest.spliceOutboxLocation(splicedText, key: outboxKey)
         }
         if surface == .spoken {
             splicedText = ConverseRequest.spliceSpokenSummaryInstruction(splicedText)
@@ -374,7 +402,9 @@ actor RemoteAgentClient {
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)] = [],
         // Count of this turn's unreachable server files — see `assembleMessages`.
         newUserUnavailableFileCount: Int = 0,
-        fileServerReady: Bool = false
+        fileServerReady: Bool = false,
+        // The folder this dispatch names for its reply's files — see `send`.
+        outboxKey: String? = nil
     ) -> URLRequest {
         // `URL.appending(path:)` (iOS 16+) preserves the user's optional
         // trailing slash and avoids URLComponents round-trip surprises.
@@ -401,7 +431,8 @@ actor RemoteAgentClient {
                 newUserImageFileRefs: newUserImageFileRefs,
                 newUserTextFileServerRefs: newUserTextFileServerRefs,
                 newUserUnavailableFileCount: newUserUnavailableFileCount,
-                fileServerReady: fileServerReady
+                fileServerReady: fileServerReady,
+                outboxKey: outboxKey
             ),
             stream: false,
             model: model

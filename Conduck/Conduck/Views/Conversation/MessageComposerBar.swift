@@ -252,6 +252,23 @@ struct MessageComposerBar: View {
     /// until local acceptance resolves. Shared state-machine semantics with the
     /// iOS/iPadOS coordinator.
     @State private var deferredAttachmentTeardown = ComposerDeferredTeardown()
+    /// The conversation identifier this composer has already committed to for
+    /// the chat it is about to mint.
+    ///
+    /// Attachments are staged — and their file-server keys minted — before any
+    /// conversation row exists, so without this the first attachment of a new
+    /// chat has no folder to go in and lands flat at the served root. The host
+    /// hands the sealed value to
+    /// `ConversationStore.createConversation(id:backend:)`, so the row adopts
+    /// the folder its files are already in.
+    ///
+    /// ROTATED EXPLICITLY on handoff and on discard. `.id(ComposerMountIdentity
+    /// .newChat)` is the same identity for every successive new chat, so this
+    /// `@State` can outlive the chat it was minted for — and an identifier kept
+    /// past handoff files the NEXT new chat's first attachment into the PREVIOUS
+    /// conversation's folder, which is a worse outcome than having no folder at
+    /// all: the file is filed under a conversation it has nothing to do with.
+    @State private var pendingConversationID = UUID()
 
     private var shouldLockNewChatGateway: Bool {
         viewModel == nil
@@ -993,6 +1010,7 @@ struct MessageComposerBar: View {
                 text: text,
                 ref: dispatchRef,
                 conversationID: viewModel?.conversationID,
+                pendingConversationID: pendingConversationID,
                 stagingGeneration: UUID()
             ) else {
                 viewModel?.reportComposerDispatchRejection()
@@ -1041,8 +1059,8 @@ struct MessageComposerBar: View {
     /// vision (`stageImage`); text/code → planner (`stageTextFile`); binary →
     /// server upload (configured gateway) OR a blocking `.needsSetup` tile
     /// (unconfigured gateway), with a >100 MB soft-confirm. Works WITHOUT a VM
-    /// (brand-new chat): the binary route still uploads eagerly — under a FLAT
-    /// storedKey, since no conversation folder exists yet.
+    /// (brand-new chat): the binary route still uploads eagerly, into the folder
+    /// named by `pendingConversationID`.
     private func stageServerFiles(_ urls: [URL], ref stagedRef: RemoteAgentRef? = nil) {
         stageSources(urls.map(MacStagingSource.init(pickedURL:)), ref: stagedRef)
     }
@@ -1128,7 +1146,7 @@ struct MessageComposerBar: View {
                 if source.isAppOwned { attachments.append(StagedAttachment(kind: .failed)) }
                 return .next
             }
-            await stageImage(data, ref: ref)
+            await stageImage(data, originalName: source.originalName, ref: ref)
             return .next
         }
 
@@ -1204,8 +1222,8 @@ struct MessageComposerBar: View {
     /// Stage a (size-cleared) binary: READY gateway (Test Connection passed) →
     /// `.serverFile` + eager upload; not-ready gateway (unconfigured, untested,
     /// or failed) → a blocking `.needsSetup` tile (no upload — promotion defers). `stagingURL` is the already-copied app-temp file. A nil
-    /// `viewModel` (brand-new chat) still uploads — under a FLAT storedKey (flat
-    /// keys are the historic first-class format every gateway supports). `ref` is
+    /// `viewModel` (brand-new chat) still uploads — into the folder named by
+    /// `pendingConversationID`, which the conversation this turn creates adopts. `ref` is
     /// the gateway captured when the file was picked/confirmed — NOT re-read from
     /// `effectiveRef`, which may have moved under a queued soft-confirm.
     private func finalizeBinaryStage(
@@ -1234,7 +1252,7 @@ struct MessageComposerBar: View {
         attachments.append(item)
         serverStagingFiles[id] = stagingURL
 
-        let storedKey = Self.mintStoredKey(
+        let storedKey = self.mintStoredKey(
             originalName: originalName,
             vm: viewModel,
             snapshot: snapshot
@@ -1249,10 +1267,15 @@ struct MessageComposerBar: View {
         )
     }
 
-    /// Mint a storedKey for a server upload: namespaced under the conversation's
-    /// folder when a VM exists AND the gateway's nested-PUT probe passed; FLAT
-    /// otherwise (VM-less new chat / folder-incapable gateway).
-    private static func mintStoredKey(
+    /// Mint a storedKey for a server upload: namespaced under the bound
+    /// conversation's folder, or under `pendingConversationID` while the chat is
+    /// still VM-less. FLAT only when the gateway's nested-PUT probe failed.
+    ///
+    /// Every mint path in this file routes through here, and the
+    /// `TextAttachmentStagePreparer.prepare` call site resolves the same folder
+    /// through `ComposerMintFolder` — one turn's files must never split across
+    /// two folders on the user's server.
+    private func mintStoredKey(
         originalName: String,
         vm: ConversationDetailViewModel?,
         snapshot: SettingsManager.FileTransferSnapshot
@@ -1260,7 +1283,11 @@ struct MessageComposerBar: View {
         return FileServerClient.makeStoredKey(
             originalName: originalName,
             uuid: UUID(),
-            folder: (snapshot.folderCapable && vm != nil) ? vm?.conversationID.uuidString : nil
+            folder: ComposerMintFolder.storedKeyFolder(
+                bound: vm?.conversationID,
+                pending: pendingConversationID,
+                folderCapable: snapshot.folderCapable
+            )
         )
     }
 
@@ -1270,7 +1297,8 @@ struct MessageComposerBar: View {
     /// advance the queue. Routes to the gateway captured at ENQUEUE (`file.ref`)
     /// and reuses an already-captured physical lane. Only a file queued before
     /// transfer was ready resolves a newly configured lane at confirmation time.
-    /// A nil VM (brand-new chat) still uploads under a FLAT storedKey.
+    /// A nil VM (brand-new chat) still uploads, into `pendingConversationID`'s
+    /// folder.
     private func confirmPendingLargeFile() {
         guard !attachmentDispatchInProgress else { return }
         guard let file = pendingLargeFiles.first else { return }
@@ -1314,9 +1342,11 @@ struct MessageComposerBar: View {
     /// `.needsSetup` tile to a `.serverFile` upload (if the server is now READY
     /// — saved AND its staged Test Connection passed).
     /// Mints a storedKey + kicks the eager PUT from each tile's retained staging
-    /// URL. Works WITHOUT a VM (brand-new chat — flat storedKey), so a user who
-    /// completes setup from the new-chat composer unblocks immediately; only a
-    /// still-absent snapshot keeps a tile `.needsSetup`.
+    /// URL. Works WITHOUT a VM (brand-new chat — `pendingConversationID`'s folder,
+    /// the SAME resolution every other mint path uses, or this late mint would
+    /// split one turn's files across two folders), so a user who completes setup
+    /// from the new-chat composer unblocks immediately; only a still-absent
+    /// snapshot keeps a tile `.needsSetup`.
     private func promoteNeedsSetupTiles() async {
         let ref = effectiveRef
         guard let snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) else { return }
@@ -1337,7 +1367,7 @@ struct MessageComposerBar: View {
             // may have X-removed it mid-mint. The `.needsSetup` re-check makes
             // promotion idempotent (never a double upload / a kick from a
             // reclaimed staging temp).
-            let storedKey = Self.mintStoredKey(
+            let storedKey = self.mintStoredKey(
                 originalName: entry.name,
                 vm: viewModel,
                 snapshot: snapshot
@@ -1383,8 +1413,8 @@ struct MessageComposerBar: View {
         activeGatewayStages += 1
         defer { activeGatewayStages -= 1 }
         // Capture the effective gateway before any suspension. A brand-new chat
-        // has no VM yet, but READY belongs to this ref and still supports a flat
-        // storedKey + eager upload.
+        // has no VM yet, but READY belongs to this ref and the key is namespaced
+        // under `pendingConversationID`, so the eager upload still works.
         let ref = stagedRef ?? effectiveRef
         let lane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
         guard !Task.isCancelled else { return nil }
@@ -1415,7 +1445,13 @@ struct MessageComposerBar: View {
             fileServerReady: fileServerReady,
             inlineBudgetRemaining: inlineTextBudgetRemaining,
             folderCapable: folderCapable,
-            conversationID: viewModel?.conversationID
+            // Same folder resolution as `mintStoredKey` — a text file staged in a
+            // VM-less new chat must land beside the turn's other attachments, not
+            // flat at the served root.
+            conversationID: ComposerMintFolder.conversationID(
+                bound: viewModel?.conversationID,
+                pending: pendingConversationID
+            )
         )
         guard !Task.isCancelled else {
             if let upload = prepared.uploadRequest {
@@ -1526,20 +1562,6 @@ struct MessageComposerBar: View {
 
     // MARK: - Image staging (dual-route when a file-server is configured)
 
-    /// Stage a composer image (picked / dropped). When the bound gateway has a
-    /// file-server AND `ImageProcessor` succeeds, this is the DUAL route
-    /// (Approach C): process ONCE here (downsized + EXIF/GPS-stripped JPEG, the
-    /// INLINE/persist copy), stage a `.dualImage` tile in `.uploading(0)`, and
-    /// eagerly upload the ORIGINAL RAW bytes — the exact picked file in its TRUE
-    /// format (HEIC / PNG / DNG / JPEG, metadata intact), NOT the processed JPEG
-    /// — so the agent's tools act on the real file. Otherwise fall back to the
-    /// INLINE-ONLY `.image(original)` tile (unchanged). Send is NEVER gated on
-    /// the image upload (a `.dualImage` tile is excluded from the send-gating
-    /// helpers). PRIVACY: the upload name is SYNTHETIC by POSITION
-    /// ("image.<ext>" / "image-N.<ext>") carrying only the original's sniffed
-    /// extension; the processed JPEG (inline) already has EXIF/GPS stripped, the
-    /// uploaded original keeps its metadata (the user PUTs it to their OWN
-    /// server).
     /// Drain the "Type Instead" bridge: if the host parked a screenshot, stage it
     /// for review (reuses `stageImage`) and reset the binding so it drains exactly
     /// once. No-op when the binding is absent or empty.
@@ -1559,17 +1581,46 @@ struct MessageComposerBar: View {
         preparationTasks[preparationID] = task
     }
 
-    private func stageImage(_ original: Data, ref stagedRef: RemoteAgentRef? = nil) async {
+    /// Stage a composer image (picked / dropped / pasted / screenshot bridge).
+    /// When the bound gateway has a file-server AND `ImageProcessor` succeeds,
+    /// this is the DUAL route (Approach C): process ONCE here (downsized +
+    /// EXIF/GPS-stripped JPEG, the INLINE/persist copy), stage a `.dualImage`
+    /// tile in `.uploading(0)`, and eagerly upload the ORIGINAL RAW bytes — the
+    /// exact picked file in its TRUE format (HEIC / PNG / DNG / JPEG, metadata
+    /// intact), NOT the processed JPEG — so the agent's tools act on the real
+    /// file. Otherwise fall back to the INLINE-ONLY `.image(original)` tile. Send
+    /// is NEVER gated on the image upload (a `.dualImage` tile is excluded from
+    /// the send-gating helpers).
+    ///
+    /// `originalName` is the name the user gave the file, when the source has one
+    /// (a pick or drop the classifier routed here). A photo-library pick, a
+    /// pasted bitmap and the screenshot bridge arrive as bare bytes and get a
+    /// numbered `image…` name instead — see `ComposerImageName.unnamed`.
+    ///
+    /// PRIVACY: an image the user named keeps that name, exactly as a document
+    /// does — one rule for both routes, and in a voice product the name is often
+    /// what the user said out loud. Only the numbered fallback carries a sniffed
+    /// extension; a name the user supplied is passed through as given, extension
+    /// included (`ComposerImageName.resolve`). The processed JPEG (inline) has
+    /// EXIF/GPS stripped; the uploaded original keeps its metadata (the user PUTs
+    /// it to their OWN server, deliberately) — a far larger disclosure than a
+    /// filename, and the settled answer to the same question.
+    private func stageImage(
+        _ original: Data,
+        originalName: String? = nil,
+        ref stagedRef: RemoteAgentRef? = nil
+    ) async {
         guard !attachmentDispatchInProgress else { return }
         activeGatewayStages += 1
         defer { activeGatewayStages -= 1 }
         let ref = stagedRef ?? effectiveRef
         // No file-server configured → inline-only (unchanged). WHY no `viewModel`
-        // gate: a VM-less brand-new conversation STILL dual-routes — `mintStoredKey`
-        // yields a FLAT storedKey (folder:nil) when vm==nil and the binary path
-        // already uploads VM-less, so the spec gives images no VM-less carve-out.
-        // Gating on `viewModel` here wrongly short-circuited the FIRST image turn to
-        // inline-only and never uploaded the byte-faithful original.
+        // gate: a VM-less brand-new conversation STILL dual-routes —
+        // `mintStoredKey` namespaces the key under `pendingConversationID` when
+        // vm==nil, and the binary path already uploads VM-less, so the spec gives
+        // images no VM-less carve-out. Gating on `viewModel` here wrongly
+        // short-circuited the FIRST image turn to inline-only and never uploaded
+        // the byte-faithful original.
         let resolvedLane = await SettingsManager.shared.fileTransferReadySnapshot(for: ref)
         guard !Task.isCancelled else { return }
         guard let lane = resolvedLane else {
@@ -1589,15 +1640,19 @@ struct MessageComposerBar: View {
             return
         }
 
-        // Sniff the ORIGINAL bytes for their true format; synthesize a
-        // position-based name with the real extension (no user filename travels).
+        // The user's own name wins. Only a source that genuinely has none falls
+        // back to a numbered `image…` name carrying the sniffed extension, so the
+        // uploaded file lands on the user's server with its real type.
         let format = ImageFormatSniffer.sniff(original)
-        let position = attachments.filter(\.isDualImage).count
-        let filename = position == 0 ? "image.\(format.ext)" : "image-\(position + 1).\(format.ext)"
+        let filename = ComposerImageName.resolve(
+            originalName: originalName,
+            extension: format.ext,
+            staged: attachments
+        )
         // Per-conversation folder unless this gateway's nested-PUT probe failed.
-        // Pass the OPTIONAL `viewModel` straight through — `mintStoredKey` yields a
-        // FLAT storedKey (folder:nil) when it's nil (VM-less first turn).
-        let storedKey = Self.mintStoredKey(
+        // Pass the OPTIONAL `viewModel` straight through — `mintStoredKey` falls
+        // back to `pendingConversationID` when it's nil (VM-less first turn).
+        let storedKey = self.mintStoredKey(
             originalName: filename,
             vm: viewModel,
             snapshot: lane
@@ -1710,8 +1765,9 @@ struct MessageComposerBar: View {
         attachments[index].serverUploadState = .uploading(progress: 0)
 
         // Reuse the key minted at stage time (retry overwrites the partial blob).
-        // The fallback mint (key somehow absent) resolves folder-capability so a
-        // re-minted key still lands in THIS conversation's folder (flat VM-less).
+        // The fallback mint (key somehow absent) goes through the SAME helper as
+        // the stage-time mint, so a re-minted key cannot land in a different
+        // folder from its siblings.
         if let storedKey = serverStoredKeys[id] {
             kickUpload(
                 id: id,
@@ -1722,7 +1778,7 @@ struct MessageComposerBar: View {
             )
             return
         }
-        let storedKey = Self.mintStoredKey(
+        let storedKey = self.mintStoredKey(
             originalName: originalName,
             vm: viewModel,
             snapshot: snapshot
@@ -1824,6 +1880,9 @@ struct MessageComposerBar: View {
         dropPlaceholderIDs.removeAll()
         attachments.removeAll()
         pickerSelection.removeAll()
+        // Nothing is minted against the old identifier any more, so the next new
+        // chat must not inherit it.
+        pendingConversationID = UUID()
     }
 
     private func clearAfterSuccessfulHandoff(_ dispatch: ComposerTurnDispatch) {
@@ -1842,6 +1901,11 @@ struct MessageComposerBar: View {
         if attachments.isEmpty {
             pickerSelection.removeAll()
         }
+        // The host has taken this identifier to `createConversation(id:)`, so it
+        // now names a real conversation. This mount keeps its `@State` across
+        // successive new chats, so without an explicit rotation the next one's
+        // first attachment would land in the conversation just handed off.
+        pendingConversationID = UUID()
     }
 
     private func cleanupStagingFile(_ id: UUID) {
