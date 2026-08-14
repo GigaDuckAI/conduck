@@ -400,6 +400,17 @@ struct WatchConversationThreadView: View {
                 // `.conversationsDidChange` refreshed the messages).
                 attemptAutoSpeak()
             }
+            // An agent-output file attaching to an EXISTING reply changes no
+            // message count, so the handler above never fires and the new row
+            // draws below the fold — on a 40mm screen that reads as "nothing
+            // happened". This is the same snap for that case, and deliberately
+            // NOT the same handler: attaching a file must not re-trigger
+            // `attemptAutoSpeak()`, which is armed for a reply ARRIVING.
+            .onChange(of: viewModel.threadAttachmentCount) { old, new in
+                guard new > old, !viewModel.threadMessages.isEmpty else { return }
+                isComposerVisible = true
+                snapToBottom(proxy)
+            }
             .onChange(of: hasLoaded) { _, loaded in
                 if loaded, !viewModel.threadMessages.isEmpty {
                     snapToBottom(proxy)

@@ -189,6 +189,467 @@ nonisolated struct AttachmentDraft: Sendable {
     }
 }
 
+// MARK: - Agent-file courier (phone → wrist fast lane)
+//
+// WHY THIS EXISTS. A turn dictated on the Watch is dispatched BY the Watch, so
+// the reply TEXT is in the wrist's store within a second. The FILE the agent
+// produced is not: the wrist deliberately never holds the file-server
+// credential (it is written non-synchronizable, and the phone→watch relay
+// carries no file-server secret), so the wrist can neither list the reply's
+// output folder nor discover the file. Discovery is a credential-holding
+// device's job — the phone opens the thread, runs the retroactive output scan,
+// and patches an `Attachment` row on. That patch reaches the wrist only through
+// CloudKit mirroring, measured at roughly seven minutes on watchOS.
+//
+// The courier closes that gap by shipping the row's METADATA — tens of bytes —
+// over the WatchConnectivity link the two devices already share. It carries no
+// credential, no URL, no file bytes and no preview bytes: the phone stays the
+// only device that ever touches the file server, and the wrist gains a row it
+// can DISPLAY, never one it can download.
+//
+// CROSS-TARGET, single-sourced: these types live in `ConversationStore.swift`
+// because this file already carries BOTH iOS and watchOS target membership (the
+// same reason `AttachmentDraft` is declared here). The relay's own wire enum is
+// a literal duplicate across two single-target files and needs a source-reading
+// drift guard to stay honest; this contract needs neither, because both sides
+// compile the SAME declaration and a rename is a compile error rather than a
+// silent runtime break.
+
+/// One agent-produced file the PHONE discovered and attached, reduced to what a
+/// wrist needs to draw a row. Deliberately a metadata-only projection of an
+/// `Attachment`: it carries NO `data`, NO `thumbnailData` and NO `previewData`.
+///
+/// `attachmentID` is the identifier the phone minted for its own Core Data row.
+/// Carrying it — rather than letting the wrist mint one — is what lets the
+/// overlay recognize the authoritative row when CloudKit finally delivers it,
+/// and keeps SwiftUI's `ForEach` identity continuous across the handover so the
+/// row does not visibly pop.
+///
+/// PRIVACY: `storedKey` is an opaque server path token — never log it, never
+/// render it raw.
+nonisolated struct AttachedFileDescriptor: Sendable, Equatable, Codable, Identifiable {
+    let conversationID: UUID
+    let messageID: UUID
+    /// The `Attachment.id` the phone minted. Doubles as this descriptor's identity.
+    let attachmentID: UUID
+    /// Non-empty by construction — a descriptor with no stored key cannot be
+    /// matched against the CloudKit row that will supersede it, and
+    /// `MessageRowFormatters.dedupedServerFiles` deliberately never collapses
+    /// nil-key rows, so an unkeyed overlay row could not be retired at all.
+    let storedKey: String
+    let filename: String?
+    let mimeType: String
+    let byteSize: Int
+    /// The sequence the phone ACTUALLY persisted (already clamped to the store's
+    /// Integer 16 width), so the overlay row sorts exactly where the mirrored row
+    /// will land and the handover reorders nothing.
+    let sequence: Int
+    /// The persisted preview discriminator, carried for completeness and forward
+    /// compatibility. It is deliberately NOT applied to the rendered overlay row
+    /// — see `AgentFileOverlay.synthesizedRecord(from:)`.
+    let previewKind: String?
+    /// The row's persisted `createdAt`. Carried, never re-synthesized at render
+    /// time: `AttachmentRecord` equality includes it, and a fresh `Date()` per
+    /// merge would make every refresh pass unequal and repaint the whole thread
+    /// forever.
+    let createdAt: Date
+
+    var id: UUID { attachmentID }
+
+    init(
+        conversationID: UUID,
+        messageID: UUID,
+        attachmentID: UUID,
+        storedKey: String,
+        filename: String?,
+        mimeType: String,
+        byteSize: Int,
+        sequence: Int,
+        previewKind: String?,
+        createdAt: Date
+    ) {
+        self.conversationID = conversationID
+        self.messageID = messageID
+        self.attachmentID = attachmentID
+        self.storedKey = storedKey
+        self.filename = filename
+        self.mimeType = mimeType
+        self.byteSize = byteSize
+        self.sequence = sequence
+        self.previewKind = previewKind
+        self.createdAt = createdAt
+    }
+}
+
+/// The WatchConnectivity payload shape for the courier. Plist-clean scalars
+/// only (`String` / `Int` / `Double` / arrays / dictionaries) because both
+/// `transferUserInfo` and `sendMessage` validate their payload against the
+/// property-list types at send time.
+///
+/// DECODE POSTURE — tolerant, per-item. A payload from a NEWER phone may carry
+/// keys this build has never heard of; those are ignored. An item missing an
+/// optional display field decodes with a safe default. An item missing an
+/// IDENTITY field (either UUID, or a non-empty stored key) is dropped on its
+/// own — a single malformed item never rejects the batch, because the other
+/// items in it are the files the user is waiting to see. A payload whose kind
+/// does not match decodes to nothing, which is exactly how an OLDER wrist build
+/// already behaves: it falls through to the settings-envelope decoder, finds
+/// none of its keys, and no-ops.
+nonisolated enum AttachedFileCourierWire {
+    static let kindKey = "kind"
+    static let kindValue = "conduck.agentFiles"
+    /// Contract revision. Present so a future operation (a tombstone for an
+    /// attachment deleted on the phone) can be added without ambiguity about
+    /// what an older reader was allowed to assume.
+    static let versionKey = "v"
+    static let version = 1
+    /// Operation discriminator. V1 emits only `upsert`; a reader that does not
+    /// recognize the operation drops the batch rather than guessing.
+    static let operationKey = "op"
+    static let operationUpsert = "upsert"
+    static let itemsKey = "items"
+
+    static let conversationIDKey = "convo"
+    static let messageIDKey = "msg"
+    static let attachmentIDKey = "att"
+    static let storedKeyKey = "key"
+    static let filenameKey = "name"
+    static let mimeTypeKey = "mime"
+    static let byteSizeKey = "size"
+    static let sequenceKey = "seq"
+    static let previewKindKey = "preview"
+    static let createdAtKey = "created"
+
+    /// Fallback MIME for an item that arrived without one. Matches
+    /// `AttachmentRecord.init(managedObject:)`'s own fallback so an overlay row
+    /// and the mirrored row it will be replaced by classify identically.
+    static let defaultMIMEType = "application/octet-stream"
+
+    /// Ceiling on items per envelope. WatchConnectivity caps a payload at a few
+    /// hundred KB; a descriptor is ~200 bytes, so this is nowhere near the wire
+    /// limit — it exists so one pathological scan (an agent that wrote hundreds
+    /// of files) sends several small envelopes instead of one the OS rejects
+    /// wholesale, which would lose every row rather than delay some.
+    static let maxItemsPerEnvelope = 32
+
+    /// Split descriptors into ready-to-send envelopes, at most
+    /// `maxItemsPerEnvelope` items each. Empty input yields no envelopes.
+    static func envelopes(for descriptors: [AttachedFileDescriptor]) -> [[String: Any]] {
+        stride(from: 0, to: descriptors.count, by: maxItemsPerEnvelope).map { start in
+            let chunk = Array(descriptors[start..<min(start + maxItemsPerEnvelope, descriptors.count)])
+            return [
+                kindKey: kindValue,
+                versionKey: version,
+                operationKey: operationUpsert,
+                itemsKey: chunk.map(item(for:))
+            ]
+        }
+    }
+
+    /// The per-item dictionary. This is the ONLY place a descriptor becomes wire
+    /// bytes, so the allowlist of what may leave the phone is auditable in one
+    /// screen — and `WatchAttachmentPushWireTests`
+    /// (`testEnvelopeCarriesOnlyTheAllowlistedKeys`) pins it with SET EQUALITY,
+    /// against both the all-optionals-present and the all-optionals-absent
+    /// shape, so a future field cannot ride along unnoticed on either branch of
+    /// the conditional puts below. The test name is load-bearing: a maintainer
+    /// adding a field greps it, and a citation that resolves to nothing reads as
+    /// "the pin was never written" — which is exactly the licence this function
+    /// must never grant.
+    static func item(for descriptor: AttachedFileDescriptor) -> [String: Any] {
+        var item: [String: Any] = [
+            conversationIDKey: descriptor.conversationID.uuidString,
+            messageIDKey: descriptor.messageID.uuidString,
+            attachmentIDKey: descriptor.attachmentID.uuidString,
+            storedKeyKey: descriptor.storedKey,
+            mimeTypeKey: descriptor.mimeType,
+            byteSizeKey: descriptor.byteSize,
+            sequenceKey: descriptor.sequence,
+            createdAtKey: descriptor.createdAt.timeIntervalSinceReferenceDate
+        ]
+        if let filename = descriptor.filename { item[filenameKey] = filename }
+        if let previewKind = descriptor.previewKind { item[previewKindKey] = previewKind }
+        return item
+    }
+
+    /// Decode one received payload. Returns an empty array for anything that is
+    /// not a recognized courier batch — the caller treats that as "not for me"
+    /// and falls through to its other handlers.
+    static func decode(_ payload: [String: Any]) -> [AttachedFileDescriptor] {
+        guard payload[kindKey] as? String == kindValue else { return [] }
+        // An unknown operation is NOT an upsert. Dropping is the safe direction:
+        // a tombstone misread as an upsert would resurrect a deleted row.
+        guard (payload[operationKey] as? String ?? operationUpsert) == operationUpsert else { return [] }
+        guard let items = payload[itemsKey] as? [[String: Any]] else { return [] }
+        return items.compactMap(descriptor(fromItem:))
+    }
+
+    /// One item → one descriptor, or nil when an identity field is missing or
+    /// malformed. Display fields fall back rather than failing the item.
+    static func descriptor(fromItem item: [String: Any]) -> AttachedFileDescriptor? {
+        guard let conversationID = (item[conversationIDKey] as? String).flatMap(UUID.init(uuidString:)),
+              let messageID = (item[messageIDKey] as? String).flatMap(UUID.init(uuidString:)),
+              let attachmentID = (item[attachmentIDKey] as? String).flatMap(UUID.init(uuidString:)),
+              let storedKey = item[storedKeyKey] as? String,
+              !storedKey.isEmpty else {
+            return nil
+        }
+        // `NSNumber` bridging: WatchConnectivity round-trips integers through
+        // property-list numbers, so read them as `NSNumber` rather than `Int`.
+        let byteSize = (item[byteSizeKey] as? NSNumber)?.intValue ?? 0
+        let sequence = (item[sequenceKey] as? NSNumber)?.intValue ?? 0
+        let created = (item[createdAtKey] as? NSNumber)?.doubleValue
+        return AttachedFileDescriptor(
+            conversationID: conversationID,
+            messageID: messageID,
+            attachmentID: attachmentID,
+            storedKey: storedKey,
+            filename: item[filenameKey] as? String,
+            mimeType: item[mimeTypeKey] as? String ?? defaultMIMEType,
+            byteSize: byteSize,
+            sequence: sequence,
+            previewKind: item[previewKindKey] as? String,
+            // A missing timestamp still has to be STABLE across merges (see
+            // `createdAt`'s note), so it pins to the reference date rather than
+            // to "now".
+            createdAt: Date(timeIntervalSinceReferenceDate: created ?? 0)
+        )
+    }
+}
+
+/// One inbox entry: a descriptor plus the moment this device received it.
+/// `receivedAt` drives the age bound only — it is never rendered, and it is
+/// deliberately NOT the row's `createdAt` (which is the phone's persisted value
+/// and must survive re-receipt unchanged).
+nonisolated struct AttachedFileInboxEntry: Sendable, Equatable, Codable {
+    let descriptor: AttachedFileDescriptor
+    let receivedAt: Date
+}
+
+/// The wrist's pending-file inbox, as a PURE value.
+///
+/// This is a fast cache, NOT a second persistence system, and the distinction
+/// is the whole design. Nothing here is ever written into the Core Data store:
+/// that store is CloudKit-mirrored on the wrist too, so a wrist-inserted
+/// `Attachment` row would export as its OWN CKRecord — Core Data + CloudKit
+/// mirroring does not unique on an `id` attribute — and the phone's row and the
+/// wrist's row would then coexist permanently on every device the user owns.
+/// The overlay instead lives beside the store and is merged in at READ time, so
+/// the couriered row and the mirrored row can never both exist: the merge
+/// retires the entry in the same pass that first sees the real row.
+///
+/// Bounded two ways, because an entry whose message never arrives (deleted on
+/// another device, or a courier that outran a CloudKit import that then never
+/// came) has nothing to retire it: oldest-first eviction past `maxEntries`, and
+/// an absolute age cap at `maxEntryAge`. The trade-off is explicit — if the
+/// authoritative row never syncs, the overlay row eventually disappears rather
+/// than becoming a permanent phantom.
+nonisolated struct AttachedFileInboxState: Sendable, Equatable, Codable {
+    /// Entry ceiling. A handful of pending rows is the realistic steady state;
+    /// this is headroom, not a working size.
+    static let maxEntries = 64
+    /// Age ceiling. Generous enough that a wrist left off the charger over a
+    /// long weekend still shows what it was couriered, short enough that a row
+    /// whose authoritative copy never syncs does not linger indefinitely.
+    static let maxEntryAge: TimeInterval = 7 * 24 * 60 * 60
+
+    private(set) var entries: [AttachedFileInboxEntry] = []
+
+    init(entries: [AttachedFileInboxEntry] = []) {
+        self.entries = entries
+    }
+
+    /// Identity of an entry for dedupe purposes: the message it belongs to plus
+    /// the stored key. Deliberately NOT the attachment UUID alone — two devices
+    /// running the retro scan concurrently can mint different UUIDs for the same
+    /// file, and the user must see one row either way.
+    private static func slot(_ descriptor: AttachedFileDescriptor) -> String {
+        "\(descriptor.messageID.uuidString)|\(descriptor.storedKey)"
+    }
+
+    /// Absorb a courier batch. Returns whether the inbox actually changed —
+    /// load-bearing, because the caller posts `.conversationsDidChange` on the
+    /// strength of it, and the courier deliberately sends the SAME batch twice
+    /// (queued + interactive). A re-delivery must cost nothing: no post, no
+    /// refresh pass, no repaint.
+    @discardableResult
+    mutating func ingest(_ descriptors: [AttachedFileDescriptor], now: Date = Date()) -> Bool {
+        var changed = false
+        for descriptor in descriptors {
+            let key = Self.slot(descriptor)
+            if let index = entries.firstIndex(where: { Self.slot($0.descriptor) == key }) {
+                // Same file, new metadata (e.g. a preview kind landed): take the
+                // newer descriptor but keep the ORIGINAL receipt time, so a
+                // re-push cannot indefinitely extend an entry's age bound.
+                guard entries[index].descriptor != descriptor else { continue }
+                entries[index] = AttachedFileInboxEntry(
+                    descriptor: descriptor,
+                    receivedAt: entries[index].receivedAt
+                )
+                changed = true
+            } else {
+                entries.append(AttachedFileInboxEntry(descriptor: descriptor, receivedAt: now))
+                changed = true
+            }
+        }
+        if purgeExpired(now: now) { changed = true }
+        if entries.count > Self.maxEntries {
+            // Oldest first — the newest couriered file is the one the user is
+            // most likely still looking at.
+            entries.sort { $0.receivedAt < $1.receivedAt }
+            entries.removeFirst(entries.count - Self.maxEntries)
+            changed = true
+        }
+        return changed
+    }
+
+    @discardableResult
+    mutating func purgeExpired(now: Date = Date()) -> Bool {
+        let before = entries.count
+        entries.removeAll { now.timeIntervalSince($0.receivedAt) > Self.maxEntryAge }
+        return entries.count != before
+    }
+
+    /// Drop entries whose authoritative row has landed. The merge decides which
+    /// those are; this only applies the verdict.
+    @discardableResult
+    mutating func remove(attachmentIDs: Set<UUID>) -> Bool {
+        guard !attachmentIDs.isEmpty else { return false }
+        let before = entries.count
+        entries.removeAll { attachmentIDs.contains($0.descriptor.attachmentID) }
+        return entries.count != before
+    }
+
+    /// Drop every entry for a conversation this device just deleted. Without
+    /// this the entries would survive, invisible (their messages are gone), until
+    /// the age bound expired them.
+    @discardableResult
+    mutating func purgeConversation(_ conversationID: UUID) -> Bool {
+        let before = entries.count
+        entries.removeAll { $0.descriptor.conversationID == conversationID }
+        return entries.count != before
+    }
+
+    func descriptors(forMessage messageID: UUID) -> [AttachedFileDescriptor] {
+        entries.filter { $0.descriptor.messageID == messageID }.map(\.descriptor)
+    }
+}
+
+/// Pure merge of couriered descriptors onto fetched message snapshots. No I/O,
+/// no persistence, no isolation — so the entire convergence story is unit
+/// testable without a store, a WCSession, or a view.
+nonisolated enum AgentFileOverlay {
+
+    /// Build the DISPLAY-ONLY row for a couriered descriptor.
+    ///
+    /// Every byte-bearing field is forced nil, and that is a correctness
+    /// requirement rather than a shortcut:
+    /// * `previewKind` — a `"text"` row classifies as `.viewableText`, which
+    ///   makes it tappable into `WatchAttachmentTextView`; that viewer resolves
+    ///   its content by fetching the attachment out of Core Data, where an
+    ///   overlay row does not exist, so the tap would land on "no longer
+    ///   available". Nil keeps it the passive `.serverPlaceholder` row until the
+    ///   real row arrives with real bytes behind it.
+    /// * `thumbnailData` — same reasoning, and the courier carries no bytes to
+    ///   put there anyway.
+    /// * `extractedText` — a server reference never has local bytes.
+    ///
+    /// The result is a pure function of the descriptor: merging twice produces
+    /// equal records, which is what lets the view model's equality skip treat a
+    /// no-op refresh as a no-op.
+    static func synthesizedRecord(from descriptor: AttachedFileDescriptor) -> AttachmentRecord {
+        AttachmentRecord(
+            id: descriptor.attachmentID,
+            mimeType: descriptor.mimeType,
+            filename: descriptor.filename,
+            thumbnailData: nil,
+            extractedText: nil,
+            width: 0,
+            height: 0,
+            byteSize: descriptor.byteSize,
+            sequence: descriptor.sequence,
+            createdAt: descriptor.createdAt,
+            isServerReference: true,
+            storedKey: descriptor.storedKey,
+            previewKind: nil
+        )
+    }
+
+    /// Merge `entries` into `messages`.
+    ///
+    /// For each message, an entry is RESOLVED when the fetched attachments
+    /// already carry its stored key OR its attachment id — either proves the
+    /// authoritative row has arrived, and the id check additionally catches a
+    /// partially-mirrored row whose `storedKey` attribute has not landed yet
+    /// (which the key check alone would miss, leaving a duplicate on screen).
+    /// A resolved entry contributes no overlay row and is reported for pruning.
+    /// Everything else is appended as a synthesized row.
+    ///
+    /// An entry whose message is not in `messages` is NEITHER rendered NOR
+    /// resolved: the courier can legitimately outrun the message's own CloudKit
+    /// import, so "message not here yet" must not be read as "row already
+    /// landed". The age bound is what eventually retires those.
+    static func merge(
+        _ entries: [AttachedFileInboxEntry],
+        into messages: [MessageRecord]
+    ) -> (messages: [MessageRecord], resolved: Set<UUID>) {
+        guard !entries.isEmpty else { return (messages, []) }
+
+        var byMessage: [UUID: [AttachedFileDescriptor]] = [:]
+        for entry in entries {
+            byMessage[entry.descriptor.messageID, default: []].append(entry.descriptor)
+        }
+
+        var resolved: Set<UUID> = []
+        let merged = messages.map { message -> MessageRecord in
+            guard let descriptors = byMessage[message.id] else { return message }
+
+            let presentKeys = Set(message.attachments.compactMap(\.storedKey))
+            let presentIDs = Set(message.attachments.map(\.id))
+
+            var additions: [AttachmentRecord] = []
+            for descriptor in descriptors {
+                if presentKeys.contains(descriptor.storedKey) || presentIDs.contains(descriptor.attachmentID) {
+                    resolved.insert(descriptor.attachmentID)
+                    continue
+                }
+                additions.append(synthesizedRecord(from: descriptor))
+            }
+            guard !additions.isEmpty else { return message }
+
+            return MessageRecord(
+                id: message.id,
+                role: message.role,
+                text: message.text,
+                createdAt: message.createdAt,
+                sourceDevice: message.sourceDevice,
+                status: message.status,
+                failureCode: message.failureCode,
+                failureWireCode: message.failureWireCode,
+                failureHadHistoryImages: message.failureHadHistoryImages,
+                fileTransferLaneID: message.fileTransferLaneID,
+                outputScanDone: message.outputScanDone,
+                outputScanLaneID: message.outputScanLaneID,
+                outputBoxKey: message.outputBoxKey,
+                attachments: (message.attachments + additions).sorted { $0.sequence < $1.sequence }
+            )
+        }
+        return (merged, resolved)
+    }
+}
+
+extension Notification.Name {
+    /// Posted by `ConversationStore` when THIS device's own write attached one
+    /// or more agent-output files to an existing turn — never on a CloudKit
+    /// import, which by definition already reached every device.
+    ///
+    /// The `userInfo` carries `[AttachedFileDescriptor]` under
+    /// `ConversationStore.attachedFilesUserInfoKey`. A NotificationCenter seam
+    /// rather than a direct call keeps this cross-target store ignorant of the
+    /// iOS-only WatchConnectivity broadcaster that listens for it.
+    static let agentFilesDidAttachLocally = Notification.Name("agentFilesDidAttachLocally")
+}
+
 /// Trailing-edge debouncer for the CloudKit remote-change fan-out. A mirroring
 /// import batch delivers `.NSPersistentStoreRemoteChange` in dense bursts
 /// (dozens per session in a field log); posting `.conversationsDidChange` 1:1
@@ -638,6 +1099,25 @@ actor ConversationStore {
     private func postDidChange() async {
         await MainActor.run {
             NotificationCenter.default.post(name: .conversationsDidChange, object: nil)
+        }
+    }
+
+    /// `userInfo` key carrying `[AttachedFileDescriptor]` on
+    /// `.agentFilesDidAttachLocally`.
+    nonisolated static let attachedFilesUserInfoKey = "agentFiles"
+
+    /// Announce agent-output files THIS device just attached, so a listener that
+    /// can reach another device (on iOS, `PhoneSessionManager`) can courier the
+    /// metadata to a device that structurally cannot discover it. Main-actor
+    /// posted for the same reason `postDidChange` is: observers are UI-adjacent
+    /// and register on `queue: .main`.
+    private func postAgentFilesDidAttach(_ descriptors: [AttachedFileDescriptor]) async {
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .agentFilesDidAttachLocally,
+                object: nil,
+                userInfo: [ConversationStore.attachedFilesUserInfoKey: descriptors]
+            )
         }
     }
 
@@ -2149,6 +2629,15 @@ actor ConversationStore {
     /// Returns whether ANY attachment was INSERTED — that is the caller's gate
     /// for preview enrichment, so it stays strictly about chips.
     ///
+    /// Also posts `.agentFilesDidAttachLocally` with a metadata descriptor for
+    /// every row it INSERTED (never for a row it skipped as a duplicate, and
+    /// never for a bare marker flip). That notification is what feeds the
+    /// phone→wrist courier: this is the exact moment a credential-holding device
+    /// learns of a file the wrist structurally cannot discover for itself, and
+    /// the descriptors are built INSIDE the same transaction that wrote the rows
+    /// so they report what was actually persisted — the real clamped `sequence`,
+    /// the real `createdAt` — not what the caller proposed.
+    ///
     /// Posts `.conversationsDidChange` ONCE, when either an attachment was
     /// inserted OR a turn's `outputScanDone` actually TRANSITIONED false → true.
     /// The marker selects a turn INTO the automatic pass
@@ -2166,9 +2655,11 @@ actor ConversationStore {
         guard !results.isEmpty else { return false }
         try await ensureLoaded()
         let bgContext = newWriteContext()
-        let outcome: (inserted: Bool, changedVisibleState: Bool) = try await bgContext.perform { [bgContext] in
+        let outcome: (inserted: Bool, changedVisibleState: Bool, descriptors: [AttachedFileDescriptor])
+        outcome = try await bgContext.perform { [bgContext] in
             var insertedAny = false
             var changedVisibleState = false
+            var descriptors: [AttachedFileDescriptor] = []
             let now = Date()
             for result in results {
                 let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
@@ -2198,6 +2689,14 @@ actor ConversationStore {
                     }
                 }
 
+                // The owning conversation id, read once per message — it is the
+                // wrist's routing key for a couriered descriptor (the wrist
+                // resolves the thread, not the bare turn). A message with no
+                // conversation cannot be couriered; it is still attached to
+                // normally, and CloudKit remains its delivery path.
+                let conversationID = (message.value(forKey: "conversation") as? NSManagedObject)?
+                    .value(forKey: "id") as? UUID
+
                 var nextSequence = maxSequence + 1
                 for draft in result.drafts {
                     // Skip a storedKey already present (prior partial success OR a
@@ -2208,7 +2707,28 @@ actor ConversationStore {
                     )
                     // Sequence continues after the message's existing max — the
                     // draft's pass-local 0-based sequence is deliberately ignored.
-                    Self.applyDraft(draft, to: attachment, on: message, id: UUID(), sequence: nextSequence, at: now)
+                    let attachmentID = UUID()
+                    Self.applyDraft(draft, to: attachment, on: message, id: attachmentID, sequence: nextSequence, at: now)
+                    // Courier descriptor for exactly what was just written. The
+                    // sequence is re-read through the SAME `Int16(clamping:)` the
+                    // store applied, so the wrist sorts the overlay row where the
+                    // mirrored row will actually land. A draft with no storedKey
+                    // is skipped: an unkeyed overlay row could never be matched
+                    // against its authoritative copy and so could never retire.
+                    if let conversationID, let storedKey = draft.storedKey, !storedKey.isEmpty {
+                        descriptors.append(AttachedFileDescriptor(
+                            conversationID: conversationID,
+                            messageID: result.messageID,
+                            attachmentID: attachmentID,
+                            storedKey: storedKey,
+                            filename: draft.filename,
+                            mimeType: draft.mimeType,
+                            byteSize: draft.byteSize,
+                            sequence: Int(Int16(clamping: nextSequence)),
+                            previewKind: draft.previewKind,
+                            createdAt: now
+                        ))
+                    }
                     if let key = draft.storedKey { presentKeys.insert(key) }
                     nextSequence += 1
                     insertedAny = true
@@ -2227,9 +2747,14 @@ actor ConversationStore {
                 }
             }
             try bgContext.save()
-            return (insertedAny, changedVisibleState)
+            return (insertedAny, changedVisibleState, descriptors)
         }
         if outcome.changedVisibleState { await postDidChange() }
+        // Fan out AFTER the save has committed and after the local refresh post,
+        // so a courier can never describe a row this device would fail to show.
+        if !outcome.descriptors.isEmpty {
+            await postAgentFilesDidAttach(outcome.descriptors)
+        }
         return outcome.inserted
     }
 

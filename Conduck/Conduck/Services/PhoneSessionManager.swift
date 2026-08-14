@@ -14,6 +14,13 @@
 //
 // Identity-request handler uses `Constants.iCloudKVSUserIDKey` for the
 // payload key — no hardcoded `"gigaduck_user_id"` literal.
+//
+// Also couriers agent-output FILE METADATA to the wrist
+// (`courierAttachedFilesToWatch`), triggered by `.agentFilesDidAttachLocally`.
+// That payload carries no `Constants.watchBroadcastKindKey` marker, so the
+// settings-delivery stamps in `session(_:didFinish:error:)` — which accept only
+// the exact settings marker — stay a settings-only signal and are not moved by
+// courier traffic.
 
 #if os(iOS)
 import Combine
@@ -60,6 +67,22 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
             queue: .main
         ) { [weak self] _ in
             self?.broadcastToWatchDebounced()
+        }
+
+        // Agent-file courier. `ConversationStore` posts this the moment THIS
+        // device's retroactive output scan attaches a file to a turn — which is
+        // the only moment the wrist can learn about that file promptly, because
+        // the wrist holds no file-server credential and its CloudKit mirror runs
+        // minutes behind. NOT debounced: a scan fires this once per pass with the
+        // whole batch already in hand, and the entire point is latency.
+        NotificationCenter.default.addObserver(
+            forName: .agentFilesDidAttachLocally,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let descriptors = note.userInfo?[ConversationStore.attachedFilesUserInfoKey]
+                    as? [AttachedFileDescriptor] else { return }
+            self?.courierAttachedFilesToWatch(descriptors)
         }
     }
 
@@ -305,6 +328,65 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
             guard !Task.isCancelled else { return }
             await self?.broadcastToWatchAsync()
         }
+    }
+
+    // MARK: - Agent-file courier (phone → wrist)
+
+    /// Ship the METADATA of agent-output files this device just attached to the
+    /// paired Watch.
+    ///
+    /// WHAT RIDES: name, size, stored key, MIME, preview discriminator,
+    /// sequence, and the owning message + conversation + attachment ids — tens
+    /// of bytes, assembled in `AttachedFileCourierWire`. WHAT NEVER RIDES: the
+    /// file bytes, any preview or thumbnail bytes, the file-server URL, and any
+    /// credential of any kind. The phone remains the ONLY device that ever
+    /// touches the file server; the wrist receives something it can draw, never
+    /// something it could fetch.
+    ///
+    /// DELIVERY — deliberately BOTH channels, same payload:
+    /// * `transferUserInfo` is the durable spine. It is queued, ordered, and
+    ///   survives an unreachable or asleep wrist, so a file row that arrives
+    ///   late still arrives. A row appearing late is acceptable; a row never
+    ///   appearing because the only send was dropped is not.
+    /// * `sendMessage`, only when `isReachable`, is the latency lane — the
+    ///   interactive channel is what turns "eventually" into about a second.
+    ///   Reachable means the Watch app is already awake and foreground, which is
+    ///   precisely the case that matters: the user is staring at the thread
+    ///   waiting for the row.
+    ///
+    /// The double send is safe by construction, not by luck: ingestion on the
+    /// wrist is keyed on (message, stored key), so the second copy to arrive
+    /// changes nothing, posts nothing, and repaints nothing.
+    ///
+    /// Preflighted through the SAME `resendPreflight` the manual re-send uses —
+    /// `transferUserInfo` on a session that has not activated is a programmer
+    /// error, and an unpaired / app-not-installed Watch has nothing to receive.
+    /// A blocked preflight is a silent no-op: CloudKit is still delivering this
+    /// row, just slowly, so there is no failure to surface to anyone.
+    func courierAttachedFilesToWatch(_ descriptors: [AttachedFileDescriptor]) {
+        guard !descriptors.isEmpty else { return }
+        let session = WCSession.default
+        guard Self.resendPreflight(
+            activationState: session.activationState,
+            isPaired: session.isPaired,
+            isWatchAppInstalled: session.isWatchAppInstalled
+        ) == nil else { return }
+
+        for payload in AttachedFileCourierWire.envelopes(for: descriptors) {
+            session.transferUserInfo(payload)
+            if session.isReachable {
+                // Fire-and-forget: the queued copy above already owns the
+                // guarantee, so an interactive failure needs no recovery and
+                // must not be surfaced. The error is swallowed WITHOUT logging —
+                // a WCSession error string can carry payload detail.
+                session.sendMessage(payload, replyHandler: nil, errorHandler: { _ in })
+            }
+        }
+        #if DEBUG
+        // Count only — a stored key is an opaque server path token and a
+        // filename is user content; neither may reach a log.
+        print("[Phone] Couriered \(descriptors.count) agent-file descriptor(s) to Watch")
+        #endif
     }
 
     // MARK: - WCSessionDelegate (required on iOS)

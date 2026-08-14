@@ -165,6 +165,34 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     // MARK: - Direct Messages (real-time identity request responses)
 
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        // Two unsolicited kinds arrive here, both on the INTERACTIVE channel,
+        // both because latency is the point — and EACH reads its discriminator
+        // through its OWN contract's key constant. The two constants hold the
+        // same literal today, so one shared read would compile and behave
+        // identically; it would also make a rename of either contract's key a
+        // SILENT break of the other's interactive lane, with no compile error
+        // and a wrong-branch fall-through at runtime. That is precisely the
+        // failure mode the relay's duplicated wire strings already cost us once.
+        let relayKind = message[AppleSpeechRelayCoordinator.Wire.kindKey] as? String
+        let courierKind = message[AttachedFileCourierWire.kindKey] as? String
+
+        // Agent-file courier, interactive lane. The iPhone sends every batch on
+        // BOTH channels; this is the one that makes a file row appear in about a
+        // second while the user is still looking at the thread. The queued copy
+        // (`didReceiveUserInfo`) owns the delivery guarantee, and ingestion is
+        // keyed on (message, stored key), so whichever arrives second is free.
+        if courierKind == AttachedFileCourierWire.kindValue {
+            let bridged = SendablePlistPayload(message)
+            Task { @MainActor in
+                guard let payload = bridged.dictionary() else {
+                    WatchLog.error(.session, "wc.message.bridgedrop", ["keys": bridged.keyCount])
+                    return
+                }
+                Self.ingestAgentFileCourier(payload, lane: "msg")
+            }
+            return
+        }
+
         // Relay-reply ingress #2 (interactive channel). When the Watch is
         // reachable AND the request stamped `replySendMessageOK`, the iPhone
         // sends the transcript verdict via `sendMessage` for snappy delivery
@@ -172,8 +200,7 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
         // same handler as the userInfo route below — the coordinator
         // correlates by requestID either way, and the queue's claim-token
         // reconcile dedups if BOTH channels ever deliver the same reply.
-        guard let kind = message[AppleSpeechRelayCoordinator.Wire.kindKey] as? String,
-              kind == AppleSpeechRelayCoordinator.Wire.replyKind else {
+        guard relayKind == AppleSpeechRelayCoordinator.Wire.replyKind else {
             // No other unsolicited-message kinds are defined for the Watch.
             return
         }
@@ -239,6 +266,11 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
         // first avoids redundant decode attempts on every reply.
         let isRelayReply = (userInfo[AppleSpeechRelayCoordinator.Wire.kindKey] as? String)
             == AppleSpeechRelayCoordinator.Wire.replyKind
+        // Agent-file courier, QUEUED lane — the durable spine. This one delivers
+        // even when the wrist was unreachable or asleep when the iPhone attached
+        // the file, which is why it exists alongside the interactive lane above.
+        let isFileCourier = (userInfo[AttachedFileCourierWire.kindKey] as? String)
+            == AttachedFileCourierWire.kindValue
         let bridged = SendablePlistPayload(userInfo)
         Task { @MainActor in
             WatchLog.note(.session, "wc.userinfo", ["relay": isRelayReply, "keys": bridged.keyCount])
@@ -250,8 +282,49 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
                 await AppleSpeechRelayCoordinator.shared.handleReply(payload)
                 return
             }
+            if isFileCourier {
+                Self.ingestAgentFileCourier(payload, lane: "userinfo")
+                return
+            }
+            // Forward-compat: anything else falls through to the settings
+            // decoder, which is key-driven and no-ops on a payload carrying none
+            // of its keys. That is exactly how an OLDER wrist build absorbs a
+            // courier batch it has never heard of — harmlessly.
             await self.applyEnvelopePayload(payload)
         }
+    }
+
+    // MARK: - Agent-file courier ingress
+
+    /// Decode one courier batch, absorb it, and wake the UI.
+    ///
+    /// Posting `.conversationsDidChange` is the whole delivery mechanism on this
+    /// side: `WatchConversationViewModel` observes it, coalesces the burst, and
+    /// re-runs BOTH the list reload and — via `selectedConversationID` — the open
+    /// thread's refresh, so a user already staring at the conversation sees the
+    /// row appear without leaving and re-entering it. `MessageRecord` equality
+    /// includes its attachments, so the merged thread genuinely differs and the
+    /// view model's no-op skip does not swallow it.
+    ///
+    /// Gated on the inbox ACTUALLY changing, because the iPhone sends every batch
+    /// on both channels: a re-delivery must not cost a store fetch or a repaint.
+    /// PRIVACY: the breadcrumb is counts and a lane label only — never a stored
+    /// key (an opaque server path token) and never a filename (user content).
+    @MainActor
+    private static func ingestAgentFileCourier(_ payload: [String: Any], lane: String) {
+        let descriptors = AttachedFileCourierWire.decode(payload)
+        guard !descriptors.isEmpty else {
+            WatchLog.note(.session, "wc.agentfiles.empty", ["lane": lane])
+            return
+        }
+        let changed = WatchAttachmentInbox.shared.ingest(descriptors)
+        WatchLog.note(.session, "wc.agentfiles", [
+            "lane": lane,
+            "items": descriptors.count,
+            "new": changed
+        ])
+        guard changed else { return }
+        NotificationCenter.default.post(name: .conversationsDidChange, object: nil)
     }
 
     /// Decode + apply a settings payload. Shared by BOTH ingress channels:

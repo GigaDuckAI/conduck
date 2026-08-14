@@ -10,6 +10,17 @@
 // Reads an injected `ConversationStore` (defaults to `.shared` — CloudKit-synced
 // on device builds; the in-memory seam under test). The store is the single
 // source of truth; this VM is a thin SwiftUI-facing cache.
+//
+// One exception to "the store is the single source of truth", and it is
+// deliberate: agent-output FILES. The wrist holds no file-server credential, so
+// it can never discover a file the agent produced — the iPhone discovers it,
+// attaches it, and CloudKit mirrors that row here minutes later. The iPhone also
+// couriers the row's metadata over WatchConnectivity in about a second, and
+// `WatchAttachmentInbox` holds it until the authoritative row lands. Every
+// thread fetch here is merged through that inbox, which is also what retires an
+// entry: the merge sees the real row and drops the couriered one in the same
+// pass, so the two can never both render. See `WatchAttachmentInbox` for why
+// this is an overlay and not a local Core Data write.
 
 import Foundation
 
@@ -86,8 +97,17 @@ final class WatchConversationViewModel {
     /// under test so refresh-machinery tests never touch the CloudKit store.
     private let store: ConversationStore
 
-    init(store: ConversationStore = .shared) {
+    /// Injected agent-file overlay. Every thread fetch is merged through it so a
+    /// couriered file row shows immediately; the merge also retires entries whose
+    /// authoritative row has arrived.
+    private let attachmentInbox: WatchAttachmentInbox
+
+    init(
+        store: ConversationStore = .shared,
+        attachmentInbox: WatchAttachmentInbox = .shared
+    ) {
         self.store = store
+        self.attachmentInbox = attachmentInbox
         observerBox.observer = NotificationCenter.default.addObserver(
             forName: .conversationsDidChange,
             object: nil,
@@ -216,6 +236,11 @@ final class WatchConversationViewModel {
         Task {
             do {
                 try await store.deleteConversation(id: conversation.id)
+                // Drop any couriered file rows for this thread. Their messages
+                // are gone, so nothing can ever prove their authoritative rows
+                // landed — without this they would sit invisible until the
+                // inbox's age bound expired them.
+                attachmentInbox.purgeConversation(conversation.id)
                 conversations.removeAll { $0.id == conversation.id }
                 changeGeneration += 1
             } catch {
@@ -265,7 +290,9 @@ final class WatchConversationViewModel {
         // previous thread's bubbles while the new fetch is in flight.
         threadMessages = []
         do {
-            threadMessages = try await store.fetchMessages(for: conversationID)
+            threadMessages = attachmentInbox.merged(
+                into: try await store.fetchMessages(for: conversationID)
+            )
         } catch {
             threadMessages = []
         }
@@ -281,9 +308,20 @@ final class WatchConversationViewModel {
     @discardableResult
     func refreshThread(for conversationID: UUID) async -> Bool {
         do {
-            let fresh = try await store.fetchMessages(for: conversationID)
+            // Merged through the agent-file inbox, which is what makes a
+            // couriered file row surface HERE — the courier's ingest posts
+            // `.conversationsDidChange`, the refresh worker calls this, and the
+            // merged thread differs by value because `MessageRecord` equality
+            // includes its attachments. Without the merge the notification would
+            // fetch an unchanged thread and the equality skip below would
+            // correctly swallow it, and the row would wait for CloudKit.
+            let fresh = attachmentInbox.merged(
+                into: try await store.fetchMessages(for: conversationID)
+            )
             // Equality skip, same as `reload()` — an unchanged thread must not
-            // re-render every visible bubble.
+            // re-render every visible bubble. The merge is a pure function of
+            // (fetched rows, inbox entries), so a genuinely unchanged pass stays
+            // equal and still skips.
             if fresh != threadMessages {
                 threadMessages = fresh
                 return true
@@ -293,5 +331,15 @@ final class WatchConversationViewModel {
             // transient fetch error.
         }
         return false
+    }
+
+    /// Total attachment rows across the open thread.
+    ///
+    /// The thread view snaps to the bottom on `threadMessages.count` changing —
+    /// which a file landing on an EXISTING reply does not change, so the new row
+    /// would draw below the fold on a wrist and the user would conclude nothing
+    /// happened. This is the companion signal for exactly that case.
+    var threadAttachmentCount: Int {
+        threadMessages.reduce(0) { $0 + $1.attachments.count }
     }
 }
