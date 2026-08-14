@@ -1594,6 +1594,17 @@
         }
       }
     },
+    "declinedTurn.wordless.hint" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This message had no text. Some agents reply with nothing when they get a file but no question — send it again with a question."
+          }
+        }
+      }
+    },
     "Delete All" : {
 
     },
