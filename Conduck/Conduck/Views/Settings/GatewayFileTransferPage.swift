@@ -51,6 +51,9 @@ extension GatewayFileLaneStatus {
         switch self {
         case .ready:
             return LocalizedStringResource("fileTransfer.status.ready.short", defaultValue: "Server tested")
+        case .readyUploadsOnly:
+            return LocalizedStringResource(
+                "fileTransfer.status.uploadsOnly.short", defaultValue: "Uploads only")
         case .needsAttention:
             return LocalizedStringResource("fileTransfer.status.needsAttention.short", defaultValue: "Needs attention")
         case .saved:
@@ -64,16 +67,32 @@ extension GatewayFileLaneStatus {
         }
     }
 
-    /// Plain-English meaning of the badge. `.ready` is deliberately precise about
-    /// WHAT was proven — a passing staged test proves uploads land on the server,
-    /// not that the agent is looking in the folder they landed in (nothing on the
-    /// device can prove that; see the setup explanation).
+    /// Plain-English meaning of the badge.
+    ///
+    /// `.ready` claims ONLY what this badge durably knows: a test file went up
+    /// and came back. It deliberately does NOT claim that files can come the
+    /// other way, even though a passing listing stage would prove it — the badge
+    /// is derived from PERSISTED state, and the only listing outcome that
+    /// persists is the structural refusal below. A green badge asserting "listed
+    /// a folder" would therefore go on asserting it after a relaunch on a lane
+    /// whose listing probe timed out and proved nothing. The live staged result
+    /// says more, on the screen where it is still in hand.
+    ///
+    /// `.readyUploadsOnly` is the third answer and borrows neither of the other
+    /// two: it names what works FIRST, then what does not, and it ends by saying
+    /// where the files still are — a user whose server cannot list folders has
+    /// not lost their files, only the automatic delivery of them.
     var meaning: LocalizedStringResource? {
         switch self {
         case .ready:
             return LocalizedStringResource(
                 "fileTransfer.status.ready.meaning",
                 defaultValue: "Conduck uploaded and retrieved a test file."
+            )
+        case .readyUploadsOnly:
+            return LocalizedStringResource(
+                "fileTransfer.status.uploadOnly.meaning",
+                defaultValue: "Conduck uploaded a test file and read it back. This server can't list folders, so files the agent creates won't come back on their own — you'll still find them on the server."
             )
         case .needsAttention:
             return LocalizedStringResource(
@@ -110,6 +129,11 @@ extension GatewayFileLaneStatus {
                 "fileTransfer.status.ready.title",
                 defaultValue: "File server tested"
             )
+        case .readyUploadsOnly:
+            return LocalizedStringResource(
+                "fileTransfer.status.uploadOnly.title",
+                defaultValue: "File server tested — uploads only"
+            )
         case .needsAttention:
             return LocalizedStringResource(
                 "fileTransfer.status.needsAttention.title",
@@ -138,6 +162,7 @@ extension GatewayFileLaneStatus {
     var systemImage: String? {
         switch self {
         case .ready: return "checkmark.circle.fill"
+        case .readyUploadsOnly: return "exclamationmark.triangle.fill"
         case .needsAttention: return "xmark.circle.fill"
         case .saved: return "clock.fill"
         case .recommended, .optional: return "externaldrive.badge.plus"
@@ -148,6 +173,9 @@ extension GatewayFileLaneStatus {
     var tint: Color {
         switch self {
         case .ready: return AppColors.success
+        // Amber, never green and never red: the lane works, and half of what
+        // the user set it up for does not.
+        case .readyUploadsOnly: return AppColors.warning
         case .needsAttention: return AppColors.error
         case .recommended: return AppColors.brandAmber
         case .saved, .optional, .unsupported: return AppColors.textTertiary

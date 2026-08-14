@@ -1505,11 +1505,55 @@ enum Constants {
     /// against it is a PROPFIND, which a lane that refuses nested PUTs answers
     /// perfectly well. Gating the box here left phone/Mac/CarPlay with no file
     /// return on a lane where the Watch (which cannot read this flag at all)
-    /// still named one. What actually gates the box is the pre-dispatch absence
-    /// witness — a PROPFIND that has to come back `404` — which measures the one
-    /// capability the box depends on, per dispatch, on the lane itself.
+    /// still named one. What gates the box instead is the pair that measures the
+    /// one capability it actually depends on — answering a `PROPFIND` at all:
+    /// the durable `fileServerReturnCapableKeyPrefix` verdict, read first and
+    /// shared with the wrist, and then the pre-dispatch absence witness, a
+    /// `PROPFIND` that has to come back `404` on the lane itself, per dispatch.
     static func fileServerFolderCapableKey(for ref: RemoteAgentRef) -> String {
         "fileServer.folderCapable." + ref.storageKeySuffix
+    }
+
+    /// App Groups UserDefaults **and** iCloud KVS key PREFIX for a SPECIFIC ref's
+    /// "this file server can LIST a collection" verdict (Bool, default TRUE).
+    /// Format `fileServer.returnCapable.<suffix>`.
+    ///
+    /// It is the whole RETURN direction: every file an agent produces reaches the
+    /// device through a `PROPFIND` of the per-dispatch output box, so a lane with
+    /// this false moves bytes UP perfectly and can never bring one back.
+    ///
+    /// A NARROWING ON PROOF, exactly like `folderCapableKey`: only a structural
+    /// `405`/`501` at the staged test's listing stage may clear it, so an ABSENT
+    /// stored value reads TRUE — the absence of evidence, not evidence of
+    /// absence. Dual-stored because it is a fact about the SERVER, so a second
+    /// device must not have to re-measure it before it stops claiming file
+    /// return works.
+    ///
+    /// IT IS THE DISPATCH GATE — `BackgroundFileTransfer.mintOutboxKey` reads it
+    /// before it spends anything, and the wrist gates its own mint on the
+    /// couriered copy, so one stored fact keeps every surface on one gateway
+    /// telling the same story. The per-dispatch absence witness cannot take that
+    /// job: it asks about a collection that by construction does not exist, where
+    /// a `405`/`501` describes the route rather than the method.
+    ///
+    /// A GATE THAT ONLY NARROWS NEEDS A WIDENER:
+    /// `FileTransferCapabilityRefresher` re-probes a narrowed lane once per
+    /// launch and writes `true` back on proof, so a repaired server self-heals at
+    /// the next launch — and immediately via the "Test again" button under the
+    /// amber "Uploads only" status. It is also what the surfaces that can measure
+    /// nothing read: the badges on relaunch, and the wrist, which holds no
+    /// file-server credential.
+    ///
+    /// Single-sourced as a prefix for the same reason
+    /// `fileServerAutoDeliverKeyPrefix` is — the inbound KVS mirror scans by
+    /// prefix, and `SettingsManager`'s mirrored-prefix list names THIS constant
+    /// rather than a second copy of the literal.
+    static let fileServerReturnCapableKeyPrefix = "fileServer.returnCapable."
+
+    /// App Groups UserDefaults **and** iCloud KVS key for a SPECIFIC ref's
+    /// return-capability verdict. Format `fileServer.returnCapable.<suffix>`.
+    static func fileServerReturnCapableKey(for ref: RemoteAgentRef) -> String {
+        fileServerReturnCapableKeyPrefix + ref.storageKeySuffix
     }
 
     /// App Groups UserDefaults **and** iCloud KVS key PREFIX for a SPECIFIC

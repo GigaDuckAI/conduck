@@ -198,8 +198,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // empty inbox; the actor serializes against the active-drain hook.
         shareInboxWatcher.start()
         Task { await SharedInboxDrainer.shared.drain(trigger: .launch) }
-        // Initial sync, then the silent folder-capability refresh in the SAME
-        // task (it reads file-server flags the sync may have just hydrated).
+        // Initial sync, then the silent capability refresh (folder + return) in
+        // the SAME task — it reads file-server flags the sync may have just
+        // hydrated.
         Task {
             await SettingsManager.shared.performInitialSync()
             await FileTransferCapabilityRefresher.refreshIfNeeded()

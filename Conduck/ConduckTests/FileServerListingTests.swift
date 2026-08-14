@@ -14,8 +14,9 @@
 //  learned) or `.absent` (the folder is not there) — never an empty folder,
 //  because "the agent produced nothing" is the one conclusion that CLOSES a turn.
 //
-//  The tolerant `parsePropfindBody` is a different function with a different
-//  contract (`FileServerPropfindTests`); it may not back a delivery decision.
+//  `parseListing` is the app's ONLY `207` parser, and these cases are what keep
+//  a tolerant one from growing back beside it: leniency that is right for a
+//  browser reports a body nobody understood as an ordinary short listing.
 //
 //  Privacy: synthetic fixtures only; nothing is logged.
 //

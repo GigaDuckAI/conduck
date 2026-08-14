@@ -366,6 +366,25 @@ final class DiagnosticsRunner {
     /// gateway never reaches `copyBlock()`. See `FileLaneState`.
     private(set) var fileLanes: [FileLaneState] = []
 
+    /// Refs whose PERSISTED file-server verdict says the server cannot list a
+    /// collection — the upload-only lanes, which move bytes up perfectly and can
+    /// never bring one back.
+    ///
+    /// PERSISTED, not read off `fileTransferResults`, and that is the whole
+    /// point of holding it separately: the results dict is session-scoped —
+    /// written only by a test run in THIS session and dropped outright when a
+    /// lane's signature changes — so a lane whose upload-only verdict was proven
+    /// yesterday showed a green "Verified" here while the gateway's File
+    /// transfer page correctly showed amber. Membership is a narrowing recorded
+    /// only from a structural `405`/`501`, so a lane nobody has measured is not
+    /// a member.
+    ///
+    /// Kept beside `fileLanes` rather than ON `FileLaneState` because it is not
+    /// part of the lane's badge derivation for the summary's attention count: an
+    /// upload-only lane is a working lane with a stated limitation, not a
+    /// finding.
+    private(set) var fileLaneUploadOnly: Set<RemoteAgentRef> = []
+
     /// Ordered per-gateway display model (UI-only) — one entry per CONFIGURED
     /// gateway (incl. non-file-capable `openrouter`), focused/active-sorted to match
     /// the Connection check order. Carries the real display NAME (a custom gateway's
@@ -722,9 +741,15 @@ final class DiagnosticsRunner {
         // re-derive iff the lane's config signature is unchanged.
         var newFileLanes: [FileLaneState] = []
         var newFileLaneSignatures: [RemoteAgentRef: String] = [:]
+        var newFileLaneUploadOnly: Set<RemoteAgentRef> = []
         for ref in refs where Self.isFileCapable(ref) {
             let snap = await manager.fileTransferSnapshot(for: ref)
             let signature = Self.fileLaneSignature(snap)
+            // The PERSISTED listing verdict, from the same atomic snapshot read
+            // as readiness — so this screen can never pair one moment's
+            // readiness with another moment's capability. A lane with no
+            // snapshot has no server to describe and stays out of the set.
+            if snap?.returnCapable == false { newFileLaneUploadOnly.insert(ref) }
             var reachAuth: DiagnosticStatus = .notRun
             var detail: String?
             if carryOver,
@@ -1384,6 +1409,9 @@ final class DiagnosticsRunner {
 
         // --- Commit (disable the row-insert animation on a structural change) ---
         fileLanes = newFileLanes
+        // Replaced wholesale, not merged: a ref that lost its lane must lose its
+        // verdict with it, exactly as its signature does below.
+        fileLaneUploadOnly = newFileLaneUploadOnly
         gatewayDisplayOrder = newGatewayDisplayOrder
         incompleteGatewayDisplay = newIncompleteDisplay
         // The global conclusion when the per-gateway rows have replaced the
@@ -2216,12 +2244,22 @@ final class DiagnosticsRunner {
         }
     }
 
-    /// Run the staged file-server test (reachability → auth → write → read) for a
-    /// SPECIFIC gateway and persist availability + folder-capability EXACTLY like
-    /// `SettingsViewModel.runFileTransferTest(for:)`, so a failed Diagnostics test
-    /// downgrades `fileTransferAvailable` (no stale-green composer affordance).
-    /// The ONLY thing that sets `writeVerified` — the reach/auth probe never does.
-    func runFileTransferTest(for ref: RemoteAgentRef) async {
+    /// Run the staged file-server test (reachability → auth → write → read →
+    /// listing) for a SPECIFIC gateway and commit what it concluded EXACTLY like
+    /// `SettingsViewModel.runFileTransferTest(for:)` — through the same
+    /// `SettingsManager.commitStagedFileTransferResult` — so a failed Diagnostics
+    /// test downgrades `fileTransferAvailable` (no stale-green composer
+    /// affordance) and a listing-less server is recorded as upload-only wherever
+    /// the user happened to test it. The ONLY thing that sets `writeVerified` —
+    /// the reach/auth probe never does.
+    ///
+    /// `session` is a TEST SEAM, exactly like `FileServerClient.runConnectionTest`'s:
+    /// production passes nil and the client builds its own pinned probe session.
+    /// It exists so this screen's persistence can be driven against a scripted
+    /// server, which is the only way to catch the two staged-test paths drifting
+    /// apart again — the drift was invisible to every test that exercised the
+    /// client alone.
+    func runFileTransferTest(for ref: RemoteAgentRef, session: URLSession? = nil) async {
         // Don't let a manual write test start DURING the full run's sweep phase (a
         // sub-render double-tap window before the row button re-renders disabled):
         // the sweep is writing this lane's `reachAuth` too, so last-writer-wins
@@ -2245,14 +2283,18 @@ final class DiagnosticsRunner {
                 failure: .fileTransferNotConfigured
             )
             fileTransferResults[ref] = result
-            await SettingsManager.shared.setFileTransferAvailable(false, for: ref)
+            // Through the same commit as every other outcome of this test: a
+            // not-configured result concludes only that the lane is not ready,
+            // and routing it here keeps this screen with exactly ONE way of
+            // writing what a staged test learned.
+            await SettingsManager.shared.commitStagedFileTransferResult(result, for: ref)
             let code = AppError.fileTransferNotConfigured.errorCode
             updateFileLaneAfterWrite(ref: ref, success: false, code: code)
             return
         }
 
         let signatureAtDispatch = Self.fileLaneSignature(snapshot)
-        let result = await FileServerClient.runConnectionTest(snapshot: snapshot)
+        let result = await FileServerClient.runConnectionTest(snapshot: snapshot, session: session)
 
         // Drop the outcome if the lane's config changed while the test ran —
         // otherwise the OLD server's verdict gets persisted onto the NEW config
@@ -2263,28 +2305,95 @@ final class DiagnosticsRunner {
         guard Self.fileLaneSignature(liveSnapshot) == signatureAtDispatch else { return }
 
         fileTransferResults[ref] = result
-        // Same persistence contract as the Settings-side test: set availability
-        // ONLY on a full pass; clear on any failure; persist folder-capability
-        // only on a pass (the nested probe runs only after read passes).
+        // THE SAME DURABLE COMMIT the Settings-side test makes, through the same
+        // actor hop rather than through a second spelling of it. This screen runs
+        // the identical staged test, so it must reach the identical conclusion:
+        // readiness, folder capability, the listing verdict and this device's
+        // local test proof all land together, in one hop, one notification. The
+        // duplicate that lived here wrote everything EXCEPT the listing verdict,
+        // so a user who tested a listing-less server from Diagnostics got a
+        // proven upload-only lane that kept a green badge everywhere while
+        // dispatch silently stopped naming output folders.
+        await SettingsManager.shared.commitStagedFileTransferResult(result, for: ref)
+        await refreshFileLaneReturnCapability(for: ref)
         if result.success {
-            // Folder-capability BEFORE availability true: the file-server keys
-            // mirror to iCloud KVS, so a peer must never observe `available=true`
-            // paired with a stale default-true folderCapable when the definitive
-            // verdict was flat-only.
-            await SettingsManager.shared.setFileServerFolderCapable(result.folderCapable, for: ref)
-            await SettingsManager.shared.setFileTransferAvailable(true, for: ref)
-            // This device proved the lane locally — arm the silent, upgrade-only
-            // folder re-probe (synced-only peers stay disarmed). A fresh staged
-            // verdict supersedes any recorded silent-probe outcome, so the
-            // markers drop with it (re-arms the upgrade-only probe).
-            await SettingsManager.shared.setFileServerTestedLocally(true, for: ref)
-            await SettingsManager.shared.clearFolderProbeMarkers(for: ref)
             updateFileLaneAfterWrite(ref: ref, success: true, code: nil)
         } else {
-            await SettingsManager.shared.setFileTransferAvailable(false, for: ref)
             let code = result.failure?.errorCode ?? AppError.fileTransferUploadFailed.errorCode
             updateFileLaneAfterWrite(ref: ref, success: false, code: code)
         }
+    }
+
+    /// Re-read `ref`'s PERSISTED listing verdict into the published mirror the
+    /// badge renders.
+    ///
+    /// READ BACK rather than derived from the result just committed, and for the
+    /// same reason `SettingsViewModel` reads its own mirror back: the store is
+    /// the authority, an unsettled listing stage deliberately leaves the stored
+    /// value alone, and a mirror computed from the live result would then report
+    /// a verdict the store never took.
+    private func refreshFileLaneReturnCapability(for ref: RemoteAgentRef) async {
+        if await SettingsManager.shared.getFileServerReturnCapable(for: ref) {
+            fileLaneUploadOnly.remove(ref)
+        } else {
+            fileLaneUploadOnly.insert(ref)
+        }
+    }
+
+    /// What a PASSING file lane still has to say about the RETURN direction.
+    /// `nil` = nothing to add; the model's own badge stands.
+    enum FileLaneReturnCaveat: Equatable, Sendable {
+        /// The server has STATED it does not implement the listing method. The
+        /// lane works, in one direction, and this is the only badge that says so.
+        case uploadsOnly
+        /// The return direction could not be checked this run — neither the
+        /// green claim nor the amber limitation has been earned.
+        case returnUnchecked
+    }
+
+    /// Derive the return-direction caveat for one lane. PURE, and separated from
+    /// the view for exactly that reason: it is the only place two sources of
+    /// truth are ranked against each other, and the ranking is what the bug was.
+    ///
+    /// THE PERSISTED VERDICT WINS. It is the durable answer, so it is still true
+    /// after a relaunch, after a lane-signature change dropped this session's
+    /// results, and on a device that never ran the test itself — where the live
+    /// result, being session-scoped, silently says nothing and let a proven
+    /// upload-only lane render green.
+    ///
+    /// The live result is consulted ONLY for what persistence deliberately
+    /// cannot express: an unsettled listing stage stores nothing (a `502` is not
+    /// proof either way), and "no stored value" is indistinguishable from "never
+    /// measured", so the fact that THIS run tried and could not tell exists
+    /// nowhere else. That is a real addition, and a diagnostics screen — where
+    /// the user came to ask why files are not coming back — is the one place
+    /// worth spending a badge on it.
+    static func fileLaneReturnCaveat(
+        badge: FileLaneState.Badge,
+        persistedUploadOnly: Bool,
+        liveResult: FileTransferTestResult?
+    ) -> FileLaneReturnCaveat? {
+        // Only a lane the model calls verified has a green seal to qualify. A
+        // failed or untested lane already says something truer.
+        guard badge == .verified else { return nil }
+        if persistedUploadOnly { return .uploadsOnly }
+        // A live verdict may still NARROW ahead of the mirror — the commit and
+        // the mirror refresh are two awaits apart, so a just-finished test is
+        // authoritative for the moment in between.
+        if liveResult?.isUploadOnly == true { return .uploadsOnly }
+        if liveResult?.listingUnverified != nil { return .returnUnchecked }
+        return nil
+    }
+
+    /// The caveat for `lane`, reading this runner's two sources. The view calls
+    /// this rather than assembling the inputs itself, so the ranking above is
+    /// stated once.
+    func fileLaneReturnCaveat(for lane: FileLaneState) -> FileLaneReturnCaveat? {
+        Self.fileLaneReturnCaveat(
+            badge: lane.badge,
+            persistedUploadOnly: fileLaneUploadOnly.contains(lane.ref),
+            liveResult: fileTransferResults[lane.ref]
+        )
     }
 
     /// Mark a lane's write test as running (spinner on that row) — clears any prior

@@ -17,13 +17,15 @@
 // do NOT reintroduce a lane parameter to special-case copy; add per-ref facts
 // instead, resolved the way the rows below already are.
 //
-// What it surfaces (gateway name · file-transfer readiness · default-for-new-chats)
+// What it surfaces (gateway name · file-transfer state · default-for-new-chats)
 // is the connected-confirmation summary the guided flow ends on:
 //   - the gateway's display name (a proper noun / user label) — shown verbatim,
 //     never localized, never a secret;
-//   - whether file sharing is READY for that gateway (`fileLaneStatus(for:)` →
-//     `.unsupported` means no file lane at all — the hosted model's case — so the
-//     row is OMITTED rather than claiming a state);
+//   - what file sharing is good for on that gateway, read straight off
+//     `fileLaneStatus(for:)` so this screen tells the same three-valued story the
+//     gateway editor and the File transfer page do — on, uploads only, or off.
+//     `.unsupported` means no file lane at all (the hosted model's case), so the
+//     row is OMITTED rather than claiming a state;
 //   - whether the connected gateway is the default for new chats — only the
 //     first-ever gateway bootstraps the default, so a later one gets a quiet
 //     "pick it under New chats use" line instead of overclaiming.
@@ -94,13 +96,22 @@ struct GatewaySetupSuccessView: View {
     }
 
     /// File-sharing readiness for the connected gateway, or `nil` when there is no
-    /// file lane to report (`.unsupported` — the hosted model) or no ref. `true` =
-    /// the staged file test PASSED this session; `false` = a file lane exists but
-    /// isn't ready. We never invent a state, so an absent lane drops the row.
-    private var fileSharingOn: Bool? {
+    /// file lane to report (`.unsupported` — the hosted model) or no ref. We never
+    /// invent a state, so an absent lane drops the row.
+    ///
+    /// THE WHOLE BADGE, not a Bool derived from `isFileTransferAvailable`. A lane
+    /// whose server accepts writes and reads but implements no directory listing
+    /// passes the staged test and is therefore AVAILABLE — so a Bool answers
+    /// "on", and this screen would hand a plain-nginx user an unqualified success
+    /// for a capability they have exactly half of, while the gateway editor and
+    /// the File transfer page both show the amber "Uploads only" for the same
+    /// gateway. `.readyUploadsOnly` exists precisely so no surface has to
+    /// remember to ask the second question; asking for the status is how this one
+    /// stops being the surface that forgot.
+    private var fileLaneStatus: GatewayFileLaneStatus? {
         guard let ref = connectedRef else { return nil }
-        guard viewModel.fileLaneStatus(for: ref) != .unsupported else { return nil }
-        return viewModel.isFileTransferAvailable(ref)
+        let status = viewModel.fileLaneStatus(for: ref)
+        return status == .unsupported ? nil : status
     }
 
     var body: some View {
@@ -196,17 +207,13 @@ struct GatewaySetupSuccessView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            // File-sharing state — only when there's a file lane to report.
-            if let on = fileSharingOn {
+            // File-sharing state — only when there's a file lane to report, and
+            // three-valued for the same reason every other file surface is.
+            if let status = fileLaneStatus {
                 summaryRow(
-                    icon: on ? "folder.fill" : "folder",
-                    text: on
-                        ? LocalizedStringResource(
-                            "gateway.setup.success.fileSharing.on",
-                            defaultValue: "File transfer · On")
-                        : LocalizedStringResource(
-                            "gateway.setup.success.fileSharing.off",
-                            defaultValue: "File transfer · Off")
+                    icon: Self.fileRowIcon(status),
+                    text: Self.fileRowText(status),
+                    tint: Self.fileRowTint(status)
                 )
             }
 
@@ -242,11 +249,62 @@ struct GatewaySetupSuccessView: View {
         .padding(.horizontal, 32)
     }
 
+    // MARK: - File-transfer row (three-valued, like every other file surface)
+
+    // Static + internal rather than private, for the test target: the regression
+    // this row carries — a half-lane reported as an unqualified success — is a
+    // pure mapping from one enum, and a `View`'s `body` is the one place it
+    // cannot be asserted on.
+
+    /// The glyph. `.readyUploadsOnly` leaves the folder family for the amber
+    /// triangle the editor's badge and the File transfer page's status block
+    /// already use for it — a folder icon of any fill would read as one of the
+    /// two settled answers.
+    static func fileRowIcon(_ status: GatewayFileLaneStatus) -> String {
+        switch status {
+        case .ready: return "folder.fill"
+        case .readyUploadsOnly: return "exclamationmark.triangle.fill"
+        case .needsAttention, .saved, .recommended, .optional, .unsupported: return "folder"
+        }
+    }
+
+    /// The label. Deliberately the SHORT form the rest of the app uses for this
+    /// state — the card reports, it does not explain, and the meaning lives one
+    /// tap away on the File transfer page where the remedy is.
+    static func fileRowText(_ status: GatewayFileLaneStatus) -> LocalizedStringResource {
+        switch status {
+        case .ready:
+            return LocalizedStringResource(
+                "gateway.setup.success.fileSharing.on",
+                defaultValue: "File transfer · On")
+        case .readyUploadsOnly:
+            return LocalizedStringResource(
+                "gateway.setup.success.fileSharing.uploadsOnly",
+                defaultValue: "File transfer · Uploads only")
+        case .needsAttention, .saved, .recommended, .optional, .unsupported:
+            return LocalizedStringResource(
+                "gateway.setup.success.fileSharing.off",
+                defaultValue: "File transfer · Off")
+        }
+    }
+
+    /// Amber for the half-lane, the card's own neutral for everything else. Not
+    /// `GatewayFileLaneStatus.tint`, whose `.ready` is green: a second green
+    /// element under the screen's hero checkmark competes with it, and this row
+    /// is a summary line rather than a badge.
+    static func fileRowTint(_ status: GatewayFileLaneStatus) -> Color {
+        status == .readyUploadsOnly ? AppColors.warning : AppColors.textSecondary
+    }
+
     /// A leading-icon summary line in the card (file-sharing state).
-    private func summaryRow(icon: String, text: LocalizedStringResource) -> some View {
+    private func summaryRow(
+        icon: String,
+        text: LocalizedStringResource,
+        tint: Color = AppColors.textSecondary
+    ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: icon)
-                .foregroundStyle(AppColors.textSecondary)
+                .foregroundStyle(tint)
                 .accessibilityHidden(true)
             Text(text)
                 .onboardingScaledFont(.subheadline)

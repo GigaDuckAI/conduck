@@ -381,8 +381,9 @@ struct ConduckApp: App {
 
         // 1. iCloud KVS pull on first launch of a second device (identity +
         //    `stt.preferredLanguage` only — trimmed per Plan Q7D). The silent
-        //    folder-capability refresh chains AFTER it in the SAME task — it reads
-        //    file-server flags this initial sync may have just hydrated.
+        //    capability refresh (folder + return) chains AFTER it in the SAME
+        //    task — it reads file-server flags this initial sync may have just
+        //    hydrated.
         Task {
             await SettingsManager.shared.performInitialSync()
             await FileTransferCapabilityRefresher.refreshIfNeeded()

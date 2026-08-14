@@ -35,9 +35,12 @@ final class FileServerTrustRefusalTests: XCTestCase {
 
     private var session: URLSession!
 
-    /// The nested capability probe is the only traffic under `__conduck_probe__/`;
-    /// the flat stages write `__conduck_probe_<tag>.txt` at the root.
-    private static let nestedDirMarker = "__conduck_probe__/"
+    /// The nested capability probe is the only traffic inside a probe COLLECTION,
+    /// and the collection is named per run (`__conduck_probe_<8hex>__/`) so a
+    /// `201` proves this call created it. The flat stages write
+    /// `__conduck_probe_<tag>.txt` at the root — no trailing `__/` — so the
+    /// directory segment still identifies the nested traffic uniquely.
+    private static let nestedDirMarker = "__/"
 
     override func setUp() {
         super.setUp()

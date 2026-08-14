@@ -2395,11 +2395,51 @@ actor SettingsManager {
         /// (probed at Test Connection; default true). True → uploads mint
         /// per-conversation `<convID>/<8hex>__<name>` keys; false → flat
         /// `<8hex>__<name>` keys (a gateway that rejects nested PUTs).
+        ///
+        /// A fact about the SERVER, which is why it also rides the pairing payload
+        /// (`PairingPayload.FileServer.folderCapable`): the answer does not depend
+        /// on which device asked, so a device set up by import starts from the
+        /// exporting device's measured verdict instead of the optimistic default.
+        /// `available` does NOT travel that way — see the pairing files for why a
+        /// readiness verdict is device-local while a capability is not.
         let folderCapable: Bool
+        /// Whether this gateway's file-server can LIST a collection — i.e.
+        /// whether it answers `PROPFIND` (probed at the staged Test Connection's
+        /// listing stage; default true). It is the whole return direction: every
+        /// file an agent produces reaches the device through a `PROPFIND` of the
+        /// per-dispatch output box, so a lane with this false moves bytes UP
+        /// perfectly and can never bring one back.
+        ///
+        /// A NARROWING ON PROOF, exactly like `folderCapable`: only a structural
+        /// `405`/`501` may clear it, and an ABSENT stored value therefore reads
+        /// true. A fact about the SERVER rather than about this device, so it
+        /// syncs like `folderCapable` does.
+        ///
+        /// IT IS THE DISPATCH GATE, read by `BackgroundFileTransfer.mintOutboxKey`
+        /// before it spends anything and by the Watch before its own mint — one
+        /// stored fact, so every surface on one gateway agrees. The alternative,
+        /// letting the per-dispatch absence witness re-discover the answer on the
+        /// lane itself, is not available: that witness asks about a collection
+        /// that by construction does not exist, where a `405`/`501` describes the
+        /// route rather than the method, so it may not conclude incapability at
+        /// all. Without the gate the large plain-`nginx` population paid a
+        /// `PROPFIND` on the critical path of every turn and drew an actionable
+        /// fault row on every turn, forever, after every relaunch.
+        ///
+        /// A GATE THAT ONLY NARROWS NEEDS A WIDENER, and it has one:
+        /// `FileTransferCapabilityRefresher` re-probes a narrowed lane once per
+        /// launch, silently, and writes `true` back on proof — so a user who
+        /// enables `PROPFIND` on their server gets file return at the next launch
+        /// without doing anything, and immediately if they use the "Test again"
+        /// button the amber "Uploads only" status sits directly above. Both
+        /// routes go through this field, which is also what the surfaces that can
+        /// measure nothing read: the Settings badge on relaunch, and the wrist,
+        /// which holds no file-server credential.
+        let returnCapable: Bool
         /// Whether this gateway may put files on the device automatically
-        /// (default true). A PERMISSION, not a capability: `available` and
-        /// `folderCapable` describe what the server can do, this describes what
-        /// the user allows it to do.
+        /// (default true). A PERMISSION, not a capability: `available`,
+        /// `folderCapable` and `returnCapable` describe what the server can do,
+        /// this describes what the user allows it to do.
         ///
         /// RESERVED — NOTHING READS IT. No dispatch, delivery or UI path
         /// branches on this value on any surface, and none is meant to yet;
@@ -2407,9 +2447,9 @@ actor SettingsManager {
         /// `if snapshot.autoDeliver` without the seat policy that gives it a
         /// meaning, and do not delete it as dead weight.
         ///
-        /// It is stored, synced, named in the pairing payload
-        /// (`PairingPayload.FileServer.autoDeliver` parses it; no import path
-        /// applies it, because there is nothing yet to apply), couriered to the Watch
+        /// It is stored, synced, carried both ways through the pairing payload
+        /// (`PairingPayload.FileServer.autoDeliver` — the exporter states it, the
+        /// importer commits it), couriered to the Watch
         /// (`RemoteAgentBroadcastEnvelope.fileTransferAutoDeliver`) and placed on
         /// this snapshot now — with no reader — because those five surfaces are
         /// the expensive half: each is a persisted key, a synced key or a locked
@@ -2442,6 +2482,11 @@ actor SettingsManager {
             certFingerprintHex: String?,
             available: Bool,
             folderCapable: Bool,
+            // Defaulted true for the same reason its stored form defaults true:
+            // it is a narrowing applied on proof, so a synthetic snapshot (the
+            // staged test's draft tuple, a fixture) that has measured nothing
+            // must describe a capable lane rather than stamp one incapable.
+            returnCapable: Bool = true,
             autoDeliver: Bool = true,
             filenamePolicy: String = Constants.fileServerFilenamePolicyPreserve
         ) {
@@ -2451,6 +2496,7 @@ actor SettingsManager {
             self.certFingerprintHex = certFingerprintHex
             self.available = available
             self.folderCapable = folderCapable
+            self.returnCapable = returnCapable
             self.autoDeliver = autoDeliver
             self.filenamePolicy = filenamePolicy
         }
@@ -2462,6 +2508,9 @@ actor SettingsManager {
         /// DiagnosticsRunner's stale-result guard and the capability
         /// refresher's apply-guard — two independent definitions could
         /// disagree and let a stale probe verdict apply to a repointed lane.
+        /// `returnCapable` is excluded on the same terms as the other two
+        /// verdicts: it is measured ABOUT this identity, so folding it in would
+        /// make a lane change identity the moment a test told us something.
         /// Hashed so no secret sits in a comparable field; both operands of
         /// any comparison are produced in the same process run, so the
         /// per-process Hasher seed cancels out. Never logged.
@@ -2783,8 +2832,84 @@ actor SettingsManager {
     ]
     private static let fileServerMirroredBoolPrefixes = [
         "fileServer.available.", "fileServer.folderCapable.",
+        // SYNCED, like `folderCapable` and unlike `testedLocally`: whether a
+        // host answers `PROPFIND` does not depend on which of the user's
+        // devices asked, so a second device must not have to re-measure it
+        // before it stops claiming file return works. Named through the
+        // constant rather than re-spelled, so the key and its sync
+        // registration cannot drift apart — a key in one and not the other
+        // syncs on live changes but is missing on a fresh install, or the
+        // reverse, and neither shows up until a second device disagrees.
+        Constants.fileServerReturnCapableKeyPrefix,
         Constants.fileServerAutoDeliverKeyPrefix
     ]
+
+    /// Read a ref's "the file server can list a collection" verdict.
+    ///
+    /// ABSENT READS TRUE, and the default is the load-bearing half of this
+    /// accessor. The flag is a NARROWING the app applies only on a structural
+    /// `405`/`501` (see `FileTransferTestResult.returnCapable`), so "no stored
+    /// value" is the absence of evidence, not evidence of absence. Defaulting
+    /// false would silently demote every existing install that has not re-run a
+    /// Test Connection since this key shipped — telling users with perfectly
+    /// capable servers that files cannot come back, and switching off wrist file
+    /// return across a whole paired watch, on the strength of a key nobody ever
+    /// wrote. The failure mode of the true default is bounded and self-correcting
+    /// in the opposite direction: the lane over-claims until the first staged
+    /// test measures it for real. The per-dispatch witness is NOT a second
+    /// author here and cannot be — it asks about a collection that by
+    /// construction does not exist, where a `405`/`501` describes the route
+    /// rather than the method.
+    func getFileServerReturnCapable(for ref: RemoteAgentRef) -> Bool {
+        (defaults.object(forKey: Constants.fileServerReturnCapableKey(for: ref)) as? Bool) ?? true
+    }
+
+    /// Persist a ref's return-capability verdict. Dual-writes App Groups +
+    /// iCloud KVS (same reason `setFileServerFolderCapable` does — it is a fact
+    /// about the server, not about this device) and posts
+    /// `.settingsDidChangeRemotely`.
+    func setFileServerReturnCapable(_ capable: Bool, for ref: RemoteAgentRef) {
+        let key = Constants.fileServerReturnCapableKey(for: ref)
+        defaults.set(capable, forKey: key)
+        iCloudStore.set(capable, forKey: key)
+        postSettingsDidChangeRemotely()
+    }
+
+    /// What a commit hop does to the stored return-capability verdict.
+    ///
+    /// THREE OPERATIONS, NOT `Bool?`, because "leave it alone" and "forget it"
+    /// are different instructions and a nil that meant the first silently did
+    /// the wrong thing for the second: a lane repointed at a NEW server kept the
+    /// OLD server's `false`, so a replacement that lists folders perfectly would
+    /// have gone on being displayed — and couriered to the wrist — as
+    /// uploads-only until someone re-ran a Test Connection. An identity change
+    /// invalidates a verdict; an unsettled probe does not.
+    enum ReturnCapabilityWrite: Sendable {
+        /// Leave whatever is stored. For a probe that settled nothing: the flag
+        /// narrows and widens on proof, and "no proof" is not proof either way.
+        case preserve
+        /// Remove the key so it reads UNKNOWN (which resolves capable). For an
+        /// identity change — the verdict described a different server.
+        case resetToUnknown
+        /// A settled verdict measured against exactly this tuple.
+        case set(Bool)
+    }
+
+    /// Apply a `ReturnCapabilityWrite` to both stores. Private and
+    /// notification-free: every caller is a commit hop that posts exactly once.
+    private func writeReturnCapability(_ write: ReturnCapabilityWrite, for ref: RemoteAgentRef) {
+        let key = Constants.fileServerReturnCapableKey(for: ref)
+        switch write {
+        case .preserve:
+            break
+        case .resetToUnknown:
+            defaults.removeObject(forKey: key)
+            iCloudStore.removeObject(forKey: key)
+        case .set(let capable):
+            defaults.set(capable, forKey: key)
+            iCloudStore.set(capable, forKey: key)
+        }
+    }
 
     /// Revoke a ref's file-transfer READINESS as one actor-level operation —
     /// the single choke point every config-identity mutation (URL save,
@@ -2799,6 +2924,14 @@ actor SettingsManager {
     /// re-probe against the replacement server. A future mutation site that
     /// calls this cannot recreate the stale-verdict bug by construction.
     func revokeFileTransferReadiness(for ref: RemoteAgentRef) {
+        // FIRST, ahead of the two setters that post: the listing verdict dies
+        // with the identity, and it must — it is the one file-lane fact that
+        // gets DISPLAYED and COURIERED TO THE WRIST, so a rotated credential or
+        // a repointed URL keeping the old server's "uploads only" would state a
+        // limitation of a server that is no longer there. Removed rather than
+        // set true: unknown is the truth. Ordering matters because an observer
+        // woken by the notification below must not read the stale verdict back.
+        writeReturnCapability(.resetToUnknown, for: ref)
         setFileTransferAvailable(false, for: ref)
         setFileServerTestedLocally(false, for: ref)
         clearFolderProbeMarkers(for: ref)
@@ -2898,6 +3031,7 @@ actor SettingsManager {
         url: URL,
         pin: String?,
         folderCapable: Bool?,
+        returnCapable: ReturnCapabilityWrite = .resetToUnknown,
         available: Bool,
         autoDeliver: Bool? = nil,
         filenamePolicy: String? = nil,
@@ -2942,6 +3076,13 @@ actor SettingsManager {
             iCloudStore.set(folderCapable, forKey: capKey)
         }
 
+        // Before the availability flip, for the same no-half-state reason. The
+        // DEFAULT here is `.resetToUnknown`, the opposite of the verdict hop's:
+        // this method commits a TUPLE, and a tuple change is exactly the event
+        // that makes an old server's listing verdict meaningless. A caller
+        // carrying a pass earned against precisely this tuple says `.set`.
+        writeReturnCapability(returnCapable, for: ref)
+
         // Before the availability flip, for the same reason `folderCapable` is:
         // no durable state may pair Ready with a delivery policy the commit
         // hadn't landed yet.
@@ -2976,6 +3117,7 @@ actor SettingsManager {
     func commitFileTransferVerdict(
         available: Bool,
         folderCapable: Bool?,
+        returnCapable: ReturnCapabilityWrite = .preserve,
         autoDeliver: Bool? = nil,
         filenamePolicy: String? = nil,
         for ref: RemoteAgentRef
@@ -2985,6 +3127,13 @@ actor SettingsManager {
             defaults.set(folderCapable, forKey: capKey)
             iCloudStore.set(folderCapable, forKey: capKey)
         }
+        // In the SAME hop as the availability it qualifies: a snapshot taken
+        // between two loose writes would report a lane that is Ready and — by
+        // the stale flag — able to return files, which is the exact sentence the
+        // user must not be shown. A staged test never RESETS this (its tuple is
+        // unchanged, so an old verdict still describes the same server); it
+        // either states a settled one or preserves.
+        writeReturnCapability(returnCapable, for: ref)
         writeFileDeliveryPolicy(autoDeliver: autoDeliver, filenamePolicy: filenamePolicy, for: ref)
         let availKey = Constants.fileTransferAvailableKey(for: ref)
         defaults.set(available, forKey: availKey)
@@ -2994,6 +3143,40 @@ actor SettingsManager {
             clearFolderProbeMarkers(for: ref)
         }
         postSettingsDidChangeRemotely()
+    }
+
+    /// Commit everything a STAGED TEST RESULT durably concludes about `ref`'s
+    /// lane — readiness, folder capability and the listing verdict — in the one
+    /// hop above.
+    ///
+    /// THE SINGLE COMMIT POINT FOR A STAGED TEST, whichever screen ran it. Two
+    /// screens offer that test (the gateway's File transfer page and Settings ▸
+    /// Diagnostics) against the identical `FileServerClient.runConnectionTest`,
+    /// and while each spelled its own persistence they drifted: Diagnostics
+    /// wrote readiness and folder capability but never the listing verdict, so a
+    /// user who tested a listing-less server from Diagnostics got a lane that
+    /// silently stopped naming output folders while every badge stayed green.
+    /// A caller passes the RESULT, not a set of flags, so there is no longer a
+    /// place to forget one.
+    ///
+    /// Callers own the two things that are theirs: proving the result still
+    /// describes the persisted tuple (a verdict for a lane that moved while the
+    /// probe was in flight must be binned, not committed), and refreshing
+    /// whatever published mirror their screen renders.
+    func commitStagedFileTransferResult(
+        _ result: FileTransferTestResult,
+        for ref: RemoteAgentRef
+    ) {
+        commitFileTransferVerdict(
+            available: result.success,
+            // Only on a full pass. The nested probe runs only after the read
+            // stage passes, so on any earlier failure `result.folderCapable` is
+            // the optimistic init default and must not overwrite a
+            // previously-probed false.
+            folderCapable: result.success ? result.folderCapable : nil,
+            returnCapable: result.returnCapabilityWrite,
+            for: ref
+        )
     }
 
     /// Commit a ref's DELIVERY POLICY — the auto-deliver permission and the
@@ -3056,6 +3239,7 @@ actor SettingsManager {
             certFingerprintHex: getFileServerCertFingerprint(for: ref),
             available: getFileTransferAvailable(for: ref),
             folderCapable: getFileServerFolderCapable(for: ref),
+            returnCapable: getFileServerReturnCapable(for: ref),
             autoDeliver: getFileServerAutoDeliver(for: ref),
             filenamePolicy: getFileServerFilenamePolicy(for: ref)
         )
@@ -4203,6 +4387,12 @@ actor SettingsManager {
             // posture as `fileTransferAvailable`, which the legacy single-apply
             // path also ignores.
             fileTransferLaneID: fileLane?.durableLaneID,
+            // Per-ref RETURN capability, from that same lane read. The wrist
+            // holds no file-server credential, so it cannot discover that a
+            // server refuses `PROPFIND` and would otherwise name an output
+            // folder nothing can ever read. Nil lane → `true` ("unstated"),
+            // matching what the wrist's decoder assumes for an absent key.
+            fileTransferReturnCapable: fileLane?.returnCapable ?? true,
             // The per-gateway delivery properties, from the SAME lane read as
             // the two fields above — a permission shipped beside a different
             // moment's readiness is exactly the pairing this single read exists
@@ -4323,6 +4513,12 @@ actor SettingsManager {
                 // prove which lane that turn belongs to. The wrist can't derive
                 // it (the file-server credential never syncs there).
                 fileTransferLaneID: fileLane?.durableLaneID,
+                // Per-ref RETURN capability — the one file-lane fact the wrist
+                // cannot measure for itself (it holds no file-server credential
+                // and issues no absence witness), and the one that decides
+                // whether naming an output folder on a wrist turn is useful or
+                // strands the turn pointing at a directory nothing can list.
+                fileTransferReturnCapable: fileLane?.returnCapable ?? true,
                 // Per-ref delivery PROPERTIES, from the same lane read: what the
                 // user permits this gateway to do, as opposed to what the server
                 // is capable of. Nil with no READY lane means "unstated" — the

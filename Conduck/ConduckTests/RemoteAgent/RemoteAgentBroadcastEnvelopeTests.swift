@@ -42,6 +42,68 @@ final class RemoteAgentBroadcastEnvelopeTests: XCTestCase {
         XCTAssertEqual(decoded.timestamp, original.timestamp, accuracy: 0.0001)
     }
 
+    // MARK: - Return capability (the one file-lane fact the wrist cannot measure)
+
+    /// The wrist holds no file-server credential, so it cannot discover that a
+    /// server refuses `PROPFIND` — yet it names a per-dispatch output folder on
+    /// every spoken turn. Without this field it names one on a lane that can
+    /// never list it, the turn is persisted pointing at that folder, and a
+    /// capable device that later opens the thread shows a "couldn't read your
+    /// file server" fault for a limitation Settings already stated.
+    func testEnvelopeReturnCapabilityIsAlwaysEncodedAndRoundTrips() throws {
+        let url = try XCTUnwrap(URL(string: "https://gateway.local:18789"))
+        let original = RemoteAgentBroadcastEnvelope(
+            backendRef: "openclaw", url: url, name: nil, model: nil, colorID: nil,
+            monogram: nil, token: "t", certFingerprintHex: nil,
+            fileTransferAvailable: true, fileTransferLaneID: nil,
+            fileTransferReturnCapable: false, activeSessionID: nil, timestamp: 1.0
+        )
+
+        let dict = original.encodedDict()
+        XCTAssertEqual(dict["fileTransferReturnCapable"] as? Bool, false,
+                       "always present, never omit-nil: an absent key already means "
+                       + "'un-upgraded sender', so a stated capability must not encode the same way")
+        let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: dict))
+        XCTAssertFalse(decoded.fileTransferReturnCapable)
+    }
+
+    /// A MISSING key is an un-upgraded SENDER — exactly the state where today's
+    /// wrist behaviour is the correct behaviour. Defaulting to "incapable" would
+    /// switch file return off across every paired watch mid-upgrade, on lanes
+    /// that are perfectly capable, for want of a key nobody wrote.
+    func testEnvelopeMissingReturnCapabilityDecodesAsCapable() throws {
+        let url = try XCTUnwrap(URL(string: "https://gateway.local:18789"))
+        var dict: [String: Any] = [
+            "backend": "openclaw",
+            "url": url.absoluteString,
+            "timestamp": 1.0,
+            "fileTransferAvailable": true,
+        ]
+        dict.removeValue(forKey: "fileTransferReturnCapable")
+
+        let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: dict))
+
+        XCTAssertTrue(decoded.fileTransferReturnCapable,
+                      "absence of a statement is not a proven incapability")
+    }
+
+    /// A hostile / wrong-typed value takes the same road as a missing one rather
+    /// than stranding the whole envelope — the tolerant posture every other
+    /// field on this wire takes.
+    func testEnvelopeWrongTypedReturnCapabilityDecodesAsCapable() throws {
+        let url = try XCTUnwrap(URL(string: "https://gateway.local:18789"))
+        let dict: [String: Any] = [
+            "backend": "openclaw",
+            "url": url.absoluteString,
+            "timestamp": 1.0,
+            "fileTransferReturnCapable": "no",
+        ]
+
+        let decoded = try XCTUnwrap(RemoteAgentBroadcastEnvelope.decode(from: dict))
+
+        XCTAssertTrue(decoded.fileTransferReturnCapable)
+    }
+
     // MARK: - File-transfer availability (WS6b)
 
     /// `fileTransferAvailable` round-trips through the dict. The iPhone is the

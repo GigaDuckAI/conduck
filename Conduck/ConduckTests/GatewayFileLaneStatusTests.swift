@@ -157,10 +157,14 @@ final class GatewayFileLaneStatusTests: XCTestCase {
         XCTAssertEqual(vm.fileLaneStatus(for: ref), .ready)
     }
 
-    /// A passing WebDAV probe proves the server accepted a write/read cycle; it
-    /// does not prove the agent's workspace or tool policy. Keep the shared row
-    /// badge and page title honest about that narrower result.
-    func testReadyPresentationNamesTheServerTest() {
+    /// A passing WebDAV probe proves the server moved a test file up and back
+    /// down. It does not prove the agent's workspace or tool policy — and,
+    /// load-bearing here, it does not prove the RETURN direction either, because
+    /// this badge is derived from PERSISTED state and the only listing outcome
+    /// that persists is the structural refusal. A green badge claiming "listed a
+    /// folder" would go on claiming it after relaunch on a lane whose listing
+    /// probe had merely timed out.
+    func testReadyPresentationClaimsOnlyWhatItDurablyKnows() {
         let status = GatewayFileLaneStatus.ready
         XCTAssertEqual(status.shortLabel.map { String(localized: $0) }, "Server tested")
         XCTAssertEqual(status.pageTitle.map { String(localized: $0) }, "File server tested")
@@ -168,12 +172,30 @@ final class GatewayFileLaneStatusTests: XCTestCase {
             status.meaning.map { String(localized: $0) },
             "Conduck uploaded and retrieved a test file."
         )
+        XCTAssertFalse(
+            (status.meaning.map { String(localized: $0) } ?? "").contains("both ways"),
+            "the green badge may never assert a direction nothing durable measured")
         XCTAssertEqual(status.systemImage, "checkmark.circle.fill")
+    }
+
+    /// The third badge: neither green nor red, amber, and it says which half
+    /// works before it says which does not.
+    func testUploadsOnlyPresentationNamesBothHalves() {
+        let status = GatewayFileLaneStatus.readyUploadsOnly
+        XCTAssertEqual(status.shortLabel.map { String(localized: $0) }, "Uploads only")
+        XCTAssertEqual(status.tint, AppColors.warning,
+                       "never the success tint — the lane is half of what the user set up")
+        let meaning = status.meaning.map { String(localized: $0) } ?? ""
+        XCTAssertTrue(meaning.contains("read it back"), "what works comes first")
+        XCTAssertTrue(meaning.contains("can't list folders"), "then what does not")
+        XCTAssertTrue(meaning.contains("on the server"),
+                      "and where the files still are — nothing has been lost, only auto-delivery")
     }
 
     func testEveryVisibleStatusHasACompactPagePresentation() {
         for status in [
             GatewayFileLaneStatus.ready,
+            .readyUploadsOnly,
             .needsAttention,
             .saved,
             .recommended,

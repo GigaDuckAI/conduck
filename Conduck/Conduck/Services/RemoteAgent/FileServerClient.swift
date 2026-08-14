@@ -353,6 +353,53 @@ enum FileServerListingVerdict: Equatable, Sendable {
     case unusable(FileTransferListingRefusal)
 }
 
+/// What ONE `PROPFIND Depth: 0` of the folder a dispatch is about to name
+/// established. Four cases, and the split between the last three is the whole
+/// reason this is not a Bool:
+///
+///   - `.absent` — a definite `404`. The folder is not there, so naming it on
+///     the wire is safe.
+///   - `.cannotAnswer` — the server named `PROPFIND` as a method it will not
+///     perform on this resource (`405`/`501`). WHAT IT PROVES DEPENDS ENTIRELY
+///     ON WHAT WAS ASKED, which is why no caller may read it as a permanent
+///     property on its own. Asked of a collection that CERTAINLY EXISTS — the
+///     served root, which only the staged test probes — it is the structural
+///     refusal that makes a lane upload-only, and nothing the user can do to
+///     their network changes it. Asked of a collection that certainly does NOT
+///     exist — which is every per-dispatch witness, by construction — it is a
+///     fact about the route a missing path is served by (a path-scoped
+///     `dav_methods` rule, a WAF, an SSO layer, a rewrite) on a server that may
+///     list existing collections perfectly. Only the first caller may conclude
+///     an incapability from it; see `probeListingCapability`'s two steps, which
+///     draw exactly that line.
+///   - `.occupied` — the server answered about the folder, and said it is
+///     there. Either a collision or a namespace that answers everything;
+///     either way the folder cannot vouch for what is found in it later.
+///   - `.indeterminate` — the server ANSWERED, with something that settles
+///     nothing: a rejected credential, a `5xx`, a redirect, a portal. THE
+///     ACTIONABLE CASE — something that used to work stopped.
+///   - `.unreachable` — no HTTP response arrived at all (DNS, refused, TLS,
+///     timeout). Also actionable, and split from `.indeterminate` because it
+///     is the SIGNATURE of this product's commonest file-lane failure: these
+///     URLs are frequently cloudflared quick tunnels whose hostname rotates on
+///     every restart, so a stale URL resolves to nothing. It is what lets the
+///     witness back off after ONE observation instead of three (a host that is
+///     simply not there will not be there next turn either), while a server
+///     that is answering keeps its benefit of the doubt.
+///
+/// Carries no status, no URL, and no key: it is a taxonomy value, and the
+/// privacy invariants at the top of this file apply to it.
+///
+/// `.unreachable` is the one case `classifyAbsenceWitness(status:)` can never
+/// return — it describes the absence of a status line, not a status.
+enum FileServerAbsenceWitness: Equatable, Sendable {
+    case absent
+    case cannotAnswer
+    case occupied
+    case indeterminate
+    case unreachable
+}
+
 /// The stages of the staged Test Connection, in order. `Int` raw value =
 /// stage ordinal so the Settings UI can render a determinate per-stage
 /// result list and `FileTransferTestResult.reachedStage` can report how far the
@@ -383,23 +430,127 @@ enum FileTransferTestStage: Int, Equatable, Sendable, CaseIterable {
     /// delivers nothing an agent produces, ever — so a test that stopped at
     /// `.read` certified half a lane as fully green and left the user with no
     /// signal anywhere.
+    ///
+    /// THE STAGE THAT CANNOT FAIL THE TEST. It reports on
+    /// `FileTransferTestResult.returnVerification` rather than on `success`,
+    /// because the four stages above have already proved the upload direction
+    /// with a byte-echo and nothing this stage learns can un-prove it. What it
+    /// decides is what the app may CLAIM about the other direction: verified,
+    /// structurally unavailable (the amber uploads-only lane), or unchecked.
     case listing
 }
 
-/// Result of a staged Test Connection: how far it got + whether the full
-/// reachability→auth→write→read→listing sequence passed + the mapped failure
-/// (nil on success). `fileTransferAvailable` is set true ONLY when `success`.
+/// What the staged test learned about the RETURN direction — the one question
+/// the listing stage decides, held as a taxonomy rather than a Bool because
+/// there are three answers and the middle one has no polarity.
+///
+/// THE RULE THIS TYPE ENFORCES: return-direction uncertainty may reduce what the
+/// app CLAIMS, and may never erase what the upload stages PROVED. A `502` from a
+/// reverse proxy on the fifth request of a sequence whose first four moved real
+/// bytes end to end says nothing about the server and nothing about uploads, so
+/// it neither narrows a capability nor revokes a lane.
+enum FileTransferReturnVerification: Sendable {
+    /// The run never reached the listing stage — an earlier stage failed, or the
+    /// result was constructed synthetically. The DEFAULT, so a legacy or partial
+    /// construction claims nothing in either direction.
+    case notMeasured
+    /// The server answered `207` for a collection that exists and `404` for one
+    /// that cannot. The handshake both halves of the return direction rest on.
+    ///
+    /// It is a HANDSHAKE, not a delivery guarantee: two `Depth: 0` status lines
+    /// prove the method is recognised and that a miss is reported as a miss;
+    /// they do not prove a later `Depth: 1` body will survive `parseListing`.
+    /// Nothing downstream treats it as more than it is — every real listing
+    /// still runs its own negative control and the strict parser.
+    case verified
+    /// STRUCTURAL: `PROPFIND` of a collection that certainly exists came back
+    /// `405`/`501` — the server naming the method as one it does not perform
+    /// (RFC 9110 §15.5.6 / §15.6.2). Plain nginx with `dav_methods PUT DELETE`
+    /// is exactly this, and it is a large real population.
+    ///
+    /// THE SOLE AUTHOR OF AN INCAPABILITY IN THE WHOLE SUBSYSTEM, and it earns
+    /// that by being the only measurement taken against a collection that
+    /// certainly exists. The per-dispatch witness can never be: the box it asks
+    /// about is the one this turn is about to name, so a `405` from it describes
+    /// the route a missing path is served by and settles nothing (see
+    /// `FileServerAbsenceWitness.cannotAnswer`). One author is what keeps the
+    /// phone, the Mac, CarPlay and the wrist from telling four stories about one
+    /// server.
+    ///
+    /// IT IS A FACT ABOUT THE LANE AS CONFIGURED, not an eternal property of the
+    /// host: `405`'s allowed-method set is explicitly permitted to change, and a
+    /// path-scoped rule or a rate limiter can produce one. So it narrows the
+    /// CLAIM — an amber uploads-only lane the user can read — rather than
+    /// disabling anything, and the narrowing is persisted per gateway,
+    /// couriered to the Watch, and read by every surface's mint.
+    ///
+    /// IT ALSO SEEDS THE PROCESS-LOCAL WITNESS BREAKER, which stops the dispatch
+    /// path re-asking, and that suppression is deliberate: a server that
+    /// structurally refuses the method would be paying a `PROPFIND` every single
+    /// turn to re-learn a fact Settings already displays, and the answer the
+    /// witness could get back would not settle the question anyway.
+    ///
+    /// A REPAIR IS NOTICED BY A DELIBERATE MEASUREMENT, never by a dispatch. The
+    /// four that reach it: the next Test Connection and the Diagnostics file-lane
+    /// sweep both re-run `probeListingCapability` and commit `.set(true)` on a
+    /// pass; any edit to the URL, credential or pin commits `.resetToUnknown`,
+    /// which is also a new witness-breaker key; and
+    /// `FileTransferCapabilityRefresher` re-runs the same probe once per launch,
+    /// silently, so a user who fixes their server does not have to know that a
+    /// re-test is what tells the app about it. The first three are where the user
+    /// reads about the limitation and therefore where they land after fixing it;
+    /// the fourth is what stops the verdict outliving the fact for someone who
+    /// never goes back to that screen.
+    case methodUnavailable
+    /// The stage ran and settled NOTHING: a timeout, a `502`, a `429`, a `401`,
+    /// a redirect, a `200` that is not a multistatus, or a namespace that
+    /// answered a 16-hex-entropy path. Carries the taxonomy code the user is
+    /// shown next to the listing row.
+    ///
+    /// NOT a failure of the test and NOT a narrowing — uploads stay proven,
+    /// nothing is persisted, and no capability is seeded into the dispatch-path
+    /// witness breaker. (The passing test that produced this still clears that
+    /// lane's failure cooldown: a cooldown is a guess about whether another
+    /// request is worth spending, not a claim about the server, and four stages
+    /// of moved bytes outweigh it.) It exists so the surfaces can say "couldn't
+    /// check" instead of picking one of the two answers nobody has.
+    case unverified(AppError)
+}
+
+/// Result of a staged Test Connection: how far it got + whether the lane is
+/// USABLE + what was learned about the return direction + the mapped failure
+/// (nil when usable). `fileTransferAvailable` is set true ONLY when `success`.
+///
+/// TWO INDEPENDENT AXES, and keeping them apart is what this type is for.
+/// `success` answers "may this lane carry bytes at all", which is the question
+/// that gates uploads; `returnVerification` answers "can anything come back",
+/// which is the question the listing stage alone decides. A server that PUTs and
+/// GETs but cannot `PROPFIND` — plain nginx with `dav_methods PUT DELETE`, a
+/// large real population — is `success: true, .methodUnavailable`, and
+/// collapsing that into one Bool cost those users their UPLOADS as well, for a
+/// capability they were not using.
 struct FileTransferTestResult: Equatable, Sendable {
-    /// The furthest stage reached — on success this is `.listing`; on failure it
+    /// The furthest stage reached — on a pass this is `.listing`; on failure it
     /// is the stage that failed (everything before it passed).
     let reachedStage: FileTransferTestStage
-    /// True only on a full pass through every stage.
+    /// True when the lane is usable for uploads — the
+    /// reachability→auth→write→read sequence passed. NO listing-stage outcome
+    /// clears it: a structural refusal is a fact about the other direction, and
+    /// an unsettled listing probe is not a fact at all. Both would otherwise
+    /// destroy evidence the four byte-moving stages had already established.
     let success: Bool
+    /// What the listing stage learned. See the enum — it is the only place the
+    /// three answers are distinguished, and every surface reads it rather than
+    /// re-deriving one from a pair of Bools.
+    let returnVerification: FileTransferReturnVerification
     /// The taxonomy error on failure (nil on success). Never names the
-    /// credential.
+    /// credential. An UNVERIFIED listing carries its code on
+    /// `returnVerification`, not here: the test did not fail, so a `failure`
+    /// would make every `success == false` reader draw a red X on a lane that
+    /// works.
     let failure: AppError?
     /// Whether the post-pass NESTED write-probe succeeded — i.e. the gateway
-    /// accepts a `PUT __conduck_probe__/<uuid>` (folder) + GET + DELETE. True →
+    /// accepts a `PUT __conduck_probe_<8hex>__/<tag>.txt` (folder) + GET + DELETE. True →
     /// uploads can mint per-conversation `<convID>/…` keys; false → the gateway
     /// rejected nested PUTs (nginx-DAV needing MKCOL, an S3-DAV bridge, …) so the
     /// client must fall back to FLAT `<8hex>__<name>` keys for it. Defaults true
@@ -414,12 +565,69 @@ struct FileTransferTestResult: Equatable, Sendable {
         reachedStage: FileTransferTestStage,
         success: Bool,
         failure: AppError?,
-        folderCapable: Bool = true
+        folderCapable: Bool = true,
+        returnVerification: FileTransferReturnVerification = .notMeasured
     ) {
         self.reachedStage = reachedStage
         self.success = success
         self.failure = failure
         self.folderCapable = folderCapable
+        self.returnVerification = returnVerification
+    }
+
+    /// Whether the lane may be treated as able to carry files BACK.
+    ///
+    /// DERIVED, and the polarity matches `folderCapable`'s for the same reason:
+    /// this is a NARROWING the app applies on proof, so only the one measured
+    /// incapability answers false. `.notMeasured` and `.unverified` read TRUE —
+    /// not because anything was proven, but because stamping a lane incapable on
+    /// evidence nobody has is the specific failure being repaired here.
+    var returnCapable: Bool {
+        if case .methodUnavailable = returnVerification { return false }
+        return true
+    }
+
+    /// The lane works for uploads and CANNOT return files — the third outcome,
+    /// which is neither the green pass nor a failure and must never be rendered
+    /// as either. Every surface that draws a badge, a checklist row, or a status
+    /// line reads this rather than re-deriving the conjunction, so they cannot
+    /// disagree about which of the three a given result is.
+    var isUploadOnly: Bool { success && !returnCapable }
+
+    /// The lane works for uploads and the return direction could not be checked
+    /// AT ALL this run. A FOURTH thing a surface may need to say, and the reason
+    /// it must exist: rendering it as the green pass claims a folder was listed
+    /// when none was, and rendering it as the upload-only lane claims the server
+    /// refused when it never said so.
+    var listingUnverified: AppError? {
+        guard success, case .unverified(let error) = returnVerification else { return nil }
+        return error
+    }
+
+    /// The listing verdict this run SETTLED, or nil when it settled nothing —
+    /// the single definition of "settled", so the two commit paths that care
+    /// (a staged verdict and a tuple save) cannot come to different views of
+    /// which outcomes count as evidence.
+    var settledReturnCapability: Bool? {
+        switch returnVerification {
+        case .verified: return true
+        case .methodUnavailable: return false
+        case .unverified, .notMeasured: return nil
+        }
+    }
+
+    /// What this result instructs the store to do about the persisted listing
+    /// verdict — the ONE translation from the three-answer taxonomy to the
+    /// three-operation write, so no screen can invent a fourth reading of it.
+    ///
+    /// AN UNSETTLED RUN PRESERVES. Widening a previously-proven incapability on
+    /// a probe that learned nothing would be as wrong as narrowing on one, and
+    /// this flag moves on proof in BOTH directions. Never `.resetToUnknown` — a
+    /// staged test does not change the tuple, so an existing verdict still
+    /// describes the same server; only an identity change invalidates one, and
+    /// that caller spells its own reset.
+    var returnCapabilityWrite: SettingsManager.ReturnCapabilityWrite {
+        settledReturnCapability.map { .set($0) } ?? .preserve
     }
 
     /// `AppError` is `LocalizedError`, NOT `Equatable` (its `Error`-carrying
@@ -431,6 +639,8 @@ struct FileTransferTestResult: Equatable, Sendable {
             && lhs.success == rhs.success
             && lhs.failure?.errorCode == rhs.failure?.errorCode
             && lhs.folderCapable == rhs.folderCapable
+            && lhs.returnCapable == rhs.returnCapable
+            && lhs.listingUnverified?.errorCode == rhs.listingUnverified?.errorCode
     }
 }
 
@@ -1352,42 +1562,19 @@ enum FileServerClient {
         }
     }
 
-    /// Parse a WebDAV `207 Multi-Status` body into `[FileServerEntry]`.
-    /// TOLERANT by contract — NEVER throws. Any malformed / unexpected / empty
-    /// XML yields `[]` so a flaky server can never crash a caller that is only
-    /// rendering.
-    ///
-    /// NO PRODUCTION CALLER: it is kept for the deferred in-app file browser,
-    /// which is the only consumer its tolerance is correct for.
-    ///
-    /// **MUST NEVER BACK A DELIVERY DECISION.** It cannot see the HTTP status, it
-    /// keeps whatever entries completed before a parse fault, it ignores
-    /// per-resource `<propstat><status>`, and it discards the parent path — so a
-    /// non-`207`, a truncated body and an empty directory are all `[]`, and an
-    /// href can name a file outside the folder that was asked for. That is
-    /// acceptable for a browser a user is looking at and disqualifying for the
-    /// path that decides what to download unattended. `parseListing` is the one
-    /// that decides; this one only renders.
-    ///
-    /// Strategy: a lightweight `XMLParser` delegate that, namespace-agnostically
-    /// (matching the LOCAL element name so it works whether the server uses the
-    /// `D:` / `d:` / no prefix for the `DAV:` namespace), collects per-`response`:
-    ///   - `<href>`             → the entry path (last component → `name`)
-    ///   - `<getcontentlength>` → `byteSize`
-    ///   - `<collection/>` inside `<resourcetype>` → `isDirectory`
-    static func parsePropfindBody(_ data: Data) -> [FileServerEntry] {
-        guard !data.isEmpty else { return [] }
-        let delegate = PropfindParserDelegate()
-        let parser = XMLParser(data: data)
-        parser.delegate = delegate
-        parser.shouldProcessNamespaces = false   // match local names; tolerate any/no prefix
-        // Ignore the Bool result — a parse error just means we keep whatever
-        // entries completed before the fault (tolerant; never throw).
-        parser.parse()
-        return delegate.entries
-    }
-
     // MARK: - Strict directory listing (the authority on agent output)
+    //
+    // `parseListing` below is the ONLY `207` parser in this file, deliberately.
+    // A tolerant sibling that accumulates whatever it can and reports no failure
+    // is the wrong shape for every consumer this app has — it cannot see the HTTP
+    // status, it keeps entries completed before a parse fault, it ignores
+    // per-resource `<propstat><status>` and it discards the parent path, so a
+    // non-`207`, a truncated body and an empty directory all read as "the agent
+    // produced nothing", which is the one conclusion that CLOSES a turn. Keeping
+    // one next to the strict one is how a future consumer picks the wrong one by
+    // accident, so there is only the strict one. A deferred in-app file browser
+    // that wants leniency states its own tolerance at ITS call site, over
+    // `ListingVerdict`, rather than reviving a second parser here.
 
     /// Most `<response>` elements one listing may describe. Refused, never
     /// truncated — see `FileTransferListingRefusal.tooManyEntries`.
@@ -1466,7 +1653,46 @@ enum FileServerClient {
     /// Shares its definition with `negativeControlProvesNotFound` so the app can
     /// never hold two ideas of what a definite miss looks like.
     static func absenceWitnessed(status: Int) -> Bool {
-        negativeControlProvesNotFound(status: status)
+        classifyAbsenceWitness(status: status) == .absent
+    }
+
+    /// The absence witness's answer as a TAXONOMY rather than a Bool, because
+    /// exactly one of its non-`404` answers means something different to the
+    /// user: a server that does not implement `PROPFIND` at all is not a server
+    /// that failed, it is a server that cannot do this. Folding the two is what
+    /// made a plain nginx-DAV lane complain on every single turn about a
+    /// limitation it was always going to have.
+    ///
+    /// A verdict here still shows the user nothing on its own — the mint decides
+    /// what, if anything, is said — so the privacy posture of the Bool form is
+    /// unchanged: no status, URL, or key leaves the classification.
+    static func classifyAbsenceWitness(status: Int) -> FileServerAbsenceWitness {
+        // The one green light. Definition shared with
+        // `negativeControlProvesNotFound` so the app cannot hold two ideas of
+        // what a definite miss looks like.
+        if negativeControlProvesNotFound(status: status) { return .absent }
+        // `405 Method Not Allowed` is what a compliant HTTP server answers for a
+        // method it knows about but does not implement on this resource, and
+        // `501 Not Implemented` is what it answers for a method it does not
+        // recognise at all (RFC 9110 §15.5.6 / §15.6.2). Plain nginx with
+        // `dav_methods PUT DELETE` answers one of the two for PROPFIND on every
+        // path it serves, which is precisely the "uploads yes, returns never"
+        // population this case exists to keep quiet. STRUCTURAL and permanent
+        // for as long as the server is configured that way — a retry cannot
+        // change it, so re-probing it every turn buys nothing.
+        if status == 405 || status == 501 { return .cannotAnswer }
+        // A `207` (or any other 2xx) for a path carrying `OutboxKey`'s fresh
+        // entropy is either a collision — astronomically unlikely, therefore far
+        // more likely a bug in the mint — or a namespace that answers
+        // everything. NOT `.cannotAnswer`: a wall that 200s every path is a
+        // misconfiguration in front of a server that may well speak WebDAV, and
+        // calling it a permanent incapability would hide a fixable fault behind
+        // a displayed limitation.
+        if (200...299).contains(status) { return .occupied }
+        // Everything else — `401`/`403` (the credential stopped working), `5xx`
+        // (the server is sick), a redirect, a portal. All of them are things
+        // that were working and stopped, which is the actionable case.
+        return .indeterminate
     }
 
     /// THE listing verdict, from one PROPFIND response. Pure — the network half
@@ -1778,11 +2004,18 @@ enum FileServerClient {
     /// Run the staged Test Connection against `snapshot`'s file-server:
     /// **reachability → auth → write(PUT tiny probe) → read(GET) → delete(cleanup)
     /// → listing(PROPFIND)**.
-    /// Sets `fileTransferAvailable` (caller side) only on a full pass — a
+    /// Sets `fileTransferAvailable` (caller side) only when `success` — a
     /// read-only 200 false-positives on a Control-UI HTML page, so availability
-    /// requires the write+read round-trip to actually land, and the listing
-    /// stage requires the lane to answer the two PROPFINDs the return direction
-    /// is built on (see `probeListingCapability`).
+    /// requires the write+read round-trip to actually land.
+    ///
+    /// THE LISTING STAGE DECIDES A DIFFERENT QUESTION and reports on its own
+    /// field. It measures the two PROPFINDs the return direction is built on
+    /// (see `probeListingCapability`) and leaves `success` alone whatever it
+    /// finds, because uploads and returns are separate capabilities of one lane:
+    /// revoking both on the evidence for one took a working feature away from
+    /// every server that speaks PUT/GET and not PROPFIND, and revoking both on
+    /// the ABSENCE of evidence would throw away a byte-echo that had already
+    /// succeeded.
     ///
     /// - The probe file is `__conduck_probe_<8hex>.txt` with a tiny known body;
     ///   it is GET-read back, then best-effort DELETEd. A DELETE failure does
@@ -2139,22 +2372,37 @@ enum FileServerClient {
 
         // --- Stage 5: listing (the whole RETURN direction) ---
         // Everything above certifies bytes going OUT. This certifies the one
-        // capability bytes coming BACK depend on, and it is fatal for the same
-        // reason the read stage is: a green test is a claim about the lane, and a
-        // lane that cannot answer a PROPFIND silently delivers nothing an agent
-        // ever produces. Indeterminate is NOT a failure — a transport hiccup on
-        // the fifth request of an otherwise clean sequence proves nothing, and
-        // this stage narrows nothing that could be persisted wrong.
+        // capability bytes coming BACK depend on — and a STRUCTURAL refusal here
+        // is DELIBERATELY NOT FATAL. It is a fact about ONE DIRECTION of a lane
+        // whose other direction the four stages above just proved end to end, so
+        // failing the whole test on it revoked `fileTransferAvailable` and
+        // disabled UPLOADS as well, on a server that uploads perfectly. Plain
+        // nginx with `dav_methods PUT DELETE` is exactly that server and is a
+        // large real population; they lost a working feature to buy nothing.
+        // That verdict rides out on `returnVerification` instead, which every
+        // status surface renders as its own third outcome.
+        //
+        // THREE OUTCOMES, and NONE of them fails this test. The four stages
+        // above proved uploads end to end with a byte-echo; a later, independent
+        // check of the OTHER direction cannot un-prove that, and a `502` on the
+        // fifth request would otherwise revoke a lane whose upload half was just
+        // demonstrated. What each outcome does instead is decide what the app
+        // may CLAIM:
+        //   - `.capable`        → both directions, and the witness state is seeded.
+        //   - `.methodUnavailable` → the amber uploads-only lane, persisted, and
+        //     the witness state is seeded so the dispatch path stops re-asking.
+        //   - `.unverified`     → claim nothing about the return direction:
+        //     persist nothing, seed nothing, and let the surfaces say "couldn't
+        //     check" so a green "listed a folder" is never shown over a folder
+        //     nobody listed.
+        let verification: FileTransferReturnVerification
         switch await probeListingCapability(snapshot: snapshot, session: session, signals: signals) {
-        case .capable, .indeterminate:
-            break
-        case .rejected:
-            return FileTransferTestResult(
-                reachedStage: .listing,
-                success: false,
-                failure: .fileTransferNotAFileServer,
-                folderCapable: folderCapable
-            )
+        case .capable:
+            verification = .verified
+        case .methodUnavailable:
+            verification = .methodUnavailable
+        case .unverified(let error):
+            verification = .unverified(error)
         case .certificateRefused(let refusal):
             // At `.reachability`, for the reason the nested probe's refusal is:
             // a certificate verdict is about the CONNECTION, and the file lane
@@ -2166,33 +2414,165 @@ enum FileServerClient {
             )
         }
 
-        // Full pass (connectivity + listing). `folderCapable` rides alongside.
+        // The staged test is the ONE place a lane's return capability is
+        // measured deliberately, by a user who is watching, so a SETTLED verdict
+        // seeds the process-local witness state the dispatch path reads. Without
+        // this seeding an upload-only lane would still spend one pre-dispatch
+        // PROPFIND after every launch to rediscover a fact Settings already
+        // displays — and, worse, a lane the user has just REPAIRED would stay in
+        // its cooldown until that expired, so a passing test must also clear the
+        // failure streak outright.
+        //
+        // ONLY A SETTLED VERDICT STATES A CAPABILITY. `.unverified` states none:
+        // the breaker is a cache of FACTS about the lane, and seeding it from a
+        // `502` is what made one bad moment silence file return for the rest of
+        // the process — the dispatch path's own per-turn measurement is then
+        // free to learn the truth on the next turn.
+        //
+        // THE FAILURE STREAK IS CLEARED EITHER WAY, and that asymmetry is the
+        // point. A capability is a claim and needs proof; a cooldown is only a
+        // guess about whether spending another request is worth it, and four
+        // stages that just moved real bytes to this server and read them back
+        // are a far stronger signal than the streak that opened it. The case
+        // that forced this: a server goes unreachable, one witness failure opens
+        // the ladder to as much as an hour, the user restarts the server and
+        // taps Test Connection on the same tuple — and a `502` from a
+        // reverse proxy still warming up left them waiting out a pause they
+        // cannot see, having just demonstrated the exact reachability the pause
+        // was guessing about.
+        //
+        // A recorded INCAPABILITY is left alone, because it is not a pause:
+        // `decide` answers `.cannotReturn` before any cooldown is consulted, so
+        // there is nothing here to clear, and dropping it would widen a proven
+        // narrowing on a probe that proved nothing.
+        //
+        // THE SEED IS A CACHE, NOT THE VERDICT. The verdict this run settles is
+        // also PERSISTED per gateway by the commit hop that consumes this
+        // result, and `mintOutboxKey` gates on that durable flag before it
+        // consults the breaker at all — so the incapability survives a relaunch
+        // and reaches the wrist, and this seeding only saves the rest of THIS
+        // process the request. Nothing else may write the durable flag: the
+        // dispatch witness asks about a collection that does not exist and can
+        // therefore never settle this question (see
+        // `FileServerAbsenceWitness.cannotAnswer`).
+        let lane = BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)
+        switch verification {
+        case .verified:
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.noteStagedVerdict(
+                lane: lane, returnCapable: true)
+        case .methodUnavailable:
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.noteStagedVerdict(
+                lane: lane, returnCapable: false)
+        case .unverified, .notMeasured:
+            if BackgroundFileTransfer.FileLaneWitnessBreaker.shared.decide(lane: lane)
+                != .cannotReturn {
+                BackgroundFileTransfer.FileLaneWitnessBreaker.shared.reset(lane: lane)
+            }
+        }
+
+        // Uploads passed. `folderCapable` is the one narrowing this sequence
+        // makes on its own; `returnVerification` carries everything the listing
+        // stage established, including that it established nothing.
         return FileTransferTestResult(
             reachedStage: .listing,
             success: true,
             failure: nil,
-            folderCapable: folderCapable
+            folderCapable: folderCapable,
+            returnVerification: verification
         )
     }
 
-    /// What the LISTING-capability probe learned. Shaped like
-    /// `FolderProbeOutcome` and for the same reasons — `indeterminate` says "try
-    /// again later" where `certificateRefused` says "no later probe will do
-    /// better", and folding the two is how a trust refusal disappears into a
-    /// feature narrowing.
+    /// What the LISTING-capability probe learned. FOUR outcomes because there
+    /// are four different things to do about them, and the distinction this type
+    /// exists to hold is between "the server told us it cannot do this" and "we
+    /// learned nothing" — collapsing those two let ONE reverse-proxy `502`
+    /// during a Test Connection stamp a healthy WebDAV server permanently unable
+    /// to return files.
+    ///
+    /// Same three-way shape `FileServerListingVerdict` already uses for the
+    /// listing itself (entries / absent / unusable), and for the same reason: a
+    /// question with a "don't know" answer needs a value to put it in, or the
+    /// don't-know silently borrows the meaning of whichever neighbour it is
+    /// folded into.
     enum ListingProbeOutcome: Equatable {
         /// The server answered `207` for a collection that exists AND `404` for
         /// one that cannot. Both directions of the return lane are available.
         case capable
-        /// The server ANSWERED, and its answer proves the return lane cannot
-        /// work: no `PROPFIND` support at all, or a namespace that answers
-        /// everything so an absence can never be witnessed.
-        case rejected
-        /// Nothing was learned (a transport failure carrying no certificate
-        /// verdict). Never persisted as a verdict and never fails the test.
-        case indeterminate
+        /// STRUCTURAL REFUSAL — `PROPFIND` of a collection that CERTAINLY EXISTS
+        /// came back `405 Method Not Allowed` (known method, not allowed here)
+        /// or `501 Not Implemented` (method not recognised), per RFC 9110
+        /// §15.5.6 / §15.6.2. The same two statuses `classifyAbsenceWitness`
+        /// calls `.cannotAnswer`, so the staged test and the per-dispatch
+        /// witness cannot tell the user two different stories about one server.
+        ///
+        /// The ONLY outcome that may record an incapability, and ONLY from the
+        /// first probe. A `405` on the SECOND probe cannot mean this: the server
+        /// has just answered `207` and thereby demonstrated it performs the
+        /// method, so a refusal on the missing-resource route is a fact about
+        /// that route, not about the method.
+        case methodUnavailable
+        /// The probe ANSWERED OR FAILED and proved NOTHING — a timeout, a
+        /// `502`, a `401`, a redirect, a `200` that is not a multistatus, a
+        /// namespace that `207`s a path carrying 16 hex of fresh entropy. All of
+        /// them are things that can be true this minute and false the next, or
+        /// method-specific interception in front of a server that may well speak
+        /// `PROPFIND` — a WAF, an SSO layer, a rewrite, a rate-limit rule — so
+        /// none of them may narrow a capability.
+        ///
+        /// The `2xx` control deserves its name here. A status-only reading
+        /// cannot tell a namespace that answers everything from a compliant
+        /// `207` whose INNER response is the `404` we asked for; real
+        /// deployments send the latter. Calling either one proof would be a
+        /// diagnosis drawn from a status line that does not carry it.
+        ///
+        /// Carries the taxonomy code the surfaces show beside the listing row.
+        /// It does NOT fail the test: uploads were proven end to end before this
+        /// probe ran, and revoking them for an unrelated later check destroys
+        /// established evidence. Nothing is persisted; no capability is seeded
+        /// into the witness breaker (a passing test still clears that lane's
+        /// failure cooldown, which is a spending guess rather than a claim); the
+        /// user is asked to check again.
+        case unverified(AppError)
         /// This device refused the server's certificate.
         case certificateRefused(CertificateRefusal)
+
+        /// `AppError` is `LocalizedError`, not `Equatable` — compare the payload
+        /// by its stable numeric code, the same way `FileTransferTestResult`
+        /// does, so this stays `Equatable` for tests without forcing an
+        /// `AppError: Equatable` conformance across the whole taxonomy.
+        static func == (lhs: ListingProbeOutcome, rhs: ListingProbeOutcome) -> Bool {
+            switch (lhs, rhs) {
+            case (.capable, .capable), (.methodUnavailable, .methodUnavailable):
+                return true
+            case (.unverified(let l), .unverified(let r)):
+                return l.errorCode == r.errorCode
+            case (.certificateRefused(let l), .certificateRefused(let r)):
+                return l == r
+            default:
+                return false
+            }
+        }
+    }
+
+    /// The taxonomy code for a listing-stage answer that settled nothing.
+    ///
+    /// Three codes, no new ones: the file lane already has words for all three
+    /// shapes, and a fourth would be a fourth paraphrase of an instruction the
+    /// user has already read elsewhere.
+    ///
+    /// `401` ONLY for the credential — deliberately not `403`. The PUT and the
+    /// GET authenticated moments earlier, so a `403` here is the server
+    /// understanding the request and refusing it (a method or path policy, RFC
+    /// 9110 §15.5.4), and sending the user to regenerate a password that
+    /// demonstrably works would be the wrong errand. A transport failure
+    /// carrying no certificate verdict is reachability; everything else the
+    /// server said routes to "check your file-server's logs, then try again",
+    /// which is the honest instruction for a `5xx`, a `429`, a `403`, a redirect
+    /// and a non-multistatus `200` alike — in every one of those the server's
+    /// own log is the only place the answer lives.
+    private static func listingStageError(status: Int?) -> AppError {
+        guard let status else { return .fileTransferUnreachable }
+        return status == 401 ? .fileTransferAuthFailed : .fileTransferServerError
     }
 
     /// Probe whether `snapshot`'s file-server can support the RETURN direction,
@@ -2213,6 +2593,24 @@ enum FileServerClient {
     /// question is about the collection itself, and a `Depth: 1` of the served
     /// root would make the server enumerate every file the user owns to answer a
     /// yes/no question.
+    ///
+    /// ONLY A STRUCTURAL REFUSAL ON THE FIRST PROBE MAY CONCLUDE INCAPABILITY,
+    /// and everything else is `.unverified`. The status set is not a matter of
+    /// taste: `405`/`501` are what a compliant server answers for a method it
+    /// will not or cannot perform (RFC 9110 §15.5.6 / §15.6.2), and they are
+    /// exactly the pair `classifyAbsenceWitness` already treats as structural. A
+    /// `502` from a reverse proxy, a `429`, a `401`, a redirect and a
+    /// non-multistatus `200` all say something about the moment or about a box
+    /// in front of the server — a WAF, an SSO layer, a rewrite — never about
+    /// what the server implements. The SECOND probe cannot conclude it at all:
+    /// once the root has answered `207` the method is demonstrably performed, so
+    /// a refusal or a `2xx` on the missing-resource route is a fact about that
+    /// route, read the way `classifyAbsenceWitness` reads it — a fixable
+    /// configuration, not a permanent property to display.
+    ///
+    /// The alternative — treating every non-`207` as proof — is what made one
+    /// `502` during a Test Connection mark a healthy WebDAV server unable to
+    /// return files, permanently and silently, with a false diagnosis on screen.
     ///
     /// Session posture and the trust-reading rule mirror `probeFolderCapability`:
     /// when `session` is nil this builds the ephemeral cert-pinned session and
@@ -2245,25 +2643,48 @@ enum FileServerClient {
         ) {
         case .status(207):
             break
-        case .status:
-            return .rejected
+        case .status(405), .status(501):
+            // The ONE conclusion this whole function may draw: the server named
+            // the method as one it will not perform, on a collection that
+            // certainly exists.
+            return .methodUnavailable
+        case .status(let status):
+            return .unverified(listingStageError(status: status))
         case .certificate(let refusal):
             return .certificateRefused(refusal)
         case .noAnswer:
-            return .indeterminate
+            return .unverified(listingStageError(status: nil))
         }
 
-        // Step 2 — a collection that cannot exist must answer `404`.
+        // Step 2 — a collection that cannot exist must answer `404`. Routed
+        // through `classifyAbsenceWitness` rather than re-deriving the rule,
+        // because this probe and the per-dispatch witness ask the SAME question
+        // of the SAME server: two definitions could disagree, and the user would
+        // be told in Settings that their server can list folders while every
+        // turn silently concluded it cannot.
         let controlKey = negativeControlCollectionKey(siblingOf: "")
         switch await propfindStatus(
             snapshot: snapshot, collectionKey: controlKey, session: probeSession, signals: attemptSignals
         ) {
         case .status(let status):
-            return absenceWitnessed(status: status) ? .capable : .rejected
+            switch classifyAbsenceWitness(status: status) {
+            case .absent:
+                return .capable
+            case .cannotAnswer, .occupied, .indeterminate, .unreachable:
+                // EVERY non-`404` is unverified here, `405`/`501` INCLUDED — and
+                // that is not an oversight. Step 1 just got a `207`, so this
+                // server demonstrably performs `PROPFIND`; a refusal on the
+                // missing-resource route says the route cannot answer the
+                // absence question, which is a configuration fact and not the
+                // method incapability the amber lane is meant to describe.
+                // `.unreachable` is unreachable from a status (its own doc says
+                // so) and rides along for exhaustiveness.
+                return .unverified(listingStageError(status: status))
+            }
         case .certificate(let refusal):
             return .certificateRefused(refusal)
         case .noAnswer:
-            return .indeterminate
+            return .unverified(listingStageError(status: nil))
         }
     }
 
@@ -2385,9 +2806,22 @@ enum FileServerClient {
         )
     }
 
+    /// The throwaway collection ONE folder-capability probe run owns, named from
+    /// that run's tag. Exposed (not private) so the cleanup tests can name the
+    /// same directory the probe does instead of re-deriving the format — a
+    /// second copy of this shape is how a test starts asserting against a name
+    /// production no longer uses.
+    ///
+    /// The `__conduck_` prefix and `__` suffix keep it visibly ours in an `ls` of
+    /// the agent's working directory, and the sanitized alphabet matches
+    /// `makeStoredKey`'s so the path is structurally inert on the wire.
+    static func probeCollectionKey(tag: String) -> String {
+        "__conduck_probe_\(tag)__"
+    }
+
     /// Probe whether `snapshot`'s file-server accepts the client's nested
-    /// upload sequence: `MKCOL __conduck_probe__` (status INSPECTED), then
-    /// `PUT __conduck_probe__/<uuid>.txt`, `GET` byte-echo, best-effort
+    /// upload sequence: `MKCOL __conduck_probe_<8hex>__` (status INSPECTED), then
+    /// `PUT __conduck_probe_<8hex>__/<tag>.txt`, `GET` byte-echo, best-effort
     /// `DELETE`. Callers: the staged Test Connection (which fails the whole test
     /// on `.certificateRefused` and collapses everything else to a Bool) and the
     /// silent launch-time capability refresh (upgrade-only — writes
@@ -2420,10 +2854,47 @@ enum FileServerClient {
     /// refusal on that session is indistinguishable from a dead host. Tests inject
     /// a `MockURLProtocol`-backed session and state the verdicts they are testing.
     ///
-    /// The probe DIR is a fixed throwaway namespace (`__conduck_probe__`) distinct
-    /// from any conversation folder; the file carries a per-run uuid so concurrent
-    /// probes never collide. The DELETE is best-effort and never affects the
-    /// outcome.
+    /// THE PROBE DIR IS PER-RUN (`__conduck_probe_<8hex>__`), and that name is
+    /// the ownership proof the cleanup DELETE stands on. Under the old fixed
+    /// name it did not exist: rclone — the documented happy path — re-answers
+    /// `201` for a MKCOL of a collection that is ALREADY THERE, so `201` proved
+    /// nothing, and two overlapping probes (two devices, or a Diagnostics sweep
+    /// and a Settings tap) both believed they owned the directory. The first to
+    /// finish issued the RFC 4918 §9.6 `Depth: infinity` DELETE and took the
+    /// other's in-flight file with it, which cost that probe a spurious
+    /// `.rejected` — a lane mis-parked on flat keys until the next Test
+    /// Connection. With entropy in the name a `201` genuinely means "this call
+    /// created it", so the recursive delete can only ever reach its own run.
+    /// The nesting DEPTH is unchanged (one level, exactly the shape a real
+    /// upload key uses), so the probe still measures what dispatch does.
+    ///
+    /// CLEANUP IS PART OF THE PROBE, because the served root is the AGENT'S OWN
+    /// WORKING DIRECTORY — a directory this test leaves behind is litter in a
+    /// folder the user works in, and it is visible to every `ls` the agent runs.
+    /// So the collection is removed on EVERY exit past the MKCOL, not only the
+    /// happy one, and the removal is:
+    ///
+    ///   - **narrow** — only THIS run's collection, only when THIS call's MKCOL
+    ///     answered `201`. Anything else (a `405`, an ambient failure) means the
+    ///     directory is not provably ours, and a recursive delete inside the
+    ///     user's workspace may not run on a guess. Historic litter from an
+    ///     older build is therefore left alone rather than swept — a sweeper
+    ///     would need a rule for what is safe to delete, which is the guess this
+    ///     is avoiding.
+    ///   - **best-effort** — every outcome is swallowed (a server that refuses
+    ///     collection `DELETE` is a real population, and a test that failed
+    ///     because cleanup failed would be worse than the litter it cleaned).
+    ///   - **trailing-slashed** — several DAV servers (nginx's `dav_methods`
+    ///     among them) answer a collection `DELETE` without the trailing slash
+    ///     with a `409` and leave the directory in place.
+    ///
+    /// THE LITTER TRADE-OFF, chosen deliberately: on a server that refuses a
+    /// collection DELETE, a per-run name leaves one empty `__conduck_probe_*__`
+    /// directory per Test Connection tap instead of reusing one. That is a
+    /// handful of empty, obviously-Conduck-named directories over a lane's
+    /// lifetime, bounded by user taps; the fixed name bought tidiness with a
+    /// destructive DELETE fired on a `201` that does not mean what it says on
+    /// the commonest server. Tidiness loses.
     static func probeFolderCapability(
         snapshot: SettingsManager.FileTransferSnapshot,
         session: URLSession? = nil,
@@ -2447,18 +2918,34 @@ enum FileServerClient {
         let probeTag = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(8))
         // Nested path: a real `/` separator. `buildUploadRequest` resolves it via
         // `URL.appending(path:)`, which keeps the slash unescaped as a path
-        // separator (the whole point of the probe).
-        let nestedKey = "__conduck_probe__/\(probeTag).txt"
+        // separator (the whole point of the probe). The collection carries the
+        // run's entropy so a `201` below is proof of CREATION rather than a
+        // guess — see the header's ownership note.
+        let collectionKey = Self.probeCollectionKey(tag: probeTag)
+        let nestedKey = "\(collectionKey)/\(probeTag).txt"
         let body = Data("conduck-nested-probe".utf8)
 
         // Create the collection first — the client's real upload sequence is
         // MKCOL-then-PUT (WebDAV won't auto-create the parent; rclone 409s a
         // nested PUT into a missing folder). Conclusive = the server answered
         // that the collection now exists: 2xx (created; rclone re-answers 201
-        // on repeat) or 405 (RFC 4918 "already exists").
+        // on repeat) or 405 (RFC 4918 "already exists"). A `405` on a name
+        // carrying this run's entropy is a server quirk, not a real collision —
+        // it still says the parent is there, which is all `mkcolConclusive` is
+        // asked, and the cleanup guard below refuses it anyway.
         let mkcolStatus = await performMkcol(
-            snapshot: snapshot, collectionKey: "__conduck_probe__", session: probeSession)
+            snapshot: snapshot, collectionKey: collectionKey, session: probeSession)
         let mkcolConclusive = mkcolStatus.map { (200...299).contains($0) || $0 == 405 } ?? false
+
+        // `201` on a per-run name is the ONLY status that proves this call minted
+        // the collection, which is the only ground on which it may recursively
+        // remove it (see the header). Every exit below runs this; it is a no-op
+        // otherwise.
+        let removeProbeCollection: () async -> Void = {
+            guard mkcolStatus == 201 else { return }
+            await bestEffortDeleteCollection(
+                snapshot: snapshot, collectionKey: collectionKey, session: probeSession)
+        }
 
         // PUT the nested file. Body via `from:` only (no `httpBody` — see the
         // flat-write path: it makes URLSession warn about a body on an upload task).
@@ -2466,18 +2953,25 @@ enum FileServerClient {
         let putStatus: Int
         do {
             let (_, response) = try await probeSession.upload(for: putRequest, from: body)
-            guard let http = response as? HTTPURLResponse else { return .indeterminate }
+            guard let http = response as? HTTPURLResponse else {
+                await removeProbeCollection()
+                return .indeterminate
+            }
             putStatus = http.statusCode
         } catch {
-            if let refusal = certificateRefusal(error, signals: attemptSignals()) {
-                return .certificateRefused(refusal)
-            }
+            // The verdict is READ BEFORE the cleanup request, always: the signals
+            // describe the attempt that just failed, and a DELETE on the same
+            // session raises its own challenge and would overwrite them.
+            let refusal = certificateRefusal(error, signals: attemptSignals())
+            await removeProbeCollection()
+            if let refusal { return .certificateRefused(refusal) }
             return .indeterminate
         }
 
         guard (200...299).contains(putStatus) else {
             // Best-effort clean up any partial before classifying.
             await bestEffortDelete(snapshot: snapshot, storedKey: nestedKey, session: probeSession)
+            await removeProbeCollection()
             switch putStatus {
             case 403, 405, 409:
                 // Definitive folder-rejection ONLY when the parent provably
@@ -2512,8 +3006,11 @@ enum FileServerClient {
                 .map(FolderProbeOutcome.certificateRefused) ?? .indeterminate
         }
 
-        // Best-effort cleanup (never affects the verdict).
+        // Best-effort cleanup (never affects the verdict). File first, then the
+        // collection: a server that refuses to delete a non-empty collection
+        // would otherwise keep the directory AND its probe file.
         await bestEffortDelete(snapshot: snapshot, storedKey: nestedKey, session: probeSession)
+        await removeProbeCollection()
         return outcome
     }
 
@@ -2526,6 +3023,31 @@ enum FileServerClient {
         session: URLSession
     ) async {
         let request = buildDeleteRequest(snapshot: snapshot, storedKey: storedKey)
+        _ = try? await session.data(for: request)
+    }
+
+    /// The collection form of `bestEffortDelete`, and the ONE place the trailing
+    /// slash is applied. RFC 4918 §9.6 makes a collection DELETE act at `Depth:
+    /// infinity`, and several servers (nginx `dav_methods DELETE` among them)
+    /// answer `409` and leave the directory in place when the request-URI does
+    /// not end in `/` — so a slashless collection DELETE silently cleans nothing.
+    /// Swallows every outcome, exactly like the file form: a server that refuses
+    /// to remove collections at all must never turn a passing test into a
+    /// failing one.
+    ///
+    /// The KEY IS THE SAFETY BOUNDARY. This is a recursive delete inside the
+    /// user's own working directory, so the only key any caller may pass is one
+    /// the same call provably created — never a conversation folder, never a key
+    /// derived from anything a server said.
+    static func bestEffortDeleteCollection(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        collectionKey: String,
+        session: URLSession
+    ) async {
+        // Same builder as the file form (one auth header, one timeout); the
+        // slash rides in on the key, because `appending(path:)` infers
+        // "directory" from a trailing slash and keeps it in the request-URI.
+        let request = buildDeleteRequest(snapshot: snapshot, storedKey: collectionKey + "/")
         _ = try? await session.data(for: request)
     }
 
@@ -2552,9 +3074,10 @@ enum FileServerClient {
 /// `Response` per `<response>` element and REFUSES the document the moment it
 /// meets something it cannot account for.
 ///
-/// The contrast with `PropfindParserDelegate` below is the point. That one
-/// accumulates whatever it can and reports no failure, which is right for a
-/// browser and wrong for the authority on what an agent produced. This one:
+/// Strictness is the whole point, and it is why this file carries no tolerant
+/// sibling: a delegate that accumulates whatever it can and reports no failure
+/// would report a listing nobody fully understood as an ordinary short one, and
+/// "the agent produced nothing" CLOSES a turn. This one:
 ///
 ///   - requires `multistatus` as the root element
 ///   - requires every `<response>` to sit DIRECTLY under it, and refuses the
@@ -2755,108 +3278,6 @@ private final class StrictListingParserDelegate: NSObject, XMLParserDelegate {
             // read as "the folder is empty", which past the grace window stamps
             // the turn done forever with no row and no way back.
             return refuse(.malformedBody, parser)
-        default:
-            break
-        }
-    }
-}
-
-// MARK: - PROPFIND parser delegate
-
-/// Streaming `XMLParser` delegate that collects `FileServerEntry` rows from a
-/// WebDAV 207 multistatus body. Namespace-agnostic (matches LOCAL element names
-/// so it works for `D:`, `d:`, or unprefixed `DAV:` documents). Strictly
-/// tolerant — it accumulates whatever it can and never reports failure upward;
-/// `FileServerClient.parsePropfindBody` ignores the parser's return value.
-private final class PropfindParserDelegate: NSObject, XMLParserDelegate {
-    /// Completed entries (one per `<response>` that carried an `<href>`).
-    private(set) var entries: [FileServerEntry] = []
-
-    // Per-`<response>` accumulators, reset on each `<response>` open.
-    private var inResponse = false
-    private var currentHref = ""
-    private var currentLength = 0
-    private var currentIsDirectory = false
-
-    // Element-text capture state.
-    private var capturingChars = false
-    private var charBuffer = ""
-
-    // Resource-type scoping — a `<collection/>` only counts inside
-    // `<resourcetype>` (avoids a stray element name colliding).
-    private var inResourceType = false
-
-    /// Lowercased local name, stripping any `prefix:` so `D:href` / `d:href` /
-    /// `href` all match `"href"`.
-    private func localName(_ elementName: String) -> String {
-        if let colon = elementName.lastIndex(of: ":") {
-            return String(elementName[elementName.index(after: colon)...]).lowercased()
-        }
-        return elementName.lowercased()
-    }
-
-    func parser(
-        _ parser: XMLParser,
-        didStartElement elementName: String,
-        namespaceURI: String?,
-        qualifiedName qName: String?,
-        attributes attributeDict: [String: String]
-    ) {
-        switch localName(elementName) {
-        case "response":
-            inResponse = true
-            currentHref = ""
-            currentLength = 0
-            currentIsDirectory = false
-        case "resourcetype":
-            inResourceType = true
-        case "collection":
-            if inResourceType { currentIsDirectory = true }
-        case "href", "getcontentlength":
-            capturingChars = true
-            charBuffer = ""
-        default:
-            break
-        }
-    }
-
-    func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if capturingChars { charBuffer += string }
-    }
-
-    func parser(
-        _ parser: XMLParser,
-        didEndElement elementName: String,
-        namespaceURI: String?,
-        qualifiedName qName: String?
-    ) {
-        let local = localName(elementName)
-        switch local {
-        case "href":
-            currentHref = charBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            capturingChars = false
-        case "getcontentlength":
-            currentLength = Int(charBuffer.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-            capturingChars = false
-        case "resourcetype":
-            inResourceType = false
-        case "response":
-            // Emit only when the response carried an href; derive the entry name
-            // from the href's last non-empty path component (handles a trailing
-            // slash on directory hrefs). Percent-decode for display fidelity.
-            if !currentHref.isEmpty {
-                let trimmed = currentHref.hasSuffix("/") ? String(currentHref.dropLast()) : currentHref
-                let lastComponent = trimmed.split(separator: "/").last.map(String.init) ?? trimmed
-                let name = lastComponent.removingPercentEncoding ?? lastComponent
-                if !name.isEmpty {
-                    entries.append(FileServerEntry(
-                        name: name,
-                        isDirectory: currentIsDirectory,
-                        byteSize: currentLength
-                    ))
-                }
-            }
-            inResponse = false
         default:
             break
         }

@@ -876,6 +876,33 @@ struct DiagnosticsContent: View {
     /// Map the model-derived `FileLaneState.Badge` to its glyph, tint, and label.
     /// The failure-before-verified ordering lives in the model.
     private func fileLaneBadge(_ lane: FileLaneState) -> (glyph: String, tint: Color, text: LocalizedStringResource) {
+        // ONE OVERRIDE, ahead of the model's badge. A lane that moves bytes but
+        // cannot list a folder is a genuine pass in the model's terms — uploads
+        // work — and "Verified" is what the model calls that. On a diagnostics
+        // screen it over-claims: the user came here to find out why files are
+        // not coming back, and a green seal is the worst possible answer to that
+        // question. The ranking of the persisted verdict against this session's
+        // result lives in the runner (`fileLaneReturnCaveat`), where it is
+        // testable and stated once; the checklist below spells out which stage
+        // it was.
+        switch runner.fileLaneReturnCaveat(for: lane) {
+        case .uploadsOnly:
+            return ("exclamationmark.triangle.fill", AppColors.warning,
+                    LocalizedStringResource(
+                        "diagnostics.files.badge.uploadsOnly",
+                        defaultValue: "Uploads only — can't list folders"))
+        case .returnUnchecked:
+            // Same reasoning, one step weaker: the seal has to come off for "we
+            // could not check" as much as for "it cannot", because the user is
+            // on this screen asking why files are not coming back and a green
+            // Verified answers that question wrongly either way.
+            return ("exclamationmark.triangle.fill", AppColors.warning,
+                    LocalizedStringResource(
+                        "diagnostics.files.badge.returnUnchecked",
+                        defaultValue: "Uploads verified — couldn't check returns"))
+        case nil:
+            break
+        }
         switch lane.badge {
         case .failed:
             return ("xmark.circle.fill", AppColors.error,

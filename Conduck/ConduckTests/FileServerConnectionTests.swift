@@ -42,10 +42,12 @@ final class FileServerConnectionTests: XCTestCase {
 
     private var session: URLSession!
 
-    // The probe-file key the staged test mints is `__conduck_probe_<tag>.txt`
-    // (flat) and the nested-capability probe is `__conduck_probe__/<tag>.txt`.
-    // The nested probe is uniquely identifiable by the directory segment.
-    private static let nestedDirMarker = "__conduck_probe__/"
+    /// The nested capability probe is the only traffic inside a probe COLLECTION,
+    /// and the collection is named per run (`__conduck_probe_<8hex>__/`) so a
+    /// `201` proves this call created it. The flat stages write
+    /// `__conduck_probe_<tag>.txt` at the root — no trailing `__/` — so the
+    /// directory segment still identifies the nested traffic uniquely.
+    private static let nestedDirMarker = "__/"
 
     override func setUp() {
         super.setUp()
@@ -448,129 +450,6 @@ final class FileServerConnectionTests: XCTestCase {
         let nested = FileServerClient.makeStoredKey(originalName: "report.pdf", uuid: uuid, folder: convID)
         XCTAssertEqual(nested, "\(convID)/8e4e2d0a__report.pdf",
                        "folderCapable=true → folder supplied → <convID>/<8hex>__<name>")
-    }
-
-    // MARK: - PROPFIND parser edges (additive to FileServerPropfindTests)
-
-    /// A 207 body with a directory entry (a `<resourcetype><collection/>`) must
-    /// be flagged `isDirectory == true`. The sibling test filters dirs OUT; this
-    /// asserts the flag is actually set.
-    func testPropfindFlagsCollectionAsDirectory() {
-        let body = """
-        <?xml version="1.0" encoding="utf-8"?>
-        <D:multistatus xmlns:D="DAV:">
-          <D:response>
-            <D:href>/subdir</D:href>
-            <D:propstat>
-              <D:prop>
-                <D:resourcetype><D:collection/></D:resourcetype>
-              </D:prop>
-              <D:status>HTTP/1.1 200 OK</D:status>
-            </D:propstat>
-          </D:response>
-          <D:response>
-            <D:href>/file.txt</D:href>
-            <D:propstat>
-              <D:prop>
-                <D:getcontentlength>10</D:getcontentlength>
-                <D:resourcetype/>
-              </D:prop>
-              <D:status>HTTP/1.1 200 OK</D:status>
-            </D:propstat>
-          </D:response>
-        </D:multistatus>
-        """
-        let entries = FileServerClient.parsePropfindBody(Data(body.utf8))
-
-        let dir = entries.first { $0.name == "subdir" }
-        XCTAssertNotNil(dir, "the collection entry must be parsed")
-        XCTAssertEqual(dir?.isDirectory, true, "a <collection/> resourcetype → isDirectory true")
-        XCTAssertEqual(dir?.byteSize, 0, "a directory has no getcontentlength → byteSize 0")
-
-        let file = entries.first { $0.name == "file.txt" }
-        XCTAssertEqual(file?.isDirectory, false, "a plain file (empty resourcetype) is NOT a directory")
-        XCTAssertEqual(file?.byteSize, 10)
-    }
-
-    /// A percent-encoded href is decoded for display fidelity: `%20` → space.
-    /// The entry name is the last path component, percent-decoded.
-    func testPropfindDecodesPercentEncodedHref() {
-        let body = """
-        <?xml version="1.0" encoding="utf-8"?>
-        <D:multistatus xmlns:D="DAV:">
-          <D:response>
-            <D:href>/my%20report%20(final).pdf</D:href>
-            <D:propstat>
-              <D:prop>
-                <D:getcontentlength>2048</D:getcontentlength>
-                <D:resourcetype/>
-              </D:prop>
-              <D:status>HTTP/1.1 200 OK</D:status>
-            </D:propstat>
-          </D:response>
-        </D:multistatus>
-        """
-        let entries = FileServerClient.parsePropfindBody(Data(body.utf8))
-
-        XCTAssertEqual(entries.count, 1)
-        XCTAssertEqual(entries.first?.name, "my report (final).pdf",
-                       "percent-encoded href must be decoded for the entry name")
-        XCTAssertEqual(entries.first?.byteSize, 2048)
-        XCTAssertEqual(entries.first?.isDirectory, false)
-    }
-
-    /// A directory href with a TRAILING SLASH: the trailing slash is dropped
-    /// before taking the last path component, so the name is the directory's own
-    /// last component (not empty).
-    func testPropfindHandlesTrailingSlashDirectoryHref() {
-        let body = """
-        <?xml version="1.0" encoding="utf-8"?>
-        <D:multistatus xmlns:D="DAV:">
-          <D:response>
-            <D:href>/photos/vacation/</D:href>
-            <D:propstat>
-              <D:prop>
-                <D:resourcetype><D:collection/></D:resourcetype>
-              </D:prop>
-              <D:status>HTTP/1.1 200 OK</D:status>
-            </D:propstat>
-          </D:response>
-        </D:multistatus>
-        """
-        let entries = FileServerClient.parsePropfindBody(Data(body.utf8))
-
-        XCTAssertEqual(entries.count, 1, "a trailing-slash dir href still yields exactly one entry")
-        XCTAssertEqual(entries.first?.name, "vacation",
-                       "trailing slash is dropped → name is the dir's last component, not empty")
-        XCTAssertEqual(entries.first?.isDirectory, true)
-    }
-
-    /// A MIXED/lowercase namespace prefix (`d:` instead of `D:`) must parse
-    /// identically — the parser matches the LOCAL element name namespace-
-    /// agnostically. Also covers `getcontentlength` populating byteSize under the
-    /// lowercase prefix.
-    func testPropfindParsesLowercaseNamespacePrefix() {
-        let body = """
-        <?xml version="1.0" encoding="utf-8"?>
-        <d:multistatus xmlns:d="DAV:">
-          <d:response>
-            <d:href>/data.csv</d:href>
-            <d:propstat>
-              <d:prop>
-                <d:getcontentlength>512</d:getcontentlength>
-                <d:resourcetype/>
-              </d:prop>
-              <d:status>HTTP/1.1 200 OK</d:status>
-            </d:propstat>
-          </d:response>
-        </d:multistatus>
-        """
-        let entries = FileServerClient.parsePropfindBody(Data(body.utf8))
-
-        XCTAssertEqual(entries.count, 1, "lowercase d: prefix parses the same as D:")
-        XCTAssertEqual(entries.first?.name, "data.csv")
-        XCTAssertEqual(entries.first?.byteSize, 512, "getcontentlength populates byteSize under d: prefix")
-        XCTAssertEqual(entries.first?.isDirectory, false)
     }
 
     // MARK: - Non-mutating reach+auth probe (Diagnostics "Test connections")

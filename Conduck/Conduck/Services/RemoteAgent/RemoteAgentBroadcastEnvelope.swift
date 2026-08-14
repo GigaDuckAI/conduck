@@ -133,6 +133,36 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
     /// rather than stranding the envelope. Never logged.
     let fileTransferLaneID: String?
 
+    /// Whether THIS gateway's file-server can LIST a collection — the iPhone's
+    /// `FileTransferSnapshot.returnCapable`, read from the SAME lane snapshot as
+    /// the two fields above.
+    ///
+    /// THE WRIST CANNOT MEASURE THIS AND MUST NOT GUESS. It holds no file-server
+    /// credential by design, so it issues no absence witness and has no way to
+    /// discover that a server refuses `PROPFIND` — yet it still NAMES a
+    /// per-dispatch output folder on every spoken turn, because naming a path
+    /// needs no credential. On a lane that can never list a folder, that name is
+    /// worse than useless: the agent writes files into a directory nothing can
+    /// ever read, the turn is persisted pointing at it, and a capable device
+    /// that later opens the thread runs the retroactive scan and shows a "we
+    /// couldn't read your file server" fault for a limitation the user was
+    /// already told about in Settings. So the phone, which CAN measure it,
+    /// couriers the answer.
+    ///
+    /// Always encoded (a plain Bool, like `fileTransferAvailable`). A MISSING key
+    /// decodes to `true` — capable — and the polarity is deliberate in both
+    /// directions:
+    ///   - A missing key means an un-upgraded SENDER, i.e. exactly the state
+    ///     where today's wrist behaviour is correct. Defaulting `false` would
+    ///     switch wrist file return off across every paired watch mid-upgrade,
+    ///     on lanes that are perfectly capable, for want of a key nobody wrote.
+    ///   - It matches the app-wide polarity for this capability: incapability is
+    ///     established only by a structural refusal the server itself stated
+    ///     (`FileTransferTestResult.returnCapable`), never by an absence.
+    /// The cost of a wrong `true` is bounded — one named folder nobody fills;
+    /// the cost of a wrong `false` is a working feature vanishing silently.
+    let fileTransferReturnCapable: Bool
+
     /// Whether THIS gateway may put files on the device automatically — the
     /// iPhone's `FileTransferSnapshot.autoDeliver`.
     ///
@@ -191,6 +221,11 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         certFingerprintHex: String?,
         fileTransferAvailable: Bool = false,
         fileTransferLaneID: String? = nil,
+        // Defaulted `true` for the reason the decoder defaults a missing wire
+        // key that way: an un-stated capability is not a proven incapability,
+        // and every not-yet-rewired construction site must keep today's
+        // behaviour rather than silently disable wrist file return.
+        fileTransferReturnCapable: Bool = true,
         fileTransferAutoDeliver: Bool? = nil,
         fileTransferFilenamePolicy: String? = nil,
         activeSessionID: String?,
@@ -210,6 +245,7 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         // wire, the Watch's durable slots, or a persisted `outputScanLaneID`.
         // Every construction site (broadcaster + decoder) funnels through here.
         self.fileTransferLaneID = Self.sanitizedLaneID(fileTransferLaneID)
+        self.fileTransferReturnCapable = fileTransferReturnCapable
         self.fileTransferAutoDeliver = fileTransferAutoDeliver
         self.fileTransferFilenamePolicy = fileTransferFilenamePolicy
         self.activeSessionID = activeSessionID
@@ -253,6 +289,10 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
             // Always-present (like `fileTransferAvailable`) so the keyless posture
             // is explicit on the wire — never inferred from a nil `token`.
             "authScheme": authScheme.rawValue,
+            // Always-present plain Bool, NOT omit-nil: "absent" already means
+            // "un-upgraded sender" on this wire, and a capable lane must not
+            // encode identically to one.
+            "fileTransferReturnCapable": fileTransferReturnCapable,
         ]
         if let token {
             dict["token"] = token
@@ -333,6 +373,11 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
         // pre-upgrade behavior, not a decode failure that would strand the
         // whole envelope. Shape enforcement happens in `init`.
         let fileTransferLaneID = dict["fileTransferLaneID"] as? String
+        // Missing OR wrong-typed → `true` (capable). See the field's doc: the
+        // absence of a statement is not a proven incapability, and reading it as
+        // one would switch off wrist file return across a whole paired watch the
+        // first time an older iPhone broadcast arrived.
+        let fileTransferReturnCapable = dict["fileTransferReturnCapable"] as? Bool ?? true
         // Missing OR wrong-typed → nil ("unstated"), never a coerced default.
         // A reader that needs a value applies its own default, so an
         // un-upgraded sender and a hostile type both land on today's behaviour.
@@ -351,6 +396,7 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
             certFingerprintHex: fingerprint,
             fileTransferAvailable: fileTransferAvailable,
             fileTransferLaneID: fileTransferLaneID,
+            fileTransferReturnCapable: fileTransferReturnCapable,
             fileTransferAutoDeliver: fileTransferAutoDeliver,
             fileTransferFilenamePolicy: fileTransferFilenamePolicy,
             activeSessionID: sessionID,

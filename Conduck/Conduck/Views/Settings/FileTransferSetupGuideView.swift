@@ -298,21 +298,40 @@ struct FileTransferSetupContent: View {
     /// One compact, honest status block. A passing probe is deliberately called
     /// "File server tested", never the broader "Ready": it proves WebDAV byte
     /// transport, while the agent-side requirements below remain unverified.
+    /// The status block's four display values, read WHOLE from
+    /// `GatewayFileLaneStatus`.
+    ///
+    /// No local substitution for the upload-only lane, deliberately. That state
+    /// is a case of the badge enum (`.readyUploadsOnly`), fed by the PERSISTED
+    /// verdict, so this screen, the editor's nav-row badge and the setup-success
+    /// screen cannot disagree about a lane — and none of them can go green again
+    /// on the next launch just because the session-scoped test result is gone.
+    /// The live staged result still drives the inline feedback line and the
+    /// checklist below, which is where a DRAFT tuple's verdict belongs (a draft
+    /// test is deliberately not persisted).
+    private var statusDisplay: (
+        title: LocalizedStringResource, glyph: String, tint: Color,
+        meaning: LocalizedStringResource?
+    )? {
+        guard let title = status.pageTitle, let glyph = status.systemImage else { return nil }
+        return (title, glyph, status.tint, status.meaning)
+    }
+
     @ViewBuilder
     private var statusSection: some View {
-        if let title = status.pageTitle, let systemImage = status.systemImage {
+        if let display = statusDisplay {
             Section {
                 HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: systemImage)
+                    Image(systemName: display.glyph)
                         .font(.title3)
-                        .foregroundStyle(status.tint)
+                        .foregroundStyle(display.tint)
                         .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
+                        Text(display.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(AppColors.textPrimary)
-                        if let meaning = status.meaning {
+                        if let meaning = display.meaning {
                             Text(meaning)
                                 .font(.caption)
                                 .foregroundStyle(AppColors.textSecondary)
@@ -935,8 +954,17 @@ struct FileTransferSetupContent: View {
         let test = displayedTest
         return VStack(alignment: .leading, spacing: 8) {
             actionRow(test: test)
+            // A lane whose listing stage came back anything but a clean pass
+            // gets the checklist too, unasked — whether the server refused the
+            // method or the probe simply could not find out. It is the only
+            // surface that says WHICH stage was the partial one, and a user who
+            // has just been told their server is half-usable has an obvious next
+            // question the single status line cannot answer.
+            if test?.isUploadOnly == true || test?.listingUnverified != nil {
+                FileTransferStageChecklist(result: test)
+            }
             // The staged checklist is diagnostic detail — surfaced only after a FAILED
-            // test (a passing lane stays a single "Server test passed" line).
+            // test (a fully passing lane stays a single "Server test passed" line).
             if test?.success == false {
                 FileTransferStageChecklist(result: test)
                 // "Get help" affordance under the failure — shown only when the
@@ -962,7 +990,16 @@ struct FileTransferSetupContent: View {
     private func actionRow(test: FileTransferTestResult?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             testButton
-            if testRunning || test?.success == false || (test?.success == true && state != .ready) {
+            // `isUploadOnly` is listed EXPLICITLY rather than left to the
+            // `success == true && state != .ready` clause: an upload-only lane
+            // does reach `.ready` (uploads are genuinely available), so that
+            // clause hides it — and hiding it is precisely the failure mode
+            // being fixed, a lane whose limitation is never stated anywhere.
+            if testRunning
+                || test?.success == false
+                || test?.isUploadOnly == true
+                || test?.listingUnverified != nil
+                || (test?.success == true && state != .ready) {
                 statusFeedback(test: test)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1026,7 +1063,41 @@ struct FileTransferSetupContent: View {
                     .foregroundStyle(AppColors.textSecondary)
             }
         } else if let test {
-            if test.success {
+            if test.listingUnverified != nil {
+                // THE FOURTH ANSWER: uploads proven, the other direction not
+                // measured. It must not borrow the green line (which would claim
+                // a check that never completed) nor the amber upload-only one
+                // (which would claim the server refused). It asks for a retry,
+                // because unlike a structural refusal a retry can genuinely
+                // change this one.
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(AppColors.warning)
+                    Text(LocalizedStringResource(
+                        "fileTransfer.inline.listingUnchecked",
+                        defaultValue: "Sending files works. Conduck couldn't check whether files can come back — try the test again."))
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .multilineTextAlignment(.leading)
+                }
+            } else if test.isUploadOnly {
+                // THE THIRD ANSWER, and it must not borrow either of the other
+                // two. Green "Server test passed" would let the user go on
+                // expecting files back from an agent; a red failure would send
+                // them debugging a file server that works. So it states the two
+                // halves separately, in the order they matter: what works, then
+                // what does not.
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(AppColors.warning)
+                    Text(LocalizedStringResource(
+                        "fileTransfer.inline.uploadOnly",
+                        defaultValue: "Sending files works. This server can't list folders, so files the agent creates won't come back on their own — you'll still find them on the server."))
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .multilineTextAlignment(.leading)
+                }
+            } else if test.success {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(AppColors.success)

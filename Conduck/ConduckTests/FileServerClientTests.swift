@@ -35,7 +35,8 @@ final class FileServerClientTests: XCTestCase {
         base: String = "https://fileserver.example.test",
         fingerprint: String? = "AA:BB:CC",
         available: Bool = true,
-        folderCapable: Bool = true
+        folderCapable: Bool = true,
+        returnCapable: Bool = true
     ) -> SettingsManager.FileTransferSnapshot {
         SettingsManager.FileTransferSnapshot(
             baseURL: URL(string: base)!,
@@ -43,7 +44,8 @@ final class FileServerClientTests: XCTestCase {
             credential: "deadbeefdeadbeefdeadbeefdeadbeef",
             certFingerprintHex: fingerprint,
             available: available,
-            folderCapable: folderCapable
+            folderCapable: folderCapable,
+            returnCapable: returnCapable
         )
     }
 
@@ -54,8 +56,19 @@ final class FileServerClientTests: XCTestCase {
         return URLSession(configuration: config)
     }
 
+    override func setUp() {
+        super.setUp()
+        // The staged test and the mint both write to the PROCESS-WIDE witness
+        // breaker, so a case that seeds "this lane cannot return" would make the
+        // next case's mint skip its request entirely and assert on a probe that
+        // never happened. Cleared on both edges: a case that fails mid-way must
+        // not poison the run either.
+        BackgroundFileTransfer.FileLaneWitnessBreaker.shared.resetAll()
+    }
+
     override func tearDown() {
         MockURLProtocol.requestHandler = nil
+        BackgroundFileTransfer.FileLaneWitnessBreaker.shared.resetAll()
         super.tearDown()
     }
 
@@ -607,6 +620,29 @@ final class FileServerClientTests: XCTestCase {
         }
     }
 
+    /// The taxonomy underneath that Bool, because ONE of the non-404 answers is
+    /// not a failure at all. A server that does not implement `PROPFIND` has
+    /// told us a permanent fact about itself, and reporting that to the user as
+    /// "your file server stopped answering" — once per turn, forever — is the
+    /// noise this split exists to remove.
+    func testAbsenceWitnessSeparatesCannotAnswerFromEveryOtherRefusal() {
+        XCTAssertEqual(FileServerClient.classifyAbsenceWitness(status: 404), .absent)
+        for status in [405, 501] {
+            XCTAssertEqual(FileServerClient.classifyAbsenceWitness(status: status), .cannotAnswer,
+                           "status \(status) is a server saying it does not do PROPFIND")
+        }
+        for status in [200, 204, 207] {
+            XCTAssertEqual(FileServerClient.classifyAbsenceWitness(status: status), .occupied,
+                           "status \(status) claims the folder is already there")
+        }
+        // A rejected credential and a sick server are things that WERE working
+        // and stopped — actionable, never a permanent incapability.
+        for status in [400, 301, 302, 401, 403, 409, 500, 503] {
+            XCTAssertEqual(FileServerClient.classifyAbsenceWitness(status: status), .indeterminate,
+                           "status \(status) settles nothing and must stay actionable")
+        }
+    }
+
     /// The wire shape: `PROPFIND` at `Depth: 0` against the box itself. Depth 0
     /// because the question is about the collection, not its children — a
     /// listing would be a strictly larger answer to a smaller question, and on a
@@ -629,7 +665,7 @@ final class FileServerClientTests: XCTestCase {
         let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
             snapshot: snap, collectionKey: key, session: session)
 
-        XCTAssertTrue(witnessed, "a definite miss on the box is the witness")
+        XCTAssertEqual(witnessed, .absent, "a definite miss on the box is the witness")
         XCTAssertEqual(recorder.calls.count, 1, "exactly one request — no negative control, no listing")
         XCTAssertEqual(recorder.calls.first?.method, "PROPFIND")
         XCTAssertEqual(depthHeaders, ["0"], "Depth: 0 — the collection itself, not its children")
@@ -638,9 +674,10 @@ final class FileServerClientTests: XCTestCase {
                        "aimed at the exact box, never the served root")
     }
 
-    /// Every non-404 answer fails CLOSED. `false` costs one turn without
-    /// automatic delivery; a wrong `true` costs the user a file that is not
-    /// theirs, so the asymmetry decides the polarity.
+    /// Every non-404 answer fails CLOSED. Naming no folder costs one turn
+    /// without automatic delivery; a wrongly witnessed absence costs the user a
+    /// file that is not theirs, so the asymmetry decides the polarity — and it
+    /// holds for every one of the taxonomy's non-`.absent` cases.
     func testAbsenceWitnessFailsClosedOnEveryOtherStatus() async {
         let snap = makeSnapshot()
         let session = makeMockSession()
@@ -654,14 +691,17 @@ final class FileServerClientTests: XCTestCase {
             }
             let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
                 snapshot: snap, collectionKey: key, session: session)
-            XCTAssertFalse(witnessed, "status \(status) must not read as a witnessed absence")
+            XCTAssertNotEqual(witnessed, .absent,
+                              "status \(status) must not read as a witnessed absence")
         }
     }
 
-    /// A transport failure witnesses nothing. Freshness that was not observed is
-    /// not freshness — including when the failure is a refused certificate,
-    /// which reaches here as an ordinary throw and needs no separate arm because
-    /// the answer to every failure is the same one Bool.
+    /// A transport failure witnesses nothing, and reads as `.unreachable` — the
+    /// case that means "no HTTP response arrived", which is the rotated-tunnel
+    /// signature the breaker backs off fastest on. A refused certificate reaches
+    /// here as an ordinary throw and lands in the same case deliberately: this
+    /// verdict is rendered as a consequence ("this turn has no folder"), not as
+    /// a cause, so there is no certificate diagnosis for it to lose.
     func testAbsenceWitnessFailsClosedOnTransportError() async {
         let snap = makeSnapshot()
         let session = makeMockSession()
@@ -673,7 +713,8 @@ final class FileServerClientTests: XCTestCase {
             collectionKey: "11111111-2222-3333-4444-555555555555/out-0123456789abcdef0123456789abcdef",
             session: session)
 
-        XCTAssertFalse(witnessed, "a request that never got an answer proves no absence")
+        XCTAssertEqual(witnessed, .unreachable,
+                       "a request that never got an answer proves no absence")
     }
 
     /// A root-level collection has no parent to create.
@@ -904,8 +945,8 @@ final class FileServerClientTests: XCTestCase {
         let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
             snapshot: snap, collectionKey: Self.witnessBoxKey, session: session)
 
-        XCTAssertTrue(witnessed,
-                      "a definite miss is a definite miss whatever the server padded it with")
+        XCTAssertEqual(witnessed, .absent,
+                       "a definite miss is a definite miss whatever the server padded it with")
     }
 
     /// A `207` still fails closed with an over-cap body — the body is irrelevant
@@ -921,7 +962,7 @@ final class FileServerClientTests: XCTestCase {
         }
         let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
             snapshot: snap, collectionKey: Self.witnessBoxKey, session: session)
-        XCTAssertFalse(witnessed)
+        XCTAssertEqual(witnessed, .occupied)
     }
 
     // MARK: - What gates the outbox mint
@@ -981,7 +1022,10 @@ final class FileServerClientTests: XCTestCase {
             switch request.httpMethod {
             case "PUT": return ok(201, Data())
             case "GET":
-                let nested = url.absoluteString.contains("__conduck_probe__/")
+                // The nested capability probe writes into this run's own
+                // `__conduck_probe_<8hex>__/` collection; the flat read stage
+                // fetches `__conduck_probe_<tag>.txt` at the root.
+                let nested = url.absoluteString.contains("__/")
                 return ok(200, Data((nested ? "conduck-nested-probe" : "conduck-probe").utf8))
             case "DELETE": return ok(204, Data())
             case "PROPFIND": return ok(try propfind(request), Data())
@@ -995,7 +1039,7 @@ final class FileServerClientTests: XCTestCase {
     /// never issued one certified half a lane as fully green. The user then got
     /// no file return at all, permanently, with no signal anywhere they could act
     /// on.
-    func testStagedTestFailsWhenTheServerCannotAnswerPropfind() async {
+    func testStagedTestReportsUploadOnlyWhenTheServerCannotAnswerPropfind() async {
         let session = makeMockSession()
         defer { session.invalidateAndCancel() }
         // A plain-HTTP store, or an nginx-DAV without the ext module: PUT and GET
@@ -1004,24 +1048,220 @@ final class FileServerClientTests: XCTestCase {
 
         let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
 
-        XCTAssertFalse(result.success)
+        XCTAssertTrue(result.success,
+                      "the four byte-moving stages passed, so uploads work — failing the whole "
+                      + "test here revoked availability and disabled uploads on a server that "
+                      + "uploads perfectly")
+        XCTAssertFalse(result.returnCapable, "nothing an agent writes can ever come back")
+        XCTAssertTrue(result.isUploadOnly, "the third outcome, and every status surface reads it")
+        XCTAssertNil(result.listingUnverified, "the server ANSWERED — this is knowledge, not a blank")
         XCTAssertEqual(result.reachedStage, .listing,
-                       "every byte-moving stage passed; the return direction is what failed")
-        XCTAssertEqual(result.failure?.errorCode, AppError.fileTransferNotAFileServer.errorCode)
+                       "every byte-moving stage passed; the return direction is what did not")
+        XCTAssertNil(result.failure, "a capability the server has not got is not a failure")
     }
 
-    /// A catch-all host that answers every path with a `207` passes the listing
-    /// itself and can never witness an absence, so it can never mint a box. It
-    /// fails the same stage.
-    func testStagedTestFailsWhenTheNamespaceAnswersEverything() async {
+    /// `501 Not Implemented` is the other half of the structural pair (RFC 9110
+    /// §15.6.2 — a method the server does not recognise at all), and it must land
+    /// in exactly the same place as `405` or the same server behind a slightly
+    /// different front end would get a different diagnosis.
+    func testStagedTestReportsUploadOnlyOnA501Propfind() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(propfind: { _ in 501 })
+
+        let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
+
+        XCTAssertTrue(result.isUploadOnly)
+        XCTAssertTrue(result.success)
+    }
+
+    /// THE CORE REPAIR. Every status that is not a structural refusal proves
+    /// NOTHING, and the damage of reading one as proof was total: a healthy
+    /// WebDAV server whose reverse proxy answered a single `502` while the user
+    /// tapped Test Connection was marked permanently unable to return files, the
+    /// witness breaker was seeded to match, and no folder was named for the rest
+    /// of the process.
+    func testAServerErrorDuringTheListingStageProvesNothing() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(propfind: { _ in 502 })
+
+        let result = await FileServerClient.runConnectionTest(snapshot: snapshot, session: session)
+
+        XCTAssertTrue(result.success, "the upload half was proven with a byte-echo and stays proven")
+        XCTAssertTrue(result.returnCapable,
+                      "a narrowing may only follow proof — a proxy fault is not the server "
+                      + "stating an incapability")
+        XCTAssertFalse(result.isUploadOnly, "and it must never be RENDERED as one either")
+        XCTAssertEqual(result.listingUnverified?.errorCode, AppError.fileTransferServerError.errorCode,
+                       "the surfaces need something to say: 'couldn't check', with the code")
+        XCTAssertEqual(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.laneDecision(for: snapshot),
+            .probe,
+            "and the dispatch path must be free to measure for itself on the very next turn")
+    }
+
+    /// Table-driven, because the boundary IS the fix: one row per class of
+    /// answer, and only the two structural statuses may narrow the lane.
+    func testOnlyAStructuralRefusalMayNarrowTheLane() async {
+        // status → (upload-only?, the code the surfaces show when unverified)
+        let cases: [(status: Int, uploadOnly: Bool, unverified: AppError?)] = [
+            (405, true, nil),                                  // structural: method not allowed here
+            (501, true, nil),                                  // structural: method not implemented
+            (401, false, .fileTransferAuthFailed),             // the credential stopped working
+            (403, false, .fileTransferServerError),            // PUT/GET just authenticated — a policy refusal, not the password
+            (429, false, .fileTransferServerError),            // rate limited this minute
+            (500, false, .fileTransferServerError),            // the server is sick
+            (502, false, .fileTransferServerError),            // the reverse proxy is
+            (302, false, .fileTransferServerError),            // a redirect to a portal
+            (200, false, .fileTransferServerError),            // answered, but not a multistatus
+        ]
+        for row in cases {
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.resetAll()
+            let session = makeMockSession()
+            scriptStagedTest(propfind: { _ in row.status })
+            let result = await FileServerClient.runConnectionTest(
+                snapshot: makeSnapshot(), session: session)
+            session.invalidateAndCancel()
+
+            XCTAssertTrue(result.success, "uploads stay proven whatever the listing stage says (\(row.status))")
+            XCTAssertEqual(result.isUploadOnly, row.uploadOnly, "status \(row.status)")
+            XCTAssertEqual(result.listingUnverified?.errorCode, row.unverified?.errorCode,
+                           "status \(row.status)")
+        }
+    }
+
+    /// A catch-all host that answers every path with a `207` cannot witness an
+    /// absence, so it can never mint a box — but that is a WALL or a route, not
+    /// the server stating it does not implement the method, and real deployments
+    /// answer an outer `207` whose inner response is the `404` we asked for.
+    /// A status-only reading cannot tell those apart, so it may not diagnose.
+    func testACatchAllNamespaceIsUnverifiedRatherThanIncapable() async {
         let session = makeMockSession()
         defer { session.invalidateAndCancel() }
         scriptStagedTest(propfind: { _ in 207 })
 
         let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
 
-        XCTAssertFalse(result.success)
-        XCTAssertEqual(result.reachedStage, .listing)
+        XCTAssertTrue(result.success, "uploads were proven before this probe ran")
+        XCTAssertFalse(result.isUploadOnly,
+                       "a namespace that answers everything is a fixable misconfiguration, and "
+                       + "displaying it as a permanent limitation hides the fix")
+        XCTAssertNotNil(result.listingUnverified)
+    }
+
+    /// The second probe is not allowed to reach the structural verdict at all:
+    /// step one has just had a `207` back, so this server demonstrably performs
+    /// the method, and a refusal on the missing-resource route is a fact about
+    /// that route.
+    func testARefusalOnTheNegativeControlIsNotAMethodIncapability() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(propfind: { request in
+            request.url!.absoluteString.contains("__conduck_absent_") ? 405 : 207
+        })
+
+        let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
+
+        XCTAssertFalse(result.isUploadOnly)
+        XCTAssertNotNil(result.listingUnverified)
+    }
+
+    /// The staged verdict SEEDS the dispatch path's witness state, so a lane the
+    /// user has just tested costs no per-turn probe to rediscover a fact
+    /// Settings is already displaying.
+    func testAPassingStagedTestClearsTheWitnessCooldown() async {
+        let snapshot = makeSnapshot()
+        let lane = BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)
+        let breaker = BackgroundFileTransfer.FileLaneWitnessBreaker.shared
+        breaker.recordFailure(lane: lane, severity: .unreachable)
+        XCTAssertEqual(breaker.decide(lane: lane), .cooldown, "precondition: parked")
+
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(propfind: { request in
+            request.url!.absoluteString.contains("__conduck_absent_") ? 404 : 207
+        })
+        _ = await FileServerClient.runConnectionTest(snapshot: snapshot, session: session)
+
+        XCTAssertEqual(breaker.decide(lane: lane), .probe,
+                       "a user who just repaired their server must not keep sending folder-less "
+                       + "turns until a cooldown they cannot see expires")
+        XCTAssertNil(breaker.faultedSince(lane: lane), "and the thread's rows must clear with it")
+    }
+
+    /// The other direction: a structural refusal parks the lane, so the very
+    /// next dispatch spends nothing and says nothing.
+    func testAnUploadOnlyStagedVerdictSilencesTheDispatchProbe() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(propfind: { _ in 405 })
+        _ = await FileServerClient.runConnectionTest(snapshot: snapshot, session: session)
+
+        XCTAssertEqual(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.laneDecision(for: snapshot),
+            .cannotReturn)
+        XCTAssertNil(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.faultedSince(
+                lane: BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)),
+            "a limitation is not a fault, so no thread row may derive from it")
+    }
+
+    /// An UNSETTLED probe states no CAPABILITY — not the incapability, and not
+    /// the "witnessed" reset either. The breaker's capability slot is a cache of
+    /// facts, and a `502` is not one.
+    func testAnUnverifiedListingStageStatesNoCapabilityEitherWay() async {
+        let snapshot = makeSnapshot()
+        let breaker = BackgroundFileTransfer.FileLaneWitnessBreaker.shared
+        let lane = BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)
+        // A lane the server has already told us cannot list. An inconclusive
+        // test must not let it out of that: widening is a claim, and claims need
+        // proof.
+        breaker.recordCannotReturn(lane: lane)
+
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(propfind: { _ in 502 })
+        _ = await FileServerClient.runConnectionTest(snapshot: snapshot, session: session)
+
+        XCTAssertEqual(breaker.decide(lane: lane), .cannotReturn,
+                       "an inconclusive test neither condemns the lane nor exonerates it")
+    }
+
+    /// THE COOLDOWN CLEARS WHATEVER THE LISTING STAGE CONCLUDED, and the
+    /// asymmetry with the test above is the point: a capability is a claim about
+    /// the server and needs proof, while a cooldown is only a guess about
+    /// whether another request is worth spending.
+    ///
+    /// The case that forced it: the server goes unreachable, ONE witness failure
+    /// opens the ladder to as much as an hour, the user restarts the server —
+    /// same URL, credential and pin, so the lane key does not move — and taps
+    /// Test Connection. The four upload stages pass against the repaired server
+    /// and a reverse proxy still warming up answers the listing probe `502`. The
+    /// user has just proved reachability far better than the streak ever guessed
+    /// it, and must not be left waiting out a pause they cannot see.
+    func testAPassingTestClearsTheCooldownEvenWhenTheListingStageSettledNothing() async {
+        let snapshot = makeSnapshot()
+        let breaker = BackgroundFileTransfer.FileLaneWitnessBreaker.shared
+        let lane = BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)
+        breaker.recordFailure(lane: lane, severity: .unreachable)
+        XCTAssertEqual(breaker.decide(lane: lane), .cooldown, "precondition: parked")
+
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(propfind: { _ in 502 })
+        let result = await FileServerClient.runConnectionTest(snapshot: snapshot, session: session)
+
+        XCTAssertEqual(breaker.decide(lane: lane), .probe,
+                       "four stages of moved bytes outweigh the streak that opened the pause")
+        XCTAssertNil(breaker.faultedSince(lane: lane),
+                     "and the thread's folder-less rows clear with it")
+        XCTAssertTrue(result.returnCapable,
+                      "clearing a pause is not a claim — the listing verdict is still unstated")
+        XCTAssertNotNil(result.listingUnverified,
+                        "and the surfaces still say 'couldn't check' rather than picking an answer")
     }
 
     /// The probe asks the two questions the dispatch path asks, in the shape it
@@ -1043,6 +1283,7 @@ final class FileServerClientTests: XCTestCase {
         XCTAssertTrue(result.success)
         XCTAssertEqual(result.reachedStage, .listing, "a full pass now reaches the listing stage")
         XCTAssertNil(result.failure)
+        XCTAssertNil(result.listingUnverified)
         XCTAssertTrue(result.folderCapable)
 
         let propfinds = recorder.calls
@@ -1055,9 +1296,10 @@ final class FileServerClientTests: XCTestCase {
     }
 
     /// A transport failure on the listing probe is NOT a verdict. It narrows
-    /// nothing that could be persisted wrong, and failing an otherwise clean
-    /// five-request sequence on the fifth request's hiccup would be a test that
-    /// lies about the server.
+    /// nothing, and — the part that took a real repair — it must not revoke the
+    /// upload direction either: four stages moved real bytes end to end before
+    /// this request was ever issued, and a fifth-request hiccup cannot un-prove
+    /// them.
     func testStagedTestTolerantOfATransportHiccupOnTheListingProbe() async {
         let session = makeMockSession()
         defer { session.invalidateAndCancel() }
@@ -1065,8 +1307,268 @@ final class FileServerClientTests: XCTestCase {
 
         let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
 
-        XCTAssertTrue(result.success, "nothing was learned, so nothing is claimed")
+        XCTAssertTrue(result.success, "uploads stay usable — nothing about them was disproved")
+        XCTAssertTrue(result.returnCapable,
+                      "`returnCapable` is a NARROWING — only a structural refusal may flip it, "
+                      + "or a hiccup would strip file return off a healthy lane")
+        XCTAssertEqual(result.listingUnverified?.errorCode,
+                       AppError.fileTransferUnreachable.errorCode,
+                       "no HTTP answer at all reads as reachability, not as a server fault")
         XCTAssertEqual(result.reachedStage, .listing)
+    }
+
+    // MARK: - The mint's typed outcome (which folder-less turns are worth a word)
+
+    /// A dispatch with no lane at all — the unconfigured majority, and every
+    /// wrist-originated turn, since the Watch holds no file-server credential by
+    /// design. Silent: the user is not missing anything they asked for.
+    func testAWristOrUnconfiguredTurnMintsNothingAndSaysNothing() async {
+        let outcome = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: nil)
+
+        XCTAssertEqual(outcome, .noLane)
+        XCTAssertNil(outcome.key)
+        XCTAssertFalse(outcome.isActionableFault,
+                       "a device that was never given a credential has not failed at anything")
+    }
+
+    /// A lane the STAGED test found return-incapable. Silent, and — the point of
+    /// the persisted verdict — silent for FREE on every turn, including the
+    /// first one after a relaunch, when the process-local breaker knows nothing.
+    ///
+    /// The gate is the durable flag, not an inference this dispatch drew: the
+    /// witness never issues a request at all here, which is also what stops the
+    /// large plain-nginx population paying a `PROPFIND` per turn to re-learn
+    /// what Settings already shows them in amber.
+    func testAReturnIncapableLaneStaysSilentAndSpendsNothing() async {
+        let snapshot = makeSnapshot(returnCapable: false)
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        MockURLProtocol.requestHandler = { request in
+            recorder.record(method: request.httpMethod ?? "", url: request.url!)
+            return (HTTPURLResponse(url: request.url!, statusCode: 405,
+                                    httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+
+        let first = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+        let second = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertEqual(first, .laneCannotReturn)
+        XCTAssertEqual(second, .laneCannotReturn)
+        XCTAssertFalse(first.isActionableFault,
+                       "a permanent property of the user's server is not a per-turn complaint")
+        XCTAssertEqual(recorder.calls.count, 0,
+                       "a settled, persisted verdict is not worth one more request")
+    }
+
+    /// THE INFERENCE THE DISPATCH PATH MAY NOT DRAW. The witness PROPFINDs the
+    /// box this turn is about to name, which by construction is not there — so a
+    /// `405` answers a question about the ROUTE a missing path is served by, not
+    /// about the method the server performs. Path-scoped `dav_methods`, a WAF,
+    /// an SSO layer and a rewrite all produce exactly this on a server that
+    /// lists existing collections perfectly.
+    ///
+    /// The old behaviour marked such a lane permanently and silently incapable
+    /// for the rest of the process, from one answer, while the staged test
+    /// looking at the same server concluded nothing bad at all.
+    func testAStructuralRefusalAtDispatchIsAFaultNotAnIncapability() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 405,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+
+        let outcome = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertEqual(outcome, .witnessFailed,
+                       "unhelpful answer, not a verdict — the turn is folder-less and says so")
+        XCTAssertTrue(outcome.isActionableFault)
+        XCTAssertNotEqual(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.laneDecision(for: snapshot),
+            .cannotReturn,
+            "a `405` on a path that does not exist may never stamp the lane incapable")
+    }
+
+    /// And it is charged as an ANSWERED failure, so the lane keeps the same
+    /// three-sample patience every other answered failure earns. Backing off
+    /// after one would be the old permanent verdict wearing a cooldown's
+    /// clothes.
+    func testAStructuralRefusalAtDispatchKeepsTheAnsweredPatience() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        MockURLProtocol.requestHandler = { request in
+            recorder.record(method: request.httpMethod ?? "", url: request.url!)
+            return (HTTPURLResponse(url: request.url!, statusCode: 405,
+                                    httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+
+        for _ in 0..<4 {
+            _ = await BackgroundFileTransfer.mintOutboxKey(
+                conversationID: UUID(), snapshot: snapshot, session: session)
+        }
+
+        XCTAssertEqual(recorder.calls.count, 3,
+                       "three samples, then the lane is parked — the `.answered` threshold")
+    }
+
+    /// THE TWO PATHS MUST AGREE ABOUT ONE SERVER. A route-scoped `405` server —
+    /// `PROPFIND` works on collections that exist, missing paths are refused by
+    /// a rule in front of it — is the case that used to split them: the staged
+    /// test said "couldn't check" while the dispatch witness silently concluded
+    /// "cannot ever list". Neither may now claim a capability OR an
+    /// incapability; both may only report that nothing was settled.
+    func testStagedTestAndDispatchAgreeAboutARouteScoped405Server() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        // The served root exists and lists; anything carrying the negative
+        // control's or the mint's entropy is a path that does not exist, and
+        // this server's route answers those `405`.
+        scriptStagedTest(propfind: { request in
+            let path = request.url?.path ?? "/"
+            let isRoot = path == "/" || path.isEmpty
+            return isRoot ? 207 : 405
+        })
+
+        let staged = await FileServerClient.probeListingCapability(
+            snapshot: snapshot, session: session, signals: { .empty })
+
+        XCTAssertEqual(staged, .unverified(.fileTransferServerError),
+                       "step 2 already refuses to read a `405` on a missing path as a verdict")
+        XCTAssertNotEqual(staged, .methodUnavailable)
+
+        let dispatched = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertEqual(dispatched, .witnessFailed,
+                       "and the dispatch path reaches the same non-verdict")
+        XCTAssertNotEqual(dispatched, .laneCannotReturn)
+        XCTAssertNotEqual(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.laneDecision(for: snapshot),
+            .cannotReturn)
+    }
+
+    /// The actionable case: a lane the user configured and tested green that has
+    /// stopped answering. It must NOT be silent, and it must not be silent only
+    /// once either — every turn dispatched into a broken lane genuinely went out
+    /// folder-less.
+    func testAnUnreachableConfiguredLaneIsAnActionableFault() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cannotFindHost) }
+
+        let outcome = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertEqual(outcome, .witnessFailed)
+        XCTAssertNil(outcome.key, "no witnessed absence, no folder on the wire")
+        XCTAssertTrue(outcome.isActionableFault)
+        XCTAssertNotNil(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.faultedSince(
+                lane: BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)),
+            "and the thread has a streak start to scope its rows against")
+    }
+
+    /// A host that is not there will not be there next turn, so ONE observation
+    /// opens the cooldown — three would spend ~12 s of the user's time
+    /// re-learning it. The turn is still reported folder-less; only the REQUEST
+    /// is suppressed.
+    func testAnUnreachableLaneStopsBeingProbedAfterOneFailure() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        MockURLProtocol.requestHandler = { request in
+            recorder.record(method: request.httpMethod ?? "", url: request.url!)
+            throw URLError(.cannotFindHost)
+        }
+
+        _ = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+        let second = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertEqual(second, .witnessSuppressed)
+        XCTAssertTrue(second.isActionableFault,
+                      "the backoff suppresses the request, never the truth")
+        XCTAssertEqual(recorder.calls.count, 1, "the second turn pays no latency at all")
+    }
+
+    /// A server that ANSWERS, unhelpfully, keeps its benefit of the doubt for
+    /// longer: those failures are transient often enough that one sample is not
+    /// a diagnosis, and a one-in-a-billion name collision must not park a
+    /// healthy lane.
+    func testALaneThatAnswersBadlyIsProbedThreeTimesBeforeBackingOff() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        MockURLProtocol.requestHandler = { request in
+            recorder.record(method: request.httpMethod ?? "", url: request.url!)
+            return (HTTPURLResponse(url: request.url!, statusCode: 500,
+                                    httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+
+        for _ in 0..<4 {
+            _ = await BackgroundFileTransfer.mintOutboxKey(
+                conversationID: UUID(), snapshot: snapshot, session: session)
+        }
+
+        XCTAssertEqual(recorder.calls.count, 3,
+                       "three samples, then the lane is parked")
+    }
+
+    /// Recovery with no user action: one witnessed absence resets everything,
+    /// including the streak the thread's rows are scoped against.
+    func testAWitnessedAbsenceResetsTheStreakAndTheRows() async {
+        let snapshot = makeSnapshot()
+        let breaker = BackgroundFileTransfer.FileLaneWitnessBreaker.shared
+        let lane = BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)
+        breaker.recordFailure(lane: lane, severity: .answered)
+        breaker.recordFailure(lane: lane, severity: .answered)
+
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+        let outcome = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertNotNil(outcome.key)
+        XCTAssertFalse(outcome.isActionableFault)
+        XCTAssertNil(breaker.faultedSince(lane: lane))
+        XCTAssertEqual(breaker.decide(lane: lane), .probe)
+    }
+
+    /// Any edit to the URL, the credential or the device-local pin lands on a
+    /// NEW lane key, so "I just fixed my settings" needs no reset path at all.
+    func testEditingTheLaneConfigurationLandsOnACleanKey() {
+        let breaker = BackgroundFileTransfer.FileLaneWitnessBreaker.shared
+        let before = makeSnapshot()
+        breaker.recordFailure(
+            lane: BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: before),
+            severity: .unreachable)
+
+        let repointed = makeSnapshot(base: "https://fileserver-2.example.test")
+        let repinned = makeSnapshot(fingerprint: "DD:EE:FF")
+
+        XCTAssertEqual(breaker.laneDecision(for: before), .cooldown)
+        XCTAssertEqual(breaker.laneDecision(for: repointed), .probe,
+                       "a new address is a new lane")
+        XCTAssertEqual(breaker.laneDecision(for: repinned), .probe,
+                       "a corrected certificate pin is one of the repairs that must reopen "
+                       + "the lane instantly, and it moves no durable id")
     }
 }
 

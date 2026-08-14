@@ -72,9 +72,22 @@ struct FileTransferTestSignature: Equatable, Sendable {
 /// failure comes from `fileServerValidationStates`. Computed by
 /// `SettingsViewModel.fileLaneStatus(for:)`.
 enum GatewayFileLaneStatus: Equatable {
-    /// Staged test passed — the file server accepted a write/read cycle. The
-    /// client cannot prove the agent workspace or tool-policy requirements.
+    /// Staged test passed IN BOTH DIRECTIONS — the file server accepted a
+    /// write/read cycle AND answered the two PROPFINDs the return direction is
+    /// built on. The client cannot prove the agent workspace or tool-policy
+    /// requirements.
     case ready
+    /// Staged test passed for UPLOADS, and the server stated it does not
+    /// implement `PROPFIND` (`405`/`501`), so nothing an agent writes can ever
+    /// come back on its own. Neither green nor red: the lane genuinely works,
+    /// in one direction, and this is the only badge that says so.
+    ///
+    /// Its own case rather than a flag the badge surfaces read alongside
+    /// `.ready`, because every one of them (the editor's nav-row badge, the
+    /// setup page's status block, the gateway-setup success screen) would
+    /// otherwise have to remember to ask the second question — and the one that
+    /// forgot would assert both directions on a server that has one.
+    case readyUploadsOnly
     /// Saved but the last staged test FAILED (write/read/delete) — surfaces red.
     case needsAttention
     /// Saved (URL + credential) but not yet tested — neutral "run a test".
@@ -638,6 +651,20 @@ final class SettingsViewModel {
     /// detail. Mirrors the gateway `configuredRemoteAgentRefSet` posture, but is
     /// a pass-flag, not a config-presence flag.
     var fileTransferAvailableRefSet: Set<RemoteAgentRef> = []
+
+    /// Refs whose PERSISTED file-server verdict says the server cannot list a
+    /// collection — the upload-only lanes. Membership is a NARROWING recorded
+    /// only from a structural `405`/`501` at the staged test's listing stage, so
+    /// an absent stored value (every install that predates the key) is NOT a
+    /// member.
+    ///
+    /// Persisted rather than read off `fileTransferTestResults`, because that
+    /// dict is session-scoped: the user tested plain nginx, correctly saw
+    /// "uploads only", quit, reopened Settings — and the badge went green,
+    /// asserting files could come back on a server that had just told us they
+    /// cannot. A verdict the user is shown must survive the process that
+    /// measured it.
+    var fileTransferUploadOnlyRefSet: Set<RemoteAgentRef> = []
 
     /// Per-ref image-history policy (Recent / Extended / All). Backs the
     /// "Image history" picker in the gateway editor's Advanced section —
@@ -1839,6 +1866,7 @@ final class SettingsViewModel {
         var nextFSCredPresent: [RemoteAgentRef: Bool] = [:]
         var nextFSCerts: [RemoteAgentRef: String] = [:]
         var nextFSAvailable: Set<RemoteAgentRef> = []
+        var nextFSUploadOnly: Set<RemoteAgentRef> = []
 
         for ref in allRefs {
             if let url = await SettingsManager.shared.getFileServerURL(for: ref) {
@@ -1856,6 +1884,13 @@ final class SettingsViewModel {
             if await SettingsManager.shared.getFileTransferAvailable(for: ref) {
                 nextFSAvailable.insert(ref)
             }
+            // Read unconditionally, not only for available refs: the accessor
+            // defaults an absent key to capable, so a non-member is the honest
+            // reading for a lane nobody has measured, and hydrating it beside
+            // availability keeps the two from being read a settings-edit apart.
+            if !(await SettingsManager.shared.getFileServerReturnCapable(for: ref)) {
+                nextFSUploadOnly.insert(ref)
+            }
         }
 
         fileServerURLStrings = nextFSURLs
@@ -1863,6 +1898,7 @@ final class SettingsViewModel {
         fileServerCredentialPresent = nextFSCredPresent
         fileServerCertFingerprints = nextFSCerts
         fileTransferAvailableRefSet = nextFSAvailable
+        fileTransferUploadOnlyRefSet = nextFSUploadOnly
         // The hydrated buffers ARE the persisted values at this point — seed the
         // persisted mirrors from the same reads (the file-transfer editor's
         // dirty-detection / discard baseline).
@@ -3640,6 +3676,11 @@ final class SettingsViewModel {
         let carriedVerdict: FileTransferTestResult? =
             (fileTransferTestSignatures[ref] == newSignature) ? fileTransferTestResults[ref] : nil
         let carriedPass = carriedVerdict?.success == true
+        // The listing half of the carried verdict, and only when it settled —
+        // "settled" defined once, on the result itself, so this path and the
+        // staged-verdict commit cannot disagree about what counts as evidence.
+        let carriedSettledListing: Bool? =
+            carriedPass ? carriedVerdict?.settledReturnCapability : nil
 
         // ONE actor hop commits URL + pin + capability + availability together
         // (no suspension inside), so a concurrent `fileTransferSnapshot` sees
@@ -3657,6 +3698,12 @@ final class SettingsViewModel {
             url: parsedURL,
             pin: pin,
             folderCapable: carriedPass ? carriedVerdict?.folderCapable : nil,
+            // A tuple commit RESETS the listing verdict by default, because the
+            // verdict described whatever server the old tuple pointed at. Only a
+            // draft test that SETTLED the question against exactly this tuple
+            // may state one — an unsettled draft pass resets like everything
+            // else, since nothing measured the new server.
+            returnCapable: carriedSettledListing.map { .set($0) } ?? .resetToUnknown,
             available: carriedPass,
             for: ref
         )
@@ -3665,6 +3712,7 @@ final class SettingsViewModel {
         } else {
             fileTransferAvailableRefSet.remove(ref)
         }
+        await refreshFileTransferUploadOnlyMirror(for: ref)
 
         // A persisted URL now exists — flip the mirror the setup-state derivation
         // reads (a typed-but-unsaved URL never reaches here, so never reads
@@ -3728,6 +3776,13 @@ final class SettingsViewModel {
         let wasTestedLocally = await SettingsManager.shared.getFileServerTestedLocally(for: ref)
         await SettingsManager.shared.revokeFileTransferReadiness(for: ref)
         fileTransferAvailableRefSet.remove(ref)
+        // The revoke reset the stored listing verdict (a rotated credential is a
+        // new identity), so the mirror drops with it. A FAILED rotation below
+        // does not restore it: the verdict resolves to unknown, i.e. capable,
+        // which is the conservative direction — the lane keeps working and the
+        // next test re-states any limitation, where restoring a stale "uploads
+        // only" would display a limitation nothing had re-measured.
+        fileTransferUploadOnlyRefSet.remove(ref)
         // AWAIT the Keychain write so `fileServerCredentialPresent` reflects a
         // REAL persisted credential. A fire-and-forget write could still be in
         // flight — or have silently failed — when the user taps Test Connection,
@@ -3916,25 +3971,38 @@ final class SettingsViewModel {
         fileTransferTestSignatures[ref] = signature
 
         // Availability moves ONLY when the probed tuple is the persisted tuple.
-        // A draft probe stages its verdict for Save to carry. The verdict
-        // commits capability + availability in ONE actor hop — two separate
-        // setter hops would let a concurrent snapshot see `available == true`
-        // paired with a stale `folderCapable`. Capability persists ONLY on a
-        // full pass (the nested probe runs only after read passes; on a
-        // connectivity failure `result.folderCapable` is the optimistic default
-        // true, which must not overwrite a previously-probed false). On a pass
-        // the same hop also records this device's local test proof and re-arms
-        // the silent-probe markers — see `commitFileTransferVerdict`.
+        // A draft probe stages its verdict for Save to carry. Everything the
+        // result durably concludes — readiness, folder capability, the listing
+        // verdict, this device's local test proof — lands through the ONE
+        // commit `SettingsManager` exposes for a staged test, which the
+        // Diagnostics screen's copy of this flow calls too. That shared hop is
+        // deliberate: while each screen spelled its own persistence they
+        // drifted, and the one that forgot the listing verdict left a lane
+        // green everywhere while dispatch quietly stopped naming folders.
         guard persistedFileTransferSignature(for: ref) == signature else { return }
-        await SettingsManager.shared.commitFileTransferVerdict(
-            available: result.success,
-            folderCapable: result.success ? result.folderCapable : nil,
-            for: ref
-        )
+        await SettingsManager.shared.commitStagedFileTransferResult(result, for: ref)
         if result.success {
             fileTransferAvailableRefSet.insert(ref)
         } else {
             fileTransferAvailableRefSet.remove(ref)
+        }
+        await refreshFileTransferUploadOnlyMirror(for: ref)
+    }
+
+    /// Re-read `ref`'s stored listing verdict into the published mirror the
+    /// badge renders.
+    ///
+    /// READ BACK rather than derived from the value just written, and that is
+    /// deliberate: the store is the authority, several paths (pairing import,
+    /// Forget, a credential rotation) reset the key without going through this
+    /// view model, and a mirror computed from a local branch would drift from
+    /// the store exactly where nobody is looking. One read, one assignment, no
+    /// second copy of the three-way rule.
+    private func refreshFileTransferUploadOnlyMirror(for ref: RemoteAgentRef) async {
+        if await SettingsManager.shared.getFileServerReturnCapable(for: ref) {
+            fileTransferUploadOnlyRefSet.remove(ref)
+        } else {
+            fileTransferUploadOnlyRefSet.insert(ref)
         }
     }
 
@@ -3943,6 +4011,14 @@ final class SettingsViewModel {
     /// "File transfer: Ready / Not set up" status line.
     func isFileTransferAvailable(_ ref: RemoteAgentRef) -> Bool {
         fileTransferAvailableRefSet.contains(ref)
+    }
+
+    /// Whether `ref`'s file server has been PROVEN unable to list a collection —
+    /// the upload-only lane. Reads the persisted mirror (no actor hop), so it
+    /// survives relaunch; false for every lane nobody has measured, because only
+    /// a structural refusal may put a lane in this set.
+    func isFileTransferUploadOnly(_ ref: RemoteAgentRef) -> Bool {
+        fileTransferUploadOnlyRefSet.contains(ref)
     }
 
     /// Coarse setup state for `ref`'s file transfer, driving the redesigned
@@ -3991,7 +4067,11 @@ final class SettingsViewModel {
 
         switch fileTransferSetupState(for: ref) {
         case .ready:
-            return .ready
+            // A ready lane still has two answers, and the persisted verdict —
+            // not the session-scoped test result — is what decides between
+            // them, so the badge tells the same story after a relaunch as it
+            // did the moment the test ran.
+            return isFileTransferUploadOnly(ref) ? .readyUploadsOnly : .ready
         case .savedNeedsTest:
             // "Needs attention" = the staged Test RAN and FAILED **for the
             // PERSISTED tuple** — the verdict's signature must match the saved
@@ -4085,6 +4165,10 @@ final class SettingsViewModel {
         fileServerCredentialPresent[ref] = false
         fileServerCertFingerprints.removeValue(forKey: ref)
         fileTransferAvailableRefSet.remove(ref)
+        // Forget resets the listing verdict in the store (via the revoke above);
+        // the mirror follows so a re-added lane starts unmeasured, not carrying
+        // the forgotten server's limitation.
+        fileTransferUploadOnlyRefSet.remove(ref)
         fileServerValidationStates[ref] = .unset
         fileTransferTestResults.removeValue(forKey: ref)
         fileTransferTestSignatures.removeValue(forKey: ref)
