@@ -351,7 +351,11 @@ final class PairingPayloadExportTests: XCTestCase {
             Constants.fileServerFolderCapableKey(for: ref),
             Constants.fileServerAutoDeliverKey(for: ref),
             Constants.fileServerFilenamePolicyKey(for: ref),
-            Constants.fileServerTestedLocallyKey(for: ref)
+            Constants.fileServerTestedLocallyKey(for: ref),
+            // The stamp that binds that flag to a server. It rides the shared
+            // singleton like everything else here, so a leftover would follow
+            // this ref into whichever suite runs next.
+            Constants.fileServerTestedLocallyStampKey(for: ref)
         ] {
             TestStores.defaults.removeObject(forKey: key)
             TestStores.kvs.removeObject(forKey: key)

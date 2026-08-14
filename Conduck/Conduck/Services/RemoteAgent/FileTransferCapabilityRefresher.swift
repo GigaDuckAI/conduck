@@ -42,10 +42,12 @@
 //     exclusive verdict, and the flag is already false whenever this probes
 //     (upgrade-only),
 //   - flip `available` — readiness is earned ONLY by the staged test,
-//   - probe an un-trust-gated (un-`available`) OR un-locally-tested server — a
-//     synced-only peer that never ran a Test Connection HERE fires no automated
-//     writes and raises no unexplained iOS Local-Network prompt at a server it
-//     never saw.
+//   - probe an un-trust-gated (un-`available`) server, or one THIS device has
+//     not itself staged-tested at its current identity — a synced-only peer
+//     that never ran a Test Connection HERE, and a device whose slot was
+//     repointed at a stranger's server since its last one, both fire no
+//     automated writes and raise no unexplained iOS Local-Network prompt at a
+//     server they never saw.
 //
 // WHAT THE RETURN PROBE DOES NOT PROMISE, stated because the doc comments it
 // backs would otherwise over-claim. It is fire-and-forget from launch wiring, so
@@ -55,24 +57,41 @@
 // once on Test again" — never "the moment `PROPFIND` is enabled".
 //
 // Topology limitation (documented + ACCEPTED), and it covers both probes: the
-// upgrade is armed by `testedLocally`, a device-local App-Group flag. A lane
+// upgrade is armed by device-local proof, held in App-Group storage. A lane
 // whose ORIGINALLY-tested device is gone stays narrowed until SOME device
-// re-runs a Test Connection — which both re-arms `testedLocally` and dual-writes
-// any upgrade to peers via KVS. A device that only ever received the verdict
-// through iCloud is a device that has never seen the server, and firing probes
-// from it is exactly what the arming rule exists to prevent.
+// re-runs a Test Connection — which both re-earns the proof and dual-writes any
+// upgrade to peers via KVS. A device that only ever received the verdict through
+// iCloud is a device that has never seen the server, and firing probes from it
+// is exactly what the arming rule exists to prevent.
 //
-// KNOWN GAP IN THAT ARMING, shared with the folder probe and NOT introduced by
-// the return one: `testedLocally` is a per-REF bool, so it records that this
-// device tested this gateway slot, not that it tested the server currently in
-// it. A peer that repoints the slot at a different file server syncs the new URL
-// and credential in through `handleICloudChange`, which deliberately does not
-// grant local proof — but it does not REVOKE the proof this device already had
-// either, so a probe can fire at a host this device has never seen. Closing it
-// needs the flag bound to a stable identity stamp (`durableLaneID` plus the
-// device-local pin; NOT `identitySignature`, whose `Hasher` seed is
-// process-random and therefore unpersistable), which is a new stored key and a
-// change to the folder probe's arming as much as this one's.
+// THE ARMING RULE, and it is per-SERVER rather than per-slot: both probes gate
+// on `SettingsManager.isFileServerLocallyProven(_:for:)`, which answers true
+// only when the `testedLocally` flag is set AND the stored identity stamp equals
+// the stamp of the lane in hand. The stamp is
+// `FileTransferSnapshot.localProofStamp` — the durable lane (URL + credential)
+// folded together with this device's certificate pin, hashed, and written beside
+// the flag at the moment a staged test passes.
+//
+// The bare flag is keyed by gateway SLOT and so records only that this device
+// tested this slot; three things move the server under it and each one voids the
+// proof through that comparison: a peer repointing the URL, a rotated
+// credential, and a changed pin. All three reach this device the same way — the
+// URL and credential sync in through `handleICloudChange`, which grants no local
+// proof — and the stamp is what makes the arriving lane stop matching, so no
+// probe fires at a host this device has never opened a connection to. That
+// matters most for the folder probe, which WRITES (a nested PUT) and can raise
+// an unexplained iOS Local-Network prompt.
+//
+// A MISSING STAMP IS UNPROVEN, never grandfathered, and it is never back-filled
+// on read: back-filling would stamp whichever server occupies the slot at that
+// moment, which is the unproven server the rule exists to keep probes away from.
+// So a proof that predates the stamp — the one-time migration seed's, which
+// reconstructs a bare boolean and can recover no identity from it — arms
+// nothing, and the whole cost is one Test Connection to re-arm the silent
+// upgrades. `identitySignature` cannot serve here even though it covers the same
+// three fields: its `Hasher` seed is process-random, so a value written on one
+// launch never compares equal on the next. It stays the right tool for the
+// apply-guards below, where both operands are minted in the same process.
 //
 // Privacy: never logs URLs / credentials / keys (no logging at all); both probes
 // ride the same cert-pinned ephemeral session as the staged test
@@ -160,12 +179,17 @@ enum FileTransferCapabilityRefresher {
         // is nil unless URL + credential are present AND `available`.
         guard let snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) else { return }
 
-        let testedLocally = await SettingsManager.shared.getFileServerTestedLocally(for: ref)
+        // IDENTITY-CHECKED proof, never the bare `getFileServerTestedLocally`
+        // flag: this probe WRITES to the server the snapshot names, so what has
+        // to be true is that THIS device tested THAT server — not merely this
+        // gateway slot, which a peer can repoint at a stranger's host without
+        // ever touching the flag.
+        let locallyProven = await SettingsManager.shared.isFileServerLocallyProven(snapshot, for: ref)
         let recordedRevision = await SettingsManager.shared.getFolderProbeRevision(for: ref)
         let lastAttempt = await SettingsManager.shared.getFolderProbeAttempt(for: ref)
         guard isProbeDue(
             folderCapable: snapshot.folderCapable,
-            testedLocally: testedLocally,
+            locallyProven: locallyProven,
             recordedRevision: recordedRevision,
             currentRevision: Constants.fileServerFolderProbeRevision,
             lastAttempt: lastAttempt,
@@ -229,8 +253,12 @@ enum FileTransferCapabilityRefresher {
     /// under the amber "Uploads only" status on the File transfer page.
     private static func refreshReturnCapability(for ref: RemoteAgentRef) async {
         guard let snapshot = await SettingsManager.shared.fileTransferReadySnapshot(for: ref) else { return }
-        let testedLocally = await SettingsManager.shared.getFileServerTestedLocally(for: ref)
-        guard isReturnProbeDue(returnCapable: snapshot.returnCapable, testedLocally: testedLocally) else { return }
+        // Same identity-checked proof the folder probe arms on, for the weaker
+        // but still binding half of the reason: this request writes nothing, but
+        // it is still an unannounced connection, and a device that has not
+        // tested THIS server has no business opening one at it.
+        let locallyProven = await SettingsManager.shared.isFileServerLocallyProven(snapshot, for: ref)
+        guard isReturnProbeDue(returnCapable: snapshot.returnCapable, locallyProven: locallyProven) else { return }
         // Claim the process's one probe LAST, after the cheap reads have shown
         // the lane is actually due — otherwise a lane that is not narrowed at all
         // would spend the claim and a later narrowing in the same process could
@@ -275,10 +303,14 @@ enum FileTransferCapabilityRefresher {
     /// True iff ALL hold:
     ///   - `folderCapable == false` — true is already the ceiling, nothing to
     ///     upgrade (and this refresh never degrades),
-    ///   - `testedLocally` — only a device that itself passed a staged Test
-    ///     Connection may fire automated writes / a Local-Network prompt at this
-    ///     server; the stuck device is by definition one that tested locally, and
-    ///     its upgrade dual-writes to synced-only peers,
+    ///   - `locallyProven` — only a device that itself passed a staged Test
+    ///     Connection AGAINST THE SERVER NOW IN THE SLOT may fire automated
+    ///     writes / a Local-Network prompt at it; the stuck device is by
+    ///     definition one that tested that server, and its upgrade dual-writes
+    ///     to synced-only peers. Callers pass
+    ///     `SettingsManager.isFileServerLocallyProven(_:for:)` and never the
+    ///     bare `testedLocally` flag, which is keyed by SLOT and survives a peer
+    ///     repointing that slot at a host this device has never seen,
     ///   - `recordedRevision != currentRevision` — a DEFINITIVE prior outcome
     ///     (capable or rejected) parks the probe until the algorithm revision
     ///     bumps; a bump re-arms it,
@@ -286,7 +318,7 @@ enum FileTransferCapabilityRefresher {
     ///     server costs at most one probe per backoff window, not one per launch.
     static func isProbeDue(
         folderCapable: Bool,
-        testedLocally: Bool,
+        locallyProven: Bool,
         recordedRevision: Int?,
         currentRevision: Int,
         lastAttempt: Date?,
@@ -294,7 +326,7 @@ enum FileTransferCapabilityRefresher {
         now: Date
     ) -> Bool {
         guard !folderCapable else { return false }
-        guard testedLocally else { return false }
+        guard locallyProven else { return false }
         guard recordedRevision != currentRevision else { return false }
         if let lastAttempt, now.timeIntervalSince(lastAttempt) < backoff { return false }
         return true
@@ -305,9 +337,10 @@ enum FileTransferCapabilityRefresher {
     ///   - `returnCapable == false` — true is already the ceiling, and this
     ///     refresh never narrows (only the staged Test Connection may, from a
     ///     structural refusal on a collection that certainly exists),
-    ///   - `testedLocally` — same arming rule the folder probe uses, for the same
-    ///     reason: a device that received this verdict over iCloud has never seen
-    ///     the server and must not fire an automated request at it.
+    ///   - `locallyProven` — same arming rule the folder probe uses, from the
+    ///     same accessor, for the same reason: a device that received this
+    ///     verdict over iCloud, or whose slot a peer has since repointed, has
+    ///     never seen the server and must not fire an automated request at it.
     ///
     /// NO REVISION AND NO TIME BACKOFF, unlike `isProbeDue`. There is no
     /// algorithm revision to park against because the answer this probe chases
@@ -316,9 +349,9 @@ enum FileTransferCapabilityRefresher {
     /// to once per process and the request writes nothing. Adding either would
     /// re-create the defect this probe exists to fix — a repaired server that the
     /// app goes on treating as broken.
-    static func isReturnProbeDue(returnCapable: Bool, testedLocally: Bool) -> Bool {
+    static func isReturnProbeDue(returnCapable: Bool, locallyProven: Bool) -> Bool {
         guard !returnCapable else { return false }
-        guard testedLocally else { return false }
+        guard locallyProven else { return false }
         return true
     }
 

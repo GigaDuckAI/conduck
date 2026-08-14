@@ -91,7 +91,11 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
                 Constants.fileServerReturnCapableKey(for: ref),
                 Constants.fileServerAutoDeliverKey(for: ref),
                 Constants.fileServerFilenamePolicyKey(for: ref),
-                Constants.fileServerTestedLocallyKey(for: ref)
+                Constants.fileServerTestedLocallyKey(for: ref),
+                // The identity stamp that turns that flag into per-SERVER proof.
+                // A stray one from an earlier case would let an assertion pass on
+                // provenance the code under test never wrote.
+                Constants.fileServerTestedLocallyStampKey(for: ref)
             ] {
                 defaults.removeObject(forKey: key)
                 TestStores.kvs.removeObject(forKey: key)
@@ -483,6 +487,9 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let testedLocally = await SettingsManager.shared.getFileServerTestedLocally(for: openclaw)
         XCTAssertFalse(testedLocally,
                        "An import is not a local test — the device-local proof must not be forged by a scan.")
+        XCTAssertNil(defaults.string(forKey: Constants.fileServerTestedLocallyStampKey(for: openclaw)),
+                     "…and no identity stamp either. A scanned code names a server this device has never "
+                     + "connected to, so it may not arm the silent probes — one of which WRITES to that server.")
     }
 
     /// A code minted BEFORE the delivery properties existed — the shape every

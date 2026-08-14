@@ -74,6 +74,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
     private let fileServerCertKeyOpenclaw = "fileServer.certFingerprint.openclaw"    // Constants.fileServerCertFingerprintKey
     private let fileServerKeepInlineKeyOpenclaw = "fileServer.keepImagesInline.openclaw" // Constants.fileServerKeepImagesInlineKey (legacy, mirror-banned)
     private let fileServerTestedLocallyKeyOpenclaw = "fileServer.testedLocally.openclaw" // Constants.fileServerTestedLocallyKey
+    private let fileServerTestedLocallyStampKeyOpenclaw = "fileServer.testedLocallyStamp.openclaw" // Constants.fileServerTestedLocallyStampKey
     private let fileServerSeededFlagKey = "fileServer.testedLocallySeeded"           // Constants.fileServerTestedLocallySeededKey
     private let fileServerProbeRevisionKeyOpenclaw = "fileServer.folderProbeRevision.openclaw" // Constants.fileServerFolderProbeRevisionKey
     private let fileServerProbeAttemptKeyOpenclaw = "fileServer.folderProbeAttempt.openclaw"   // Constants.fileServerFolderProbeAttemptKey
@@ -103,7 +104,8 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
             fileServerURLKeyOpenclaw, fileServerURLKeyCustom,
             fileServerAvailableKeyOpenclaw, fileServerFolderCapableKeyOpenclaw,
             fileServerCertKeyOpenclaw, fileServerKeepInlineKeyOpenclaw,
-            fileServerTestedLocallyKeyOpenclaw, fileServerSeededFlagKey,
+            fileServerTestedLocallyKeyOpenclaw, fileServerTestedLocallyStampKeyOpenclaw,
+            fileServerSeededFlagKey,
             fileServerProbeRevisionKeyOpenclaw, fileServerProbeAttemptKeyOpenclaw,
             fileServerAutoDeliverKeyOpenclaw, fileServerFilenamePolicyKeyOpenclaw,
         ] {
@@ -483,22 +485,28 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
 
     func testInboundFileServerCertFingerprintAndLegacyKeyAreNeverMirrored() async {
         // The cert pin is a PER-DEVICE optional tightening (never synced by
-        // design) and `keepImagesInline` is the retired legacy bool
-        // (mirror-banned). Even a hostile/buggy KVS push naming them must not
-        // land in defaults — the handler scans an EXPLICIT prefix list, never
-        // blanket `fileServer.`.
+        // design), `keepImagesInline` is the retired legacy bool, and the local
+        // test proof's identity stamp is device-local provenance — all
+        // mirror-banned. Even a hostile/buggy KVS push naming them must not land
+        // in defaults: the handler scans an EXPLICIT prefix list, never blanket
+        // `fileServer.`.
         kvs.set("ab12", forKey: fileServerCertKeyOpenclaw)
         kvs.set(true, forKey: fileServerKeepInlineKeyOpenclaw)
+        kvs.set(String(repeating: "0", count: 64), forKey: fileServerTestedLocallyStampKeyOpenclaw)
 
         await SettingsManager.shared.handleICloudChange(
             makeKVSNotification(changedKeys: [fileServerCertKeyOpenclaw,
-                                              fileServerKeepInlineKeyOpenclaw])
+                                              fileServerKeepInlineKeyOpenclaw,
+                                              fileServerTestedLocallyStampKeyOpenclaw])
         )
 
         XCTAssertNil(defaults.object(forKey: fileServerCertKeyOpenclaw),
                      "The per-device cert pin must NEVER be written by the inbound mirror.")
         XCTAssertNil(defaults.object(forKey: fileServerKeepInlineKeyOpenclaw),
                      "The retired keepImagesInline legacy key must stay mirror-banned.")
+        XCTAssertNil(defaults.object(forKey: fileServerTestedLocallyStampKeyOpenclaw),
+                     "A peer's proof stamp must NEVER be mirrored in — it is what authorises this "
+                     + "device to fire an automated probe, and this device has met no such server.")
     }
 
     func testInboundFileServerMirrorAcceptsInitialSyncReason() async {
@@ -551,8 +559,8 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
     }
 
     func testSetFileServerTestedLocallyIsAppGroupOnlyNeverKVS() async {
-        // Device-local provenance: the flag must never ride KVS (a peer's
-        // testedLocally is meaningless on this device).
+        // Device-local provenance: neither the flag nor its identity stamp may
+        // ride KVS (a peer's proof is meaningless on this device).
         await SettingsManager.shared.resetTestedLocallySeedForTesting()
         defaults.set(true, forKey: fileServerSeededFlagKey) // seed already done → pure setter test
 
@@ -562,10 +570,19 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
                       "setFileServerTestedLocally(true) must write the App-Group flag.")
         XCTAssertNil(kvs.object(forKey: fileServerTestedLocallyKeyOpenclaw),
                      "testedLocally must NEVER be written to iCloud KVS.")
+        // This ref has no URL and no credential, so there is no lane to stamp.
+        // An unstampable proof is an unproven one and the key stays ABSENT —
+        // never a placeholder, which a later comparison would have to special-case.
+        XCTAssertNil(defaults.object(forKey: fileServerTestedLocallyStampKeyOpenclaw),
+                     "A lane with no identity yields no stamp — half a proof must not be stored.")
+        XCTAssertNil(kvs.object(forKey: fileServerTestedLocallyStampKeyOpenclaw),
+                     "The identity stamp must NEVER be written to iCloud KVS.")
 
         await SettingsManager.shared.setFileServerTestedLocally(false, for: .builtin(.openclaw))
         XCTAssertNil(defaults.object(forKey: fileServerTestedLocallyKeyOpenclaw),
                      "setFileServerTestedLocally(false) must remove the flag (clean forget).")
+        XCTAssertNil(defaults.object(forKey: fileServerTestedLocallyStampKeyOpenclaw),
+                     "…and the stamp with it.")
     }
 
     // MARK: - revokeFileTransferReadiness (the single config-mutation choke point)
@@ -576,6 +593,10 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         defaults.set(true, forKey: fileServerSeededFlagKey) // park the seed — pure revoke test
         await SettingsManager.shared.setFileTransferAvailable(true, for: .builtin(.openclaw))
         await SettingsManager.shared.setFileServerTestedLocally(true, for: .builtin(.openclaw))
+        // The stamp is written directly here rather than earned: this test owns
+        // the revoke, and staging a real lane would drag a Keychain credential
+        // into a case that has nothing to say about one.
+        defaults.set(String(repeating: "0", count: 64), forKey: fileServerTestedLocallyStampKeyOpenclaw)
         await SettingsManager.shared.setFolderProbeRevision(1, for: .builtin(.openclaw))
         await SettingsManager.shared.setFolderProbeAttempt(Date(timeIntervalSince1970: 1_700_000_000),
                                                            for: .builtin(.openclaw))
@@ -593,6 +614,9 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         // revision marker would permanently disarm the silent re-probe there.
         XCTAssertNil(defaults.object(forKey: fileServerTestedLocallyKeyOpenclaw),
                      "Revocation must forfeit the device-local test proof.")
+        XCTAssertNil(defaults.object(forKey: fileServerTestedLocallyStampKeyOpenclaw),
+                     "…including the identity stamp — a stamp that outlived its flag would name "
+                     + "a server nothing on this device has proof of, and Forget is one of the paths here.")
         XCTAssertNil(defaults.object(forKey: fileServerProbeRevisionKeyOpenclaw),
                      "Revocation must clear the silent-probe revision marker.")
         XCTAssertNil(defaults.object(forKey: fileServerProbeAttemptKeyOpenclaw),

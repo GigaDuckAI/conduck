@@ -13,14 +13,22 @@
 //  re-probed is the part worth a regression lock.
 //
 //  Folder contract (UPGRADE-ONLY): a probe is due iff the lane is stuck flat
-//  (`folderCapable == false`), was tested on THIS device (`testedLocally`), has
-//  no DEFINITIVE outcome recorded at the current algorithm revision, and is out
-//  of its per-lane backoff window.
+//  (`folderCapable == false`), is `locallyProven`, has no DEFINITIVE outcome
+//  recorded at the current algorithm revision, and is out of its per-lane
+//  backoff window.
 //
 //  Return contract (UPGRADE-ONLY): a probe is due iff the lane is stuck
-//  upload-only (`returnCapable == false`) and was tested on THIS device. NO
-//  revision and NO time window, and both absences are load-bearing rather than
+//  upload-only (`returnCapable == false`) and is `locallyProven`. NO revision
+//  and NO time window, and both absences are load-bearing rather than
 //  oversights — see the tests at the foot of this file.
+//
+//  `locallyProven` is the identity-checked proof, not the bare `testedLocally`
+//  flag: the callers supply `SettingsManager.isFileServerLocallyProven(_:for:)`,
+//  which requires the flag AND a stored identity stamp equal to the lane in
+//  hand, so a slot a peer repointed at a different server arrives here as
+//  unproven. The storage half of that rule is locked in
+//  `SettingsManagerICloudSyncTests`; what these lock is that the decisions
+//  refuse to fire without it.
 //
 //  Deterministic + headless: no network, no Core Data, no Keychain, no actor
 //  hop — `isProbeDue` is pure. No real filenames / URLs / keys involved.
@@ -40,13 +48,13 @@ final class FileTransferCapabilityRefresherTests: XCTestCase {
     /// flips exactly one input to assert its individual gate.
     private func due(
         folderCapable: Bool = false,
-        testedLocally: Bool = true,
+        locallyProven: Bool = true,
         recordedRevision: Int? = nil,
         lastAttempt: Date? = nil
     ) -> Bool {
         FileTransferCapabilityRefresher.isProbeDue(
             folderCapable: folderCapable,
-            testedLocally: testedLocally,
+            locallyProven: locallyProven,
             recordedRevision: recordedRevision,
             currentRevision: currentRevision,
             lastAttempt: lastAttempt,
@@ -65,9 +73,11 @@ final class FileTransferCapabilityRefresherTests: XCTestCase {
         XCTAssertFalse(due(folderCapable: true))
     }
 
-    /// A synced-only peer that never tested here must not fire automated writes.
-    func testNotTestedLocally_notDue() {
-        XCTAssertFalse(due(testedLocally: false))
+    /// A synced-only peer that never tested here must not fire automated writes
+    /// — and so must a device whose slot was repointed at a server it has not
+    /// tested, which reaches this decision as the same `false`.
+    func testNotLocallyProven_notDue() {
+        XCTAssertFalse(due(locallyProven: false))
     }
 
     /// A DEFINITIVE outcome already recorded at the current revision parks the
@@ -110,9 +120,9 @@ final class FileTransferCapabilityRefresherTests: XCTestCase {
     // user who ENABLES `PROPFIND` on their server without file return until they
     // thought to re-run a Test Connection, which is the defect these lock.
 
-    private func returnDue(returnCapable: Bool = false, testedLocally: Bool = true) -> Bool {
+    private func returnDue(returnCapable: Bool = false, locallyProven: Bool = true) -> Bool {
         FileTransferCapabilityRefresher.isReturnProbeDue(
-            returnCapable: returnCapable, testedLocally: testedLocally)
+            returnCapable: returnCapable, locallyProven: locallyProven)
     }
 
     /// Baseline: a lane the staged test stamped upload-only, on the device that
@@ -128,11 +138,12 @@ final class FileTransferCapabilityRefresherTests: XCTestCase {
         XCTAssertFalse(returnDue(returnCapable: true))
     }
 
-    /// A device that received the verdict over iCloud has never seen the server.
-    /// Same arming rule the folder probe uses, and for the stronger of its two
+    /// A device that received the verdict over iCloud has never seen the server,
+    /// and neither has one whose slot a peer repointed since its last test. Same
+    /// arming rule the folder probe uses, and for the stronger of its two
     /// reasons: no unexplained request at a host this device never met.
-    func testReturnProbeNotTestedLocally_notDue() {
-        XCTAssertFalse(returnDue(testedLocally: false))
+    func testReturnProbeNotLocallyProven_notDue() {
+        XCTAssertFalse(returnDue(locallyProven: false))
     }
 
     /// NO REVISION GATE, and that is the difference from the folder probe rather

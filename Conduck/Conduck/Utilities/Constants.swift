@@ -1612,11 +1612,43 @@ enum Constants {
         "fileServer.testedLocally." + ref.storageKeySuffix
     }
 
+    /// App Groups UserDefaults key (NO KVS — device-local provenance, exactly
+    /// like the flag it qualifies) for the identity of the file server that
+    /// ref's `testedLocally` flag was measured against (String, 64 lowercase
+    /// hex). Format `fileServer.testedLocallyStamp.<suffix>`.
+    ///
+    /// WHY A PER-REF BOOL IS NOT ENOUGH ON ITS OWN: the flag is keyed by
+    /// gateway SLOT, so it says "this device tested this slot", not "this
+    /// device tested the server sitting in this slot". A peer that repoints the
+    /// slot at a different file server syncs the new URL and credential in
+    /// through the inbound KVS mirror, which grants no local proof — and,
+    /// without this key, revokes none either, so the silent upgrade probes
+    /// would fire at a host this device has never seen. The folder probe WRITES
+    /// (a nested PUT), which is how that reaches a stranger's server and raises
+    /// an unexplained iOS Local-Network prompt.
+    ///
+    /// The stored value is `FileTransferSnapshot.localProofStamp` — a SHA-256
+    /// over the durable lane identity (URL + credential) and the device-local
+    /// certificate pin, so repointing the URL, rotating the credential or
+    /// changing the pin all revoke the proof. Only the digest is ever written:
+    /// no credential and no fingerprint sits in a readable field, and the key
+    /// is NEVER synced and NEVER logged.
+    ///
+    /// ABSENT MEANS UNPROVEN. A stored flag with no stamp arms nothing — the
+    /// stamp cannot be back-filled on read, because back-filling would stamp
+    /// whatever server happens to occupy the slot now, which is the gap itself.
+    static func fileServerTestedLocallyStampKey(for ref: RemoteAgentRef) -> String {
+        "fileServer.testedLocallyStamp." + ref.storageKeySuffix
+    }
+
     /// App Groups UserDefaults key (NO KVS) for the ONE-TIME `testedLocally`
     /// seed guard (Bool). The seed scans local defaults for pre-mirror
     /// `fileServer.available.<suffix> == true` entries and marks each ref
     /// locally-tested; it must run BEFORE the inbound KVS mirror can write
     /// `available` into defaults, or a synced-only peer would be misclassified.
+    /// It seeds the FLAG only, never a stamp — it knows a staged test once
+    /// passed on this device, not which server it passed against — so a seeded
+    /// ref reads as unproven until a Test Connection re-earns the stamp.
     static let fileServerTestedLocallySeededKey = "fileServer.testedLocallySeeded"
 
     /// Revision of the folder-capability probe ALGORITHM. Bump when the probe /

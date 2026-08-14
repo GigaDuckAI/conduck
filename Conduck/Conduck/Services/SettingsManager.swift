@@ -122,6 +122,11 @@ actor SettingsManager {
     /// across a suite run. Callers must ALSO wipe
     /// `Constants.fileServerTestedLocallySeededKey` from App-Group defaults —
     /// this resets only the in-memory latch.
+    ///
+    /// Re-running the seed re-arms the FLAG only. It writes no identity stamp,
+    /// so a suite that wants a lane the silent probes will actually arm on has
+    /// to earn one the way production does: commit the tuple, then record a pass
+    /// against it.
     func resetTestedLocallySeedForTesting() {
         didAttemptTestedLocallySeed = false
     }
@@ -2539,6 +2544,43 @@ actor SettingsManager {
             return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
         }
 
+        /// Stable, one-way stamp of EVERYTHING a device-local proof was measured
+        /// against — the durable lane (URL + credential) AND this device's
+        /// optional certificate pin. Persisted beside a `testedLocally` flag so
+        /// the flag records which SERVER this device tested, not merely which
+        /// gateway slot; a stored stamp that no longer equals the current lane's
+        /// is a lane that moved under the proof, and the proof is void.
+        ///
+        /// THE PERSISTABLE SIBLING OF `identitySignature`, which covers the same
+        /// three fields but cannot be stored: `Hasher` is seeded randomly per
+        /// process, so its output is comparable only against another value
+        /// produced in the same run — write it to disk and every relaunch reads
+        /// back a mismatch. `identitySignature` stays the right tool for an
+        /// in-flight apply-guard (both operands are minted moments apart in one
+        /// process, and it is cheaper); this one is the right tool for anything
+        /// that has to survive a launch.
+        ///
+        /// `durableLaneID` alone is not enough either: it deliberately excludes
+        /// the pin, because the durable server namespace is defined by URL +
+        /// credential and a pin is device-local. A pin is exactly what a probe's
+        /// transport rides on, though, so a device whose pin changed has not
+        /// proven the connection it is about to make — hence both, folded
+        /// together here rather than stored as two keys.
+        ///
+        /// Domain-separated and length-prefixed on the same terms as
+        /// `durableLaneID`. Only the SHA-256 digest is persisted: the credential
+        /// stays Keychain-only, the fingerprint stays in its own App-Group key,
+        /// and neither is ever recoverable from — or logged through — this value.
+        var localProofStamp: String {
+            var input = Data("conduck.file-lane.local-proof.v1\0".utf8)
+            Self.appendLengthPrefixed(Data(durableLaneID.utf8), to: &input)
+            // Absent and empty are the same state: `setFileServerCertFingerprint`
+            // removes the key for an empty string, so no lane can ever store one
+            // and the two can never need telling apart.
+            Self.appendLengthPrefixed(Data((certFingerprintHex ?? "").utf8), to: &input)
+            return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
+        }
+
         private static func appendLengthPrefixed(_ value: Data, to data: inout Data) {
             var length = UInt64(value.count).bigEndian
             withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
@@ -2760,27 +2802,97 @@ actor SettingsManager {
         Constants.fileServerFilenamePolicyPreserve
     ]
 
-    /// Read a ref's "THIS device ran a passing staged Test Connection" flag.
-    /// Default false. App Groups ONLY (device-local provenance — `available`
-    /// stops proving local testing once the inbound KVS mirror ships). Gates
-    /// the silent folder-capability re-probe. Runs the one-time seed first so
-    /// a pre-mirror `available=true` (which could only have come from a local
-    /// test) is honoured on the first read after update.
+    /// Read a ref's "THIS device ran a passing staged Test Connection on this
+    /// SLOT" flag. Default false. App Groups ONLY (device-local provenance —
+    /// `available` stops proving local testing once the inbound KVS mirror
+    /// ships). Runs the one-time seed first so a pre-mirror `available=true`
+    /// (which could only have come from a local test) is honoured on the first
+    /// read after update.
+    ///
+    /// THE WEAKER OF THE TWO READS, and the difference decides whether an
+    /// automated request may leave this device. This one answers a question
+    /// about the SLOT and says nothing about which server currently occupies
+    /// it, so a peer that repointed the slot leaves it standing. Anything that
+    /// arms a silent probe — anything that would write to, or open a connection
+    /// at, the server — must use `isFileServerLocallyProven(_:for:)` instead,
+    /// which additionally requires the stored identity stamp to match the lane
+    /// in hand.
+    ///
+    /// The remaining callers of this one want exactly the slot-scoped answer:
+    /// the pairing EXPORT asks "did a staged test on this device ever measure
+    /// this gateway's folder behaviour" before it puts a `folderCapable` verdict
+    /// on the wire, and a FAILED credential rotation restores the flag it
+    /// captured moments earlier over an unchanged tuple.
     func getFileServerTestedLocally(for ref: RemoteAgentRef) -> Bool {
         ensureFileServerTestedLocallySeeded()
         return defaults.bool(forKey: Constants.fileServerTestedLocallyKey(for: ref))
     }
 
-    /// Persist a ref's locally-tested flag. App Groups ONLY — never KVS, never
-    /// a change notification (pure bookkeeping; no UI reads it live). Set true
-    /// at the two staged-test pass sites (Settings + Diagnostics); cleared by
-    /// "Forget file transfer".
+    /// Whether this device holds proof it staged-tested the file server that
+    /// `snapshot` describes — the flag AND a stored identity stamp equal to that
+    /// lane's `localProofStamp`. THE ARMING READ: every silent, automated probe
+    /// gates on this, because the flag alone records a tested SLOT while a probe
+    /// opens a connection to whatever server is in the slot right now.
+    ///
+    /// Any of three things revokes the proof, all three folded into the one
+    /// comparison: a repointed URL, a rotated credential, a changed (or newly
+    /// added, or removed) certificate pin. Each of them means the connection
+    /// this device is about to make is not the connection it once proved.
+    ///
+    /// A MISSING STAMP IS NOT PROOF. A flag stored without one — by the one-time
+    /// migration seed, or by a build that predates the stamp — arms nothing, and
+    /// it is deliberately not back-filled on read: back-filling would stamp
+    /// whichever server occupies the slot at that moment, which is precisely the
+    /// unproven server the rule exists to keep probes away from. The cost is one
+    /// Test Connection to re-arm the upgrade-only probes, which is the
+    /// conservative outcome the arming rule is built to produce.
+    ///
+    /// Takes the snapshot rather than re-deriving it: every caller already holds
+    /// the ready snapshot it is about to probe, and re-reading here would open a
+    /// window where the stamp is checked against a lane other than the one the
+    /// request will use.
+    func isFileServerLocallyProven(
+        _ snapshot: FileTransferSnapshot,
+        for ref: RemoteAgentRef
+    ) -> Bool {
+        guard getFileServerTestedLocally(for: ref) else { return false }
+        guard let stored = defaults.string(forKey: Constants.fileServerTestedLocallyStampKey(for: ref)),
+              !stored.isEmpty else { return false }
+        return stored == snapshot.localProofStamp
+    }
+
+    /// Persist a ref's locally-tested flag AND the identity stamp of the server
+    /// the pass was measured against. App Groups ONLY — never KVS, never a
+    /// change notification (pure bookkeeping; no UI reads it live). Set true at
+    /// the two staged-test pass sites (Settings + Diagnostics, both of which
+    /// reach here through `commitFileTransferConfig` /
+    /// `commitFileTransferVerdict`); cleared by "Forget file transfer" and by
+    /// every other identity mutation, through `revokeFileTransferReadiness`.
+    ///
+    /// The stamp is read from the CURRENT persisted lane, which is correct
+    /// because of where the callers sit: a commit hop writes the proven tuple
+    /// BEFORE it records the proof, and the rotation-failure path restores a
+    /// flag over a tuple that never changed. This is not a back-fill — nothing
+    /// here reacts to a read; the stamp is only ever written at the moment a
+    /// caller states that a test just passed against what is stored.
+    ///
+    /// A lane with no URL or no credential yields no snapshot and therefore no
+    /// stamp, and the key is REMOVED rather than left stale: an unstampable
+    /// proof is an unproven one, and half a proof must never outlive the pass it
+    /// belonged to.
     func setFileServerTestedLocally(_ tested: Bool, for ref: RemoteAgentRef) {
         ensureFileServerTestedLocallySeeded()
+        let stampKey = Constants.fileServerTestedLocallyStampKey(for: ref)
         if tested {
             defaults.set(true, forKey: Constants.fileServerTestedLocallyKey(for: ref))
+            if let stamp = fileTransferSnapshot(for: ref)?.localProofStamp {
+                defaults.set(stamp, forKey: stampKey)
+            } else {
+                defaults.removeObject(forKey: stampKey)
+            }
         } else {
             defaults.removeObject(forKey: Constants.fileServerTestedLocallyKey(for: ref))
+            defaults.removeObject(forKey: stampKey)
         }
     }
 
@@ -2817,9 +2929,14 @@ actor SettingsManager {
     /// live changes yet be missing on a fresh install, or vice versa).
     /// NEVER widen to a blanket `fileServer.` scan: `certFingerprint.` is a
     /// per-device pin (an optional tightening on top of system trust, never
-    /// synced), `keepImagesInline.` is the retired legacy bool,
-    /// and `testedLocally.`/`folderProbeRevision.`/`folderProbeAttempt.` are
-    /// device-local probe provenance — all mirror-banned.
+    /// synced), `keepImagesInline.` is the retired legacy bool, and
+    /// `testedLocally.`/`testedLocallyStamp.`/`folderProbeRevision.`/
+    /// `folderProbeAttempt.` are device-local probe provenance — all
+    /// mirror-banned. `testedLocallyStamp.` is the sharpest of them: it is the
+    /// evidence that binds a local proof to the server it was measured against,
+    /// so mirroring one in would hand this device a peer's proof for a host it
+    /// has never opened a connection to — the exact arming this stamp exists to
+    /// refuse.
     ///
     /// `autoDeliver.` and `filenamePolicy.` ARE mirrored. They are per-gateway
     /// PROPERTIES — a decision about the gateway, like `imageHistory.policy.` —
@@ -2917,9 +3034,10 @@ actor SettingsManager {
     /// the new config value. Ordering is load-bearing: `available=false`
     /// dual-writes FIRST so the revocation reaches iCloud KVS no later than
     /// the new config — no peer may assemble new-config + stale-Ready.
-    /// Also forfeits this device's local test proof (`testedLocally`) and
-    /// clears the silent-probe markers: a changed identity makes both the
-    /// proof and any recorded probe verdict meaningless for the NEW server —
+    /// Also forfeits this device's local test proof (`testedLocally` and its
+    /// identity stamp) and clears the silent-probe markers: a changed identity
+    /// makes both the proof and any recorded probe verdict meaningless for the
+    /// NEW server —
     /// a surviving `folderProbeRevision` would permanently disarm the silent
     /// re-probe against the replacement server. A future mutation site that
     /// calls this cannot recreate the stale-verdict bug by construction.
@@ -2961,6 +3079,15 @@ actor SettingsManager {
     /// misclassified as locally tested. Scans the raw defaults dictionary
     /// rather than enumerating refs so stale suffixes (deleted customs) seed
     /// too — harmless, and complete.
+    ///
+    /// WHAT IT CAN AND CANNOT PROVE. It proves the SLOT was tested here: that
+    /// is a real fact, and the pairing export reads it. It cannot prove WHICH
+    /// server was tested — the evidence it reconstructs from is a bare boolean,
+    /// and no stamp can be recovered from it. So the seed deliberately writes no
+    /// `testedLocallyStamp.`, and a seeded ref arms no silent probe until a Test
+    /// Connection measures a server and stamps it. Writing a stamp here would
+    /// mean stamping whatever lane is configured at seed time as though the old
+    /// pass had been measured against it, which is a guess dressed as proof.
     private func ensureFileServerTestedLocallySeeded() {
         if didAttemptTestedLocallySeed { return }
         didAttemptTestedLocallySeed = true
@@ -3015,10 +3142,10 @@ actor SettingsManager {
     /// probe signal — see `runFileTransferTest`'s capability rules).
     ///
     /// The hop also carries `revokeFileTransferReadiness`'s doctrine for an
-    /// identity change: local test proof (`testedLocally`) FOLLOWS the
-    /// availability being committed — an `available: true` commit is only ever
-    /// a carried staged pass earned on THIS device against exactly this tuple,
-    /// and an `available: false` commit is an unproven tuple
+    /// identity change: local test proof (`testedLocally` and its identity
+    /// stamp) FOLLOWS the availability being committed — an `available: true`
+    /// commit is only ever a carried staged pass earned on THIS device against
+    /// exactly this tuple, and an `available: false` commit is an unproven tuple
     /// whose old proof must not survive onto the new identity. The
     /// silent-probe markers re-arm either way (an identity change orphans a
     /// recorded silent verdict; a carried pass is a fresh staged verdict that
@@ -3093,6 +3220,11 @@ actor SettingsManager {
             iCloudStore.set(true, forKey: availKey)
         }
 
+        // LAST, and after every tuple write above: the proof is stamped with the
+        // identity of the lane as it stands at this instant, so it must be taken
+        // once the new URL, pin and credential are all in place. Stamping before
+        // the tuple landed would bind a pass to the server being replaced, which
+        // is the same lie as not stamping at all.
         setFileServerTestedLocally(available, for: ref)
         clearFolderProbeMarkers(for: ref)
 
@@ -3108,12 +3240,14 @@ actor SettingsManager {
     ///
     /// A PASSING verdict is by definition a staged Test Connection that ran on
     /// THIS device against the persisted tuple — so the same hop records the
-    /// device-local proof (`testedLocally`, arming the upgrade-only silent
-    /// folder re-probe; a synced-only peer stays disarmed) and re-arms the
-    /// silent-probe markers (a fresh staged verdict supersedes any recorded
-    /// silent outcome). A FAILING verdict leaves the proof untouched: the
-    /// tuple's identity didn't change, and the probe the proof arms never
-    /// touches availability.
+    /// device-local proof (`testedLocally` plus the identity stamp of that very
+    /// tuple, together arming the upgrade-only silent probes; a synced-only peer
+    /// stays disarmed, and so does a device whose slot a peer later repoints)
+    /// and re-arms the silent-probe markers (a fresh staged verdict supersedes
+    /// any recorded silent outcome). Nothing here writes the tuple, so the
+    /// stamp taken here describes exactly the lane the test just ran against.
+    /// A FAILING verdict leaves the proof untouched: the tuple's identity didn't
+    /// change, and the probe the proof arms never touches availability.
     func commitFileTransferVerdict(
         available: Bool,
         folderCapable: Bool?,
@@ -5190,7 +5324,12 @@ actor SettingsManager {
         // Excluded by design: `fileServer.certFingerprint.*` (per-device pin,
         // never synced) + `fileServer.keepImagesInline.*` (retired legacy, mirror-banned)
         // + the local-only probe bookkeeping keys (`testedLocally.` /
-        // `folderProbeRevision.` / `folderProbeAttempt.` — never in KVS).
+        // `testedLocallyStamp.` / `folderProbeRevision.` /
+        // `folderProbeAttempt.` — never in KVS). The stamp's exclusion is the
+        // one that decides whether a fresh device fires automated requests: it
+        // binds a proof to the server that proof was measured against, so
+        // hydrating a peer's copy would arm probes on a device that has opened
+        // no connection to that host at all.
         ensureFileServerTestedLocallySeeded()
         let iCloudSnapshot = iCloudStore.dictionaryRepresentation()
         for (key, value) in iCloudSnapshot
@@ -5248,6 +5387,13 @@ actor SettingsManager {
         "remoteAgent.lastChatSuccess.",
         "fileServer.url.", "fileServer.available.", "fileServer.folderCapable.",
         "fileServer.certFingerprint.", "fileServer.testedLocally.",
+        // A SEPARATE entry, not covered by the line above: the stamp key is
+        // `fileServer.testedLocallyStamp.<suffix>`, and `testedLocally.` cannot
+        // match it — the trailing dot that keeps these prefixes from swallowing
+        // their neighbours is exactly what stops it. Without its own entry a
+        // deleted custom gateway would leave its proof stamp behind for a uuid
+        // that will never be reissued.
+        "fileServer.testedLocallyStamp.",
         "fileServer.folderProbeRevision.", "fileServer.folderProbeAttempt.",
         "fileServer.keepImagesInline.",
         Constants.fileServerAutoDeliverKeyPrefix,
@@ -5260,12 +5406,12 @@ actor SettingsManager {
     /// Kept beside the wipe's own list so the two cannot drift; the subset
     /// relation is asserted in `RemoteAgentInventoryTests`.
     ///
-    /// The excluded five (`available`, `folderCapable`, `testedLocally` and the
-    /// two `folderProbe*` counters) are DERIVED probe results, and — decisively —
-    /// a built-in Forget WRITES them (`available = false`, `folderCapable =
-    /// true`) rather than removing them. Probing those would leave every
-    /// once-configured built-in permanently "removable", pinning a destructive
-    /// button onto a gateway the user already forgot.
+    /// The excluded six (`available`, `folderCapable`, `testedLocally`, its
+    /// identity stamp and the two `folderProbe*` counters) are DERIVED probe
+    /// results, and — decisively — a built-in Forget WRITES them (`available =
+    /// false`, `folderCapable = true`) rather than removing them. Probing those
+    /// would leave every once-configured built-in permanently "removable",
+    /// pinning a destructive button onto a gateway the user already forgot.
     ///
     /// `keepImagesInline.` is excluded for the same reason from the other
     /// direction: it is the RETIRED legacy bool, and only the custom-gateway
@@ -5670,8 +5816,12 @@ actor SettingsManager {
         // synced), so a rotated-but-still-trusted cert this device hasn't
         // re-pinned degrades to a VISIBLE per-upload failure on this device —
         // strictly better than the silent-off lane this mirror fixes.
-        // `testedLocally` stays false: adoption is not local proof (it gates
-        // the silent re-probe, not uploads).
+        // `testedLocally` stays false and no identity stamp is written:
+        // adoption is not local proof (the pair gates the silent re-probes, not
+        // uploads). A peer repointing the lane travels through this same block
+        // as a plain `fileServer.url.*` change, and the stamp it leaves
+        // unmatched is what withdraws any proof this device still held — the
+        // arriving URL simply stops equalling the one that was measured here.
         for prefix in Self.fileServerMirroredBoolPrefixes {
             for key in changedKeys where key.hasPrefix(prefix) {
                 if iCloudStore.object(forKey: key) != nil {
