@@ -1200,13 +1200,13 @@
         }
       }
     },
-    "conversations.newConversation" : {
+    "conversations.newConversation.help" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "New Conversation"
+            "value" : "New conversation (⌘N)"
           }
         }
       }
