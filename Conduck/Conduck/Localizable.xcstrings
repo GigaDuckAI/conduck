@@ -2086,6 +2086,28 @@
         }
       }
     },
+    "diagnostics.files.badge.returnUnchecked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads verified — couldn't check returns"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.uploadsOnly" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads only — can't list folders"
+          }
+        }
+      }
+    },
     "diagnostics.files.badge.verified" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -3988,6 +4010,28 @@
         }
       }
     },
+    "fileTransfer.inline.listingUnchecked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sending files works. Conduck couldn't check whether files can come back — try the test again."
+          }
+        }
+      }
+    },
+    "fileTransfer.inline.uploadOnly" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sending files works. This server can't list folders, so files the agent creates won't come back on their own — you'll still find them on the server."
+          }
+        }
+      }
+    },
     "fileTransfer.intro.body" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4780,6 +4824,39 @@
         }
       }
     },
+    "fileTransfer.status.uploadsOnly.short" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads only"
+          }
+        }
+      }
+    },
+    "fileTransfer.status.uploadOnly.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File server tested — uploads only"
+          }
+        }
+      }
+    },
+    "fileTransfer.status.uploadOnly.meaning" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck uploaded a test file and read it back. This server can't list folders, so files the agent creates won't come back on their own — you'll still find them on the server."
+          }
+        }
+      }
+    },
     "fileTransfer.test.button" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4853,6 +4930,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "List a folder"
+          }
+        }
+      }
+    },
+    "fileTransfer.test.stage.listing.unchecked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sending files works. Conduck couldn't check whether files can come back — try this test again."
+          }
+        }
+      }
+    },
+    "fileTransfer.test.stage.listing.unsupported" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This server can't list folders. Sending files to the agent works; files the agent creates can't come back on their own."
           }
         }
       }
@@ -5346,6 +5445,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "File transfer · On"
+          }
+        }
+      }
+    },
+    "gateway.setup.success.fileSharing.uploadsOnly" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File transfer · Uploads only"
           }
         }
       }
@@ -15681,6 +15791,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Couldn't read your file server"
+          }
+        }
+      }
+    },
+    "thread.outputs.noFolder.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No folder for this reply"
+          }
+        }
+      }
+    },
+    "thread.outputs.noFolder.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck couldn't confirm a fresh folder on your file server for this message, so the agent had nowhere to put files and nothing could come back with the reply. Check your file server, then send again."
           }
         }
       }
