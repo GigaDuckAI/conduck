@@ -7,9 +7,11 @@
 // The unified macOS shell — a single `Window("Conduck", id: "main")` modeled on
 // the Claude desktop app: a `NavigationSplitView` sidebar (search field +
 // conversation list + bottom identity footer) and a detail column reusing the
-// conversation thread + composer. The sidebar toggle and the compose action
-// share the title bar's leading edge (`LeadingToolbarChrome`), so collapsing
-// the sidebar never hides the way to start a chat. Settings is a
+// conversation thread + composer. The compose action (`LeadingToolbarChrome`)
+// is declared on the SIDEBAR COLUMN so it renders inside the sidebar's half of
+// the title bar, flush beside the sidebar toggle; because it is a toolbar item
+// rather than a sidebar row, collapsing the column never hides the way to start
+// a chat — collapsed, the two merge into one glass capsule. Settings is a
 // full-window MODE SWAP (`MacSettingsView`), NOT a sheet or a separate window:
 // while `showingSettings` the window renders `MacSettingsView` INSTEAD OF
 // `splitView`, giving the dense setup screens the whole resizable window. Evolved
@@ -209,18 +211,25 @@ struct MainWindowView: View {
         NavigationSplitView {
             sidebar
                 .navigationSplitViewColumnWidth(min: 260, ideal: 280, max: 320)
+                // Compose is declared on the SIDEBAR COLUMN, not on the split
+                // view: that is the only way it enters the toolbar's sidebar
+                // region — the half bounded by the tracking separator at the
+                // column divider — so it renders INSIDE the sidebar, flush
+                // beside the toggle, instead of stranded past the divider.
+                // Being a toolbar item rather than a sidebar row is also what
+                // keeps it alive when the column collapses, where the two merge
+                // into one glass capsule. `LeadingToolbarChrome` owns the
+                // placement (it differs by platform) and is shared with the
+                // iPad split view, which attaches it to its DETAIL column for
+                // the opposite reason. Moving this call site breaks one of the
+                // two — the measurements are in that file's header.
+                .toolbar {
+                    LeadingToolbarChrome { startNewConversation() }
+                }
         } detail: {
             detailColumn
         }
         .toolbar {
-            // Sidebar toggle + compose, in that order, at the leading edge.
-            // Shared verbatim with the iPad split view; the placement lives in
-            // `LeadingToolbarChrome`, not here, so the two surfaces cannot
-            // drift. Compose sits in the TITLE BAR rather than the sidebar so a
-            // collapsed sidebar can't strand the user with no way to start a
-            // chat. No `sharedBackgroundVisibility` override — unlike the
-            // gateway pill below, this pair WANTS the system glass.
-            LeadingToolbarChrome { startNewConversation() }
             // Gateway identity, centered in the title bar — fills the otherwise
             // empty top strip and stays visible across new + existing chats.
             ToolbarItem(placement: .principal) {
@@ -389,9 +398,11 @@ struct MainWindowView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            // 1. Custom search field — the sidebar's top element. Compose lives
-            // in the window toolbar (`LeadingToolbarChrome`), which is what
-            // keeps it reachable with the sidebar collapsed. Carries the 12pt
+            // 1. Custom search field — the sidebar's top element. Compose is a
+            // toolbar item in this column's own title-bar region
+            // (`LeadingToolbarChrome`, attached where `splitView` builds this
+            // view), NOT a row here — which is what keeps it reachable once the
+            // column collapses and its content unmounts. Carries the 12pt
             // top inset so the column's top rhythm is unchanged. Shared
             // `SidebarSearchField` (same component the iPad sidebar uses); the
             // native `.searchable(placement:.sidebar)` is deliberately unused —
