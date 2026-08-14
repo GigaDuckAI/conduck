@@ -4046,6 +4046,16 @@ final class ConversationDetailViewModel {
         // includes network `probeExists` round-trips). Claiming here also closes
         // the window in which the composer still offered Send for a turn already
         // dispatching. EVERY early return below releases it.
+        //
+        // SPEND THE FAILURE ACKNOWLEDGEMENT HERE TOO, for the same `createdAt`
+        // reason. The stamp the list compares an acknowledgement against is that
+        // same frozen `createdAt`, so it does not advance across a retry: if
+        // this turn fails again, an acknowledgement taken before the retry would
+        // still cover it and the row would never go red — silently, for every
+        // re-failure that turn ever has, and `markFailureSeen` is monotone so
+        // nothing would undo it. Asking again is also the clearest statement a
+        // user can make that they have NOT finished with this failure.
+        ReadStateStore.shared.clearFailureSeen(conversationID)
         beginInFlight()
         await reload()
 

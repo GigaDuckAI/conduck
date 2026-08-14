@@ -214,6 +214,22 @@ enum Constants {
     /// markers. Read/written only through `ReadStateStore`.
     static let conversationReadStatePrefix = "conversations.readState."
 
+    /// App-Group UserDefaults key PREFIX for the device-local "last looked at
+    /// WHILE IT WAS SHOWING A FAILURE" marker of ONE conversation:
+    /// `conversations.failureSeen.<uuidString>` → `Double` (seconds since 1970).
+    /// **App Group ONLY, never iCloud KVS**, for the same reasons as
+    /// `conversationReadStatePrefix`.
+    ///
+    /// A SIBLING prefix, deliberately not nested under
+    /// `conversationReadStatePrefix` — that prefix's marker sweep treats every
+    /// key beneath it as a marker and deletes whatever it cannot parse as one,
+    /// so a nested key would be swept as an orphan at the next launch.
+    ///
+    /// SEPARATE FROM the read marker and not derivable from it — the reasoning
+    /// lives once, in the `ReadStateStore` header, which is also the only thing
+    /// that reads or writes this key.
+    static let conversationFailureSeenPrefix = "conversations.failureSeen."
+
     /// App-Group UserDefaults key for the moment this device first saw the
     /// unviewed-reply feature, as a `Double` (seconds since 1970). **App Group
     /// ONLY, never iCloud KVS.** Everything older than this stamp counts as

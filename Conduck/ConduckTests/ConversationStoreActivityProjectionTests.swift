@@ -76,6 +76,7 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
             ConversationActivityInputs(record: record, tailRole: .user),
             locallyLiveSince: nil,
             lastViewedAt: nil,
+            failureSeenAt: nil,
             now: newer.createdAt
         )
         guard case .working = state.activity else {

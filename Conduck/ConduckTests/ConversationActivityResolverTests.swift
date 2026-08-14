@@ -7,10 +7,13 @@
 //   • DELIVERY comes from the unresolved-turn aggregate, and the NEWEST
 //     unresolved turn wins — a fresh send after an old failure is WORKING, not
 //     red;
-//   • a `failed` turn is terminal and nothing ever clears it, so it is reported
-//     only while it is still the conversation's last activity — otherwise one
-//     offline send paints a row red for the life of the install AND blocks its
-//     amber disc forever;
+//   • a `failed` turn is terminal and nothing ever clears it, so it is bounded
+//     TWICE — reported only while it is still the conversation's last activity
+//     (otherwise one offline send paints a row red for the life of the install
+//     AND blocks its amber disc forever), and marked only until the user has
+//     seen it;
+//   • acknowledgement comes from its OWN marker and never leaks onto a row that
+//     is not reporting the failure;
 //   • ATTENTION is orthogonal to delivery, so `failed + unseen` and
 //     `working + unseen` both stay representable;
 //   • a surface that did not project a tail role (`nil`) can never produce an
@@ -50,17 +53,27 @@ final class ConversationActivityResolverTests: XCTestCase {
         )
     }
 
+    /// `failureSeenAt` defaults to nil — the pre-acknowledgement contract, and
+    /// the one watchOS and CarPlay pass — so every case that is not ABOUT
+    /// acknowledgement reads exactly as it did before it existed.
     private func resolve(
         _ inputs: ConversationActivityInputs,
         locallyLiveSince: Date? = nil,
-        lastViewedAt: Date? = nil
+        lastViewedAt: Date? = nil,
+        failureSeenAt: Date? = nil
     ) -> ConversationRowState {
         ConversationActivityResolver.resolve(
             inputs,
             locallyLiveSince: locallyLiveSince,
             lastViewedAt: lastViewedAt,
+            failureSeenAt: failureSeenAt,
             now: now
         )
+    }
+
+    /// Seconds AGO, matching `inputs`' convention for `sending` / `failed`.
+    private func ago(_ seconds: TimeInterval) -> Date {
+        now.addingTimeInterval(-seconds)
     }
 
     // MARK: - MessageRole
@@ -258,6 +271,101 @@ final class ConversationActivityResolverTests: XCTestCase {
             state.activity,
             .working(.hedged, since: now.addingTimeInterval(-600))
         )
+    }
+
+    // MARK: - A failure is bounded twice (seen, as well as superseded)
+
+    func testAnUnseenFailureCarriesItsMark() {
+        let state = resolve(
+            inputs(lastActivityAt: ago(120), failed: 120, tailRole: .user),
+            failureSeenAt: ago(600)   // last seen BEFORE this failure existed
+        )
+        XCTAssertEqual(state.activity, .failed)
+        XCTAssertFalse(state.failureAcknowledged)
+    }
+
+    func testASeenFailureKeepsItsStateAndLosesItsMark() {
+        // The whole feature: still `.failed`, so the row goes on saying the
+        // message was not sent — but acknowledged, so it stops alerting.
+        let state = resolve(
+            inputs(lastActivityAt: ago(120), failed: 120, tailRole: .user),
+            failureSeenAt: ago(60)
+        )
+        XCTAssertEqual(state.activity, .failed)
+        XCTAssertTrue(state.failureAcknowledged)
+    }
+
+    func testSeeingAFailureAtItsOwnStampCountsAsSeeingIt() {
+        // Boundary, and NOT an accident: the marker's clamp pulls it up to at
+        // least the failed turn's stamp, so equality is exactly the case where
+        // the user was looking at a turn mirrored from a clock-ahead sibling.
+        let state = resolve(
+            inputs(lastActivityAt: ago(120), failed: 120, tailRole: .user),
+            failureSeenAt: ago(120)
+        )
+        XCTAssertTrue(state.failureAcknowledged)
+    }
+
+    func testAcknowledgingOneFailureDoesNotAcknowledgeTheNextOne() {
+        // Each failure earns its own mark. An old acknowledgement must not
+        // silence the row for a fresh failure.
+        let state = resolve(
+            inputs(lastActivityAt: ago(30), failed: 30, tailRole: .user),
+            failureSeenAt: ago(600)
+        )
+        XCTAssertEqual(state.activity, .failed)
+        XCTAssertFalse(state.failureAcknowledged)
+    }
+
+    func testASurfaceWithNoFailureMarkerNeverAcknowledges() {
+        // The watchOS / CarPlay contract: `nil` leaves the mark exactly as it
+        // behaved before acknowledgement existed.
+        let state = resolve(
+            inputs(lastActivityAt: ago(120), failed: 120, tailRole: .user),
+            failureSeenAt: nil
+        )
+        XCTAssertEqual(state.activity, .failed)
+        XCTAssertFalse(state.failureAcknowledged)
+    }
+
+    func testAcknowledgementNeverLeaksOntoAWorkingRow() {
+        // A fresh `sending` turn outranks an older failure. A marker newer than
+        // that failure must not report the WORKING row as acknowledged.
+        //
+        // `lastActivityAt` is pinned to the FAILURE's stamp on purpose. Left to
+        // the helper's default it would follow the newer `sending` turn, the
+        // last-activity bound would drop the failure to nil, and `acknowledged`
+        // would short-circuit before the fold — leaving the `activity == .failed`
+        // guard untested and this case green even with the guard deleted.
+        let state = resolve(
+            inputs(lastActivityAt: ago(600), sending: 30, failed: 600, tailRole: .user),
+            failureSeenAt: now
+        )
+        XCTAssertEqual(state.activity, .working(.hedged, since: ago(30)))
+        XCTAssertFalse(state.failureAcknowledged)
+    }
+
+    func testAcknowledgementNeverLeaksOntoASupersededFailure() {
+        // Superseded, so the row is already not red. It must not additionally
+        // claim to be an acknowledged failure.
+        let state = resolve(
+            inputs(lastActivityAt: now, failed: 7_776_000, tailRole: .user),
+            failureSeenAt: now
+        )
+        XCTAssertEqual(state.activity, .idle)
+        XCTAssertFalse(state.failureAcknowledged)
+    }
+
+    func testAcknowledgementIsIndependentOfTheUnseenReply() {
+        // The two attention facts are orthogonal: acknowledging a failure says
+        // nothing about whether a reply has been read, and vice versa.
+        let seen = resolve(
+            inputs(lastActivityAt: ago(120), failed: 120, tailRole: .user),
+            lastViewedAt: ago(10_000),
+            failureSeenAt: ago(60)
+        )
+        XCTAssertTrue(seen.failureAcknowledged)
+        XCTAssertFalse(seen.hasUnseenReply, "a user tail can never be an unseen reply")
     }
 
     // MARK: - Record / picker bridges

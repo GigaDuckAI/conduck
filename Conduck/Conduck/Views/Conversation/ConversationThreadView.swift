@@ -51,6 +51,12 @@ struct ConversationThreadView: View {
     /// scroll state.
     let viewModel: ConversationDetailViewModel
 
+    /// Whether the scene hosting this thread is the one the user is actually
+    /// looking at. Read ONLY by `acknowledgeVisibleFailure` — a thread mounted
+    /// in a backgrounded window or an inactive iPad scene must not retire a
+    /// failure mark for an error nobody saw.
+    @Environment(\.appearsActive) private var appearsActive
+
     /// The host-owned Settings VM, borrowed for ONE thing: the "Review file
     /// setup" route out of the output-discovery fault row. Passed in rather than
     /// minted here because every host already owns a stable instance, and the
@@ -225,6 +231,7 @@ struct ConversationThreadView: View {
             // un-bolds its list row) and retires any banner still sitting in
             // Notification Center pointing here.
             markThreadViewed()
+            acknowledgeVisibleFailure()
             NotificationDeepLink.clearDelivered(for: viewModel.conversationID)
             // Clone continuation: claimed only AFTER the line above, so the
             // reply that comes back is suppressed as an on-screen thread rather
@@ -244,6 +251,20 @@ struct ConversationThreadView: View {
         // without necessarily growing it.
         .onChange(of: viewModel.messages.last?.id) { _, _ in
             markThreadViewed()
+            acknowledgeVisibleFailure()
+        }
+        // A send failing under the user's eyes flips the tail's STATUS without
+        // changing its id, so neither hook above fires for it. Without this, the
+        // one row the user is already staring at is the one that goes red.
+        .onChange(of: viewModel.messages.last?.status) { _, _ in
+            acknowledgeVisibleFailure()
+        }
+        // Coming BACK to a window that was inactive when the failure landed. The
+        // gate above rejected it then; the user is looking at the error now, so
+        // this is the moment it counts as seen. Without this arm the mark would
+        // survive until the thread was navigated away from and re-entered.
+        .onChange(of: appearsActive) { _, isActive in
+            if isActive { acknowledgeVisibleFailure() }
         }
         .onDisappear { ActiveViewTracker.untrack(viewModel.conversationID) }
         // Copy conversation — declared HERE (not in the three host views) so
@@ -417,6 +438,45 @@ struct ConversationThreadView: View {
         ReadStateStore.shared.markViewed(
             viewModel.conversationID,
             lastActivityAt: viewModel.messages.last?.createdAt
+        )
+    }
+
+    /// Stamp the device-local "I have seen this thread's failure" marker, which
+    /// is what retires the list row's red mark.
+    ///
+    /// A SEPARATE marker from `markThreadViewed`, and separately gated, because
+    /// the read marker is stamped the instant the user's own message appears —
+    /// before the send that will fail has failed. Reusing it would suppress the
+    /// red mark for everything sent from the composer. See the `ReadStateStore`
+    /// header.
+    ///
+    /// GATED ON THE TAIL, which is exact rather than an approximation: the list
+    /// paints `.failed` only while the newest failed turn is still the
+    /// conversation's last activity, which means it IS the tail. So this needs
+    /// no store aggregate of its own and cannot drift from what the list shows.
+    ///
+    /// Mirrors `deliveryErrorRow`'s own suppression: a turn awaiting its clone
+    /// continuation shows no error row here, so there is nothing for the user to
+    /// have seen, and acknowledging it would retire a mark for an error the
+    /// thread deliberately withheld.
+    ///
+    /// GATED ON `appearsActive`, unlike `markThreadViewed`, and the difference
+    /// is deliberate. That method documents its background-window caveat as
+    /// benign BECAUSE the menu-bar dot answers through the stricter
+    /// `appearsActive` report, so the urgent cue survives. For the failure mark
+    /// there is no second surface to fall back on — the list row is the only
+    /// one — so a thread merely MOUNTED in a backgrounded window must not
+    /// retire it. Same rule `WindowThreadVisibilityReporter` applies: a reply
+    /// (or a failure) landing where nobody is looking has not been seen.
+    private func acknowledgeVisibleFailure() {
+        guard appearsActive,
+              let tail = viewModel.messages.last,
+              tail.role == "user",
+              tail.status == "failed",
+              !awaitsCloneContinuation(tail) else { return }
+        ReadStateStore.shared.markFailureSeen(
+            viewModel.conversationID,
+            failedAt: tail.createdAt
         )
     }
 
