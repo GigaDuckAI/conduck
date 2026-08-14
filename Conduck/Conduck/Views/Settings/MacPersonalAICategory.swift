@@ -138,10 +138,16 @@ struct MacPersonalAICategory: View {
             }
             .settingsCardRowButton()
         } header: {
-            Text(LocalizedStringResource(
-                "settings.personalAI.newChats.header",
-                defaultValue: "New chats use"
-            ))
+            // Header, not row — see the iOS twin in `PersonalAISettingsView`. On
+            // macOS the tip also carries `.help(…)`, so hovering surfaces the same
+            // text without a click.
+            HStack(spacing: 0) {
+                Text(LocalizedStringResource(
+                    "settings.personalAI.newChats.header",
+                    defaultValue: "New chats use"
+                ))
+                InfoTipButton(tip: GatewayFieldTips.defaultForNewChats)
+            }
         }
     }
 

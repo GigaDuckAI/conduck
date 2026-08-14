@@ -20,6 +20,14 @@
 // the pre-pick for NEW conversations — the honest label defuses the false read
 // that changing it re-routes an open chat. (Codex + Gemini both flagged this.)
 //
+// The pre-pick is NOT this value alone: a new chat continues on the gateway the
+// last one was started on (`NewChatGatewaySeed`), and falls back here when there
+// is no such gateway. Choosing a default clears that memory, so this screen always
+// takes effect immediately — including a re-tap of the gateway already checked,
+// which is how a user reacts when a setting looks ignored. The footer says so; keep
+// it and the copy honest about "until you use a different gateway", because the row
+// shows the STORED default and the next chat may legitimately start elsewhere.
+//
 // Presentation only — the caller owns `setDefaultRemoteAgentRef` + the deep-link.
 
 import SwiftUI
@@ -79,7 +87,7 @@ struct DefaultGatewayPicker: View {
     private var footer: LocalizedStringResource {
         LocalizedStringResource(
             "settings.personalAI.default.picker.footer",
-            defaultValue: "New chats start on this gateway. Existing chats keep the one they started on."
+            defaultValue: "New chats start here until you use a different gateway, then they follow that one. Existing chats keep the one they started on."
         )
     }
 

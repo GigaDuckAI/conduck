@@ -58,6 +58,11 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
     private let preferredLanguageLocalKey = "preferred_language" // Constants.preferredLanguageKey
     private let defaultBackendKey = "remoteAgent.defaultBackend" // Constants.remoteAgentDefaultBackendKVSKey
     private let watchDefaultKey = "remoteAgent.watchDefaultBackend" // Constants.remoteAgentWatchDefaultBackendKey
+    private let lastUsedBackendKey = "remoteAgent.lastUsedBackend"  // Constants.remoteAgentLastUsedBackendKey
+    // Staged by the peer-Forget tests below; reset here rather than inline so an
+    // early exit can't leave a configured Hermes behind for the rest of the class.
+    private let hermesURLKey = "remoteAgent.url.hermes"          // Constants.remoteAgentURLKey(for:)
+    private let hermesAuthSchemeKey = "remoteAgent.authScheme.hermes" // Constants.remoteAgentAuthSchemeKey(for:)
     private let sessionPolicyKey = "remoteAgent.sessionPolicy"   // Constants.sessionContinuationPolicyKey
     private let watchSessionPolicyKey = "watch.sessionContinuationPolicyOverride" // Constants.watchSessionContinuationPolicyOverrideKey
     private let deviceLocalMigratedKey = "remoteAgentDefaultBackendDeviceLocalMigrated" // Constants.remoteAgentDefaultBackendDeviceLocalMigratedKey
@@ -95,6 +100,7 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
         for key in [
             activePresetKey, activeTTSKey, preferredLanguageLocalKey,
             preferredLanguageKVSKey, defaultBackendKey, watchDefaultKey,
+            lastUsedBackendKey, hermesURLKey, hermesAuthSchemeKey,
             sessionPolicyKey, watchSessionPolicyKey,
             deviceLocalMigratedKey,
             activeConvIDKey, activeConvActivityKey,
@@ -244,6 +250,67 @@ final class SettingsManagerICloudSyncTests: XCTestCase {
                        "Device-local default must be written to App Groups defaults.")
         XCTAssertNil(kvs.string(forKey: defaultBackendKey),
                      "Device-local default must NEVER be written to iCloud KVS (each device owns its own).")
+    }
+
+    // MARK: - Last-used gateway pointer is DEVICE-LOCAL (no KVS sync)
+
+    /// The one that catches a future contributor wiring this key into the inbound
+    /// mirror. It is a picker pre-selection, and a gateway chosen on the iPad must
+    /// not silently re-aim the Mac's next new chat.
+    func testRemoteLastUsedChangeIsIgnoredDeviceLocal() async {
+        defaults.set(RemoteAgentBackend.openclaw.rawValue, forKey: lastUsedBackendKey)
+
+        kvs.set(RemoteAgentBackend.hermes.rawValue, forKey: lastUsedBackendKey)
+        await SettingsManager.shared.handleICloudChange(
+            makeKVSNotification(changedKeys: [lastUsedBackendKey])
+        )
+
+        XCTAssertEqual(defaults.string(forKey: lastUsedBackendKey), RemoteAgentBackend.openclaw.rawValue,
+                       "A remote last-used push must NOT mirror into defaults (device-local).")
+    }
+
+    /// A peer's Forget of a BUILT-IN reaches this device as its evidence vanishing.
+    /// Only the TRANSITION retires the pre-selection.
+    func testRemoteBuiltInForgetClearsALastUsedPointingAtIt() async {
+        defaults.set("https://hermes.example.test:8642", forKey: hermesURLKey)
+        defaults.set("none", forKey: hermesAuthSchemeKey)
+        defaults.set(RemoteAgentBackend.hermes.rawValue, forKey: lastUsedBackendKey)
+
+        // The peer's Forget: the URL leaves KVS, and the mirror removes it here.
+        kvs.removeObject(forKey: hermesURLKey)
+        kvs.removeObject(forKey: hermesAuthSchemeKey)
+        await SettingsManager.shared.handleICloudChange(
+            makeKVSNotification(changedKeys: [hermesURLKey, hermesAuthSchemeKey])
+        )
+
+        XCTAssertNil(defaults.string(forKey: lastUsedBackendKey),
+                     "A built-in the user forgot elsewhere must stop pre-selecting here — the ref is reused if the lane is set up again.")
+    }
+
+    /// THE COUNTERPART, and the reason the check is a transition rather than an end
+    /// state. A restored backup holds the pointer while the gateway's URL is still
+    /// coming down from iCloud: evidence-free throughout, and an unrelated sync must
+    /// not read that as a Forget and delete it permanently.
+    func testAnUnrelatedSyncDoesNotClearAnEvidenceFreeLastUsed() async {
+        defaults.set(RemoteAgentBackend.openclaw.rawValue, forKey: lastUsedBackendKey)
+
+        await SettingsManager.shared.handleICloudChange(
+            makeKVSNotification(changedKeys: [preferredLanguageKVSKey])
+        )
+
+        XCTAssertEqual(defaults.string(forKey: lastUsedBackendKey), RemoteAgentBackend.openclaw.rawValue,
+                       "Never-had-evidence is not a removal; the pointer must survive until its gateway arrives.")
+    }
+
+    func testSetLastUsedWritesAppGroupOnlyNeverKVS() async {
+        // Evidence so the write is not later ignored on read; the assertion here
+        // is purely about WHERE it lands.
+        await SettingsManager.shared.setLastUsedRemoteAgentRef(.builtin(.hermes))
+
+        XCTAssertEqual(defaults.string(forKey: lastUsedBackendKey), RemoteAgentBackend.hermes.rawValue,
+                       "Device-local last-used must be written to App Groups defaults.")
+        XCTAssertNil(kvs.string(forKey: lastUsedBackendKey),
+                     "Device-local last-used must NEVER be written to iCloud KVS.")
     }
 
     func testWatchOverrideIsAppGroupOnlyNeverKVS() async {

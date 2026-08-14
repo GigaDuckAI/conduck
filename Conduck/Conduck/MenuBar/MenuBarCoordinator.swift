@@ -1521,6 +1521,10 @@ final class MenuBarCoordinator {
             windowViewModel?.reportComposerDispatchRejection()
             return false
         }
+        // Set only when THIS call mints a fresh row, so the last-used pointer is
+        // recorded once the turn is accepted below — appending to an existing
+        // thread says nothing about which gateway new chats should start on.
+        var mintedRef: RemoteAgentRef?
         if windowViewModel == nil {
             // The composer minted this turn's file-server keys under
             // `pendingConversationID` before any row existed, so the row adopts
@@ -1574,6 +1578,7 @@ final class MenuBarCoordinator {
             // ownership intact for retry.
             pendingNewConversationRef = nil
             bindWindowViewModel(to: fresh.id)
+            mintedRef = dispatch.ref
         }
         guard let vm = windowViewModel,
               dispatch.conversationID == nil
@@ -1590,13 +1595,25 @@ final class MenuBarCoordinator {
         // Committed dispatch (window lane) — same reply-banner permission
         // backstop as the quick lane.
         requestNotificationPermissionIfNeeded()
-        return await vm.submitUserTurnAwaitingLocalAcceptance(
+        let accepted = await vm.submitUserTurnAwaitingLocalAcceptance(
             trimmed,
             modality: .text,
             attachments: dispatch.attachments,
             expectedRef: dispatch.ref,
             expectedFileLaneID: dispatch.fileLaneID
         )
+        // Window lane only, and only on a fresh mint that was actually accepted.
+        // The quick lane deliberately does NOT record: Decision F keeps a gateway
+        // picked for the next WINDOW chat out of a hotkey capture, and the converse
+        // holds too — a hotkey capture must not re-aim the window's picker.
+        //
+        // Inline rather than a detached `Task`, so this can never land after a
+        // clear triggered by the user choosing a new default or forgetting a
+        // gateway, and two quick sends can never record out of order.
+        if accepted, let mintedRef {
+            await SettingsManager.shared.setLastUsedRemoteAgentRef(mintedRef)
+        }
+        return accepted
     }
 
     // MARK: - Hand-off failure recovery (stranded turn)

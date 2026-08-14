@@ -174,6 +174,14 @@ struct ContentView: View {
                 selectedRef: $pickerSelectedRef,
                 canPickBackend: canPickBackend,
                 onPickBackend: { userPickedRefForNewChat = true },
+                onStartNewConversation: {
+                    // Same pair, same order, as this view's own
+                    // `startNewConversation()`: the synchronous reset must land
+                    // before the refresh task can observe the flag, or the re-seed
+                    // takes its skip branch and the picker keeps the old pick.
+                    userPickedRefForNewChat = false
+                    Task { await refreshGatewayRoster() }
+                },
                 onOpenSettings: { category in
                     settingsRoute = SettingsRoute(category: category)
                 },
@@ -209,6 +217,14 @@ struct ContentView: View {
                 // `startNewConversation()`, so gating the reset on that call alone
                 // left an iPad pick sticky for the rest of the session — a later
                 // Settings default change would never take effect.
+                //
+                // BACKSTOP, not the primary hook. iPad's New button now reports
+                // through `onStartNewConversation`, because this observer cannot
+                // see it: pressing New while already on the empty state writes nil
+                // over nil and fires nothing. What still arrives here is the routes
+                // that genuinely change the selection — deleting the open thread, a
+                // deep link. The duplicate reset on the paths that do both is
+                // harmless (no refresh is scheduled here).
                 if newID == nil { userPickedRefForNewChat = false }
                 // The nav title follows the VM this rebuilds — it is derived, so
                 // no separate refresh hop can go stale or land out of order.
@@ -659,11 +675,12 @@ struct ContentView: View {
         currentConversationID = nil
         hostMascot = MascotShuffleBag.next()  // fresh shuffle-bag pose for the new empty state
         // Drop the PREVIOUS chat's hand-pick synchronously, before the refresh
-        // below can observe it — a genuinely fresh chat starts on the default.
+        // below can observe it — a genuinely fresh chat starts from the seed
+        // ladder, not from whatever the last chat was hand-picked onto.
         userPickedRefForNewChat = false
-        // Re-seed the gateway picker from the persisted default + refresh the
-        // configured list so the dropdown reappears (when ≥2 are configured)
-        // with the default pre-selected for this fresh conversation.
+        // Re-seed the gateway picker (`NewChatGatewaySeed`: last-used, else the
+        // default) + refresh the configured list so the dropdown reappears (when
+        // ≥2 are configured) pre-selected for this fresh conversation.
         Task { await refreshGatewayRoster() }
     }
 
@@ -914,23 +931,29 @@ struct ContentView: View {
     /// chosen, visibly in the title and in the ref the next send seals.
     @discardableResult
     private func refreshGatewayRoster() async -> [RemoteAgentRef] {
-        let refs = await SettingsManager.shared.configuredRemoteAgentRefs()
-        let roster = await SettingsManager.shared.gatewayBadgeRoster()
-        let persistedDefault = await SettingsManager.shared.defaultRemoteAgentRef()
+        // ONE actor turn for all four values. Do NOT split this back into separate
+        // awaits, and do NOT move any read below the guards: every suspension here
+        // is a window in which the picker can move under a resumed refresh, which
+        // is the exact bug the hand-pick flag was introduced to close. A read
+        // placed inside the `if` below would look like careful defensive code and
+        // would reopen it.
+        let snapshot = await SettingsManager.shared.newChatPickerSnapshot()
+        let refs = snapshot.configuredRefs
 
         configuredRefs = refs
-        customGateways = roster
+        customGateways = snapshot.badgeRoster
         // Inside a thread the picker is hidden, so the selection is irrelevant.
         guard currentConversationID == nil, !attachmentGatewaySelectionLocked else { return refs }
-        // A hand-pick outranks the persisted default until this chat is minted or
-        // the user starts another one. It yields only when the picked gateway is
-        // no longer configured at all — and then to the default, or to the first
-        // configured ref if the default is not configured either, never to
-        // another invalid selection.
+        // A hand-pick outranks the seed until this chat is minted or the user
+        // starts another one. It yields only when the picked gateway is no longer
+        // configured at all — and then to the seed ladder, never to another
+        // invalid selection.
         if !userPickedRefForNewChat || !refs.contains(pickerSelectedRef) {
-            pickerSelectedRef = refs.contains(persistedDefault)
-                ? persistedDefault
-                : (refs.first ?? persistedDefault)
+            pickerSelectedRef = NewChatGatewaySeed.resolve(
+                configured: refs,
+                lastUsed: snapshot.lastUsedRef,
+                persistedDefault: snapshot.defaultRef
+            )
             userPickedRefForNewChat = false
         }
         return refs
@@ -1089,11 +1112,17 @@ struct ContentView: View {
             }
         }
         // Ensure we have a visible conversation + VM; mint one bound to the
-        // gateway-picker selection on first turn. The selection is
-        // seeded from the default in the empty state, then driven by the title
-        // dropdown when ≥2 gateways are configured. Once minted,
-        // `currentConversationID` is non-nil → the picker is gated off and the
-        // thread is locked to this backend.
+        // gateway-picker selection on first turn. The selection is seeded in the
+        // empty state by `NewChatGatewaySeed` (last-used, else the default), then
+        // driven by the title dropdown when ≥2 gateways are configured. Once
+        // minted, `currentConversationID` is non-nil → the picker is gated off and
+        // the thread is locked to this backend.
+        //
+        // `mintedRef` outlives this block so the last-used pointer can be recorded
+        // AFTER the turn is locally accepted, far below — a row can be adopted and
+        // still have its first dispatch rejected, and that must not count as
+        // "started a conversation here".
+        var mintedRef: RemoteAgentRef?
         if currentConversationID == nil {
             let mintRef = expectedRef ?? pickerSelectedRef
             if let fresh = try? await ConversationStore.shared.createConversation(
@@ -1136,6 +1165,10 @@ struct ContentView: View {
                     return false
                 }
                 currentConversationID = fresh.id
+                // AFTER the adopt-guard and the commit, mirroring the macOS twin in
+                // `MenuBarCoordinator.handleTypedText`: this records that a row was
+                // actually minted and adopted, not merely that one was attempted.
+                mintedRef = mintRef
             } else {
                 // Mint failure (rare Core Data write error, e.g. disk-full).
                 // Sealed composer sends retain their own draft/tiles until this
@@ -1167,14 +1200,31 @@ struct ContentView: View {
               let vm = detailVM,
               vm.conversationID == conversationID else { return false }
         if let expectedRef {
-            return await vm.submitUserTurnAwaitingLocalAcceptance(
+            let accepted = await vm.submitUserTurnAwaitingLocalAcceptance(
                 text,
                 modality: modality,
                 attachments: attachments,
                 expectedRef: expectedRef,
                 expectedFileLaneID: expectedFileLaneID
             )
+            // Record the gateway ONLY once the turn is durably appended. Everything
+            // above this line can still reject — the VM going busy, the route or
+            // file lane moving, the append failing — and a rejected turn is not a
+            // conversation the user started.
+            //
+            // Inline, never a detached `Task`: the pointer is cleared whenever the
+            // user states fresh gateway intent (choosing a default, forgetting a
+            // gateway), and an unordered write could land after such a clear and
+            // resurrect the value it was meant to retire.
+            if accepted, let mintedRef {
+                await SettingsManager.shared.setLastUsedRemoteAgentRef(mintedRef)
+            }
+            return accepted
         }
+        // Legacy voice/retry path: `sendUserTurn` is `Void` and this branch returns
+        // `true` unconditionally, so there is no acceptance signal to hang a
+        // last-used write on. Deliberately NOT recorded — this lane is a retry of
+        // something already sent, not a fresh statement of which gateway to use.
         await vm.sendUserTurn(text, modality: modality, attachments: attachments)
         return true
     }

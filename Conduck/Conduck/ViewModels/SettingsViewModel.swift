@@ -2065,8 +2065,16 @@ final class SettingsViewModel {
     /// HEADLESS capture switches to the new gateway IMMEDIATELY rather than
     /// continuing the prior thread on its old bound gateway under
     /// `SessionContinuationPolicy`.
+    ///
+    /// The single funnel for every USER-facing default choice (iOS + iPad
+    /// `PersonalAISettingsView`, `MacPersonalAICategory`, and the post-setup "Make
+    /// Default"), which is why it routes through `applyUserChosenDefault` — that
+    /// path also retires the sticky last-used gateway and always notifies, so a
+    /// re-tap of the gateway already checked still takes effect. Programmatic
+    /// re-points (Forget fallbacks, first-gateway bootstrap) must call
+    /// `SettingsManager.setDefaultRemoteAgentRef` directly instead.
     func setDefaultRemoteAgentRef(_ ref: RemoteAgentRef) async {
-        await SettingsManager.shared.setDefaultRemoteAgentRef(ref)
+        await SettingsManager.shared.applyUserChosenDefault(ref)
         defaultRemoteAgentRef = ref
     }
 
@@ -2966,8 +2974,13 @@ final class SettingsViewModel {
         // first / OpenRouter-first user would dead-end on an UNCONFIGURED default
         // (no picker below 2 gateways; new chats mint on the resolved default).
         // The setter no-ops when the pointer already equals `ref`.
+        //
+        // The MANAGER's setter, not this view model's: the bootstrap is the app
+        // choosing on the user's behalf, so it must not retire a last-used pointer
+        // the way a deliberate choice in the chooser does.
         if !hadAnyConfiguredBefore {
-            await setDefaultRemoteAgentRef(ref)
+            await SettingsManager.shared.setDefaultRemoteAgentRef(ref)
+            defaultRemoteAgentRef = ref
         }
         return true
     }
@@ -3364,6 +3377,19 @@ final class SettingsViewModel {
         // re-provision their server. A destructive credential wipe must hang off
         // an explicit user intent, never off a shared rollback helper.
         await clearFileTransferConfig(for: ref)
+
+        // Forgetting a gateway retires it as the new-chat pre-selection. Both
+        // kinds need this explicitly: the built-in branch below only re-points the
+        // default when the forgotten gateway WAS the default, so a forgotten
+        // non-default built-in would otherwise leave the pointer behind — and
+        // built-in refs are reused when the user sets that lane up again, so the
+        // stale pointer would come back to life naming a different server.
+        //
+        // HERE, not inside `deleteCustomGateway`, for the same reason the badge
+        // retire and the file-lane wipe above are: that method doubles as the
+        // failed-save rollback for a brand-new draft, and clearing there would
+        // discard a perfectly good pointer whenever an unrelated save failed.
+        await SettingsManager.shared.clearLastUsedRemoteAgentRefIfPointing(at: ref)
 
         if case .custom(let id) = ref {
             // Freeze the badge FIRST — the roster entry about to be deleted is

@@ -239,6 +239,8 @@ final class LockedKeychainKVSLiteralsTests: XCTestCase {
                        "Custom-gateways roster KVS key literal changed — drops all custom gateways across devices.")
         XCTAssertEqual(Constants.retiredGatewayBadgesKey, "remoteAgent.retiredGatewayBadges",
                        "Retired-badge key literal changed — every forgotten gateway's conversations go blank. App-Group ONLY: this key must never appear in KVS.")
+        XCTAssertEqual(Constants.remoteAgentLastUsedBackendKey, "remoteAgent.lastUsedBackend",
+                       "Last-used gateway key literal changed — new chats silently stop continuing where the user left off. App-Group ONLY: this key must never appear in KVS.")
         XCTAssertEqual(Constants.sessionContinuationPolicyKey, "remoteAgent.sessionPolicy",
                        "Session-continuation-policy KVS key literal changed.")
         XCTAssertEqual(Constants.onLaunchModeKey, "remoteAgent.onLaunchMode",
