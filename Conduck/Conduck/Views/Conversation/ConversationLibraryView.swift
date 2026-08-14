@@ -240,15 +240,16 @@ struct ConversationLibraryView: View {
         // into that control — no separate trailing button.
         .navigationTitle(Text(""))
         .toolbar {
-            // Sidebar toggle + compose, in that order, at the leading edge —
-            // present in BOTH column states, so a hidden sidebar can no longer
-            // strand the user. This REPLACES the old `.detailOnly`-gated
-            // trailing fallback, which existed only because the real New button
-            // lived in the sidebar and vanished with it. Declared on the DETAIL
-            // column (not the sidebar) for exactly that reason — a sidebar-column
-            // item is gone the moment the sidebar is. Same component and same
-            // placement as the macOS window; see `LeadingToolbarChrome` for the
-            // cross-column caveat on the sidebar toggle.
+            // Compose, at the leading edge, beside the sidebar toggle — present
+            // in BOTH column states, so a hidden sidebar cannot strand the user.
+            // Declared on the DETAIL column, not the sidebar: an iPadOS
+            // sidebar-column nav bar is gone the moment the sidebar is, so the
+            // detail bar is the only one always on screen. macOS is the mirror
+            // image — there the SIDEBAR column is the correct host, because a
+            // macOS toolbar item outlives its column and only that column
+            // reaches the toolbar's sidebar region. Same component, and it picks
+            // the placement each platform needs; `LeadingToolbarChrome`'s header
+            // carries the measurements behind both halves of that split.
             LeadingToolbarChrome { startNewConversation() }
             ToolbarItem(placement: .principal) {
                 gatewayTitleControl
