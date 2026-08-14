@@ -248,28 +248,32 @@ final class PairingPayloadTests: XCTestCase {
         XCTAssertEqual(payload.fileServer?.credential, "cred-test-456")
     }
 
-    /// The two reserved per-gateway delivery properties must actually SURVIVE the
-    /// parse. They are stored, synced and couriered to the Watch already; a payload
-    /// that dropped them on the floor would look wired from every other angle and
-    /// only reveal itself the day a seat policy tried to import one.
+    /// The three per-gateway delivery properties must actually SURVIVE the parse.
+    /// They are stored, synced and couriered to the Watch already; a payload that
+    /// dropped them on the floor would look wired from every other angle and only
+    /// reveal itself on the device that imported the code and then behaved as
+    /// though the code had said nothing.
     func testFileServerDeliveryPropertiesParse() {
         var dict = minimalDict()
         dict["fileServer"] = [
             "url": "https://files.example.com:8443",
             "credential": "cred-test-456",
+            "folderCapable": false,
             "autoDeliver": false,
             "filenamePolicy": "preserve",
         ]
         guard let payload = assertParses(pairingString(dict)) else { return }
+        XCTAssertEqual(payload.fileServer?.folderCapable, false,
+                       "An explicit folderCapable:false must reach the payload — it is the whole point of stating a server that refuses nested PUTs")
         XCTAssertEqual(payload.fileServer?.autoDeliver, false,
                        "An explicit autoDeliver:false must reach the payload")
         XCTAssertEqual(payload.fileServer?.filenamePolicy, "preserve",
                        "A well-formed filenamePolicy token must reach the payload")
     }
 
-    /// Absence is the ONLY shape any code minted today has, so it must parse and
-    /// yield nil — "unstated", never a coerced `false` that would read as a
-    /// gateway forbidding automatic delivery.
+    /// Absence is the shape every code minted before these keys existed has, so it
+    /// must parse and yield nil — "unstated", never a coerced `false` that would
+    /// read as a gateway forbidding automatic delivery or a server refusing folders.
     func testFileServerDeliveryPropertiesAbsentYieldNil() {
         var dict = minimalDict()
         dict["fileServer"] = [
@@ -278,6 +282,8 @@ final class PairingPayloadTests: XCTestCase {
         ]
         guard let payload = assertParses(pairingString(dict)) else { return }
         XCTAssertNotNil(payload.fileServer, "The block itself must still parse")
+        XCTAssertNil(payload.fileServer?.folderCapable,
+                     "A missing folderCapable is unstated — the importing device keeps its own default and probes")
         XCTAssertNil(payload.fileServer?.autoDeliver,
                      "A missing autoDeliver is unstated, never an explicit false")
         XCTAssertNil(payload.fileServer?.filenamePolicy,
@@ -285,15 +291,16 @@ final class PairingPayloadTests: XCTestCase {
     }
 
     /// Off-shape values degrade to nil and NEVER reject the payload: a hostile or
-    /// simply newer code must not be able to fail an import over a reserved field
-    /// that changes no behaviour, and an unbounded string must not ride into
-    /// App-Group defaults / iCloud KVS.
+    /// simply newer code must not be able to fail an import over a delivery
+    /// property, and an unbounded string must not ride into App-Group defaults /
+    /// iCloud KVS.
     func testFileServerDeliveryPropertiesOffShapeDegradeToNil() {
         var dict = minimalDict()
         dict["fileServer"] = [
             "url": "https://files.example.com:8443",
             "credential": "cred-test-456",
-            // Wrong type — the wizard writes a JSON bool.
+            // Wrong type — the emitter writes a JSON bool.
+            "folderCapable": "sometimes",
             "autoDeliver": "yes",
             // Right type, wrong shape: over the token cap AND outside the token
             // alphabet (a policy is compared for equality against a closed set).
@@ -301,9 +308,31 @@ final class PairingPayloadTests: XCTestCase {
         ]
         guard let payload = assertParses(pairingString(dict)) else { return }
         XCTAssertNotNil(payload.fileServer,
-                        "An off-shape reserved field must never reject the payload")
+                        "An off-shape delivery property must never reject the payload")
+        XCTAssertNil(payload.fileServer?.folderCapable)
         XCTAssertNil(payload.fileServer?.autoDeliver)
         XCTAssertNil(payload.fileServer?.filenamePolicy)
+    }
+
+    /// A NEWER emitter's keys — inside the `fileServer` block, where the delivery
+    /// properties live — must be ignored rather than reject the code. The block is
+    /// where the contract's compatible-addition rule is now actually exercised, so
+    /// tolerance has to be pinned there and not only at the top level.
+    func testFileServerUnknownKeysAreIgnored() {
+        var dict = minimalDict()
+        dict["fileServer"] = [
+            "url": "https://files.example.com:8443",
+            "credential": "cred-test-456",
+            "folderCapable": true,
+            // Invented by a future wizard this build has never heard of.
+            "deliveryQuotaBytes": 1_048_576,
+            "retentionDays": ["min": 1, "max": 30],
+            "available": true,
+        ]
+        guard let payload = assertParses(pairingString(dict)) else { return }
+        XCTAssertEqual(payload.fileServer?.folderCapable, true,
+                       "The keys this build DOES understand must still land")
+        XCTAssertEqual(payload.fileServer?.credential, "cred-test-456")
     }
 
     func testFileServerEmptyCredentialIsMalformed() {

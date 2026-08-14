@@ -79,7 +79,19 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
                 Constants.remoteAgentTransportHintKey(for: ref),
                 Constants.fileServerURLKey(for: ref),
                 Constants.fileServerCertFingerprintKey(for: ref),
-                Constants.fileTransferAvailableKey(for: ref)
+                Constants.fileTransferAvailableKey(for: ref),
+                // The lane's delivery properties: an import states them, so a
+                // left-over value from a previous case would let an assertion pass
+                // on state the code under test never wrote.
+                Constants.fileServerFolderCapableKey(for: ref),
+                // The listing verdict: a case that seeds a proven-incapable lane
+                // would otherwise hand the next case an amber badge it never set
+                // up, and the key is absent-means-capable so only a wipe restores
+                // the unmeasured state.
+                Constants.fileServerReturnCapableKey(for: ref),
+                Constants.fileServerAutoDeliverKey(for: ref),
+                Constants.fileServerFilenamePolicyKey(for: ref),
+                Constants.fileServerTestedLocallyKey(for: ref)
             ] {
                 defaults.removeObject(forKey: key)
                 TestStores.kvs.removeObject(forKey: key)
@@ -429,6 +441,189 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
         let available = await SettingsManager.shared.getFileTransferAvailable(for: openclaw)
         XCTAssertFalse(available,
                        "Import must NOT mark file transfer available — only a passing staged Test Connection does (Decision C).")
+    }
+
+    /// A code that STATES the lane's delivery properties must land them, so the
+    /// scanning device does not have to rediscover a server fact the exporting
+    /// device already measured. `folderCapable:false` is the one that costs real
+    /// money to get wrong: the default is true, so an unstated import would mint
+    /// nested keys against a server that rejects them until the first Test
+    /// Connection re-probed.
+    func testExecuteFileServerAppliesStatedDeliveryProperties() async throws {
+        try await requireFileServerKeychainOrSkip(for: openclaw)
+
+        let vm = await makeVM()
+        let payload = try makePayload(
+            kind: "openclaw",
+            auth: "none", token: nil,
+            fileServer: [
+                "url": "https://gw.example.test:8443",
+                "credential": "feedfacecafebeeffeedfacecafebeef",
+                "folderCapable": false,
+                "autoDeliver": false,
+                "filenamePolicy": Constants.fileServerFilenamePolicyPreserve
+            ]
+        )
+
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: openclaw)
+        XCTAssertEqual(outcome, .committed)
+
+        let folderCapable = await SettingsManager.shared.getFileServerFolderCapable(for: openclaw)
+        XCTAssertFalse(folderCapable,
+                       "A stated folderCapable:false must reach storage — it is a fact about the SERVER, so it is the same answer on any device.")
+        let autoDeliver = await SettingsManager.shared.getFileServerAutoDeliver(for: openclaw)
+        XCTAssertFalse(autoDeliver,
+                       "A stated autoDeliver:false must reach storage — the permission is a decision about the gateway, not about the device it was typed on, and RESTRICTING is the direction a code may move it.")
+        let policy = await SettingsManager.shared.getFileServerFilenamePolicy(for: openclaw)
+        XCTAssertEqual(policy, Constants.fileServerFilenamePolicyPreserve)
+
+        let available = await SettingsManager.shared.getFileTransferAvailable(for: openclaw)
+        XCTAssertFalse(available,
+                       "A code may state a CAPABILITY; it may never assert READINESS. Only a staged Test Connection on THIS device does that.")
+        let testedLocally = await SettingsManager.shared.getFileServerTestedLocally(for: openclaw)
+        XCTAssertFalse(testedLocally,
+                       "An import is not a local test — the device-local proof must not be forged by a scan.")
+    }
+
+    /// A code minted BEFORE the delivery properties existed — the shape every
+    /// `conduck-connect` release has emitted so far — must import cleanly and leave
+    /// the destination's own stored values exactly where they were. An absent key is
+    /// "unstated", never a coerced default that would silently rewrite a permission
+    /// the user set, and readiness still has to be earned locally.
+    func testExecuteFileServerWithoutDeliveryPropertiesLeavesStoredValuesAlone() async throws {
+        try await requireFileServerKeychainOrSkip(for: openclaw)
+
+        // Pre-existing per-gateway state, both sides deliberately non-default.
+        await SettingsManager.shared.setFileServerFolderCapable(false, for: openclaw)
+        await SettingsManager.shared.commitFileDeliveryPolicy(autoDeliver: false, for: openclaw)
+
+        let vm = await makeVM()
+        let payload = try makePayload(
+            kind: "openclaw",
+            auth: "none", token: nil,
+            fileServer: [
+                "url": "https://gw.example.test:8443",
+                "credential": "feedfacecafebeeffeedfacecafebeef"
+            ]
+        )
+
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: openclaw)
+        XCTAssertEqual(outcome, .committed,
+                       "An old-shape code must import, not fail — the block it carries is one this build has always understood.")
+
+        let folderCapable = await SettingsManager.shared.getFileServerFolderCapable(for: openclaw)
+        XCTAssertFalse(folderCapable,
+                       "An unstated folderCapable leaves the stored flag untouched; it is not a claim that the server accepts folders.")
+        let autoDeliver = await SettingsManager.shared.getFileServerAutoDeliver(for: openclaw)
+        XCTAssertFalse(autoDeliver,
+                       "An unstated autoDeliver must not switch a user's permission back on.")
+        let available = await SettingsManager.shared.getFileTransferAvailable(for: openclaw)
+        XCTAssertFalse(available,
+                       "Not-yet-verified is the safe default for a lane no local test has proved.")
+    }
+
+    /// A code may RESTRICT the automatic-delivery permission and may never GRANT it.
+    /// A setup code is attacker-craftable and the review card the user approves names
+    /// the destination, not the permissions — so a scanned `autoDeliver:true` must
+    /// not switch delivery back on for a gateway where it was deliberately off.
+    func testExecuteFileServerRefusesToGrantAutoDeliver() async throws {
+        try await requireFileServerKeychainOrSkip(for: openclaw)
+
+        await SettingsManager.shared.commitFileDeliveryPolicy(autoDeliver: false, for: openclaw)
+
+        let vm = await makeVM()
+        let payload = try makePayload(
+            kind: "openclaw",
+            auth: "none", token: nil,
+            fileServer: [
+                "url": "https://gw.example.test:8443",
+                "credential": "feedfacecafebeeffeedfacecafebeef",
+                "autoDeliver": true
+            ]
+        )
+
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: openclaw)
+        XCTAssertEqual(outcome, .committed,
+                       "A refused permission claim must not fail the import — the rest of the code is honoured.")
+
+        let autoDeliver = await SettingsManager.shared.getFileServerAutoDeliver(for: openclaw)
+        XCTAssertFalse(autoDeliver,
+                       "A code claiming autoDeliver:true must not overwrite a stored false.")
+    }
+
+    /// `folderCapable` is applied in BOTH directions, and the asymmetry with its
+    /// monotonic sibling above is the design rather than an oversight: it is a
+    /// MEASUREMENT of the server (does a nested PUT land) rather than a permission
+    /// granted to the gateway, the value it overwrites describes the server this
+    /// very commit is replacing, and the staged Test Connection the import leaves
+    /// the lane waiting for re-measures it anyway. Locking the widening direction
+    /// so a future reader cannot "fix" the asymmetry into a clamp.
+    func testExecuteFileServerAppliesAStatedFolderCapableInBothDirections() async throws {
+        try await requireFileServerKeychainOrSkip(for: openclaw)
+
+        // The destination was measured FLAT against its previous server.
+        await SettingsManager.shared.setFileServerFolderCapable(false, for: openclaw)
+
+        let vm = await makeVM()
+        let payload = try makePayload(
+            kind: "openclaw",
+            auth: "none", token: nil,
+            fileServer: [
+                "url": "https://gw.example.test:8443",
+                "credential": "feedfacecafebeeffeedfacecafebeef",
+                "folderCapable": true
+            ]
+        )
+
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: openclaw)
+        XCTAssertEqual(outcome, .committed)
+
+        let folderCapable = await SettingsManager.shared.getFileServerFolderCapable(for: openclaw)
+        XCTAssertTrue(folderCapable,
+                      "A stated folderCapable:true must land: it is a measurement, not a permission, and the false it replaces described the server this import just swapped out.")
+        let available = await SettingsManager.shared.getFileTransferAvailable(for: openclaw)
+        XCTAssertFalse(available,
+                       "The widening is safe precisely BECAUSE the lane stays unready — the staged test that must run next re-measures the nested probe for itself.")
+    }
+
+    // MARK: - Execute: the published mirrors the badges render
+
+    /// THE MIRROR THE IMPORT FORGOT. The commit resets the stored listing verdict
+    /// (a new tuple makes the old server's verdict meaningless), so the published
+    /// set the amber "Uploads only" badge reads has to drop with it. Without this,
+    /// a user who scans a code repointing a previously upload-only gateway at a
+    /// fully capable server keeps being told their new server cannot return files,
+    /// on every surface that reads the badge, until the next relaunch reloads the
+    /// mirror from a store that no longer says it.
+    func testExecuteFileServerClearsTheUploadOnlyMirror() async throws {
+        try await requireFileServerKeychainOrSkip(for: openclaw)
+
+        // The state a user who tested a plain-nginx server is in: store and
+        // mirror both saying "proven unable to list".
+        await SettingsManager.shared.setFileServerReturnCapable(false, for: openclaw)
+        let vm = await makeVM()
+        vm.fileTransferUploadOnlyRefSet.insert(openclaw)
+        XCTAssertTrue(vm.isFileTransferUploadOnly(openclaw), "Precondition: the badge says uploads-only.")
+
+        let payload = try makePayload(
+            kind: "openclaw",
+            auth: "none", token: nil,
+            fileServer: [
+                "url": "https://files.example.test:8443",
+                "credential": "feedfacecafebeeffeedfacecafebeef"
+            ]
+        )
+
+        let outcome = await vm.executePairingImportWithResolvedTrust(payload, target: openclaw)
+        XCTAssertEqual(outcome, .committed)
+
+        let storedReturnCapable = await SettingsManager.shared.getFileServerReturnCapable(for: openclaw)
+        XCTAssertTrue(storedReturnCapable,
+                      "Precondition for the real assertion: the commit reset the verdict to unknown, which resolves CAPABLE.")
+        XCTAssertFalse(vm.isFileTransferUploadOnly(openclaw),
+                       "The published mirror must follow the store the same commit reset — a badge that outlives its verdict states a limitation of a server that is no longer configured.")
+        XCTAssertEqual(vm.fileLaneStatus(for: openclaw), .saved,
+                       "URL + credential saved and nothing tested yet — the badge an import earns. The first staged test is what may narrow it again.")
     }
 
     // MARK: - Default rule

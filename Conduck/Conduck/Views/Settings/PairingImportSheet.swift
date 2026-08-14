@@ -1001,18 +1001,11 @@ struct PairingImportSheet: View {
 
     @ViewBuilder
     private func statusGlyph(for status: PairingImportFlow.StageStatus) -> some View {
-        switch status {
-        case .pending:
-            Image(systemName: "circle")
-                .foregroundStyle(AppColors.textTertiary)
-        case .running:
+        if case .running = status {
             ProgressView().controlSize(.small)
-        case .passed:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(AppColors.success)
-        case .failed:
-            Image(systemName: "xmark.circle.fill")
-                .foregroundStyle(AppColors.error)
+        } else if let symbol = status.glyphSystemImage {
+            Image(systemName: symbol)
+                .foregroundStyle(status.glyphTint)
         }
     }
 
@@ -1031,20 +1024,77 @@ struct PairingImportSheet: View {
     }
 
     private func detailText(for status: PairingImportFlow.StageStatus) -> String? {
-        switch status {
-        case .failed(let message, _):
-            return message
-        case .pending, .running, .passed:
-            return nil
-        }
+        status.detail
     }
 
     private func detailColor(for status: PairingImportFlow.StageStatus) -> Color {
-        switch status {
-        case .failed:
-            return AppColors.error
-        default:
-            return AppColors.textTertiary
+        status.detailTint
+    }
+}
+
+// MARK: - StageStatus row presentation
+
+/// The checklist row's glyph, tint and detail line, derived from the status
+/// alone.
+///
+/// ON THE STATUS RATHER THAN INSIDE THE VIEW, for the reason
+/// `GatewayFileLaneStatus` keeps its own label/meaning/tint here: a decision
+/// buried in a `private` view method cannot be asserted without rendering the
+/// sheet, and this particular decision — whether a pass draws a green tick or an
+/// amber triangle — is one the spec constrains and a test has to be able to
+/// pin.
+extension PairingImportFlow.StageStatus {
+
+    /// SF Symbol for the leading glyph. Nil for `.running`, whose slot holds a
+    /// spinner instead of a symbol.
+    ///
+    /// FOUR ANSWERS FOR FOUR STATES, and the fourth is the whole point: a pass
+    /// carrying a caveat draws the AMBER TRIANGLE, never the green tick. Same
+    /// symbol and same tint as `FileTransferStageChecklist`'s `.unsupported` row
+    /// and the `readyUploadsOnly` badge on the gateway editor and the File
+    /// transfer page — a user meets this one fact on three screens during one
+    /// setup, and a green seal here would leave this sheet the only surface
+    /// claiming both directions on a server that has one.
+    var glyphSystemImage: String? {
+        switch self {
+        case .pending: return "circle"
+        case .running: return nil
+        case .passed(let caveat): return caveat == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        case .failed: return "xmark.circle.fill"
+        }
+    }
+
+    var glyphTint: Color {
+        switch self {
+        case .pending, .running: return AppColors.textTertiary
+        case .passed(let caveat): return caveat == nil ? AppColors.success : AppColors.warning
+        case .failed: return AppColors.error
+        }
+    }
+
+    /// The sentence under the row title. A caveat is rendered VERBATIM, not
+    /// re-worded here: it arrives as `PairingImportFlow.uploadOnlyCaveat`, built
+    /// from the same string key the File transfer page's own checklist uses, so
+    /// the two checklists a user sees during one setup describe the same server
+    /// in the same words.
+    var detail: String? {
+        switch self {
+        case .failed(let message, _): return message
+        case .passed(let caveat): return caveat
+        case .pending, .running: return nil
+        }
+    }
+
+    /// A caveat is not a failure, so it stays out of the red the failure text
+    /// uses — `FileTransferStageChecklist.detailTint` draws the same distinction
+    /// for the same sentence. Secondary rather than tertiary because this line is
+    /// the only thing on screen naming a limitation the user has to live with,
+    /// and the tertiary tint reads as incidental.
+    var detailTint: Color {
+        switch self {
+        case .failed: return AppColors.error
+        case .passed(let caveat): return caveat == nil ? AppColors.textTertiary : AppColors.textSecondary
+        case .pending, .running: return AppColors.textTertiary
         }
     }
 }

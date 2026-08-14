@@ -18,6 +18,13 @@
 // through `PairingPayload.parse` — both are enforced by golden-vector +
 // round-trip tests (`PairingPayloadExportTests`).
 //
+// "For identical values" is what makes the file lane's delivery properties
+// (`folderCapable`, `autoDeliver`, `filenamePolicy`) compatible with that
+// parity claim: the wizard states none of them, this emitter omits every key it
+// has no value for, and a payload stating none serializes to exactly the bytes
+// the wizard produces. The keys are additions under the contract's
+// compatible-addition rule — added, never repurposed.
+//
 // Why hand-rolled and not `JSONEncoder`: `JSONEncoder` gives no stable
 // insertion order, escapes "/" by default, and never emits `\uXXXX` for
 // non-ASCII — three ways it would diverge from the python emission. The
@@ -93,6 +100,35 @@ enum PairingPayloadExport {
     struct FileServer: Equatable, Sendable {
         let url: String
         let credential: String
+        /// The server's nested-PUT verdict, stated only when this device measured it
+        /// and measured it FALSE (see `makePayload`). Nil omits the key, which the
+        /// parser reads as "unstated" — the importing device keeps its own default
+        /// and settles the question with its own probe.
+        let folderCapable: Bool?
+        /// The gateway's automatic-delivery permission — stated only to RESTRICT
+        /// (`false`). Nil omits the key.
+        let autoDeliver: Bool?
+        /// The gateway's delivered-filename policy token, stated only when it is not
+        /// the app's default. Nil omits the key.
+        let filenamePolicy: String?
+
+        /// Explicit memberwise init so the three delivery properties default to nil
+        /// — the golden vectors are written against the two-field block and must
+        /// keep serializing to the same bytes, which is the whole point of pinning
+        /// them; a synthesized memberwise init cannot default a `let`.
+        init(
+            url: String,
+            credential: String,
+            folderCapable: Bool? = nil,
+            autoDeliver: Bool? = nil,
+            filenamePolicy: String? = nil
+        ) {
+            self.url = url
+            self.credential = credential
+            self.folderCapable = folderCapable
+            self.autoDeliver = autoDeliver
+            self.filenamePolicy = filenamePolicy
+        }
     }
 
     /// A complete v1 payload ready to serialize.
@@ -118,7 +154,8 @@ enum PairingPayloadExport {
     /// deterministic — the golden-vector tests assert exact equality against the
     /// bash wizard's output. Key order is FIXED to the wizard's python insertion
     /// order: gateway `{kind, url, auth, name?, token?, model?}`; top-level
-    /// `{v, gateway, transport, fileServer?}`; fileServer `{url, credential}`.
+    /// `{v, gateway, transport, fileServer?}`; fileServer `{url, credential,
+    /// folderCapable?, autoDeliver?, filenamePolicy?}`.
     ///
     /// The `fileServer` block is emitted ONLY when the payload carries one whose
     /// `url` AND `credential` are both non-empty — matching the wizard's
@@ -153,6 +190,22 @@ enum PairingPayloadExport {
             var fileServerJSON = "{"
             fileServerJSON += "\"url\":" + pythonJSONString(fileServer.url)
             fileServerJSON += ",\"credential\":" + pythonJSONString(fileServer.credential)
+            // The three delivery properties are OMITTED when nil, never emitted as
+            // `null`: the contract's conditional fields are absent rather than null
+            // (`PAYLOAD.md`), and the parser reads absence as "unstated, keep the
+            // importing device's own default". Omission is also what keeps byte
+            // parity with the wizard, which states none of them — a payload that
+            // carries no delivery properties serializes to exactly the bytes the
+            // golden vectors pin.
+            if let folderCapable = fileServer.folderCapable {
+                fileServerJSON += ",\"folderCapable\":" + (folderCapable ? "true" : "false")
+            }
+            if let autoDeliver = fileServer.autoDeliver {
+                fileServerJSON += ",\"autoDeliver\":" + (autoDeliver ? "true" : "false")
+            }
+            if let filenamePolicy = fileServer.filenamePolicy, !filenamePolicy.isEmpty {
+                fileServerJSON += ",\"filenamePolicy\":" + pythonJSONString(filenamePolicy)
+            }
             fileServerJSON += "}"
             json += ",\"fileServer\":" + fileServerJSON
         }
@@ -281,11 +334,51 @@ enum PairingPayloadExport {
 
         // File server: emitted iff BOTH url + credential exist (the wizard's
         // `if FS_URL and FS_CRED`).
+        //
+        // Read as ONE snapshot rather than field-by-field. A code is a self-contained
+        // artifact the user hands to another device, so a lane assembled from a URL
+        // read before a Settings edit and a credential read after it would mint a
+        // mixed-generation code that authenticates nowhere — and the failure would
+        // surface on the scanning device, days later, with nothing to point at.
+        //
+        // A DELIVERY PROPERTY IS STATED ONLY WHEN IT DEVIATES FROM THE APP'S OWN
+        // DEFAULT, and only when this device is entitled to state it:
+        //
+        // * `folderCapable` — emitted only when `testedLocally`, i.e. when a staged
+        //   Test Connection ON THIS DEVICE measured the server's nested-PUT
+        //   behaviour, and then only for the `false` verdict. `available` is the
+        //   wrong gate on both ends: it can arrive from a peer through iCloud KVS
+        //   (no measurement here at all) and it drops to false on a later
+        //   reachability failure that leaves a perfectly good folder verdict
+        //   standing. `true` is the app's own default for an unprobed lane, so
+        //   stating it adds nothing the importer would not already assume.
+        // * `autoDeliver` — emitted only for `false`, the restrictive state. A code
+        //   is attacker-craftable input, so the importer refuses to let one GRANT
+        //   the permission (see `SettingsViewModel+PairingImport`); emitting `true`
+        //   would put a claim on the wire that no importer will honour.
+        // * `filenamePolicy` — emitted only when the stored policy is not
+        //   `Constants.fileServerFilenamePolicyPreserve`. That is never, while the
+        //   vocabulary has one member; the rule is written now so the day a second
+        //   policy exists the code carries it without another wire revision.
+        //
+        // The READINESS verdict itself never rides out, and the lane's certificate
+        // pin has no field to ride in (same doctrine as the gateway pin above): the
+        // scanning device may be on a different network and evaluates the chain in
+        // its own trust store, so it earns Ready with its own staged test.
         var fileServer: FileServer?
-        if let fsURL = await manager.getFileServerURL(for: ref),
-           EndpointURLPolicy.isAdmissible(fsURL),
-           let credential = await manager.getFileServerCredential(for: ref), !credential.isEmpty {
-            fileServer = FileServer(url: fsURL.absoluteString, credential: credential)
+        if let lane = await manager.fileTransferSnapshot(for: ref),
+           EndpointURLPolicy.isAdmissible(lane.baseURL),
+           !lane.credential.isEmpty {
+            let measured = await manager.getFileServerTestedLocally(for: ref)
+            fileServer = FileServer(
+                url: lane.baseURL.absoluteString,
+                credential: lane.credential,
+                folderCapable: (measured && !lane.folderCapable) ? false : nil,
+                autoDeliver: lane.autoDeliver ? nil : false,
+                filenamePolicy: lane.filenamePolicy == Constants.fileServerFilenamePolicyPreserve
+                    ? nil
+                    : lane.filenamePolicy
+            )
         }
 
         return Payload(gateway: gateway, transport: transport, fileServer: fileServer)

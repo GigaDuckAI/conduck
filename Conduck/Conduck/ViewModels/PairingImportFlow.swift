@@ -49,6 +49,18 @@ protocol PairingImportEnvironment: AnyObject {
 
 struct PairingFileTestResult: Equatable, Sendable {
     let passed: Bool
+    /// The lane passed FOR UPLOADS and the server stated it cannot list a folder,
+    /// so nothing the agent writes can come back on its own.
+    ///
+    /// A SECOND AXIS RATHER THAN A THIRD VALUE OF `passed`, for the reason
+    /// `FileTransferTestResult` keeps its own two apart: the byte round-trip is
+    /// proven either way, and folding the two would make a screen choose between
+    /// a green seal and a red cross when both are false in one direction.
+    ///
+    /// It exists so the sheet does not have to be the one surface that claims
+    /// both directions on a server that has one — the spec's rule is that no
+    /// screen reporting on this lane shows an unqualified pass for it.
+    let uploadsOnly: Bool
     /// Taxonomy-derived copy only — never payload content.
     let failureMessage: String?
     /// Whether re-running this stage can reach a different verdict. Rides
@@ -60,6 +72,21 @@ struct PairingFileTestResult: Equatable, Sendable {
     /// at two boundaries instead of one. No typed error → `true`: unknown is not
     /// terminal.
     let retryable: Bool
+
+    /// Explicit memberwise init so `uploadsOnly` can default to false — an
+    /// absent second axis means "nothing narrowed", never "narrowed", matching
+    /// the polarity every other reader of this verdict uses.
+    init(
+        passed: Bool,
+        uploadsOnly: Bool = false,
+        failureMessage: String?,
+        retryable: Bool
+    ) {
+        self.passed = passed
+        self.uploadsOnly = uploadsOnly
+        self.failureMessage = failureMessage
+        self.retryable = retryable
+    }
 }
 
 @MainActor
@@ -84,7 +111,26 @@ final class PairingImportFlow {
     enum StageStatus: Equatable {
         case pending
         case running
-        case passed
+        /// The stage did what it set out to do. `caveat` is a sentence naming a
+        /// capability the stage PROVED ABSENT while everything it grades passed —
+        /// today only the file stage's upload-only lane, whose server accepts
+        /// writes and reads and structurally refuses to list a folder.
+        ///
+        /// AN ASSOCIATED VALUE RATHER THAN A FOURTH CASE, so that every existing
+        /// `case .passed:` pattern keeps compiling and no surface can silently
+        /// inherit a "nothing to report" it never asked for: a stage that grows a
+        /// partial state has to say `caveat: nil` to stay unqualified.
+        ///
+        /// Non-nil is NOT a failure. There is nothing to retry — the server
+        /// answered, permanently and correctly — and the lane is fully usable in
+        /// the direction the stage proved, so a red cross would tell a user whose
+        /// import worked that it did not.
+        ///
+        /// RENDERING IT IS `PairingImportSheet`'S JOB: a non-nil caveat draws the
+        /// amber triangle and the sentence, matching `FileTransferStageChecklist`'s
+        /// `.unsupported` row — the surface a user meets the same fact on minutes
+        /// later — while a nil one keeps the plain green tick.
+        case passed(caveat: String?)
         /// Detail is taxonomy-/key-derived only — never payload content.
         ///
         /// `retryable` rides `AppError.isRetryable`, mirroring
@@ -641,7 +687,7 @@ final class PairingImportFlow {
             return
         case .committedGatewayOnly:
             saveSucceeded = true
-            stageStatus[.save] = .passed
+            stageStatus[.save] = .passed(caveat: nil)
             // The file-server half rolled back at save time — mark its stage
             // failed up front; `runFileStageIfNeeded` sees the terminal state and
             // never probes a config that isn't there.
@@ -654,7 +700,7 @@ final class PairingImportFlow {
             ), retryable: false)
         case .committed:
             saveSucceeded = true
-            stageStatus[.save] = .passed
+            stageStatus[.save] = .passed(caveat: nil)
         }
 
         // The `.failed` arm returned above, so the save has committed here — fire
@@ -675,7 +721,7 @@ final class PairingImportFlow {
         switch await environment.runGatewayTest(payload, target: target) {
         case .passed:
             gatewayConnected = true
-            stageStatus[.gateway] = .passed
+            stageStatus[.gateway] = .passed(caveat: nil)
             fireConnectedHookIfNeeded()
             await runFileStageIfNeeded(payload, target: target)
         case .failed(let message, let error):
@@ -697,8 +743,18 @@ final class PairingImportFlow {
         stageStatus[.file] = .running
         let result = await environment.runFileTest(for: target)
         stageStatus[.file] = result.passed
-            ? .passed
+            ? .passed(caveat: result.uploadsOnly ? Self.uploadOnlyCaveat : nil)
             : .failed(result.failureMessage, retryable: result.retryable)
+    }
+
+    /// The sentence a passing-but-upload-only file stage carries. Shares its
+    /// STRING KEY with the File transfer page's own staged checklist, so the two
+    /// checklists a user sees during one setup cannot describe the same server
+    /// in two different ways.
+    static var uploadOnlyCaveat: String {
+        String(localized: LocalizedStringResource(
+            "fileTransfer.test.stage.listing.unsupported",
+            defaultValue: "This server can't list folders. Sending files to the agent works; files the agent creates can't come back on their own."))
     }
 
     /// Recovery "Try again": re-run ONLY the connectivity stages on the
@@ -822,7 +878,20 @@ final class SettingsViewModelPairingEnvironment: PairingImportEnvironment {
         let result = viewModel.fileTransferTestResults[target]
         let failure = result?.failure
         return PairingFileTestResult(
+            // `success`, not `success && returnCapable`. A lane whose server
+            // cannot list a folder still moves every byte this stage exists to
+            // prove, and a red X here would tell a user whose import worked that
+            // it did not — offering a "Try again" that cannot reach a different
+            // answer, because the server stated a structural refusal.
+            //
+            // The caveat rides the SECOND axis rather than being dropped here:
+            // the spec's rule is that every screen reporting on this lane says
+            // which half of it the user has, and a sheet that graded the stage
+            // green and said nothing was the one screen showing an unqualified
+            // seal for a server that can only send. `isUploadOnly` is the shared
+            // derivation (`success && !returnCapable`), never re-derived locally.
             passed: result?.success == true,
+            uploadsOnly: result?.isUploadOnly == true,
             failureMessage: failure?.descriptionWithRecovery,
             retryable: failure?.isRetryable ?? true
         )

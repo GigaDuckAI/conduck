@@ -344,11 +344,66 @@ extension SettingsViewModel {
                 } else {
                     pin = nil
                 }
+                // The lane's delivery properties ride in from the code; its
+                // READINESS does not. `available: false` is unconditional and has no
+                // payload input — the code describes a SERVER, and readiness is this
+                // device's own proof that IT can reach, trust and authenticate
+                // against that server. The scanning device may be off the network the
+                // code was minted on (a tailnet-only lane is the ordinary case) and
+                // evaluates the certificate chain in its own trust store, so it earns
+                // Ready with its own staged Test Connection. The wire format carries
+                // no readiness field for exactly this reason.
+                //
+                // Each field is nil-means-unchanged in the commit hop, and the parser
+                // hands nil for an absent or off-shape key — so a code minted before
+                // these keys existed leaves the destination's own stored values (and
+                // their defaults) exactly as they were, rather than resetting them to
+                // something the code never said.
+                //
+                // `autoDeliver` is MONOTONIC: a code may restrict the permission,
+                // never grant it. A setup code is attacker-craftable and the review
+                // card the user approves names the destination, not the permissions —
+                // so honouring a `true` would let a scanned code quietly switch
+                // automatic delivery back on for a gateway where the user (later, a
+                // seat policy) had switched it off, and the user would have approved
+                // a screen that never mentioned it. Nothing is lost by refusing:
+                // `true` is already the stored default, so the only state a `true`
+                // could change is the one deliberate `false` this rule protects.
+                let grantedAutoDeliver = fileServer.autoDeliver == false ? false : nil
+                // `folderCapable` IS APPLIED IN BOTH DIRECTIONS, and the asymmetry
+                // with the line above is deliberate rather than an oversight. The
+                // exporter states only the `false` verdict, so a positive value can
+                // only reach here from a hand-crafted code — and that is still
+                // harmless, for three reasons that do not hold for `autoDeliver`:
+                //
+                //   * KIND. This is a MEASUREMENT of the server (does it accept a
+                //     nested PUT), not a permission granted to the gateway. There
+                //     is no privilege in it to escalate — the worst a wrong `true`
+                //     buys an attacker is uploads that fail against a server that
+                //     rejects nested keys, on the user's own machine.
+                //   * SCOPE. The value it overwrites describes the server this very
+                //     commit is REPLACING, url and credential and all, so a `true`
+                //     overrides nothing the user still owns. `autoDeliver` survives
+                //     a server swap precisely because it is about the gateway
+                //     rather than about whatever host it currently points at.
+                //   * SELF-CORRECTION. The import deliberately leaves the lane
+                //     not-ready (`available: false`), so the user must run a staged
+                //     Test Connection before anything uses it — and that test's
+                //     nested probe writes this same key from its own measurement.
+                //     Nothing re-derives a permission, which is why `autoDeliver`
+                //     gets no second chance to be corrected.
+                //
+                // Clamping it to `false`-only would change nothing for a real code
+                // (the exporter emits nil for the default) while quietly turning a
+                // two-valued measurement channel into a one-valued one — a trap for
+                // the day a `conduck-connect` has reason to state the positive.
                 await SettingsManager.shared.commitFileTransferConfig(
                     url: fileServer.url,
                     pin: pin,
-                    folderCapable: nil,
+                    folderCapable: fileServer.folderCapable,
                     available: false,
+                    autoDeliver: grantedAutoDeliver,
+                    filenamePolicy: fileServer.filenamePolicy,
                     for: target
                 )
 
@@ -370,6 +425,20 @@ extension SettingsViewModel {
                     fileServerPersistedPins.removeValue(forKey: target)
                 }
                 fileServerValidationStates[target] = .valid
+                // The commit above reset the stored listing verdict to unknown
+                // (`commitFileTransferConfig` defaults to `.resetToUnknown`,
+                // because a new tuple makes the old server's verdict meaningless),
+                // so the published mirror the badge renders has to drop with it —
+                // exactly as the credential rotation and Forget paths do. Without
+                // this, a code repointing a previously upload-only gateway at a
+                // fully capable server keeps showing the amber "Uploads only" on
+                // every surface that reads the badge until the next relaunch
+                // reloads the mirror from a store that no longer says it.
+                //
+                // `remove`, never a read-back: the write just happened on this
+                // actor, and unknown resolves to CAPABLE — the direction that
+                // claims no limitation nobody has measured.
+                fileTransferUploadOnlyRefSet.remove(target)
             }
         }
 

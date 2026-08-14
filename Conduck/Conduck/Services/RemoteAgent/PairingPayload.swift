@@ -21,6 +21,20 @@
 // lower its standards. Trust is decided against the LIVE server, after the
 // user consents, by `PairingTrustDecision` — never against the code.
 //
+// WHAT THE FILE LANE CARRIES, AND WHAT IT REFUSES TO. The `fileServer` block
+// carries the lane's ADDRESS (url + credential) and the per-gateway delivery
+// properties — `folderCapable`, `autoDeliver`, `filenamePolicy` — because each
+// describes the SERVER or a decision about the gateway, and neither kind of
+// fact changes with which device is asking. It does NOT carry the lane's
+// READINESS verdict (`SettingsManager.getFileTransferAvailable`), and no field
+// exists through which a code could assert one. Readiness is this device's own
+// proof that IT can reach, trust and authenticate against that server — a
+// scanning device may sit on a different network from the one the code was
+// minted on (a tailnet-only lane is the ordinary case) and evaluates the
+// certificate chain in its own trust store. So the importer commits every lane
+// as not-yet-ready and earns readiness with its own staged Test Connection; a
+// capability the code claims is applied, a readiness it might claim is not.
+//
 // PRIVACY (non-negotiable — see the spec's Privacy & Security section): the raw pairing string
 // embeds the gateway bearer token + file-server credential. NEVER log /
 // echo the raw string, the decoded JSON, the token, or the credential —
@@ -91,27 +105,50 @@ struct PairingPayload: Equatable, Sendable {
         /// Machine-minted shared credential — nonempty by contract.
         let credential: String
 
+        /// Whether the server accepts NESTED (folder) PUTs — the wire form of the
+        /// per-gateway `fileServer.folderCapable.<ref>` verdict. A fact about the
+        /// SERVER, established by a staged Test Connection's nested probe, which is
+        /// what makes it portable: the answer does not depend on which device asked.
+        ///
+        /// nil means UNSTATED — the importing device keeps whatever its own store
+        /// says (default true) and settles the question with its own probe. That is
+        /// the reading a code from an older `conduck-connect`, or from a device
+        /// whose lane was never tested, must get: an absent key is not a claim that
+        /// the server rejects folders, and treating it as one would push every such
+        /// import onto the flat key layout.
+        ///
+        /// This is the ONE capability that travels. The readiness verdict
+        /// (`SettingsManager.getFileTransferAvailable`) deliberately does NOT — see
+        /// the file header — and neither does a certificate pin, which has no field
+        /// here at all.
+        let folderCapable: Bool?
+
         /// Whether this gateway may put files on the device automatically — the
         /// wire form of the per-gateway `fileServer.autoDeliver.<ref>` property.
         ///
-        /// RESERVED, and reserved literally: no code path reads it. `conduck-connect`
-        /// emits no such key today, the import path stores nothing from it, and the
-        /// per-gateway property it names is itself unread (see
-        /// `SettingsManager.FileTransferSnapshot.autoDeliver`). It is parsed now
-        /// because `PAYLOAD.md` locks v1 to additions that are COMPATIBLE but never
-        /// REPURPOSED — so the field name is the one thing that cannot be chosen
-        /// late, and fixing the shape before a reader exists costs nothing.
+        /// A PERMISSION about the gateway rather than a measurement of it, and it
+        /// travels for the same reason it is mirrored through iCloud KVS: a user
+        /// (later, a seat policy) who forbids automatic delivery for a gateway means
+        /// it wherever that gateway is set up, so a permission that stayed on the
+        /// device where it was typed would be worthless as a policy.
         ///
-        /// nil means UNSTATED, never an explicit `false`: a missing key is what
-        /// every code in existence produces, and reading that as "this gateway
-        /// forbids automatic delivery" would switch a permission off across every
+        /// It travels in ONE DIRECTION. The importer honours a `false` and refuses a
+        /// `true` (`SettingsViewModel+PairingImport`), because a code is
+        /// attacker-craftable and the review screen the user approves names the
+        /// destination rather than the permissions. Parsing both values is still
+        /// right — the parser reports what the code SAYS; the importer decides what
+        /// a code is allowed to do.
+        ///
+        /// nil means UNSTATED, never an explicit `false`: a missing key is what every
+        /// code minted before this field produces, and reading that as "this gateway
+        /// forbids automatic delivery" would switch a permission off across every such
         /// import. A wrong-typed value lands on nil for the same reason — see
         /// `parseOrThrow`.
         let autoDeliver: Bool?
 
         /// How a delivered file's name is treated — the wire form of the
-        /// per-gateway `fileServer.filenamePolicy.<ref>` property. RESERVED on
-        /// exactly the terms `autoDeliver` is, and nil likewise means "unstated,
+        /// per-gateway `fileServer.filenamePolicy.<ref>` property. Travels on
+        /// exactly the terms `autoDeliver` does, and nil likewise means "unstated,
         /// the app keeps its own default" rather than an empty policy.
         ///
         /// Held to `filenamePolicyToken` on the way in: a policy is a token from a
@@ -120,18 +157,20 @@ struct PairingPayload: Equatable, Sendable {
         /// unbounded string toward App-Group defaults and iCloud KVS.
         let filenamePolicy: String?
 
-        /// Explicit memberwise init so the two reserved properties can default to
-        /// nil. Every construction site — the parser's own, the export round-trip
-        /// suite — predates them and must keep compiling as the two-field block it
-        /// was written against; a synthesized memberwise init cannot default a `let`.
+        /// Explicit memberwise init so the three delivery properties can default to
+        /// nil. Every construction site written against the two-field block — the
+        /// parser's own, the export round-trip suite — must keep compiling
+        /// unchanged; a synthesized memberwise init cannot default a `let`.
         init(
             url: URL,
             credential: String,
+            folderCapable: Bool? = nil,
             autoDeliver: Bool? = nil,
             filenamePolicy: String? = nil
         ) {
             self.url = url
             self.credential = credential
+            self.folderCapable = folderCapable
             self.autoDeliver = autoDeliver
             self.filenamePolicy = filenamePolicy
         }
@@ -288,15 +327,17 @@ struct PairingPayload: Equatable, Sendable {
             guard let credential = fsDict["credential"] as? String, !credential.isEmpty else {
                 throw PairingParseError.malformed
             }
-            // Reserved per-gateway delivery properties. Missing OR wrong-typed →
-            // nil ("unstated"), never a coerced default and never an error: the
+            // Per-gateway delivery properties. Missing OR wrong-typed → nil
+            // ("unstated"), never a coerced default and never an error: the
             // contract's compatible-addition promise is only worth something if an
-            // older parser survives a newer wizard's extra keys, and these two are
-            // absent from every code minted today. Same posture as the sibling wire
+            // older parser survives a newer wizard's extra keys, AND if a code
+            // minted before these keys existed still imports — which is every code
+            // `conduck-connect` has emitted so far. Same posture as the sibling wire
             // surface, `RemoteAgentBroadcastEnvelope.decode(from:)`.
             fileServer = FileServer(
                 url: fsURL,
                 credential: credential,
+                folderCapable: fsDict["folderCapable"] as? Bool,
                 autoDeliver: fsDict["autoDeliver"] as? Bool,
                 filenamePolicy: filenamePolicyToken(fsDict["filenamePolicy"])
             )

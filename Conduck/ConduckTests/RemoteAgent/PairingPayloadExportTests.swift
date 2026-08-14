@@ -11,8 +11,12 @@
 // guard, and a full export→parse round-trip proving the emitter and
 // `PairingPayload.parse` stay byte-compatible.
 //
-// Pure logic — no signing / Keychain (the serializer + escaper are static; the
-// OpenRouter guard trips before any actor read). Synthetic tokens only.
+// The serializer, escaper and structural rules are pure logic — no signing, no
+// Keychain (they are static; the OpenRouter guard trips before any actor read).
+// The `makePayload` cases that assert WHICH delivery properties a real export
+// states do touch the store, so they skip on an unsigned host the way every
+// Keychain-dependent suite here does, and clean their own per-ref keys. Synthetic
+// tokens only.
 
 import XCTest
 @testable import Conduck
@@ -236,6 +240,201 @@ final class PairingPayloadExportTests: XCTestCase {
         XCTAssertFalse(decodedJSON(emptyCred).contains("fileServer"))
     }
 
+    // MARK: - File-lane delivery properties
+
+    /// A lane that states none of the three delivery properties must serialize to
+    /// the bytes the wizard produces — which is exactly what the golden vectors
+    /// already pin, so this asserts the keys are ABSENT rather than emitted as
+    /// `null`. Absence is what makes the addition compatible in both directions:
+    /// the wizard states none of them, and an older importer sees a block it
+    /// already understands.
+    func testDeliveryPropertiesOmittedWhenUnstated() {
+        let json = decodedJSON(PairingPayloadExport.serialize(vector1()))
+        XCTAssertFalse(json.contains("folderCapable"))
+        XCTAssertFalse(json.contains("autoDeliver"))
+        XCTAssertFalse(json.contains("filenamePolicy"))
+        XCTAssertFalse(json.contains("null"),
+                       "Conditional fields are omitted, never emitted as null (PAYLOAD.md).")
+    }
+
+    /// A stated lane emits all three, in the fixed order the block documents, after
+    /// `credential`. Key order is asserted as one substring so a reordering — which
+    /// a tolerant parser would swallow — still fails here, the same way the golden
+    /// vectors pin the rest of the emission. The serializer states whatever the
+    /// payload holds; WHICH values a real export puts there is `makePayload`'s rule,
+    /// asserted separately.
+    func testDeliveryPropertiesEmittedInFixedOrderWhenStated() {
+        let base = vector1()
+        let code = PairingPayloadExport.serialize(
+            PairingPayloadExport.Payload(
+                gateway: base.gateway,
+                transport: base.transport,
+                fileServer: PairingPayloadExport.FileServer(
+                    url: "https://gw.tail1234.ts.net:9443",
+                    credential: "a1b2c3d4e5f60718",
+                    folderCapable: false,
+                    autoDeliver: false,
+                    filenamePolicy: "preserve"
+                )
+            )
+        )
+        XCTAssertTrue(decodedJSON(code).contains(
+            "\"credential\":\"a1b2c3d4e5f60718\",\"folderCapable\":false,\"autoDeliver\":false,\"filenamePolicy\":\"preserve\""
+        ), "fileServer key order is part of the wire shape: url, credential, folderCapable, autoDeliver, filenamePolicy.")
+    }
+
+    /// A setup code describes a SERVER; readiness is the scanning device's own proof
+    /// that IT can reach, trust and authenticate against that server. No field
+    /// carries it, and no representable payload can invent one — the same doctrine
+    /// that keeps a certificate pin off the wire.
+    func testNoRepresentablePayloadEmitsAReadinessField() {
+        let base = vector1()
+        let maximalLane = PairingPayloadExport.serialize(
+            PairingPayloadExport.Payload(
+                gateway: base.gateway,
+                transport: base.transport,
+                fileServer: PairingPayloadExport.FileServer(
+                    url: "https://gw.tail1234.ts.net:9443",
+                    credential: "a1b2c3d4e5f60718",
+                    folderCapable: true,
+                    autoDeliver: true,
+                    filenamePolicy: "preserve"
+                )
+            )
+        )
+        for code in [vector1(), vector2(), vector3()].map(PairingPayloadExport.serialize) + [maximalLane] {
+            XCTAssertFalse(decodedJSON(code).contains("available"),
+                           "A setup code must never assert that a file lane is ready.")
+            XCTAssertFalse(decodedJSON(code).contains("testedLocally"))
+        }
+    }
+
+    // MARK: - makePayload: WHICH delivery properties a real export states
+
+    /// The ref these cases configure. A built-in keeps the fixture to per-ref slots
+    /// this file can clear itself — no roster row, no draft lifecycle.
+    private static let exportRef = RemoteAgentRef.builtin(.hermes)
+
+    /// Configure a keyless gateway + a file lane on `exportRef`, skipping on a host
+    /// whose Keychain refuses the access-group write (unsigned build) — same posture
+    /// as the pairing-import suite's `requireFileServerKeychainOrSkip`.
+    private func seedExportableLaneOrSkip() async throws {
+        let ref = Self.exportRef
+        do {
+            try await SettingsManager.shared.setFileServerCredential("a1b2c3d4e5f60718", for: ref)
+        } catch {
+            throw XCTSkip("Keychain access-group write requires a signed build (unsigned: \(error)).")
+        }
+        _ = await SettingsManager.shared.setRemoteAgentURL(
+            URL(string: "https://gw.example.test:18789"), for: ref
+        )
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.none, for: ref)
+        await SettingsManager.shared.commitFileTransferConfig(
+            url: URL(string: "https://gw.example.test:8443")!,
+            pin: nil,
+            folderCapable: nil,
+            available: false,
+            for: ref
+        )
+    }
+
+    /// Clear every per-ref slot the export fixtures write. Runs whether the case
+    /// passed or failed, so a left-over lane can't leak into the pure cases (or into
+    /// another suite reading the same ref).
+    private func clearExportedLane() async {
+        let ref = Self.exportRef
+        for key in [
+            Constants.remoteAgentURLKey(for: ref),
+            Constants.remoteAgentAuthSchemeKey(for: ref),
+            Constants.fileServerURLKey(for: ref),
+            Constants.fileTransferAvailableKey(for: ref),
+            Constants.fileServerFolderCapableKey(for: ref),
+            Constants.fileServerAutoDeliverKey(for: ref),
+            Constants.fileServerFilenamePolicyKey(for: ref),
+            Constants.fileServerTestedLocallyKey(for: ref)
+        ] {
+            TestStores.defaults.removeObject(forKey: key)
+            TestStores.kvs.removeObject(forKey: key)
+        }
+        try? await SettingsManager.shared.clearFileServerCredential(for: ref)
+    }
+
+    /// The everyday lane — never locally tested, permission at its default — states
+    /// NOTHING. A code that repeats the app's own defaults carries no information,
+    /// and `folderCapable:true` from an unprobed lane would be a claim about the
+    /// server made on no evidence at all.
+    func testMakePayloadStatesNothingForADefaultUntestedLane() async throws {
+        try await seedExportableLaneOrSkip()
+        addTeardownBlock { await self.clearExportedLane() }
+
+        let payload = try await PairingPayloadExport.makePayload(for: Self.exportRef)
+        XCTAssertEqual(payload.fileServer?.url, "https://gw.example.test:8443")
+        XCTAssertNil(payload.fileServer?.folderCapable,
+                     "An unprobed lane has no verdict to publish.")
+        XCTAssertNil(payload.fileServer?.autoDeliver,
+                     "The default permission is what the importer already assumes.")
+        XCTAssertNil(payload.fileServer?.filenamePolicy)
+    }
+
+    /// A MEASURED `folderCapable:false` is the one capability worth carrying: the
+    /// app's default is true, so a scanning device that isn't told would mint nested
+    /// keys against a server that rejects them. `testedLocally` is the gate rather
+    /// than `available`, because that is the flag meaning "a staged Test Connection
+    /// ran HERE" — `available` can arrive from a peer through iCloud KVS, and it
+    /// drops on a later reachability failure that leaves the folder verdict standing.
+    func testMakePayloadStatesAMeasuredFolderIncapability() async throws {
+        try await seedExportableLaneOrSkip()
+        addTeardownBlock { await self.clearExportedLane() }
+        let ref = Self.exportRef
+
+        await SettingsManager.shared.setFileServerFolderCapable(false, for: ref)
+
+        await SettingsManager.shared.setFileServerTestedLocally(false, for: ref)
+        var payload = try await PairingPayloadExport.makePayload(for: ref)
+        XCTAssertNil(payload.fileServer?.folderCapable,
+                     "Without a local measurement there is nothing to state, whatever the stored flag happens to say.")
+
+        await SettingsManager.shared.setFileServerTestedLocally(true, for: ref)
+        payload = try await PairingPayloadExport.makePayload(for: ref)
+        XCTAssertEqual(payload.fileServer?.folderCapable, false,
+                       "A locally measured false must travel — it is the same answer on any device.")
+    }
+
+    /// A RESTRICTED permission travels; the permissive default does not. The importer
+    /// refuses to let a code grant the permission, so emitting `true` would put a
+    /// claim on the wire that nothing will ever honour.
+    func testMakePayloadStatesOnlyARestrictedAutoDeliver() async throws {
+        try await seedExportableLaneOrSkip()
+        addTeardownBlock { await self.clearExportedLane() }
+        let ref = Self.exportRef
+
+        await SettingsManager.shared.commitFileDeliveryPolicy(autoDeliver: false, for: ref)
+        var payload = try await PairingPayloadExport.makePayload(for: ref)
+        XCTAssertEqual(payload.fileServer?.autoDeliver, false)
+
+        await SettingsManager.shared.commitFileDeliveryPolicy(autoDeliver: true, for: ref)
+        payload = try await PairingPayloadExport.makePayload(for: ref)
+        XCTAssertNil(payload.fileServer?.autoDeliver,
+                     "A code never states the permissive default — the importer would refuse it anyway.")
+    }
+
+    /// No export, under any stored state, may put a readiness claim on the wire. The
+    /// exporter's own lane is deliberately seeded READY here, which is the state a
+    /// naive implementation would leak.
+    func testMakePayloadNeverStatesReadinessEvenFromAReadyLane() async throws {
+        try await seedExportableLaneOrSkip()
+        addTeardownBlock { await self.clearExportedLane() }
+        let ref = Self.exportRef
+
+        await SettingsManager.shared.commitFileTransferVerdict(
+            available: true, folderCapable: true, for: ref
+        )
+        let code = try await PairingPayloadExport.makeSetupCode(for: ref)
+        XCTAssertFalse(decodedJSON(code).contains("available"),
+                       "Readiness is this device's proof about itself; it must never ride a setup code.")
+        XCTAssertFalse(decodedJSON(code).contains("certFP"))
+    }
+
     // MARK: - Export → parse round-trip (byte-compatibility with the parser)
 
     func testRoundTripVector1() {
@@ -278,6 +477,58 @@ final class PairingPayloadExportTests: XCTestCase {
             fileServer: nil,
             transport: .publicCert
         ))
+    }
+
+    /// The emitter and the parser must agree about the delivery properties, in both
+    /// the stated and the unstated shape — a round-trip is the only assertion that
+    /// catches a key name drifting on one side only.
+    func testRoundTripCarriesStatedDeliveryProperties() {
+        let base = vector1()
+        assertRoundTrips(
+            PairingPayloadExport.Payload(
+                gateway: base.gateway,
+                transport: base.transport,
+                fileServer: PairingPayloadExport.FileServer(
+                    url: "https://gw.tail1234.ts.net:9443",
+                    credential: "a1b2c3d4e5f60718",
+                    folderCapable: false,
+                    autoDeliver: false,
+                    filenamePolicy: "preserve"
+                )
+            ),
+            expected: PairingPayload(
+                kind: .builtin(.openclaw),
+                url: URL(string: "https://gw.tail1234.ts.net:8443")!,
+                authScheme: .bearer,
+                token: "tok_ABC123",
+                model: nil,
+                fileServer: PairingPayload.FileServer(
+                    url: URL(string: "https://gw.tail1234.ts.net:9443")!,
+                    credential: "a1b2c3d4e5f60718",
+                    folderCapable: false,
+                    autoDeliver: false,
+                    filenamePolicy: "preserve"
+                ),
+                transport: .tailscale
+            )
+        )
+    }
+
+    /// The unstated shape round-trips to all-nil — "the code said nothing", which is
+    /// what the importer needs in order to leave the destination's own stored values
+    /// alone instead of resetting them to a default the code never named. Vector 1's
+    /// lane already carries no properties, so this is the OLD-payload path too.
+    func testRoundTripOfAnUnstatedLaneYieldsNoClaims() {
+        guard case .success(let parsed) = PairingPayload.parse(
+            PairingPayloadExport.serialize(vector1())
+        ) else {
+            XCTFail("vector 1 must re-parse")
+            return
+        }
+        XCTAssertNotNil(parsed.fileServer)
+        XCTAssertNil(parsed.fileServer?.folderCapable)
+        XCTAssertNil(parsed.fileServer?.autoDeliver)
+        XCTAssertNil(parsed.fileServer?.filenamePolicy)
     }
 
     private func assertRoundTrips(
