@@ -45,33 +45,48 @@
 // MEASURED (macOS 26.5, throwaway NavigationSplitView probe, 2026-08-14; window
 // 900x652, sidebar column 288pt, x in window coordinates):
 //
-//   `.automatic` + trailing fixed spacer, SIDEBAR column          <- this file
+//   `.primaryAction` on the SIDEBAR column + trailing fixed spacer <- this file
 //   — sidebar SHOWING
-//     flex space  92–189
-//     compose    189–233   w 44   glyph 20.5x20.5   no capsule
+//     compose    189–233   w 44   glyph 21x20   no capsule
 //     spacer     233–241   w  8
-//     toggle     241–288   w 47   glyph 23.5x18.5   no capsule
-//     Both inside the sidebar column (0–288); neither carries a capsule, so
-//     compose gets exactly the system control's treatment. The 3pt width
-//     difference is the GLYPHS' own sizes, not padding this file adds.
+//     toggle     241–288   w 47   glyph 24x18   no capsule
+//     Both inside the sidebar column (0–288), each drawn flat.
 //
 //   — sidebar COLLAPSED
-//     flex space  92–100   (collapses to 8pt)
-//     compose    100–145   CAPSULE 104.5–141.0  w 36.5
+//     compose    100–145   CAPSULE 104–141   37x36
 //     spacer     145–153
-//     toggle     153–201   CAPSULE 157.5–197.0  w 39.5
-//     TWO separate capsules, and each is byte-identical in width to the
-//     content-region arrangement it replaces (36.5 / 39.5). The gap between
-//     them is 16.5pt against that arrangement's 8.5pt — 4.5pt capsule inset,
-//     8pt spacer, 4.5pt inset. 8.5pt is unreachable here: it is what the
-//     tracking separator leaves between two REGIONS, and two items in the SAME
-//     region are either spacer-split or fused.
+//     toggle     153–201   CAPSULE 157–197   40x36
+//     TWO separate capsules rather than one fused pill. The 3pt width gap is
+//     each button sizing to its own glyph — a toolbar capsule comes out at
+//     glyph + 16pt, and `square.and.pencil` is 3pt narrower than
+//     `sidebar.leading`.
+//
+// WHY the capsules are NOT forced to equal widths: pinning the compose glyph's
+// frame to the toggle glyph's width does equalize the containers (both 40x36),
+// but it does NOT scale the SF Symbol — so the compose glyph ends up sitting in
+// MORE dead space than before, which reads as a smaller button inside a bigger
+// capsule. It also hardcodes a measurement of a system symbol that a point
+// release can change. Container parity is not visual parity; the platform sizes
+// each control to its own glyph, and matching that is the correct behaviour.
+//
+// WHY the two SIDEBAR STATES cannot be made to look identical: collapsed, AppKit
+// encloses each button in a bounded 36pt glass capsule, because the controls
+// then float over content and need their own ground. Expanded, they are drawn
+// flat inside a 47x52 toolbar slot with nothing bounding them, so the
+// surrounding whitespace reads as part of the control. A bounded 40x36 aperture
+// genuinely looks smaller than an unbounded 47x52 allocation even though the
+// hover target is 36x36 in BOTH states. This is macOS 26 Liquid Glass behaviour
+// applied equally to both controls, not something this file sets — the only way
+// to equalize it is to stop using system toolbar buttons entirely and draw both
+// controls (including a replacement sidebar toggle) by hand, which forfeits the
+// Liquid Glass treatment, `⌃⌘S`, the View-menu item, and the toggle's own
+// VoiceOver name.
 //
 //   ORDER is not a choice. The system pins its toggle last in the sidebar
 //   region, flush against the divider, so it does not move as the column opens
 //   and closes. Anything this file declares lands to its LEFT, in both states.
 //
-//   `.automatic` on the SIDEBAR column, NO spacer — COLLAPSED     <- rejected
+//   Sidebar column, NO spacer — COLLAPSED                         <- rejected
 //     PLATTER 106–179.5  w 73.5  glass=YES        <- ONE capsule over BOTH
 //
 //   `.navigation` on the SIDEBAR column — sidebar SHOWING          <- rejected
@@ -113,6 +128,8 @@
 // WHY the label stays a bare `Image`: measured, `Label` and a titled `Button`
 // produce identical item metrics — width tracks the GLYPH, not the label
 // construction. The name reaches assistive technology via `.accessibilityLabel`.
+// The glyph carries no `.frame`, `.font`, `.imageScale` or `.padding` at all —
+// see the container-parity note above for why sizing it by hand backfires.
 //
 // WHY no `MacPointerTargets` primitive: `.pointerIconButton()` REPLACES the
 // button style, which strips the macOS 26 toolbar treatment and stops this
@@ -137,12 +154,18 @@ struct LeadingToolbarChrome: ToolbarContent {
     /// stays the host's.
     let action: () -> Void
 
-    /// The only placement that reaches the toolbar's sidebar region on macOS,
-    /// and the only shared-and-leading one on iOS. See the header for the
-    /// measurements that rule out every alternative on each platform.
+    /// macOS: `.primaryAction` is what Apple documents for this exact action —
+    /// its own example for the placement is "compose a new message in a chat
+    /// app" — and it docks LEADING there. Measured, it resolves to the same
+    /// toolbar slot as `.automatic` (same array index, same sidebar region, same
+    /// geometry in both sidebar states), so it costs nothing and stops the
+    /// arrangement resting on how `.automatic` happens to resolve.
+    ///
+    /// iOS: `.primaryAction` docks TRAILING, so iPad keeps `.navigation` — the
+    /// only placement that is both available and leading there.
     private var placement: ToolbarItemPlacement {
         #if os(macOS)
-        .automatic
+        .primaryAction
         #else
         .navigation
         #endif
@@ -172,7 +195,7 @@ struct LeadingToolbarChrome: ToolbarContent {
         // column ahead of the principal gateway control, where a spacer would
         // push that control off centre for no gain — the two are already in
         // different groups there.
-        ToolbarSpacer(.fixed, placement: .automatic)
+        ToolbarSpacer(.fixed, placement: .primaryAction)
         #endif
     }
 }
