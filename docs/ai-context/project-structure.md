@@ -73,7 +73,7 @@ One target covers iPhone, iPad and Mac. The Mac build is a full Dock application
 | `Conduck/ConduckShareExtension/` | The iOS share-sheet extension. It writes into a shared App-Group inbox; the main app drains it when it next becomes active. |
 | `Conduck/ConduckShareExtensionMac/` | The macOS share extension. Same inbox, same idea. Its files carry the same names as the iOS ones, but only some are copies: the view, the controller, the target filter and the web-page capture genuinely diverge because the two platforms' share hosts behave differently, while the snapshot and manifest types are deliberate verbatim mirrors of the main app's, held byte-identical by a test. |
 | `Conduck/ConduckWatch Watch App/` | The watchOS app. It reuses the phone's models and service layer (see the target table below) but none of its views. |
-| `Conduck/ConduckWatch Watch App/Services/` | The wrist's own recorder, audio session handling, network client, relay coordinator and its pending queue, deep-link routing back into the app, and logging with hostname redaction. |
+| `Conduck/ConduckWatch Watch App/Services/` | The wrist's own recorder, audio session handling, network client, relay coordinator and its pending queue, the holding area for agent-file descriptions the phone couriers ahead of sync, deep-link routing back into the app, and logging with hostname redaction. |
 | `Conduck/ConduckWatch Watch App/Views/` | The wrist screens — conversation list, thread, composer, first-run welcome and setup. |
 | `Conduck/ConduckWatch Watch App/Models/` | The Watch conversation view model and its request type. |
 | `Conduck/ConduckWatch Watch App/QA/` | Seeding for App Store screenshot capture. |
