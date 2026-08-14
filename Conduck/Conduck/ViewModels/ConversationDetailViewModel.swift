@@ -1074,6 +1074,76 @@ final class ConversationDetailViewModel {
     /// refuses to keep. Observable — the thread renders one inline row per id.
     var outputDiscoveryFaultIDs: Set<UUID> = []
 
+    /// Agent-turn `Message.id`s that went out with NO output folder because the
+    /// configured file lane stopped answering the pre-dispatch freshness
+    /// assertion. A DIFFERENT claim from `outputDiscoveryFaultIDs`, and it needs
+    /// its own row: there was never a folder, so there is nothing on the server
+    /// to reassure anyone about and nothing to re-read.
+    ///
+    /// THE THREE FOLDER-LESS TURNS THIS MUST NOT CATCH, all of which are
+    /// indistinguishable from it in the persisted record (`outputScanLaneID`
+    /// set, `outputBoxKey` nil): a wrist-originated turn (the Watch holds no
+    /// file-server credential by design), a lane whose server does not implement
+    /// `PROPFIND` at all, and a row a device synced from CloudKit before the
+    /// attribute landed. None of them is a fault, and a row on any of them is a
+    /// per-turn complaint about a standing, correct configuration.
+    ///
+    /// SO IT IS DERIVED FROM TWO LIVE FACTS, never from the record alone: the
+    /// lane must currently be failing its witness
+    /// (`FileLaneWitnessBreaker.faultedSince`), and the turn must have landed
+    /// AFTER that failure streak began. The second clause is what keeps years of
+    /// wrist turns from lighting up the moment one tunnel hostname rotates.
+    ///
+    /// DERIVED AND EPHEMERAL, like the fault set above and for the same reason —
+    /// the spec refuses to persist a missing-file verdict, and this is one. It
+    /// clears itself when the lane answers again, which is correct: the row's
+    /// whole content is "your file server is not answering right now", and when
+    /// it is answering that sentence is false.
+    ///
+    /// The one thing the live derivation cannot express on its own is the tap:
+    /// a manual look RESETS the breaker before it probes, so the derivation
+    /// would answer the empty set from the instant of the touch. `hold` below is
+    /// what keeps this set honest across that window.
+    var outputFolderUnnamedIDs: Set<UUID> = []
+
+    /// Folder-less rows the thread is holding on screen across a manual look.
+    ///
+    /// WHY IT EXISTS. A tap on "Search mentioned files" (or "Check again")
+    /// deliberately resets the pre-dispatch witness breaker, because a user who
+    /// has just fixed their tunnel must not wait out a cooldown they cannot see.
+    /// But the breaker's failure streak is ALSO the only live input to
+    /// `unnamedFolderRowIDs`, so the reset would drop every folder-less row in
+    /// the thread — including the one the user just tapped, mid-tap, before the
+    /// look has run. A row that evaporates on touch reads as a crash, takes its
+    /// own "Review file setup" affordance with it, and reports its outcome as an
+    /// orphaned caption under a bubble.
+    ///
+    /// So the two halves are separated: the breaker reset is immediate (probing
+    /// re-enabled, which is what the user asked for), and the ROWS are held at
+    /// exactly the set that was on screen — no new turn may join them — until
+    /// something EARNS their removal. Earning it means one of:
+    ///   * the look got a real answer out of the server (`releaseUnnamedFolderHold`);
+    ///   * a later turn on this lane got a folder, which is the pre-dispatch
+    ///     witness itself answering (`unnamedFolderHoldIsSpent`);
+    ///   * the lane identity moved, so the rows describe a setup that is gone.
+    /// Intent to look earns nothing.
+    ///
+    /// `@ObservationIgnored` — it is an input to `outputFolderUnnamedIDs`, which
+    /// is the observed value; nothing renders the hold itself.
+    struct UnnamedFolderHold: Equatable {
+        /// The lane the held rows were derived against. A hold never survives
+        /// the lane moving — those rows describe a server that is no longer
+        /// configured.
+        let laneID: String
+        let ids: Set<UUID>
+        /// Wall clock at capture, compared against `MessageRecord.createdAt` for
+        /// the same reason `faultedSince` is wall clock: there is no monotonic
+        /// instant to compare a stored date against.
+        let takenAt: Date
+    }
+
+    @ObservationIgnored private(set) var unnamedFolderHold: UnnamedFolderHold?
+
     /// Per-turn state of a user-initiated "Check again" / "Search mentioned
     /// files". Absent = nothing to report. Observable: drives the row's button +
     /// result caption.
@@ -1348,6 +1418,12 @@ final class ConversationDetailViewModel {
             if liveFaults != outputDiscoveryFaultIDs {
                 outputDiscoveryFaultIDs = liveFaults
             }
+            // The folder-less set is DERIVED, not pruned: it is recomputed from
+            // the messages just fetched and the lane's live witness verdict, so
+            // it self-prunes and self-clears. This is the hook that matters —
+            // `.conversationsDidChange` drives a reload the moment a reply
+            // lands, whichever process landed it.
+            refreshUnnamedFolderRows()
             // Same pruning for the transient manual-look captions, plus the one
             // thing a live-id filter cannot see: a row that has GAINED a chip
             // since it was told "nothing found" now contradicts its own caption.
@@ -2107,6 +2183,11 @@ final class ConversationDetailViewModel {
     /// fixed their certificate waiting out an interval for no reason.
     func refreshFileLaneDerivedState() async {
         await refreshCurrentFileLaneID()
+        // Unconditional, because the breaker's verdict moves without the LANE
+        // moving: a witness that failed (or recovered) since the last paint is
+        // exactly the change this row is about, and gating it on `laneMoved`
+        // would leave the row waiting for a settings edit to appear.
+        refreshUnnamedFolderRows()
         let laneMoved = fileLaneIdentityMoved
         fileLaneIdentityMoved = false
         guard laneMoved else { return }
@@ -2117,7 +2198,184 @@ final class ConversationDetailViewModel {
         if !outputDiscoveryFaultIDs.isEmpty {
             outputDiscoveryFaultIDs = []
         }
+        // The folder-less set needs no equivalent clear: the lane it was keyed
+        // to no longer exists, so the recompute above already answered the empty
+        // set for the new one — including any tap-held rows, which
+        // `unnamedFolderHoldIsSpent` drops on the lane mismatch. The ordering is
+        // load-bearing: `refreshCurrentFileLaneID` above has already moved
+        // `currentFileLaneID`, so the hold is compared against the NEW lane.
         await runRetroOutputScan()
+    }
+
+    /// The lane key the witness breaker tracks this conversation's lane under.
+    /// Nil when the bound gateway has no ready lane. Assembled from the SAME
+    /// pair `refreshCurrentFileLaneID` resolved, so the VM and the breaker
+    /// cannot end up talking about two different lanes.
+    private var currentFileLaneWitnessKey: String? {
+        guard let laneID = currentFileLaneID, let signature = currentFileLaneSignature else {
+            return nil
+        }
+        return laneID + "\u{1}" + signature
+    }
+
+    /// Which agent turns should carry the folder-less row. PURE, so the whole
+    /// selection rule is unit-testable without a server, a store, or a clock.
+    ///
+    /// `faultedSince` nil means the lane is answering, and the answer is then
+    /// the empty set — no history, no residue, nothing to clear by hand.
+    ///
+    /// THE `createdAt` COMPARISON IS THE CAUSALITY GATE. A turn that landed
+    /// before the streak started cannot have been folder-less because of it, and
+    /// the persisted record cannot tell the two apart (see
+    /// `outputFolderUnnamedIDs`). Non-strict (`>=`) because a reply always lands
+    /// after the dispatch whose witness failed, so the boundary case is the one
+    /// this row exists for.
+    ///
+    /// The lane clause is `==`, not `!= nil`: a turn dispatched to a DIFFERENT
+    /// server than the one currently failing is not evidence about that server.
+    static func unnamedFolderRowIDs(
+        in messages: [MessageRecord],
+        currentLaneID: String?,
+        faultedSince: Date?
+    ) -> Set<UUID> {
+        guard let currentLaneID, let faultedSince else { return [] }
+        return Set(
+            messages
+                .filter { message in
+                    message.role == "agent"
+                        && message.outputScanLaneID == currentLaneID
+                        && message.outputBoxKey == nil
+                        && message.createdAt >= faultedSince
+                }
+                .map(\.id)
+        )
+    }
+
+    /// Whether a hold has been EARNED AWAY by evidence rather than by time.
+    /// PURE, so the release rule is unit-testable without a server or a breaker.
+    ///
+    /// Two ways to spend it, and neither is "the user asked":
+    ///   * the lane moved — the held rows describe a server that is no longer
+    ///     the configured one, so they are no longer about anything;
+    ///   * a turn dispatched on this lane AFTER the hold was taken came back
+    ///     WITH a folder. Only a passing pre-dispatch witness mints a box key,
+    ///     so that turn is the server answering — which makes "your file server
+    ///     didn't answer" false, and the row goes.
+    ///
+    /// `>=` for the same causality reason `unnamedFolderRowIDs` uses it: the
+    /// boundary instant belongs to the turn, not to the hold.
+    static func unnamedFolderHoldIsSpent(
+        _ hold: UnnamedFolderHold,
+        in messages: [MessageRecord],
+        currentLaneID: String?
+    ) -> Bool {
+        guard hold.laneID == currentLaneID else { return true }
+        return messages.contains { message in
+            message.role == "agent"
+                && message.outputScanLaneID == hold.laneID
+                && message.outputBoxKey != nil
+                && message.createdAt >= hold.takenAt
+        }
+    }
+
+    /// The WHOLE visibility rule in one pure step — which turns carry the row,
+    /// and what survives of a tap's hold. Pure for the same reason
+    /// `unnamedFolderRowIDs` is: the interaction between a live failure streak
+    /// and a user-held set is exactly the part that needs to be provable without
+    /// a server, a breaker or a clock.
+    ///
+    /// UNION, never replacement. The derivation stays the authority on which
+    /// turns a LIVE streak covers; the hold only stops a tap's own breaker reset
+    /// from erasing what was already on screen. A held id that no longer names a
+    /// live message costs nothing — the thread asks `contains(message.id)` per
+    /// row, so a dangling id simply matches no row.
+    static func unnamedFolderRowState(
+        in messages: [MessageRecord],
+        currentLaneID: String?,
+        faultedSince: Date?,
+        hold: UnnamedFolderHold?
+    ) -> (ids: Set<UUID>, hold: UnnamedFolderHold?) {
+        let derived = unnamedFolderRowIDs(
+            in: messages, currentLaneID: currentLaneID, faultedSince: faultedSince)
+        guard let hold,
+              !unnamedFolderHoldIsSpent(hold, in: messages, currentLaneID: currentLaneID) else {
+            return (derived, nil)
+        }
+        return (derived.union(hold.ids), hold)
+    }
+
+    /// Recompute the folder-less row set from the breaker's LIVE verdict, folding
+    /// in whatever a tap is holding. Cheap and allocation-light, so it runs on
+    /// every reload rather than being pushed from the dispatch path: the reply
+    /// that needs the row is landed by the background delegate on iOS, in a
+    /// process the VM never sees, and a row that only appeared on the surfaces
+    /// the VM dispatched itself would be missing on the platform where it
+    /// matters most.
+    func refreshUnnamedFolderRows() {
+        let state = Self.unnamedFolderRowState(
+            in: messages,
+            currentLaneID: currentFileLaneID,
+            faultedSince: currentFileLaneWitnessKey.flatMap {
+                BackgroundFileTransfer.FileLaneWitnessBreaker.shared.faultedSince(lane: $0)
+            },
+            hold: unnamedFolderHold
+        )
+        unnamedFolderHold = state.hold
+        // Compared before assigning so an unchanged set repaints nothing.
+        if state.ids != outputFolderUnnamedIDs {
+            outputFolderUnnamedIDs = state.ids
+        }
+    }
+
+    /// Re-enable pre-dispatch probing on `snapshot`'s lane, WITHOUT retracting
+    /// what the thread currently says about it.
+    ///
+    /// The reset is the point: a deliberate tap is the user asserting their
+    /// server is worth asking again, and the very next turn they send must try
+    /// to name a folder rather than wait out a cooldown they cannot see.
+    ///
+    /// The hold taken first is what stops that reset from doubling as a verdict.
+    /// `faultedSince` is the sole live input to the folder-less rows, so a bare
+    /// reset would clear every one of them SYNCHRONOUSLY — the tapped row would
+    /// vanish under the user's finger, before the look it started has run, and
+    /// take its explanation and its "Review file setup" button with it. Held
+    /// here, released only by an answer (`releaseUnnamedFolderHold`) or by the
+    /// evidence rules in `unnamedFolderHoldIsSpent`.
+    ///
+    /// Internal rather than private for the test target: the regression this
+    /// carries — the tapped row surviving its own button — is only observable
+    /// across the reset, so the seam has to be callable.
+    func reopenWitnessProbing(for snapshot: SettingsManager.FileTransferSnapshot) {
+        // Captured BEFORE the reset, because the reset is what destroys the
+        // derivation this reads from. Keyed on `currentFileLaneID` rather than
+        // the snapshot's, because that is the lane the on-screen set was derived
+        // against and the lane `refreshUnnamedFolderRows` will compare it to.
+        if let laneID = currentFileLaneID, !outputFolderUnnamedIDs.isEmpty {
+            unnamedFolderHold = UnnamedFolderHold(
+                laneID: laneID,
+                ids: outputFolderUnnamedIDs,
+                takenAt: Date()
+            )
+        }
+        BackgroundFileTransfer.FileLaneWitnessBreaker.shared.reset(
+            lane: BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot))
+        refreshUnnamedFolderRows()
+    }
+
+    /// The look got a REAL ANSWER out of the file server, so the standing claim
+    /// "your file server didn't answer" is now false and the held rows go.
+    ///
+    /// This is the only release a tap can perform, and it is deliberately gated
+    /// on evidence rather than on completion: a look that resolved nothing
+    /// (unreachable host, refused certificate, a lane edit mid-request, or a
+    /// reply that named no file to probe at all) leaves the rows exactly where
+    /// they were, still carrying their explanation and their way out.
+    ///
+    /// Internal rather than private for the same reason as the capture above.
+    func releaseUnnamedFolderHold() {
+        guard unnamedFolderHold != nil else { return }
+        unnamedFolderHold = nil
+        refreshUnnamedFolderRows()
     }
 
     /// Whether this turn has an output folder a user tap could re-read. False for
@@ -2186,6 +2444,35 @@ final class ConversationDetailViewModel {
         }
     }
 
+    /// Whether a ROOT NAME SEARCH actually got something out of the file server —
+    /// the evidence that may retire a held folder-less row.
+    ///
+    /// `conclusive` ALONE IS NOT THAT EVIDENCE, and the gap is the whole reason
+    /// this exists. `probeNamedCandidates` returns `conclusive == true` for an
+    /// EMPTY probe window without issuing a single request, and the window is
+    /// empty on the ordinary case: a reply that named no filename, or named only
+    /// files this thread already uploaded. Retiring the row on that would clear
+    /// it for the INTENT to look, which is precisely the defect the hold exists
+    /// to prevent.
+    ///
+    /// So a probed window is required — and `foundAnything` is the same proof by
+    /// another route: a confirmed-present file means the server spoke, and it
+    /// covers the mixed run where one probe answered definitively and another
+    /// timed out (`conclusive == false`).
+    ///
+    /// Takes the same `excludedKeys` the probe was given, so the two cannot drift
+    /// on what "probed" means.
+    static func rootSearchGotAnAnswer(
+        candidates: [String],
+        excludedKeys: Set<String>,
+        conclusive: Bool,
+        foundAnything: Bool
+    ) -> Bool {
+        if foundAnything { return true }
+        guard candidates.contains(where: { !excludedKeys.contains($0) }) else { return false }
+        return conclusive
+    }
+
     /// USER-INITIATED re-read of one turn's output folder ("Check again").
     ///
     /// A closed turn is never re-listed automatically — that is the whole point
@@ -2243,6 +2530,13 @@ final class ConversationDetailViewModel {
         // recover ONE turn while the automatic path stayed silenced for up to an
         // hour on a lane the user has just told us to re-examine.
         FileLaneScanBreaker.shared.reset(lane: FileLaneScanBreaker.laneKey(for: snapshot))
+        // The SAME assertion applies to the pre-dispatch witness, which parks
+        // the same server on its own ladder: a user who has just fixed their
+        // tunnel taps here, and the very next turn they send must try to name a
+        // folder again rather than wait out a cooldown they cannot see. The
+        // folder-less rows this tap did NOT touch — siblings elsewhere in the
+        // thread — are held across the reset rather than deleted by it.
+        reopenWitnessProbing(for: snapshot)
         releaseRetroScanHolds()
 
         // The age ladder still applies, anchored on the turn's own `createdAt`:
@@ -2273,6 +2567,15 @@ final class ConversationDetailViewModel {
             // is whatever the server actually said.
             reportedNothingWhen: Self.folderReadAnswered(reconciliation)
         )
+        // EARNED, and only now. A `207` or a `404` is the lane answering (an
+        // `.unusable` verdict is not), which makes "your file server didn't
+        // answer" false for the SIBLING folder-less rows this tap held across
+        // the breaker reset. Ordered after the commit so the caption is already
+        // on the row when it clears — a release before the commit's awaits could
+        // paint a frame with the rows gone and nothing yet said.
+        if Self.folderReadAnswered(reconciliation) {
+            releaseUnnamedFolderHold()
+        }
     }
 
     /// USER-INITIATED probe of the filenames this reply MENTIONED, at the served
@@ -2319,15 +2622,22 @@ final class ConversationDetailViewModel {
         defer { OutputScanClaimRegistry.shared.release(message.id) }
         defer { handBackHeldTurnsAfterTap() }
         FileLaneScanBreaker.shared.reset(lane: FileLaneScanBreaker.laneKey(for: snapshot))
+        // Holds this turn's OWN folder-less row (and its siblings') on screen
+        // across the reset: this is the one action that row offers, so the row
+        // has to survive its own button and report the outcome.
+        reopenWitnessProbing(for: snapshot)
         releaseRetroScanHolds()
 
         let candidates = await FileTransferOutputDetector
             .extractCandidatesOffMainActor(from: message.text)
+        // Resolved HERE rather than inline, because whether anything was probed
+        // at all is load-bearing below.
+        let excludedKeys = Set(message.attachments.compactMap(\.storedKey))
+            .union(inboundStoredKeyTokens())
         let scan = await FileTransferOutputDetector.probeNamedCandidates(
             candidates: candidates,
             snapshot: snapshot,
-            excludedKeys: Set(message.attachments.compactMap(\.storedKey))
-                .union(inboundStoredKeyTokens())
+            excludedKeys: excludedKeys
         )
         await commitTappedOutputs(
             scan.drafts,
@@ -2344,6 +2654,19 @@ final class ConversationDetailViewModel {
             // "did the server answer" and nothing else.
             reportedNothingWhen: scan.conclusive
         )
+        // EARNED, and only on evidence the server spoke — see
+        // `rootSearchGotAnAnswer` for why `scan.conclusive` alone is not that.
+        // Ordered after the commit so the caption is already on the row when it
+        // clears; a release before the commit's awaits could paint a frame with
+        // the rows gone and nothing yet said.
+        if Self.rootSearchGotAnAnswer(
+            candidates: candidates,
+            excludedKeys: excludedKeys,
+            conclusive: scan.conclusive,
+            foundAnything: !scan.drafts.isEmpty
+        ) {
+            releaseUnnamedFolderHold()
+        }
     }
 
     /// The bound gateway's currently READY lane, required to be the exact one a
@@ -3161,16 +3484,26 @@ final class ConversationDetailViewModel {
                 }
                 // Name THIS dispatch's output folder and witness that it is not
                 // there yet. AFTER the lane revalidation above, so the folder is
-                // named on the lane this send actually uses. Nil (no ready lane, a
-                // lane that cannot hold a nested collection, or an unwitnessed
-                // absence) → no location line and no automatic delivery for this
-                // turn; the same value is persisted with the reply below, so the
-                // wire and the row can never disagree about which folder was
-                // promised.
-                let outboxKey = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+                // named on the lane this send actually uses. No folder (no ready
+                // lane, a lane that cannot answer a PROPFIND at all, or an
+                // unwitnessed absence) → no location line and no automatic
+                // delivery for this turn; the same value is persisted with the
+                // reply below, so the wire and the row can never disagree about
+                // which folder was promised.
+                //
+                // The OUTCOME is not read here even though it is available: what
+                // the thread says about a folder-less turn is derived from the
+                // lane's live witness health at paint time (see
+                // `outputFolderUnnamedIDs`), NOT threaded from the dispatch. It
+                // has to be — on iOS the reply is landed by a background
+                // delegate in a process this view model never sees, so a row
+                // that only appeared where the VM dispatched itself would be
+                // missing on the platform that needs it most, and two mechanisms
+                // for one row is how they drift.
+                let outboxKey = await BackgroundFileTransfer.mintOutboxKey(
                     conversationID: conversationID,
                     snapshot: dispatchFileLane
-                )
+                ).key
                 // Pinning session for the LIVE hop. The pin is resolved from the
                 // DISPATCHED ref here, at send time, from the durable store —
                 // never captured earlier in the turn — so a re-pin between
@@ -3951,11 +4284,12 @@ final class ConversationDetailViewModel {
                 // failed dispatch's path lets a file written late by that attempt
                 // appear as this turn's output, which destroys the only property
                 // the design has — that everything in the folder was put there
-                // after this turn named it.
-                let outboxKey = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+                // after this turn named it. Outcome discarded for the reason
+                // `sendUserTurn`'s macOS branch gives.
+                let outboxKey = await BackgroundFileTransfer.mintOutboxKey(
                     conversationID: conversationID,
                     snapshot: readyOutputLane
-                )
+                ).key
                 // Same pinning session as `sendUserTurn`'s macOS branch — a
                 // retry must reproduce the original send's TRUST posture, not
                 // just its wire shape. Pin resolved from the dispatched ref at

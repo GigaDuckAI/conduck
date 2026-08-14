@@ -1121,13 +1121,18 @@ final class CarPlayRecordingService {
             // Name THIS turn's output box here rather than inside the uploader:
             // the uploader receives only the lane's opaque identity, while this
             // caller holds the whole snapshot — the credential the absence
-            // assertion needs and the folder capability the mint is gated on.
-            // Hoisted AFTER the revalidation above so the folder is named on the
-            // lane this turn actually dispatches over.
-            let outboxKey = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+            // assertion needs. Hoisted AFTER the revalidation above so the
+            // folder is named on the lane this turn actually dispatches over.
+            //
+            // The typed outcome is not read, and must not be acted on HERE of
+            // all places: CarPlay has one line of text and a voice, and a
+            // file-server diagnosis belongs on neither while someone is driving.
+            // The phone's thread renders it after the fact, derived from the
+            // lane's live witness health.
+            let outboxKey = await BackgroundFileTransfer.mintOutboxKey(
                 conversationID: conversationID,
                 snapshot: fileTransferLane
-            )
+            ).key
 
             try CarPlayConverseUploader.shared.uploadConverse(
                 backend: snapshot.backend,

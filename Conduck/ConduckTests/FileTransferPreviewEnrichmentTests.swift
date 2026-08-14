@@ -4,13 +4,9 @@
 // FileTransferPreviewEnrichmentTests.swift
 //
 // WS-2 bounded preview enrichment. Locks the pure, network-free seams:
-//   1. `BackgroundFileTransfer.streamBounded` — the hard client-side cap (a
-//      Range-ignoring 200 / lying length must NOT buffer past maxBytes), the
-//      2xx gate, and the complete-and-within-cap success path — driven by a
-//      `URLProtocol` stub (the ConduckTests MockURLProtocol pattern).
-//   2. `ImageProcessor.thumbnailOnly` — decode-as-validity (non-image bytes →
+//   1. `ImageProcessor.thumbnailOnly` — decode-as-validity (non-image bytes →
 //      nil) + a real image producing a bounded JPEG.
-//   3. `FileTransferOutputDetector.buildPreviewPatches` — budget / eligibility /
+//   2. `FileTransferOutputDetector.buildPreviewPatches` — budget / eligibility /
 //      sequencing (skip-too-big-continue-to-smaller, stored-budget stops
 //      production, sequential draft order, strict-UTF-8 rejection, image lane).
 //      Fetch is injected (no live server) so the logic is exercised purely.
@@ -77,10 +73,11 @@ final class FileTransferPreviewEnrichmentTests: XCTestCase {
     }
 
     /// Records the injected fetch closure's calls + serves canned bytes by key.
-    /// Mirrors the real `fetchBounded` contract: reports bytes ACTUALLY received
-    /// on every outcome so budget accounting is exercised — an over-cap response
-    /// bails with `(nil, maxBytes + 1)` (the Range-ignoring server still cost that
-    /// bandwidth); a missing key is a zero-byte failure `(nil, 0)`.
+    /// Mirrors the injected-fetch contract `buildPreviewPatches` is written
+    /// against: bytes ACTUALLY received are reported on every outcome so budget
+    /// accounting is exercised — an over-cap response bails with
+    /// `(nil, maxBytes + 1)` (the server still cost that bandwidth); a missing key
+    /// is a zero-byte failure `(nil, 0)`.
     private final class FetchRecorder {
         var responses: [String: Data] = [:]
         private(set) var requestedKeys: [String] = []
@@ -93,70 +90,7 @@ final class FileTransferPreviewEnrichmentTests: XCTestCase {
         }
     }
 
-    // MARK: - 1. streamBounded (URLProtocol stub)
-
-    private func mockSession() -> URLSession {
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
-        return URLSession(configuration: config)
-    }
-
-    override func tearDown() async throws {
-        MockURLProtocol.requestHandler = nil
-        try await super.tearDown()
-    }
-
-    func testStreamBoundedReturnsBodyWithinCap() async {
-        let body = Data(repeating: 0x41, count: 4_000)
-        MockURLProtocol.requestHandler = { req in
-            (HTTPURLResponse(url: req.url!, statusCode: 206, httpVersion: nil, headerFields: nil)!, body)
-        }
-        let request = URLRequest(url: URL(string: "https://files.test/file.txt")!)
-        let result = await BackgroundFileTransfer.streamBounded(
-            session: mockSession(), request: request, maxBytes: 8_000)
-        XCTAssertEqual(result.data, body, "a complete 206 body ≤ maxBytes must return verbatim")
-        XCTAssertEqual(result.received, Int64(body.count), "received reports the bytes drained")
-    }
-
-    func testStreamBoundedRangeIgnoringServerOverCapReturnsNil() async {
-        // A server that ignores Range and answers a FULL 200 larger than the cap
-        // must never buffer past maxBytes → nil (the OOM guard).
-        let huge = Data(repeating: 0x42, count: 200_000)
-        MockURLProtocol.requestHandler = { req in
-            (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, huge)
-        }
-        let request = URLRequest(url: URL(string: "https://files.test/big.bin")!)
-        let result = await BackgroundFileTransfer.streamBounded(
-            session: mockSession(), request: request, maxBytes: 1_024)
-        XCTAssertNil(result.data, "an over-cap body must be dropped, never truncated-and-returned or buffered")
-        XCTAssertGreaterThan(result.received, 1_024,
-                             "over-cap bail still reports the bytes pulled (so the budget is charged)")
-    }
-
-    func testStreamBoundedExactlyAtCapSucceeds() async {
-        let body = Data(repeating: 0x43, count: 1_024)
-        MockURLProtocol.requestHandler = { req in
-            (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, body)
-        }
-        let request = URLRequest(url: URL(string: "https://files.test/edge.txt")!)
-        let result = await BackgroundFileTransfer.streamBounded(
-            session: mockSession(), request: request, maxBytes: 1_024)
-        XCTAssertEqual(result.data?.count, 1_024, "a body exactly at the cap is within bounds → returned")
-        XCTAssertEqual(result.received, 1_024)
-    }
-
-    func testStreamBoundedNon2xxReturnsNil() async {
-        MockURLProtocol.requestHandler = { req in
-            (HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
-        }
-        let request = URLRequest(url: URL(string: "https://files.test/missing.txt")!)
-        let result = await BackgroundFileTransfer.streamBounded(
-            session: mockSession(), request: request, maxBytes: 8_000)
-        XCTAssertNil(result.data, "a non-2xx status yields no preview")
-        XCTAssertEqual(result.received, 0, "a non-2xx is cancelled before the body → zero bytes charged")
-    }
-
-    // MARK: - 2. thumbnailOnly
+    // MARK: - 1. thumbnailOnly
 
     func testThumbnailOnlyRejectsNonImageBytes() {
         XCTAssertNil(ImageProcessor.thumbnailOnly(from: Data("this is not an image".utf8)),
@@ -175,7 +109,7 @@ final class FileTransferPreviewEnrichmentTests: XCTestCase {
         }
     }
 
-    // MARK: - 3. buildPreviewPatches — budgets / eligibility / sequencing
+    // MARK: - 2. buildPreviewPatches — budgets / eligibility / sequencing
 
     func testTextLaneProducesPreviewPatch() async {
         let recorder = FetchRecorder()

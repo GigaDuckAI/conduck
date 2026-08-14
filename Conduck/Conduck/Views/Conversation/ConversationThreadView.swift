@@ -302,6 +302,7 @@ struct ConversationThreadView: View {
                             speakState: speaker.speakState(for: message.id),
                             usedFallbackVoice: speaker.usedFallbackVoice(for: message.id),
                             showsOutputDiscoveryFault: viewModel.outputDiscoveryFaultIDs.contains(message.id),
+                            showsUnnamedFolderFault: viewModel.outputFolderUnnamedIDs.contains(message.id),
                             outputRecheckState: viewModel.outputRecheckStates[message.id],
                             canRecheckOutputs: ConversationDetailViewModel.canRecheckOutputs(message),
                             canSearchMentionedFiles: ConversationDetailViewModel
@@ -1097,6 +1098,15 @@ private struct MessageBubble: View, Equatable {
     /// a reply that produced nothing and shows no row at all. Derived by the VM,
     /// never persisted and never computed here.
     let showsOutputDiscoveryFault: Bool
+    /// This turn went out with NO output folder because the configured file lane
+    /// stopped settling the pre-dispatch freshness check — which covers a lane
+    /// that answers unhelpfully every bit as much as one that has gone silent.
+    /// MUTUALLY EXCLUSIVE with
+    /// `showsOutputDiscoveryFault` by construction — that one needs a folder to
+    /// have failed to read, this one needs there to have been no folder — and
+    /// the two are separate flags rather than one enum because they make
+    /// opposite claims about what is on the user's server.
+    let showsUnnamedFolderFault: Bool
     /// Outcome of the user's last manual look at this turn, if any.
     let outputRecheckState: ConversationDetailViewModel.OutputRecheckState?
     /// Whether this turn has an output folder a tap could re-read. False for a
@@ -1159,6 +1169,7 @@ private struct MessageBubble: View, Equatable {
             && lhs.speakState == rhs.speakState
             && lhs.usedFallbackVoice == rhs.usedFallbackVoice
             && lhs.showsOutputDiscoveryFault == rhs.showsOutputDiscoveryFault
+            && lhs.showsUnnamedFolderFault == rhs.showsUnnamedFolderFault
             && lhs.outputRecheckState == rhs.outputRecheckState
             && lhs.canRecheckOutputs == rhs.canRecheckOutputs
             && lhs.canSearchMentionedFiles == rhs.canSearchMentionedFiles
@@ -1208,6 +1219,12 @@ private struct MessageBubble: View, Equatable {
             // the user side.
             if !isUser, showsOutputDiscoveryFault {
                 outputDiscoveryFaultRow
+            } else if !isUser, showsUnnamedFolderFault {
+                // Ordered AFTER the read-fault row purely as a formality: the
+                // two sets are disjoint by construction (one requires a folder,
+                // the other requires none), and an `if/else` chain makes that
+                // unrepresentable rather than merely unlikely.
+                unnamedFolderFaultRow
             } else if !isUser {
                 // The progress + verdict of a manual look on a turn with no fault
                 // row to carry it — the common path, since a fault row is rare.
@@ -1513,6 +1530,121 @@ private struct MessageBubble: View, Equatable {
             // is a materially different claim from a folder the server read out
             // clean, and reporting the former as the latter would be the one lie
             // this row must never tell.
+            if let resultCaption {
+                Text(resultCaption)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(AppColors.cardBackgroundElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(AppColors.borderSubtle, lineWidth: 1)
+        )
+        .frame(maxWidth: 520, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    // MARK: - Unnamed-folder row (the turn went out with nowhere to put files)
+
+    /// Persistent inline row under an agent turn that was dispatched WITHOUT an
+    /// output folder, because the configured file server did not settle the
+    /// pre-dispatch freshness check.
+    ///
+    /// A DIFFERENT STORY FROM THE ROW ABOVE, and the difference is the reason it
+    /// exists. That row's copy — "Nothing is lost, the folder is still on your
+    /// server" — is a reassurance that depends on there BEING a folder. Here
+    /// there never was one: the turn went out with no location line at all, so
+    /// the agent was never told where to put anything and nothing could come
+    /// back. Reusing the other copy would tell the user to go looking on their
+    /// server for something that cannot be there.
+    ///
+    /// IT NAMES NO CAUSE, and that is a correctness constraint rather than a
+    /// style choice. The turns this row covers are selected from a LANE-WIDE
+    /// failure streak, and every one of `FileServerAbsenceWitness`'s non-`404`
+    /// answers can open that streak: `.unreachable` (no HTTP response at all),
+    /// `.indeterminate` (a rejected credential, a `5xx`, a redirect — the server
+    /// answered), `.occupied` (a `207`/`2xx` for a freshly minted path, which a
+    /// commercial WebDAV host produces by answering an outer `207` whose inner
+    /// propstat is `404` — the server answered clearly and correctly), plus the
+    /// suppressed turns where the breaker spent no request at all. A title
+    /// saying the server "didn't answer" is therefore false on three of those
+    /// four, and worse than false: it sends a user whose server is responding
+    /// perfectly off to debug reachability. The neighbouring "Couldn't finish
+    /// the check just now." makes the same move for the same reason — when the
+    /// causes are indistinguishable HERE, name none of them and say only what
+    /// is true of all of them.
+    ///
+    /// THE FACT TRUE OF ALL OF THEM is what the copy says: this turn carried no
+    /// folder, nothing could come back with it, and the lane is not currently
+    /// producing one. The remedy is the same in every case too — the file
+    /// server, or the setup screen behind it — so nothing actionable is lost by
+    /// refusing to guess which of the four happened.
+    ///
+    /// NO "CHECK AGAIN". The verb re-reads a folder, and this turn has no folder
+    /// to re-read; offering it would answer a tap with nothing at all. The two
+    /// actions that CAN still change something are here instead: the name search
+    /// (the agent may well have written a file somewhere the served root can
+    /// see) and the setup screen, which is where a stale address is fixed.
+    ///
+    /// Same neutral tint as the read-fault row, and for the same reason: this is
+    /// a fact about the user's own setup, not a failure of the message.
+    private var unnamedFolderFaultRow: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: "folder.badge.questionmark")
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+                Text(LocalizedStringResource(
+                    "thread.outputs.noFolder.title",
+                    defaultValue: "No folder for this reply"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+            Text(LocalizedStringResource(
+                "thread.outputs.noFolder.body",
+                defaultValue: "Conduck couldn't confirm a fresh folder on your file server for this message, so the agent had nowhere to put files and nothing could come back with the reply. Check your file server, then send again."))
+                .font(.caption2)
+                .foregroundStyle(AppColors.textTertiary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 14) {
+                if outputRecheckState == .checking {
+                    HStack(spacing: 5) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(AppColors.textTertiary)
+                        Text(LocalizedStringResource(
+                            "thread.outputs.checking",
+                            defaultValue: "Checking…"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppColors.textTertiary)
+                    }
+                } else if canSearchMentionedFiles {
+                    Button(action: onSearchMentionedFiles) {
+                        Text(LocalizedStringResource(
+                            "thread.outputs.action.searchMentionedShort",
+                            defaultValue: "Search mentioned files"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppColors.brandAmber)
+                    }
+                    .inlineLinkButton()
+                }
+                Button(action: onOpenFileSetup) {
+                    Text(LocalizedStringResource(
+                        "thread.outputs.action.reviewSetup",
+                        defaultValue: "Review file setup"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppColors.brandAmber)
+                }
+                .inlineLinkButton()
+            }
             if let resultCaption {
                 Text(resultCaption)
                     .font(.caption2)

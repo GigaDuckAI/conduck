@@ -187,15 +187,22 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
         let fileServerReady = fileTransferSnapshot != nil
         // Name THIS dispatch's output box and witness that it is not there yet.
         // AFTER the lane revalidation above, so the folder is named on the lane
-        // this send actually uses. Nil (no ready lane, a lane that cannot hold a
-        // nested collection, or an unwitnessed absence) → no location line and
-        // no automatic delivery for this turn; the same value is persisted with
-        // the reply below, so the wire and the row can never disagree about
-        // which folder was promised.
-        let outboxKey = await BackgroundFileTransfer.mintWitnessedOutboxKey(
+        // this send actually uses. No folder (no ready lane, a lane that cannot
+        // answer a PROPFIND at all, or an unwitnessed absence) → no location
+        // line and no automatic delivery for this turn; the same value is
+        // persisted with the reply below, so the wire and the row can never
+        // disagree about which folder was promised.
+        //
+        // The typed outcome is not read: a share drain has no thread on screen
+        // to say anything to, and what the thread eventually says about a
+        // folder-less turn is derived from the lane's live witness health rather
+        // than threaded from here (see
+        // `ConversationDetailViewModel.outputFolderUnnamedIDs`). Routing through
+        // the mint still contributes this dispatch's evidence to the breaker.
+        let outboxKey = await BackgroundFileTransfer.mintOutboxKey(
             conversationID: conversationID,
             snapshot: fileTransferSnapshot
-        )
+        ).key
         // Pinning session for the LIVE hop (same recipe as the in-app composer's
         // macOS branch): `URLSession.shared` cannot carry a delegate, so a send
         // on it silently ignores the user's per-ref cert pin. Pin resolved from
