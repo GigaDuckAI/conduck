@@ -39,13 +39,26 @@
 //     (`probeExistsWithLength`) and the strict directory listing
 //     (`listCollection`). The pure halves of both — `classifyProbe`,
 //     `parseListing` — live here.
-//     ONE DOCUMENTED EXEMPTION: the pre-dispatch absence assertion
-//     (`BackgroundFileTransfer.witnessCollectionAbsent`, verdict rule
-//     `absenceWitnessed`) runs on the same pinned session but has NO verdict to
-//     read — its whole answer is one Bool, every failure maps to `false`, and
-//     `false` shows the user nothing at all, so there is no taxonomy for a
-//     certificate refusal to be misfiled into. The exemption is the absence of a
-//     user-facing claim, not an oversight.
+//     ONE LANE IS EXEMPT, AND THE EXEMPTION IS NARROWER THAN "IT SAYS NOTHING".
+//     The pre-dispatch absence assertion
+//     (`BackgroundFileTransfer.witnessCollectionAbsent`) runs on the same pinned
+//     session and does not read an evaluator back. Its answer IS user-visible:
+//     it becomes an `OutboxMintOutcome`, and two of those draw the thread's
+//     folder-less row. So the exemption cannot rest on there being no claim — it
+//     rests on WHAT the claim is permitted to say. That row is written to name
+//     NO cause at all, because the turns it covers are selected from a LANE-WIDE
+//     failure streak that any answer short of a definite miss can open, so the
+//     row is drawn where that turn's cause is not in hand (`ConversationThreadView`'s
+//     unnamed-folder row; `UnnamedFolderRowCopyTests` locks the copy against
+//     naming one). End to end, a refused certificate therefore presents as: this
+//     turn carried no folder, check your file server — with the lane charged the
+//     one-observation `.unreachable` patience, which is the right patience for a
+//     refusal no retry on this device can get past. There is no branch a trust
+//     verdict could steer and no sentence it could correct, so reading the
+//     evaluator here would add a parameter nothing consults, and an unread
+//     parameter is how a rule stops being enforced. The place the user reads the
+//     CAUSE is the staged test, which does read its evaluator and names the
+//     certificate outright.
 //     `ensureCollection` / `performMkcol` / `ensureFreshCollection` take the
 //     CALLER's session and report a status only, so the caller that owns the
 //     session owns the trust reading for them. NOTHING calls
@@ -85,12 +98,45 @@
 // not a bounded, complete, well-formed `207` naming direct children of the exact
 // collection that was asked for, and its caller (`BackgroundFileTransfer
 // .listCollection`) requires the lane to DEMONSTRATE a definite miss on a
-// sibling collection that cannot exist before any entry is believed. Three
+// sibling collection that cannot exist before any entry is believed. THAT
+// DEFINITE MISS IS THE ONE DEFINITION THIS APP HOLDS — `classifyAbsenceWitness`
+// over the same status AND the same bounded body the pre-dispatch witness reads
+// (`negativeControlProvesNotFound`'s body-aware form). A weaker rule here would
+// refuse the listings of exactly the hosts the witness has just cleared to name
+// a folder: the agent writes its files into a folder Conduck named, every reply
+// resolves `.unusable`, and no chip ever appears. Three
 // verdicts, never conflated: entries (the folder was read), absent (the folder
 // is not there), unusable (nothing was learned). An empty listing is a FACT
 // about a folder that was read, so it can only be reached through every one of
 // those gates — a malformed body, a non-`207`, or a lane that cannot say no is
 // `.unusable`, never an empty folder.
+//
+// THE ABSENCE WITNESS READS A `207` BODY FOR THE OPPOSITE VERDICT, and it is the
+// one place in this file where taking the server at its word is safe.
+// `classifyAbsenceWitness` answers `.absent` only on an unambiguous "not there":
+// a `404` status line, or a `207` whose BOUNDED, strict, single-`<response>`
+// multistatus is about the exact collection that was asked for and carries a
+// response-level `404`/`410`. That inner-status shape is what a compliant host
+// sends for a `PROPFIND` of a collection that does not exist, and a large real
+// population sends it, so a status-only reading condemns those servers forever.
+// Everything else keeps `.occupied`: an over-cap or truncated body, a document
+// that does not parse, a row about some other href, more than one row, an inner
+// `2xx`, an inner status nobody can read.
+//
+// WHY BELIEVING THAT NEGATIVE IS SAFE while every positive above demands a
+// control: `.absent` is a NEGATIVE claim and it mints nothing. A wrong one costs
+// exactly one thing — Conduck names an output folder that already exists — and
+// no chip, no download and no file follow from it. Nothing downstream inherits
+// it either: `BackgroundFileTransfer.listCollection` still runs its OWN negative
+// control, against a fresh sibling that cannot exist, before a single entry is
+// believed. What that control demands is the thing the wall this whole file is
+// built against cannot produce — not a status but a per-request document naming
+// the exact collection that was asked for and saying it is not there — so an SSO
+// portal that answers every path with one login page cannot pass it. The
+// residual is the one stated at `negativeControlProvesNotFound`: a deliberately
+// hostile server can say anything, and the answer to a hostile server is the
+// staged test's write-then-byte-echo against a server the user owns, never a
+// control.
 //
 // Privacy invariants (see the spec's Privacy & Security section): the storedKey, the base
 // URL, the basic-auth credential, and filenames are NEVER logged, printed, or
@@ -357,8 +403,10 @@ enum FileServerListingVerdict: Equatable, Sendable {
 /// established. Four cases, and the split between the last three is the whole
 /// reason this is not a Bool:
 ///
-///   - `.absent` — a definite `404`. The folder is not there, so naming it on
-///     the wire is safe.
+///   - `.absent` — the server said the folder is not there, so naming it on the
+///     wire is safe. Two shapes qualify and nothing else does: a `404` status
+///     line, and a `207` whose inner response for that exact collection is a
+///     `404`/`410` (the compliant multistatus form of the same sentence).
 ///   - `.cannotAnswer` — the server named `PROPFIND` as a method it will not
 ///     perform on this resource (`405`/`501`). WHAT IT PROVES DEPENDS ENTIRELY
 ///     ON WHAT WAS ASKED, which is why no caller may read it as a permanent
@@ -372,9 +420,20 @@ enum FileServerListingVerdict: Equatable, Sendable {
 ///     list existing collections perfectly. Only the first caller may conclude
 ///     an incapability from it; see `probeListingCapability`'s two steps, which
 ///     draw exactly that line.
-///   - `.occupied` — the server answered about the folder, and said it is
-///     there. Either a collision or a namespace that answers everything;
-///     either way the folder cannot vouch for what is found in it later.
+///   - `.occupied` — the server answered about the folder and did NOT say it is
+///     missing. A collision, a namespace that answers everything, or an answer
+///     nobody could read: a `207` whose body is over-cap, truncated,
+///     unparseable, about another href, or carrying an inner `2xx` all land
+///     here, because only an unambiguous inner not-found may be read as absence
+///     and everything short of it fails closed. Either way the folder cannot
+///     vouch for what is found in it later.
+///
+///     IT IS THE ONE FAILING ANSWER A LANE CAN GIVE FOREVER. The path carries
+///     `OutboxKey.nonceHexCharacters` of fresh entropy and the next turn mints a
+///     different name, so a STREAK of this is not bad luck — it is a lane
+///     proving it will occupy every name Conduck can ever mint. `mintOutboxKey`
+///     reads a streak of it as a capability limit and goes quiet; see the
+///     process-local breaker at the foot of `BackgroundFileTransfer`.
 ///   - `.indeterminate` — the server ANSWERED, with something that settles
 ///     nothing: a rejected credential, a `5xx`, a redirect, a portal. THE
 ///     ACTIONABLE CASE — something that used to work stopped.
@@ -391,7 +450,11 @@ enum FileServerListingVerdict: Equatable, Sendable {
 /// privacy invariants at the top of this file apply to it.
 ///
 /// `.unreachable` is the one case `classifyAbsenceWitness(status:)` can never
-/// return — it describes the absence of a status line, not a status.
+/// return — it describes the absence of a status line, not a status. `.absent`
+/// is the one case that form UNDER-reports: a compliant `207` whose inner
+/// response is the `404` that was asked for reads as `.occupied` from the status
+/// line alone, and only the body-aware overload can see it for what it is. Every
+/// production caller uses the overload.
 enum FileServerAbsenceWitness: Equatable, Sendable {
     case absent
     case cannotAnswer
@@ -1302,14 +1365,23 @@ enum FileServerClient {
     }
 
     /// Whether the negative control's answer shows this namespace has credible
-    /// not-found semantics — i.e. whether the server is CAPABLE of saying no.
+    /// not-found semantics — i.e. whether the server is CAPABLE of saying no —
+    /// read from the status line alone.
     ///
-    /// ONLY a `404` counts. The control names a random key that provably does
+    /// ONLY a `404` counts here. The control names a random key that provably does
     /// not exist, so a real file server has exactly one honest answer; anything
     /// else (a `200` login page, a `206` off an SPA fallback, a redirect, a
     /// `403` from a rule covering the whole namespace) means this endpoint's
     /// answer for the candidate carries no information, and the candidate stays
     /// unbelieved.
+    ///
+    /// THIS FORM READS THE STATUS LINE, WHICH IS THE WHOLE ANSWER TO A `GET`.
+    /// The existence probe's control is a ranged GET of a key that cannot exist,
+    /// and HTTP gives that question one truthful shape. A `PROPFIND` control has
+    /// two, so it MUST use the body-aware form below — a `PROPFIND` call site
+    /// that reaches for this one is the drift the file header warns about, and
+    /// it presents as a lane whose every listing is refused while its every
+    /// dispatch is cleared.
     ///
     /// RESIDUAL, stated rather than papered over: this is a credibility check,
     /// not a proof. A deliberately hostile file server can 404 the control and
@@ -1320,6 +1392,49 @@ enum FileServerClient {
     /// server that CHANGED under a lane that once passed it.
     static func negativeControlProvesNotFound(status: Int) -> Bool {
         status == 404
+    }
+
+    /// The same question with a `PROPFIND` control's bounded body in hand — THE
+    /// form the strict listing uses, and the only one that can read the
+    /// compliant way of saying no.
+    ///
+    /// WHY THE OVERLOAD EXISTS. RFC 4918 lets a server report a collection that
+    /// is not there in two ways: a bare `404`, or a `207` multistatus whose one
+    /// `<response>` names that collection with a response-level `404`.
+    /// Commercial WebDAV hosts send the second, and from the status line alone
+    /// it is indistinguishable from a namespace that answers everything — so a
+    /// status-only control condemns every one of those lanes, and it condemns
+    /// them on the exact population the absence witness has just cleared to name
+    /// a folder. End to end that is an agent writing files into a folder Conduck
+    /// named, every reply folder resolving `.unusable(.namespaceAnswersEverything)`,
+    /// no download chip, and the thread drawing a read fault about a server doing
+    /// nothing wrong.
+    ///
+    /// ONE RULE, NOT A SECOND OPINION. It delegates to `classifyAbsenceWitness`,
+    /// so the listing's control and the pre-dispatch witness cannot hold
+    /// different ideas of a definite miss, and it fails closed on everything
+    /// that rule fails closed on: over-cap, truncated, empty, unparseable, more
+    /// than one `<response>`, a row about another href, no readable inner
+    /// status, an inner `2xx`. A control that proved nothing disqualifies the
+    /// listing exactly as a control that answered wrongly does.
+    ///
+    /// THE BODY MUST ARRIVE UNDER `absenceWitnessMaxBytes`, and the rule
+    /// re-checks the size rather than trusting the caller's read. A control body
+    /// larger than the bound the rule is documented at is not the answer this
+    /// asks for — one collection that does not exist is a few hundred bytes —
+    /// so it proves nothing, whichever cap the reader happened to run under.
+    static func negativeControlProvesNotFound(
+        status: Int,
+        body: Data,
+        bodyExceededCap: Bool,
+        requestedURL: URL
+    ) -> Bool {
+        classifyAbsenceWitness(
+            status: status,
+            body: body,
+            bodyExceededCap: bodyExceededCap,
+            requestedURL: requestedURL
+        ) == .absent
     }
 
     /// Lowercased extension of a storedKey (after the last `.` of the last path
@@ -1564,17 +1679,27 @@ enum FileServerClient {
 
     // MARK: - Strict directory listing (the authority on agent output)
     //
-    // `parseListing` below is the ONLY `207` parser in this file, deliberately.
-    // A tolerant sibling that accumulates whatever it can and reports no failure
-    // is the wrong shape for every consumer this app has — it cannot see the HTTP
-    // status, it keeps entries completed before a parse fault, it ignores
-    // per-resource `<propstat><status>` and it discards the parent path, so a
-    // non-`207`, a truncated body and an empty directory all read as "the agent
-    // produced nothing", which is the one conclusion that CLOSES a turn. Keeping
-    // one next to the strict one is how a future consumer picks the wrong one by
-    // accident, so there is only the strict one. A deferred in-app file browser
-    // that wants leniency states its own tolerance at ITS call site, over
-    // `ListingVerdict`, rather than reviving a second parser here.
+    // `StrictListingParserDelegate` is the ONLY `207` parser in this file,
+    // deliberately. A tolerant sibling that accumulates whatever it can and
+    // reports no failure is the wrong shape for every consumer this app has — it
+    // cannot see the HTTP status, it keeps entries completed before a parse
+    // fault, it ignores per-resource `<propstat><status>` and it discards the
+    // parent path, so a non-`207`, a truncated body and an empty directory all
+    // read as "the agent produced nothing", which is the one conclusion that
+    // CLOSES a turn. Keeping one next to the strict one is how a future consumer
+    // picks the wrong one by accident, so there is only the strict one. A
+    // deferred in-app file browser that wants leniency states its own tolerance
+    // at ITS call site, over `ListingVerdict`, rather than reviving a second
+    // parser here.
+    //
+    // TWO CONSUMERS, ONE PARSER, OPPOSITE QUESTIONS. `parseListing` asks the
+    // delegate "which direct children of this collection may become chips" and
+    // `multistatusWitnessesAbsence` asks it "did the server say this exact
+    // collection is not there" — and they share the href resolver
+    // (`resolveListingHref`) as well as the parser, so neither can grow its own
+    // idea of which body is about which collection. A second definition of that
+    // is precisely what let Settings certify a lane green while every turn
+    // concluded the opposite.
 
     /// Most `<response>` elements one listing may describe. Refused, never
     /// truncated — see `FileTransferListingRefusal.tooManyEntries`.
@@ -1589,6 +1714,23 @@ enum FileServerClient {
     /// stated where the parse happens, so a caller that hands over an
     /// unbounded body is refused rather than parsed.
     static let listingMaxBytes = 256 * 1024
+
+    /// Most bytes of `207` body the ABSENCE WITNESS will read (16 KiB), on the
+    /// wire and again at the parse, exactly as the listing bound is applied.
+    ///
+    /// Its own cap rather than `listingMaxBytes` because it bounds a different
+    /// answer to a different question in a place with a different budget. This
+    /// body is a multistatus describing ONE collection that is not there — a
+    /// four-hundred-byte document in every honest case — where the listing's
+    /// budget is sized for `listingMaxEntries` rows of properties. And its
+    /// busiest reader sits on the DISPATCH CRITICAL PATH: every send waits for
+    /// the pre-dispatch witness, a pure-text
+    /// turn included, so the ceiling on what a stranger's server can make the app
+    /// buffer before a message goes out has to be the smallest one that still
+    /// admits every truthful answer. Anything past it is over-cap, and over-cap
+    /// is `.occupied` — a catch-all host's login page is refused on size rather
+    /// than streamed into memory to learn that it sent one.
+    static let absenceWitnessMaxBytes = 16 * 1024
 
     /// The URL `PROPFIND` targets for `collectionKey` — the ONE place the
     /// request builder and the href resolver agree on what was asked for. A
@@ -1628,46 +1770,38 @@ enum FileServerClient {
         return components.joined(separator: "/")
     }
 
-    /// Whether a `PROPFIND Depth: 0` answer WITNESSES that the dispatch box is
-    /// not there yet — the pre-dispatch freshness assertion.
+    /// THE ABSENCE WITNESS'S RULE, from a `PROPFIND Depth: 0` answer about the
+    /// collection this dispatch is about to name — the pre-dispatch freshness
+    /// assertion. A TAXONOMY rather than a Bool, because exactly one of its
+    /// non-absent answers means something different to the user: a server that
+    /// does not implement `PROPFIND` at all is not a server that failed, it is a
+    /// server that cannot do this. Folding the two is what made a plain
+    /// nginx-DAV lane complain on every single turn about a limitation it was
+    /// always going to have.
     ///
-    /// ONLY a `404`, and the polarity is the point. This runs against a path
-    /// carrying `OutboxKey.nonceHexCharacters` of fresh entropy, so a healthy
-    /// server has exactly one honest answer; a `207` means either a collision
-    /// (astronomically unlikely, therefore far more likely a bug in the mint) or
-    /// a namespace that answers everything, and in both readings the folder
-    /// cannot vouch for what is found in it later. Every other status and every
-    /// transport failure is likewise NOT a witness: freshness that was not
-    /// observed is not freshness, and the cost of refusing is one turn without
-    /// automatic delivery.
+    /// THIS FORM READS THE STATUS LINE ONLY, and it is deliberately the WEAKER
+    /// of the two: it cannot reach `.absent` for a `207`, because the sentence
+    /// that would justify it lives in the body. Every production caller uses the
+    /// body-aware overload below, which delegates the whole taxonomy here and
+    /// re-reads exactly one of its answers. One definition, one place, two entry
+    /// points — the alternative, a second copy of "what does absence look like",
+    /// is what let Settings certify a lane green while every turn concluded the
+    /// opposite about the same server.
     ///
-    /// WHAT IT REPLACES, and why it is both weaker and better. Creating the box
-    /// (`MKCOL 201`) was a server-observed CREATION event, which is strictly
-    /// stronger evidence. It is not used, because creating the directory makes
-    /// it owned by whoever the WebDAV lane runs as, and the agent that must
-    /// write into it usually runs as somebody else — so the stronger evidence
-    /// came bundled with the failure it was evidence about. This assertion buys
-    /// a server-observed ABSENCE at the same one-request cost and changes
-    /// nothing about who owns the directory.
+    /// WHAT THE ASSERTION REPLACES, and why it is both weaker and better.
+    /// Creating the box (`MKCOL 201`) was a server-observed CREATION event,
+    /// which is strictly stronger evidence. It is not used, because creating the
+    /// directory makes it owned by whoever the WebDAV lane runs as, and the
+    /// agent that must write into it usually runs as somebody else — so the
+    /// stronger evidence came bundled with the failure it was evidence about.
+    /// This assertion buys a server-observed ABSENCE at the same one-request
+    /// cost and changes nothing about who owns the directory.
     ///
-    /// Shares its definition with `negativeControlProvesNotFound` so the app can
-    /// never hold two ideas of what a definite miss looks like.
-    static func absenceWitnessed(status: Int) -> Bool {
-        classifyAbsenceWitness(status: status) == .absent
-    }
-
-    /// The absence witness's answer as a TAXONOMY rather than a Bool, because
-    /// exactly one of its non-`404` answers means something different to the
-    /// user: a server that does not implement `PROPFIND` at all is not a server
-    /// that failed, it is a server that cannot do this. Folding the two is what
-    /// made a plain nginx-DAV lane complain on every single turn about a
-    /// limitation it was always going to have.
-    ///
-    /// A verdict here still shows the user nothing on its own — the mint decides
-    /// what, if anything, is said — so the privacy posture of the Bool form is
-    /// unchanged: no status, URL, or key leaves the classification.
+    /// A verdict here shows the user nothing on its own — the mint decides what,
+    /// if anything, is said — and the privacy posture is unchanged either way:
+    /// no status, URL, key, or byte of body leaves the classification.
     static func classifyAbsenceWitness(status: Int) -> FileServerAbsenceWitness {
-        // The one green light. Definition shared with
+        // The one green light a status line can give. Definition shared with
         // `negativeControlProvesNotFound` so the app cannot hold two ideas of
         // what a definite miss looks like.
         if negativeControlProvesNotFound(status: status) { return .absent }
@@ -1684,15 +1818,154 @@ enum FileServerClient {
         // A `207` (or any other 2xx) for a path carrying `OutboxKey`'s fresh
         // entropy is either a collision — astronomically unlikely, therefore far
         // more likely a bug in the mint — or a namespace that answers
-        // everything. NOT `.cannotAnswer`: a wall that 200s every path is a
-        // misconfiguration in front of a server that may well speak WebDAV, and
-        // calling it a permanent incapability would hide a fixable fault behind
-        // a displayed limitation.
+        // everything, UNLESS the `207`'s own body says otherwise, which only the
+        // overload below can see. NOT `.cannotAnswer`: a wall that 200s every
+        // path is a misconfiguration in front of a server that may well speak
+        // WebDAV, and calling it a permanent incapability would hide a fixable
+        // fault behind a displayed limitation.
         if (200...299).contains(status) { return .occupied }
         // Everything else — `401`/`403` (the credential stopped working), `5xx`
         // (the server is sick), a redirect, a portal. All of them are things
         // that were working and stopped, which is the actionable case.
         return .indeterminate
+    }
+
+    /// The same rule with the `207`'s own body in hand — THE form every
+    /// production caller uses, and the only one that can call a compliant
+    /// multistatus what it is.
+    ///
+    /// WHY IT HAS TO EXIST. RFC 4918 lets a server answer a `PROPFIND` of a
+    /// collection that is not there in two ways: a bare `404`, or a `207`
+    /// multistatus whose one `<response>` names that collection and carries a
+    /// response-level `404`. Both are correct; commercial WebDAV hosts send the
+    /// second. Read from the status line alone the second is indistinguishable
+    /// from a namespace that answers everything, so a status-only reading classes
+    /// those servers `.occupied` on every dispatch — a folder-less row under every
+    /// agent turn, permanently, with no in-app action that could silence it, and
+    /// a staged Test Connection that reports "couldn't verify" about a lane that
+    /// works perfectly.
+    ///
+    /// IT DELEGATES THE TAXONOMY AND RE-READS ONE ANSWER. Every non-`207` status
+    /// is whatever the status-only form says it is, unchanged. A `207` is
+    /// re-examined, and may become `.absent` only on an unambiguous inner
+    /// not-found; anything else stays `.occupied`.
+    ///
+    /// FAILS CLOSED ON EVERYTHING IT CANNOT SETTLE — over-cap, truncated, empty,
+    /// unparseable, not a multistatus, more than one `<response>`, a `<response>`
+    /// about some other href, no readable inner status, an inner `2xx`. The list
+    /// is long on purpose: `.absent` is what lets a folder name go on the wire,
+    /// so the only reading that may produce it is the one a compliant server
+    /// meant.
+    ///
+    /// AND BELIEVING THAT NEGATIVE IS SAFE, which is why the body may decide it
+    /// here while every POSITIVE verdict in this file demands a control. `.absent`
+    /// mints nothing: a wrong one costs Conduck naming an output folder that
+    /// already exists, and no chip, no download and no file follow from it.
+    /// `BackgroundFileTransfer.listCollection` still runs its OWN negative
+    /// control against a sibling that cannot exist before it believes a single
+    /// entry — decided by THIS rule, so what it demands is not a status but a
+    /// per-request document naming the exact collection that was asked for and
+    /// saying it is not there, which a blind catch-all cannot produce. The
+    /// residual is the one stated at `negativeControlProvesNotFound`: a
+    /// deliberately hostile server can say anything, and the answer to a hostile
+    /// server is the staged test's write-then-byte-echo against a server the
+    /// user owns, never a control.
+    ///
+    /// `bodyExceededCap` is the wire read's own report that it stopped early, and
+    /// it is separate from `body.count` deliberately: a truncated prefix can
+    /// parse cleanly right up to the cut, so the only thing that knows the
+    /// document was incomplete is the reader that cut it.
+    ///
+    /// PRIVACY: takes a body and a URL, returns a taxonomy value. Nothing here
+    /// logs, and no verdict carries a status, a path, or a byte of the body.
+    static func classifyAbsenceWitness(
+        status: Int,
+        body: Data,
+        bodyExceededCap: Bool,
+        requestedURL: URL
+    ) -> FileServerAbsenceWitness {
+        let fromStatus = classifyAbsenceWitness(status: status)
+        guard status == 207, fromStatus == .occupied else { return fromStatus }
+        return multistatusWitnessesAbsence(
+            body: body, exceededCap: bodyExceededCap, requestedURL: requestedURL
+        ) ? .absent : .occupied
+    }
+
+    /// Whether a `207` body is the compliant way of saying "that collection is
+    /// not there", about the collection that was actually asked for.
+    ///
+    /// Runs the SAME strict parser and the SAME href resolver the listing does,
+    /// rather than a lenient scan for a `404` anywhere in the document: a body
+    /// that a permissive reader half-understands is a body nobody understood,
+    /// and here that would put a folder name on the wire.
+    ///
+    /// EXACTLY ONE `<response>`, and no more. A question about ONE collection
+    /// that is not there has exactly one honest answer row at any depth — there
+    /// are no children to enumerate; a body with two is
+    /// answering something other than what was asked, and picking the row that
+    /// suits us out of a set we did not understand is the same mistake as
+    /// scanning for a status.
+    ///
+    /// THE INNER STATUS MUST BE THE RESPONSE'S OWN, never a `<propstat>`'s. A
+    /// `<propstat>` `404` says "you asked for properties I do not have on this
+    /// resource", which is an ordinary answer ABOUT AN EXISTING resource; only
+    /// the response-level `<status>` says the resource itself is not there. `410
+    /// Gone` counts alongside `404` because it is the same sentence with a
+    /// history attached (RFC 9110 §15.5.5 / §15.5.11).
+    ///
+    /// `410` COUNTS AS AN INNER STATUS AND NOWHERE ELSE. A bare `410` STATUS
+    /// LINE is `.indeterminate`, because the status-only form reaches `.absent`
+    /// through `404` alone. The asymmetry is deliberate and stays: it errs in
+    /// the direction that costs nothing. Admitting a status-line `410` would let
+    /// one more shape put a folder name on the wire — the only direction with a
+    /// price — while refusing it costs a single turn's automatic delivery on a
+    /// server that answers `410` for a path it has never heard of. Inside a
+    /// multistatus the same code is safe for a reason the status line cannot
+    /// offer: it arrives with the single-`<response>` shape and the href match
+    /// already proved, so the document has demonstrated it is talking about the
+    /// exact collection that was asked for.
+    private static func multistatusWitnessesAbsence(
+        body: Data,
+        exceededCap: Bool,
+        requestedURL: URL
+    ) -> Bool {
+        // A body the reader had to cut proves nothing: the rest of the document
+        // could say anything, including that the collection is right there.
+        guard !exceededCap, !body.isEmpty, body.count <= absenceWitnessMaxBytes else { return false }
+        guard let baseComponents = listingPathComponents(of: requestedURL) else { return false }
+
+        // `maxResponses: 2` so the parser stops as soon as the body is provably
+        // not the one-row shape this asks about, instead of walking a document
+        // whose verdict is already decided.
+        let delegate = StrictListingParserDelegate(maxResponses: 2)
+        let parser = XMLParser(data: body)
+        parser.delegate = delegate
+        parser.shouldProcessNamespaces = false   // match local names; tolerate any/no prefix
+        // An untrusted body must not be able to make the parser fetch anything.
+        parser.shouldResolveExternalEntities = false
+        let completed = parser.parse()
+
+        guard delegate.refusal == nil, completed, parser.parserError == nil,
+              delegate.sawMultistatus else {
+            return false
+        }
+        guard delegate.responses.count == 1, let response = delegate.responses.first else {
+            return false
+        }
+        // The row has to be ABOUT the collection that was asked for. Resolved the
+        // way the listing resolves an href — relative references against the
+        // collection with a trailing slash, percent-decoded per component,
+        // origin-checked, matched from the END of the path so a proxy that
+        // strips its own mount point is still understood — because a second
+        // opinion on "is this body about my folder" is a second thing to keep
+        // in step.
+        guard let resolved = resolveListingHref(
+                  response.href, requestedURL: requestedURL, baseComponents: baseComponents),
+              case .collectionItself = resolved else {
+            return false
+        }
+        guard let inner = response.resourceStatusCode else { return false }
+        return inner == 404 || inner == 410
     }
 
     /// THE listing verdict, from one PROPFIND response. Pure — the network half
@@ -2513,17 +2786,20 @@ enum FileServerClient {
         case methodUnavailable
         /// The probe ANSWERED OR FAILED and proved NOTHING — a timeout, a
         /// `502`, a `401`, a redirect, a `200` that is not a multistatus, a
-        /// namespace that `207`s a path carrying 16 hex of fresh entropy. All of
-        /// them are things that can be true this minute and false the next, or
-        /// method-specific interception in front of a server that may well speak
-        /// `PROPFIND` — a WAF, an SSO layer, a rewrite, a rate-limit rule — so
-        /// none of them may narrow a capability.
+        /// namespace that claims a path carrying 16 hex of fresh entropy is
+        /// occupied. All of them are things that can be true this minute and
+        /// false the next, or method-specific interception in front of a server
+        /// that may well speak `PROPFIND` — a WAF, an SSO layer, a rewrite, a
+        /// rate-limit rule — so none of them may narrow a capability.
         ///
-        /// The `2xx` control deserves its name here. A status-only reading
-        /// cannot tell a namespace that answers everything from a compliant
-        /// `207` whose INNER response is the `404` we asked for; real
-        /// deployments send the latter. Calling either one proof would be a
-        /// diagnosis drawn from a status line that does not carry it.
+        /// The `2xx` control deserves its name here, and what it is is settled by
+        /// the SAME rule the dispatch witness uses. A `207` on the control is
+        /// read through `classifyAbsenceWitness` with its body: the compliant
+        /// multistatus whose inner response is the `404` that was asked for
+        /// passes the step, and a namespace that answers everything lands here.
+        /// Reading the outer status alone could not tell those apart and
+        /// condemned both, which reported "couldn't verify, check again" about
+        /// hosts that answer the question correctly.
         ///
         /// Carries the taxonomy code the surfaces show beside the listing row.
         /// It does NOT fail the test: uploads were proven end to end before this
@@ -2583,11 +2859,16 @@ enum FileServerClient {
     ///      at all"; a `405`/`501` here is a plain-HTTP store or an nginx-DAV
     ///      without the ext module, which PUTs and GETs perfectly and can never
     ///      list anything.
-    ///   2. `PROPFIND Depth: 0` of a sibling that cannot exist — must be `404`.
-    ///      This is byte-for-byte the pre-dispatch absence witness
-    ///      (`FileServerClient.absenceWitnessed`), so a lane that fails it fails
-    ///      EVERY dispatch's witness and gets no output box, forever. A catch-all
-    ///      host that `207`s or `200`s every path lands here.
+    ///   2. `PROPFIND Depth: 0` of a sibling that cannot exist — must come back
+    ///      the server saying "not there". This is byte-for-byte the pre-dispatch
+    ///      absence witness, decided by the SAME `classifyAbsenceWitness` over
+    ///      the same status AND the same bounded body, so a lane that fails it
+    ///      fails EVERY dispatch's witness and gets no output box, forever — and
+    ///      a lane that passes it cannot then be told by its own dispatches that
+    ///      it does not. That means a bare `404` passes and so does the compliant
+    ///      `207` whose inner response for that collection is a `404`; a
+    ///      catch-all host that really does claim every path lands in
+    ///      `.unverified`.
     ///
     /// Both are `Depth: 0`, non-mutating, and cost one tiny request each — the
     /// question is about the collection itself, and a `Depth: 1` of the served
@@ -2604,9 +2885,9 @@ enum FileServerClient {
     /// in front of the server — a WAF, an SSO layer, a rewrite — never about
     /// what the server implements. The SECOND probe cannot conclude it at all:
     /// once the root has answered `207` the method is demonstrably performed, so
-    /// a refusal or a `2xx` on the missing-resource route is a fact about that
-    /// route, read the way `classifyAbsenceWitness` reads it — a fixable
-    /// configuration, not a permanent property to display.
+    /// a refusal or an occupied answer on the missing-resource route is a fact
+    /// about that route, read the way `classifyAbsenceWitness` reads it — a
+    /// fixable configuration, not a permanent property to display.
     ///
     /// The alternative — treating every non-`207` as proof — is what made one
     /// `502` during a Test Connection mark a healthy WebDAV server unable to
@@ -2637,18 +2918,20 @@ enum FileServerClient {
         }
         defer { if ownsSession { probeSession.invalidateAndCancel() } }
 
-        // Step 1 — a collection that exists must answer `207`.
-        switch await propfindStatus(
-            snapshot: snapshot, collectionKey: "", session: probeSession, signals: attemptSignals
+        // Step 1 — a collection that exists must answer `207`. The status line is
+        // the whole question ("do you perform this method"), so no body is read.
+        switch await propfindAnswer(
+            snapshot: snapshot, collectionKey: "", session: probeSession,
+            readsMultistatusBody: false, signals: attemptSignals
         ) {
-        case .status(207):
+        case .status(207, _, _):
             break
-        case .status(405), .status(501):
+        case .status(405, _, _), .status(501, _, _):
             // The ONE conclusion this whole function may draw: the server named
             // the method as one it will not perform, on a collection that
             // certainly exists.
             return .methodUnavailable
-        case .status(let status):
+        case .status(let status, _, _):
             return .unverified(listingStageError(status: status))
         case .certificate(let refusal):
             return .certificateRefused(refusal)
@@ -2656,29 +2939,38 @@ enum FileServerClient {
             return .unverified(listingStageError(status: nil))
         }
 
-        // Step 2 — a collection that cannot exist must answer `404`. Routed
-        // through `classifyAbsenceWitness` rather than re-deriving the rule,
-        // because this probe and the per-dispatch witness ask the SAME question
-        // of the SAME server: two definitions could disagree, and the user would
-        // be told in Settings that their server can list folders while every
-        // turn silently concluded it cannot.
+        // Step 2 — a collection that cannot exist must come back "not there".
+        // Routed through `classifyAbsenceWitness`, with the body, rather than
+        // re-deriving the rule: this probe and the per-dispatch witness ask the
+        // SAME question of the SAME server, so two definitions could disagree and
+        // the user would be told in Settings that their server can list folders
+        // while every turn silently concluded it cannot. Reading the body here is
+        // not an extra — it is what makes the two definitions the same one, since
+        // the witness reads it too and a compliant host's answer lives there.
         let controlKey = negativeControlCollectionKey(siblingOf: "")
-        switch await propfindStatus(
-            snapshot: snapshot, collectionKey: controlKey, session: probeSession, signals: attemptSignals
+        switch await propfindAnswer(
+            snapshot: snapshot, collectionKey: controlKey, session: probeSession,
+            readsMultistatusBody: true, signals: attemptSignals
         ) {
-        case .status(let status):
-            switch classifyAbsenceWitness(status: status) {
+        case .status(let status, let body, let exceededCap):
+            switch classifyAbsenceWitness(
+                status: status,
+                body: body,
+                bodyExceededCap: exceededCap,
+                requestedURL: listingCollectionURL(snapshot: snapshot, collectionKey: controlKey)
+            ) {
             case .absent:
                 return .capable
             case .cannotAnswer, .occupied, .indeterminate, .unreachable:
-                // EVERY non-`404` is unverified here, `405`/`501` INCLUDED — and
-                // that is not an oversight. Step 1 just got a `207`, so this
-                // server demonstrably performs `PROPFIND`; a refusal on the
-                // missing-resource route says the route cannot answer the
-                // absence question, which is a configuration fact and not the
-                // method incapability the amber lane is meant to describe.
-                // `.unreachable` is unreachable from a status (its own doc says
-                // so) and rides along for exhaustiveness.
+                // EVERY answer short of a definite miss is unverified here,
+                // `405`/`501` INCLUDED — and that is not an oversight. Step 1
+                // just got a `207`, so this server demonstrably performs
+                // `PROPFIND`; a refusal on the missing-resource route says the
+                // route cannot answer the absence question, which is a
+                // configuration fact and not the method incapability the amber
+                // lane is meant to describe. `.unreachable` is unreachable from a
+                // status (its own doc says so) and rides along for
+                // exhaustiveness.
                 return .unverified(listingStageError(status: status))
             }
         case .certificate(let refusal):
@@ -2691,27 +2983,51 @@ enum FileServerClient {
     /// What one capability PROPFIND came back as. Three cases because the caller
     /// treats them differently, and the split has to survive the `-999` that a
     /// certificate refusal and a benign cancellation share.
+    ///
+    /// `.status` carries the body a `207` was allowed to deliver — empty for
+    /// every other status and for every step that asked for none — plus the
+    /// reader's own report that it stopped early, which a caller cannot infer
+    /// from the bytes it holds.
     private enum PropfindProbeAnswer {
-        case status(Int)
+        case status(Int, body: Data, exceededCap: Bool)
         case certificate(CertificateRefusal)
         case noAnswer
     }
 
-    /// Issue one `PROPFIND Depth: 0` and report only its status. The body cannot
-    /// change a capability verdict, so it is never read — the status line is the
-    /// whole answer, and a catch-all host's login page must not be buffered to
-    /// learn that it sent one.
-    private static func propfindStatus(
+    /// Issue one `PROPFIND Depth: 0` and report its status, plus a BOUNDED body
+    /// when — and only when — the caller's question can be answered by one.
+    ///
+    /// A BODY IS READ ONLY ON `207` AND ONLY WHEN ASKED FOR, capped at
+    /// `absenceWitnessMaxBytes`. Those two conditions are the whole policy, and
+    /// each has its own reason. Only on `207` because a multistatus is the sole
+    /// shape whose contents can change a verdict — every other status has said
+    /// everything it is going to say on its status line, and a catch-all host's
+    /// login page must not be buffered to learn that it sent one. Only when
+    /// asked for because the step that asks "do you perform this method" is
+    /// answered by the status alone, and bytes nothing inspects are bytes nobody
+    /// should have paid for.
+    ///
+    /// Where a body IS asked for it is not optional politeness but the answer
+    /// itself: a compliant host reports a missing collection as a `207` whose
+    /// inner response is the `404`, and `classifyAbsenceWitness` cannot see that
+    /// without the bytes. Reading it under a cap and refusing anything over the
+    /// cap keeps the old guarantee — no unbounded body, ever — while letting the
+    /// probe reach the answer real deployments send.
+    private static func propfindAnswer(
         snapshot: SettingsManager.FileTransferSnapshot,
         collectionKey: String,
         session: URLSession,
+        readsMultistatusBody: Bool,
         signals: @Sendable () -> RemoteAgentTrustEvaluator.AttemptTrustSignals
     ) async -> PropfindProbeAnswer {
         let request = buildPropfindRequest(snapshot: snapshot, collectionKey: collectionKey, depth: 0)
         do {
-            let status = try await BackgroundFileTransfer.statusOnlyResponse(
-                session: session, request: request)
-            return .status(status)
+            let answer = try await BackgroundFileTransfer.boundedListingResponse(
+                session: session,
+                request: request,
+                maxBytes: absenceWitnessMaxBytes,
+                readsBodyWhen: { readsMultistatusBody && $0 == 207 })
+            return .status(answer.status, body: answer.body, exceededCap: answer.exceededCap)
         } catch {
             if let refusal = certificateRefusal(error, signals: signals()) {
                 return .certificate(refusal)
@@ -3086,8 +3402,10 @@ enum FileServerClient {
 ///     an empty folder
 ///   - requires exactly one `<href>` per `<response>`
 ///   - keeps property values only from a `2xx` `<propstat>`, and records the
-///     response-level `<status>` separately, so RFC 4918's not-found rows can be
-///     dropped instead of emitted as ordinary entries
+///     response-level `<status>` separately — both as a usability flag and as
+///     its raw code, so RFC 4918's not-found rows can be dropped by the listing
+///     instead of emitted as ordinary entries AND read by the absence witness as
+///     the server saying the collection is not there
 ///   - bounds element nesting and response count, aborting the parse rather
 ///     than accumulating
 ///   - records WHY it stopped, so the caller can tell "too many entries" from
@@ -3106,6 +3424,17 @@ private final class StrictListingParserDelegate: NSObject, XMLParserDelegate {
         /// Whether the resource itself is usable: no non-`2xx` response-level
         /// `<status>`, and at least one `2xx` `<propstat>`.
         var isUsableResource: Bool
+        /// The response-level `<status>`'s code, or nil when the `<response>`
+        /// carried none or carried one nobody could read.
+        ///
+        /// Kept as the raw code alongside the flag above because the two answer
+        /// different questions. The listing only needs "may this row become a
+        /// chip", which a Bool covers; the absence witness needs to tell a `404`
+        /// (the collection is not there — the answer it came for) from a `403`
+        /// or a `423` (the collection may well be there and something else went
+        /// wrong), and a Bool cannot. nil is NOT a code the caller may treat as
+        /// benign: a status nobody could read is not a server saying anything.
+        var resourceStatusCode: Int?
     }
 
     /// Deepest element nesting accepted. A `207` describing one flat collection
@@ -3128,6 +3457,7 @@ private final class StrictListingParserDelegate: NSObject, XMLParserDelegate {
     private var hrefCount = 0
     private var href = ""
     private var resourceStatusIs2xx = true
+    private var resourceStatusCode: Int?
     private var usablePropstats = 0
     private var propstatCount = 0
     private var isDirectory = false
@@ -3170,16 +3500,27 @@ private final class StrictListingParserDelegate: NSObject, XMLParserDelegate {
         return Int(text)
     }
 
-    /// Whether a `<status>` line (`HTTP/1.1 200 OK`) reports success. Anything
-    /// unparseable is NOT success — a status nobody can read is not permission
-    /// to emit the row it covers.
-    private func statusIs2xx(_ line: String) -> Bool {
+    /// The code carried by a `<status>` line (`HTTP/1.1 200 OK`), or nil when
+    /// there is no three-digit ASCII field to read one from.
+    ///
+    /// The FIRST such field wins and the scan stops there, so a reason phrase
+    /// that happens to contain digits cannot re-decide a status that was already
+    /// stated.
+    private static func statusLineCode(_ line: String) -> Int? {
         for field in line.split(separator: " ", omittingEmptySubsequences: true) {
             guard field.count == 3, field.allSatisfy({ $0.isASCII && $0.isNumber }),
                   let code = Int(field) else { continue }
-            return (200...299).contains(code)
+            return code
         }
-        return false
+        return nil
+    }
+
+    /// Whether a `<status>` line reports success. Anything unparseable is NOT
+    /// success — a status nobody can read is not permission to emit the row it
+    /// covers.
+    private func statusIs2xx(_ line: String) -> Bool {
+        guard let code = Self.statusLineCode(line) else { return false }
+        return (200...299).contains(code)
     }
 
     func parser(
@@ -3202,6 +3543,7 @@ private final class StrictListingParserDelegate: NSObject, XMLParserDelegate {
             hrefCount = 0
             href = ""
             resourceStatusIs2xx = true
+            resourceStatusCode = nil
             usablePropstats = 0
             propstatCount = 0
             isDirectory = false
@@ -3249,6 +3591,7 @@ private final class StrictListingParserDelegate: NSObject, XMLParserDelegate {
         case "status" where parent == "propstat":
             propstatStatusIs2xx = statusIs2xx(text)
         case "status" where parent == "response":
+            resourceStatusCode = Self.statusLineCode(text)
             resourceStatusIs2xx = statusIs2xx(text)
         case "propstat":
             // Properties count only when the server said they were found.
@@ -3266,7 +3609,8 @@ private final class StrictListingParserDelegate: NSObject, XMLParserDelegate {
                 byteSize: byteSize,
                 // No propstat at all means the response stated nothing about the
                 // resource, which is not evidence that it is there.
-                isUsableResource: resourceStatusIs2xx && usablePropstats > 0
+                isUsableResource: resourceStatusIs2xx && usablePropstats > 0,
+                resourceStatusCode: resourceStatusCode
             ))
         case "response":
             // A `<response>` anywhere but directly under `<multistatus>` REFUSES

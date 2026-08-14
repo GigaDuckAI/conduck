@@ -606,17 +606,20 @@ final class FileServerClientTests: XCTestCase {
                       "the leaf is the box itself")
     }
 
-    // MARK: - The pre-dispatch absence witness (404, and nothing else)
+    // MARK: - The pre-dispatch absence witness (a definite miss, and nothing else)
 
-    /// The verdict rule: ONLY a `404` witnesses that this dispatch's box is not
-    /// there yet. `207` is the interesting refusal — it means either a collision
-    /// on 128 bits of fresh entropy or a namespace that answers everything, and
-    /// under both readings the folder cannot vouch for what turns up in it.
-    func testAbsenceIsWitnessedOnlyByAFourOhFour() {
-        XCTAssertTrue(FileServerClient.absenceWitnessed(status: 404))
+    /// The verdict rule as a STATUS LINE alone can settle it: only a `404`
+    /// witnesses that this dispatch's box is not there yet. `207` is the
+    /// interesting refusal at this level — read without its body it means either
+    /// a collision on 128 bits of fresh entropy or a namespace that answers
+    /// everything, and under both readings the folder cannot vouch for what
+    /// turns up in it. (What a `207`'s BODY can still establish is the section
+    /// further down; this locks the floor the body-aware form builds on.)
+    func testOnlyAFourOhFourWitnessesAbsenceFromTheStatusLineAlone() {
+        XCTAssertEqual(FileServerClient.classifyAbsenceWitness(status: 404), .absent)
         for status in [200, 204, 207, 301, 302, 401, 403, 405, 409, 500, 503] {
-            XCTAssertFalse(FileServerClient.absenceWitnessed(status: status),
-                           "status \(status) is not a witnessed absence")
+            XCTAssertNotEqual(FileServerClient.classifyAbsenceWitness(status: status), .absent,
+                              "status \(status) is not a witnessed absence on its own")
         }
     }
 
@@ -949,8 +952,9 @@ final class FileServerClientTests: XCTestCase {
                        "a definite miss is a definite miss whatever the server padded it with")
     }
 
-    /// A `207` still fails closed with an over-cap body — the body is irrelevant
-    /// in BOTH directions, which is what makes ignoring it safe.
+    /// A `207` whose body says nothing useful still fails closed however large it
+    /// is — the read is capped and an over-cap body is refused on size, so a
+    /// catch-all host's login page is never parsed for a verdict.
     func testAbsenceWitnessStillFailsClosedOnATwoOhSevenWithAHugeBody() async {
         let snap = makeSnapshot()
         let session = makeMockSession()
@@ -958,11 +962,269 @@ final class FileServerClientTests: XCTestCase {
         MockURLProtocol.requestHandler = { request in
             (HTTPURLResponse(url: request.url!, statusCode: 207,
                              httpVersion: "HTTP/1.1", headerFields: nil)!,
-             Data(repeating: 0x41, count: FileServerClient.listingMaxBytes + 1))
+             Data(repeating: 0x41, count: FileServerClient.absenceWitnessMaxBytes + 1))
         }
         let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
             snapshot: snap, collectionKey: Self.witnessBoxKey, session: session)
         XCTAssertEqual(witnessed, .occupied)
+    }
+
+    // MARK: - The `207` that IS a miss (reading the inner status)
+
+    /// The compliant "not there" multistatus: one `<response>` naming the
+    /// collection that was asked about, with a RESPONSE-LEVEL status.
+    private func missMultistatus(
+        href: String,
+        innerStatus: String = "HTTP/1.1 404 Not Found"
+    ) -> Data {
+        Data("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <D:multistatus xmlns:D="DAV:">
+          <D:response>
+            <D:href>\(href)</D:href>
+            <D:status>\(innerStatus)</D:status>
+          </D:response>
+        </D:multistatus>
+        """.utf8)
+    }
+
+    /// The same shape for a collection that IS there: properties under a `2xx`
+    /// propstat and no response-level status at all, which is what a real server
+    /// sends for a folder it has.
+    private func presentMultistatus(href: String) -> Data {
+        Data("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <D:multistatus xmlns:D="DAV:">
+          <D:response>
+            <D:href>\(href)</D:href>
+            <D:propstat>
+              <D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop>
+              <D:status>HTTP/1.1 200 OK</D:status>
+            </D:propstat>
+          </D:response>
+        </D:multistatus>
+        """.utf8)
+    }
+
+    /// The href a compliant server echoes for the dispatch box — absolute path,
+    /// trailing slash, which is the ordinary collection form.
+    private static let witnessBoxHref = "/" + witnessBoxKey + "/"
+
+    /// Serve one PROPFIND answer for the witness and report the verdict.
+    private func witness(
+        status: Int,
+        body: Data,
+        snapshot: SettingsManager.FileTransferSnapshot? = nil
+    ) async -> FileServerAbsenceWitness {
+        let snap = snapshot ?? makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: status,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!, body)
+        }
+        return await BackgroundFileTransfer.witnessCollectionAbsent(
+            snapshot: snap, collectionKey: Self.witnessBoxKey, session: session)
+    }
+
+    /// THE DEFECT THIS SECTION EXISTS FOR. RFC 4918 lets a server report a
+    /// `PROPFIND` of a collection that is not there as a `207` whose one inner
+    /// response carries the `404`, and commercial WebDAV hosts do exactly that.
+    /// Read from the status line alone every such host was `.occupied` on every
+    /// dispatch — a folder-less row under every agent turn, forever, with no
+    /// in-app action that could silence it.
+    func testACompliantMultistatusMissIsAWitnessedAbsence() async {
+        let witnessed = await witness(
+            status: 207, body: missMultistatus(href: Self.witnessBoxHref))
+        XCTAssertEqual(witnessed, .absent,
+                       "an outer 207 whose inner response for this exact collection is 404 is "
+                       + "the server saying 'not there', in the second form the RFC allows")
+    }
+
+    /// `410 Gone` is the same sentence with a history attached, so it lands in
+    /// the same place — a server that remembers deleting the collection is still
+    /// telling us the collection is not there.
+    func testAnInnerGoneIsAlsoAWitnessedAbsence() async {
+        let witnessed = await witness(
+            status: 207,
+            body: missMultistatus(href: Self.witnessBoxHref, innerStatus: "HTTP/1.1 410 Gone"))
+        XCTAssertEqual(witnessed, .absent)
+    }
+
+    /// The other direction, and the one that keeps the whole change safe: a
+    /// namespace that answers everything says the collection is THERE, and that
+    /// is still `.occupied`. Nothing about reading the body loosens the verdict
+    /// for a wall.
+    func testAnInnerSuccessIsStillOccupied() async {
+        let witnessed = await witness(
+            status: 207, body: presentMultistatus(href: Self.witnessBoxHref))
+        XCTAssertEqual(witnessed, .occupied,
+                       "a catch-all host that claims the freshly minted path exists has not "
+                       + "witnessed anything, whatever shape it says it in")
+    }
+
+    /// A response-level `2xx` is equally not a miss, even with no properties
+    /// behind it — the status is the resource's own answer and it said yes.
+    func testAnExplicitInnerTwoHundredStatusIsOccupied() async {
+        let witnessed = await witness(
+            status: 207,
+            body: missMultistatus(href: Self.witnessBoxHref, innerStatus: "HTTP/1.1 200 OK"))
+        XCTAssertEqual(witnessed, .occupied)
+    }
+
+    /// STRICT HREF MATCHING. A `404` about some OTHER collection is not an
+    /// answer about this one, and accepting it would let a server hand back a
+    /// miss for a path nobody asked about and have Conduck name a folder on the
+    /// strength of it.
+    func testAMissAboutADifferentHrefWitnessesNothing() async {
+        let elsewhere = "/11111111-2222-3333-4444-555555555555/out-ffffffffffffffffffffffffffffffff/"
+        let witnessed = await witness(status: 207, body: missMultistatus(href: elsewhere))
+        XCTAssertEqual(witnessed, .occupied,
+                       "the row has to be about the collection that was asked about")
+    }
+
+    /// A trailing slash and percent-encoding are serialization choices a
+    /// compliant server is free to make, and refusing them would refuse the
+    /// exact population this repair is for. The href resolver is the listing's
+    /// own, so this variance is understood in one place.
+    func testTheHrefMayVaryInTrailingSlashAndEncoding() async {
+        let noSlash = "/" + Self.witnessBoxKey
+        let withoutSlash = await witness(status: 207, body: missMultistatus(href: noSlash))
+        XCTAssertEqual(withoutSlash, .absent)
+
+        let encoded = "/11111111%2D2222%2D3333%2D4444%2D555555555555/out-0123456789abcdef0123456789abcdef/"
+        let percentEncoded = await witness(status: 207, body: missMultistatus(href: encoded))
+        XCTAssertEqual(percentEncoded, .absent,
+                       "percent-encoded but identical once decoded — the same collection")
+    }
+
+    /// MORE THAN ONE ROW IS AMBIGUOUS. A `Depth: 0` question about one
+    /// collection has one honest answer row; picking the one that suits us out
+    /// of a set nobody understood is the same mistake as reading a status line.
+    func testASecondResponseElementRefusesTheReading() async {
+        let body = Data("""
+        <?xml version="1.0" encoding="utf-8"?>
+        <D:multistatus xmlns:D="DAV:">
+          <D:response>
+            <D:href>\(Self.witnessBoxHref)</D:href>
+            <D:status>HTTP/1.1 404 Not Found</D:status>
+          </D:response>
+          <D:response>
+            <D:href>/somewhere/else/</D:href>
+            <D:status>HTTP/1.1 404 Not Found</D:status>
+          </D:response>
+        </D:multistatus>
+        """.utf8)
+        let witnessed = await witness(status: 207, body: body)
+        XCTAssertEqual(witnessed, .occupied)
+    }
+
+    /// Every way a body can fail to be an answer, all landing on today's
+    /// `.occupied`. The list is the point: `.absent` is what lets a folder name
+    /// go on the wire, so only the reading a compliant server meant may produce
+    /// it.
+    func testEveryUnreadableTwoOhSevenBodyFailsClosed() async {
+        let cases: [(name: String, body: Data)] = [
+            ("empty", Data()),
+            ("not XML at all", Data("nope".utf8)),
+            ("truncated mid-document",
+             missMultistatus(href: Self.witnessBoxHref).prefix(60)),
+            ("not a multistatus root",
+             Data("<html><body>Please sign in</body></html>".utf8)),
+            ("no inner status anywhere",
+             Data("""
+             <?xml version="1.0" encoding="utf-8"?>
+             <D:multistatus xmlns:D="DAV:">
+               <D:response><D:href>\(Self.witnessBoxHref)</D:href></D:response>
+             </D:multistatus>
+             """.utf8)),
+            ("an inner status nobody can read",
+             missMultistatus(href: Self.witnessBoxHref, innerStatus: "HTTP/1.1 not-a-code Hmm")),
+            ("a propstat 404, which is about PROPERTIES not the resource",
+             Data("""
+             <?xml version="1.0" encoding="utf-8"?>
+             <D:multistatus xmlns:D="DAV:">
+               <D:response>
+                 <D:href>\(Self.witnessBoxHref)</D:href>
+                 <D:propstat>
+                   <D:prop><D:getcontentlength/></D:prop>
+                   <D:status>HTTP/1.1 404 Not Found</D:status>
+                 </D:propstat>
+               </D:response>
+             </D:multistatus>
+             """.utf8))
+        ]
+        for row in cases {
+            let witnessed = await witness(status: 207, body: row.body)
+            XCTAssertEqual(witnessed, .occupied,
+                           "\(row.name) settles nothing and must stay occupied")
+        }
+    }
+
+    /// A body that WOULD have been a miss but arrived over the cap is not a
+    /// miss: the reader cut it, so the rest of the document could say anything.
+    /// The cap is what stops a stranger's server making the app buffer megabytes
+    /// on the dispatch critical path.
+    func testAnOverCapMissBodyIsRefusedRatherThanParsed() async {
+        var padded = Data("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!-- ".utf8)
+        padded.append(Data(repeating: 0x41, count: FileServerClient.absenceWitnessMaxBytes))
+        padded.append(Data(" -->\n".utf8))
+        padded.append(missMultistatus(href: Self.witnessBoxHref))
+
+        let witnessed = await witness(status: 207, body: padded)
+        XCTAssertEqual(witnessed, .occupied,
+                       "truncated is not 'not there' — the bytes that would have said so were "
+                       + "never read")
+    }
+
+    /// THE BODY CHANGES NOTHING FOR ANY OTHER STATUS. Only a `207` is a
+    /// multistatus, so only a `207` gets its body read; every other status has
+    /// already said everything it is going to say, and a forged body cannot
+    /// promote or demote it.
+    func testTheBodyOnlyEverDecidesATwoOhSeven() async {
+        let miss = missMultistatus(href: Self.witnessBoxHref)
+        let present = presentMultistatus(href: Self.witnessBoxHref)
+
+        let paddedMiss = await witness(status: 404, body: present)
+        XCTAssertEqual(paddedMiss, .absent,
+                       "a 404 is a definite miss whatever the server padded it with")
+        let notMultistatus = await witness(status: 200, body: miss)
+        XCTAssertEqual(notMultistatus, .occupied,
+                       "a 200 is not a multistatus, so its body is never a verdict")
+        for status in [405, 501] {
+            let structural = await witness(status: status, body: miss)
+            XCTAssertEqual(structural, .cannotAnswer,
+                           "status \(status) states an incapability its body cannot soften")
+        }
+        for status in [401, 403, 429, 500, 502, 503, 302] {
+            let answered = await witness(status: status, body: miss)
+            XCTAssertEqual(answered, .indeterminate,
+                           "status \(status) stays actionable — its body is not read")
+        }
+    }
+
+    /// The pure rule, exercised without a session so the taxonomy is pinned
+    /// independently of how the bytes reached it.
+    func testTheBodyAwareClassifierDelegatesEveryNonMultistatusStatus() {
+        let url = URL(string: "https://fileserver.example.test/" + Self.witnessBoxKey)!
+        let miss = missMultistatus(href: Self.witnessBoxHref)
+        for status in [200, 204, 404, 401, 403, 405, 501, 500, 302] {
+            XCTAssertEqual(
+                FileServerClient.classifyAbsenceWitness(
+                    status: status, body: miss, bodyExceededCap: false, requestedURL: url),
+                FileServerClient.classifyAbsenceWitness(status: status),
+                "status \(status) must read the same with a body as without one")
+        }
+        XCTAssertEqual(
+            FileServerClient.classifyAbsenceWitness(
+                status: 207, body: miss, bodyExceededCap: false, requestedURL: url),
+            .absent,
+            "the 207 is the one status the body may re-decide")
+        XCTAssertEqual(
+            FileServerClient.classifyAbsenceWitness(
+                status: 207, body: miss, bodyExceededCap: true, requestedURL: url),
+            .occupied,
+            "and the reader's own report that it stopped early overrides bytes that parse")
     }
 
     // MARK: - What gates the outbox mint
@@ -1010,9 +1272,12 @@ final class FileServerClientTests: XCTestCase {
     // MARK: - The staged test certifies the RETURN direction too
 
     /// Script a staged test that passes every byte-moving stage, with PROPFIND
-    /// answered by `propfind` — `nil` throws, standing in for a transport
-    /// failure.
-    private func scriptStagedTest(propfind: @escaping (URLRequest) throws -> Int) {
+    /// answered by `propfind` — a throw stands in for a transport failure, and
+    /// the returned body is empty unless `propfindBody` supplies one.
+    private func scriptStagedTest(
+        propfind: @escaping (URLRequest) throws -> Int,
+        propfindBody: @escaping (URLRequest) -> Data = { _ in Data() }
+    ) {
         MockURLProtocol.requestHandler = { request in
             let url = request.url!
             let ok = { (status: Int, body: Data) in
@@ -1028,7 +1293,7 @@ final class FileServerClientTests: XCTestCase {
                 let nested = url.absoluteString.contains("__/")
                 return ok(200, Data((nested ? "conduck-nested-probe" : "conduck-probe").utf8))
             case "DELETE": return ok(204, Data())
-            case "PROPFIND": return ok(try propfind(request), Data())
+            case "PROPFIND": return ok(try propfind(request), propfindBody(request))
             default: return ok(200, Data())
             }
         }
@@ -1149,6 +1414,39 @@ final class FileServerClientTests: XCTestCase {
                        "a namespace that answers everything is a fixable misconfiguration, and "
                        + "displaying it as a permanent limitation hides the fix")
         XCTAssertNotNil(result.listingUnverified)
+    }
+
+    /// AND THE STAGED TEST MUST NOT DISAGREE WITH THE DISPATCH WITNESS ABOUT THE
+    /// SAME SERVER. A host whose control PROPFIND comes back as the compliant
+    /// `207`-with-an-inner-`404` is a host that CAN say no, so the listing stage
+    /// passes — reading only the outer status told the user "couldn't verify,
+    /// check again" about a lane that answers the question correctly, while
+    /// their dispatches concluded the opposite in silence.
+    func testACompliantMultistatusMissPassesTheListingStage() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        scriptStagedTest(
+            propfind: { _ in 207 },
+            propfindBody: { request in
+                guard request.url!.absoluteString.contains("__conduck_absent_") else { return Data() }
+                return Data("""
+                <?xml version="1.0" encoding="utf-8"?>
+                <D:multistatus xmlns:D="DAV:">
+                  <D:response>
+                    <D:href>\(request.url!.path)</D:href>
+                    <D:status>HTTP/1.1 404 Not Found</D:status>
+                  </D:response>
+                </D:multistatus>
+                """.utf8)
+            })
+
+        let result = await FileServerClient.runConnectionTest(snapshot: makeSnapshot(), session: session)
+
+        XCTAssertTrue(result.success)
+        XCTAssertTrue(result.returnCapable)
+        XCTAssertFalse(result.isUploadOnly)
+        XCTAssertNil(result.listingUnverified,
+                     "the control demonstrated a definite miss; there is nothing left unverified")
     }
 
     /// The second probe is not allowed to reach the structural verdict at all:
@@ -1525,6 +1823,132 @@ final class FileServerClientTests: XCTestCase {
 
         XCTAssertEqual(recorder.calls.count, 3,
                        "three samples, then the lane is parked")
+    }
+
+    // MARK: - No lane may nag forever (the occupancy run)
+
+    /// ONE occupied answer proves nothing and says so. A genuine collision on
+    /// 128 bits is astronomically unlikely but the next turn mints a different
+    /// name anyway, so a single occurrence self-heals and the turn is reported
+    /// folder-less like any other failure.
+    func testOneOccupiedAnswerIsAFaultNotASilencing() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 207,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+
+        let outcome = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertEqual(outcome, .witnessFailed)
+        XCTAssertTrue(outcome.isActionableFault)
+        XCTAssertNotEqual(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.laneDecision(for: snapshot),
+            .cannotReturn,
+            "one answer is not proof of anything about the next name")
+    }
+
+    /// A RUN of them is proof, and this is the row that could never be silenced.
+    /// Every name in the run carried fresh entropy and every one came back
+    /// occupied, so this lane will claim every name Conduck can ever mint and can
+    /// never witness an absence. That is a capability limit, and the mint's
+    /// contract table says capability limits are silent — otherwise the
+    /// folder-less row draws under every agent turn forever with no in-app action
+    /// that could stop it.
+    func testARunOfOccupiedAnswersSilencesTheLaneInsteadOfNaggingForever() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        MockURLProtocol.requestHandler = { request in
+            recorder.record(method: request.httpMethod ?? "", url: request.url!)
+            return (HTTPURLResponse(url: request.url!, statusCode: 207,
+                                    httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+
+        var outcomes: [BackgroundFileTransfer.OutboxMintOutcome] = []
+        for _ in 0..<4 {
+            outcomes.append(await BackgroundFileTransfer.mintOutboxKey(
+                conversationID: UUID(), snapshot: snapshot, session: session))
+        }
+
+        XCTAssertEqual(Array(outcomes.prefix(2)), [.witnessFailed, .witnessFailed],
+                       "the first two still might have been bad luck")
+        XCTAssertEqual(outcomes[2], .laneCannotReturn,
+                       "the answer that completes the run is the one that stops being a fault")
+        XCTAssertEqual(outcomes[3], .laneCannotReturn)
+        XCTAssertFalse(outcomes[2].isActionableFault, "and it draws no row")
+        XCTAssertEqual(recorder.calls.count, 3,
+                       "a lane that has proved it can never say no is not worth another request")
+        XCTAssertEqual(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.laneDecision(for: snapshot),
+            .cannotReturn)
+        XCTAssertNil(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.faultedSince(
+                lane: BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)),
+            "`faultedSince` is the row's only live input, so silencing the lane has to clear "
+            + "it — including for the two turns that were reported as faults before the run "
+            + "completed")
+    }
+
+    /// AND ONLY A RUN OF OCCUPANCY COUNTS. A `502` mixed into the sequence
+    /// answered nothing about whether this lane can say no, so it breaks the
+    /// proof rather than contributing to it — a lane having a bad few minutes
+    /// must not be mistaken for a lane that answers everything.
+    func testAMixedStreakNeverSilencesTheLane() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        let recorder = FileLaneRequestRecorder()
+        MockURLProtocol.requestHandler = { request in
+            recorder.record(method: request.httpMethod ?? "", url: request.url!)
+            // occupied, then a reverse-proxy fault, then occupied again.
+            let status = recorder.calls.count == 2 ? 502 : 207
+            return (HTTPURLResponse(url: request.url!, statusCode: status,
+                                    httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+
+        var outcomes: [BackgroundFileTransfer.OutboxMintOutcome] = []
+        for _ in 0..<3 {
+            outcomes.append(await BackgroundFileTransfer.mintOutboxKey(
+                conversationID: UUID(), snapshot: snapshot, session: session))
+        }
+
+        XCTAssertEqual(outcomes, [.witnessFailed, .witnessFailed, .witnessFailed])
+        XCTAssertNotEqual(
+            BackgroundFileTransfer.FileLaneWitnessBreaker.shared.laneDecision(for: snapshot),
+            .cannotReturn,
+            "two occupied answers with a 502 between them are not a run")
+    }
+
+    /// The way back out, and the only one this state has: a deliberate,
+    /// user-watched measurement that shows the lane answering a fresh name with a
+    /// definite miss. A passing staged verdict clears the silence exactly as it
+    /// clears a cooldown.
+    func testAPassingStagedVerdictClearsTheOccupancySilence() async {
+        let snapshot = makeSnapshot()
+        let breaker = BackgroundFileTransfer.FileLaneWitnessBreaker.shared
+        let lane = BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 207,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+        for _ in 0..<3 {
+            _ = await BackgroundFileTransfer.mintOutboxKey(
+                conversationID: UUID(), snapshot: snapshot, session: session)
+        }
+        XCTAssertEqual(breaker.decide(lane: lane), .cannotReturn, "precondition: silenced")
+
+        breaker.noteStagedVerdict(lane: lane, returnCapable: true)
+
+        XCTAssertEqual(breaker.decide(lane: lane), .probe,
+                       "the app narrows on proof and must widen on proof too")
+        XCTAssertNil(breaker.faultedSince(lane: lane))
     }
 
     /// Recovery with no user action: one witnessed absence resets everything,

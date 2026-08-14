@@ -66,12 +66,19 @@
 //  stage a turn's own attachments. Conduck NAMES the folder a reply's files go
 //  in and creates nothing — an agent-created directory is owned by the agent,
 //  and that is precisely what makes it writable — so the freshness evidence is a
-//  `PROPFIND Depth: 0` that must come back `404`. It fails closed on every other
-//  answer, and anything but `404` means this turn goes out without a location
-//  line. Because every send waits on it — a pure-text turn included — it runs on
-//  its own short deadline and reads no response body at all: the verdict is the
-//  status line, and a probe the user never asked for must not be able to hold up
-//  a turn or stream a login page into memory.
+//  `PROPFIND Depth: 0` that must come back with the server saying the collection
+//  is not there. It fails closed on everything else, and anything short of a
+//  definite miss means this turn goes out without a location line.
+//
+//  Because every send waits on it — a pure-text turn included — it runs on its
+//  own short deadline and buys the smallest evidence that can settle the
+//  question. A `404` settles it on the status line and no body is read at all. A
+//  `207` is the one status whose body can still say "not there", in the
+//  multistatus form RFC 4918 permits and commercial hosts send, so that body IS
+//  read — bounded by `FileServerClient.absenceWitnessMaxBytes`, which is sized
+//  for a document describing one collection. Every other status is refused
+//  before a byte arrives, so a probe the user never asked for still cannot hold
+//  up a turn or stream a login page into memory.
 //
 //  ITS ANSWER IS A TAXONOMY, NOT A BOOL (`FileServerAbsenceWitness`), and
 //  `mintOutboxKey` turns it into an `OutboxMintOutcome` the caller can act on.
@@ -81,18 +88,24 @@
 //  what `FileLaneWitnessBreaker` at the foot of this file bounds. Both types
 //  carry their whole rationale in their own headers.
 //
-//  THE WITNESS NEVER DECIDES THE FIRST OF THOSE, and that is a rule rather than
-//  an omission. It can only ever ask about the collection this turn is about to
-//  name, which by construction is NOT THERE — that is the whole point of the
-//  assertion — so a `405`/`501` from it is a fact about the route a missing path
-//  is served by and not about the method the server performs. A path-scoped
-//  `dav_methods` rule, a WAF, an SSO layer and a rewrite all produce exactly
-//  that on a server that lists existing collections perfectly, and
-//  `FileServerClient.probeListingCapability` refuses the same inference on the
-//  same request for the same reason. The durable "this lane cannot list" verdict
-//  therefore has ONE author, the staged Test Connection, which asks the served
-//  root — a collection that certainly exists; `mintOutboxKey` reads that
-//  persisted verdict and never writes one.
+//  THE WITNESS MAY NOT INFER AN INCAPABILITY FROM A REFUSAL, and may from a
+//  RUN OF OCCUPANCY. That line is the rule, and both halves of it follow from
+//  the same fact: the witness can only ever ask about the collection this turn
+//  is about to name, which by construction is NOT THERE. A `405`/`501` from it
+//  is therefore a fact about the route a missing path is served by, never about
+//  the method the server performs — a path-scoped `dav_methods` rule, a WAF, an
+//  SSO layer and a rewrite all produce exactly that on a server that lists
+//  existing collections perfectly, and `FileServerClient.probeListingCapability`
+//  refuses the same inference on the same request. A run of `207`s claiming that
+//  freshly minted names are occupied is the opposite kind of answer: a positive
+//  claim about paths that are not there, on a different fresh name every time,
+//  which no route-scoped explanation rescues. So the lane goes quiet in-process
+//  rather than complaining every turn about a limit it will always have.
+//
+//  THE DURABLE "this lane cannot list" verdict still has ONE author, the staged
+//  Test Connection, which asks the served root — a collection that certainly
+//  exists. `mintOutboxKey` reads that persisted verdict and never writes one;
+//  the occupancy conclusion lives and dies with the process.
 //
 //  PRIVACY: never log URLs, tokens, credentials, storedKeys,
 //  filenames, or reply bytes. Never reveal the credential in a thrown error.
@@ -640,9 +653,9 @@ final class BackgroundFileTransfer: NSObject {
             snapshot: snapshot, collectionKey: collectionKey, session: session)
     }
 
-    /// PROPFIND `Depth: 0` the exact dispatch box and require a definite `404` —
-    /// the pre-dispatch assertion that the folder this turn is about to name is
-    /// NOT ALREADY THERE.
+    /// PROPFIND `Depth: 0` the exact dispatch box and require the server to say
+    /// it is not there — the pre-dispatch assertion that the folder this turn is
+    /// about to name is NOT ALREADY THERE.
     ///
     /// THE ONE THING IT BUYS: a server-observed absence at the instant the turn
     /// starts. Without it the freshness of the box rests entirely on the mint's
@@ -653,10 +666,23 @@ final class BackgroundFileTransfer: NSObject {
     /// is about the collection itself; a listing of children would be a strictly
     /// larger answer to a smaller question.
     ///
-    /// FAILS CLOSED, WITHOUT EXCEPTION. `false` on a `207` (collision, or a
-    /// namespace that answers everything), on every other status, and on every
-    /// transport failure including a refused certificate. A caller that gets
-    /// `false` must NOT put the location line on the wire — freshness that was
+    /// TWO SHAPES ARE A MISS, because RFC 4918 lets a server say it two ways: a
+    /// `404` status line, and a `207` whose one inner `<response>` names this
+    /// exact collection with a response-level `404`/`410`. Commercial WebDAV
+    /// hosts send the second, and reading the outer status alone calls them
+    /// occupied on every single dispatch — a folder-less row under every agent
+    /// turn, permanently, with no in-app action that could silence it. So the
+    /// `207` body IS read here, bounded by
+    /// `FileServerClient.absenceWitnessMaxBytes`, and the rule that reads it is
+    /// `FileServerClient.classifyAbsenceWitness` — the same rule, over the same
+    /// bytes, that the staged test's own control probe uses, so the two can never
+    /// tell the user different stories about one server.
+    ///
+    /// FAILS CLOSED, WITHOUT EXCEPTION. Not `.absent` on a `207` whose body is
+    /// over-cap, truncated, empty, unparseable, about another href, or claims the
+    /// collection is there; not on any other status; not on any transport
+    /// failure, a refused certificate included. A caller that does not get
+    /// `.absent` must NOT put the location line on the wire — freshness that was
     /// not witnessed is not freshness. The cost is one turn without automatic
     /// delivery; the manual affordance still reaches the files.
     ///
@@ -704,36 +730,37 @@ final class BackgroundFileTransfer: NSObject {
             collectionKey: collectionKey,
             depth: 0,
             timeout: Constants.fileServerAbsenceWitnessTimeout)
-        // THE BODY IS NEVER READ, because the verdict is a function of the status
-        // line alone. Draining it would spend up to the listing cap of async
-        // iterations on the dispatch critical path for bytes nothing inspects —
-        // an SSO wall answering a 200 with its login page is the ordinary case —
-        // and it would turn an over-cap `404` into "not witnessed", disabling
-        // file return on a server that answered the question correctly.
-        guard let status = try? await Self.statusOnlyResponse(
-            session: session, request: request) else { return .unreachable }
-        return FileServerClient.classifyAbsenceWitness(status: status)
-    }
-
-    /// Issue one request and take ONLY its status line, cancelling before a byte
-    /// of the body is consumed.
-    ///
-    /// For the callers whose verdict the body cannot influence. `bytes(for:)`
-    /// resumes when the HEADERS arrive, so cancelling the task before the first
-    /// iteration ends the transfer having read no body at all — the iterator is
-    /// then never touched, which is the same cancellation order the bounded
-    /// readers use so our own cancel can never surface as the bare `-999` a
-    /// certificate refusal throws.
-    static func statusOnlyResponse(
-        session: URLSession,
-        request: URLRequest
-    ) async throws -> Int {
-        let (bytes, response) = try await session.bytes(for: request)
-        bytes.task.cancel()
-        guard let http = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-        return http.statusCode
+        // THE BODY IS READ ON `207` AND ON NOTHING ELSE, under a cap sized for a
+        // one-collection multistatus. A `404` needs no body and never pays for
+        // one, so an over-cap `404` is still a definite miss; every other status
+        // has already said everything it is going to say, and an SSO wall
+        // answering `200` with its login page is refused without a byte of it
+        // being buffered on the dispatch critical path. The `207` is the sole
+        // case where the sentence Conduck came for can only be in the body.
+        //
+        // ANY FAILURE OF THAT READ IS `.unreachable`, A `207` THAT DIED
+        // MID-BODY INCLUDED. The `try?` cannot tell "no response ever arrived"
+        // from "a response whose body stopped arriving", so both are charged the
+        // one-observation patience rather than the three an answered failure
+        // earns — see `FileLaneWitnessBreaker.FailureSeverity.unreachable`,
+        // which states why a broken transfer is read as a fact about the
+        // connection rather than about the collection.
+        guard let answer = try? await Self.boundedListingResponse(
+            session: session,
+            request: request,
+            maxBytes: FileServerClient.absenceWitnessMaxBytes,
+            readsBodyWhen: { $0 == 207 }
+        ) else { return .unreachable }
+        return FileServerClient.classifyAbsenceWitness(
+            status: answer.status,
+            body: answer.body,
+            bodyExceededCap: answer.exceededCap,
+            // The URL the request was built against, resolved through the one
+            // helper `buildPropfindRequest` also uses, so the href match can
+            // never be made against a different collection than the one asked
+            // about.
+            requestedURL: FileServerClient.listingCollectionURL(
+                snapshot: snapshot, collectionKey: collectionKey))
     }
 
     /// Name the box for ONE dispatch and, when this device can, witness that it
@@ -837,14 +864,16 @@ final class BackgroundFileTransfer: NSObject {
         let lane = FileLaneWitnessBreaker.laneKey(for: snapshot)
         switch FileLaneWitnessBreaker.shared.decide(lane: lane) {
         case .cannotReturn:
-            // The staged verdict again, cached in-process — the breaker's only
-            // author of this decision is `noteStagedVerdict`, and it covers the
-            // window between a Test Connection settling the answer and the
-            // commit hop's persisted flag reaching the snapshot above. Same
-            // treatment: no request, no folder, and NOTHING SAID, because this
-            // is a limitation the user can read in Settings rather than a fault,
-            // and a per-turn complaint about a permanent property of their own
-            // server is the definition of noise.
+            // The process-local twin of the gate above, and it has TWO authors.
+            // `noteStagedVerdict` writes it from a Test Connection, covering the
+            // window between that test settling the answer and the commit hop's
+            // persisted flag reaching the snapshot. The `.occupied` branch below
+            // writes it when this lane has claimed a whole run of freshly minted
+            // names is already taken. Same treatment either way: no request, no
+            // folder, and NOTHING SAID, because both are limitations the user
+            // can read on the File transfer page rather than faults, and a
+            // per-turn complaint about a standing property of their own server
+            // is the definition of noise.
             return .laneCannotReturn
         case .cooldown:
             // The lane has failed enough times in a row that probing it again
@@ -880,13 +909,30 @@ final class BackgroundFileTransfer: NSObject {
             FileLaneWitnessBreaker.shared.recordFailure(lane: lane, severity: .answered)
             return .witnessFailed
         case .occupied:
-            // A `207` for a path carrying fresh entropy. Charged as a soft
-            // failure rather than a structural one: a genuine collision is
-            // astronomically unlikely and the NEXT turn mints a different name,
-            // so one occurrence self-heals and resets the streak, while a
-            // namespace that answers everything occupies every name and reaches
-            // the cooldown on its own.
-            FileLaneWitnessBreaker.shared.recordFailure(lane: lane, severity: .answered)
+            // The lane says a path carrying `OutboxKey.nonceHexCharacters` of
+            // fresh entropy is already taken. ONE of those is a soft failure and
+            // says so: a genuine collision is astronomically unlikely, the NEXT
+            // turn mints a different name, so one occurrence self-heals and the
+            // turn is reported folder-less like any other.
+            //
+            // A RUN OF THEM IS NOT BAD LUCK — IT IS PROOF, and that is why this
+            // case is counted apart from the general streak. Every name in the
+            // run was fresh and every one came back occupied, so this lane will
+            // occupy every name Conduck can ever mint and can never witness an
+            // absence for any of them. That is a CAPABILITY LIMIT, and
+            // `OutboxMintOutcome`'s contract table says capability limits are
+            // silent — otherwise the folder-less row draws under every agent
+            // turn forever with no in-app action that could stop it, which is
+            // precisely the per-turn complaint about a standing configuration
+            // that table forbids.
+            FileLaneWitnessBreaker.shared.recordFailure(lane: lane, severity: .occupied)
+            // Asked of the breaker rather than inferred from a returned flag:
+            // `decide` is the single place that answers "what should the mint do
+            // about this lane", and a second reading of the same evidence here
+            // is a second thing to keep in step.
+            if FileLaneWitnessBreaker.shared.decide(lane: lane) == .cannotReturn {
+                return .laneCannotReturn
+            }
             return .witnessFailed
         case .indeterminate:
             FileLaneWitnessBreaker.shared.recordFailure(lane: lane, severity: .answered)
@@ -932,9 +978,34 @@ final class BackgroundFileTransfer: NSObject {
     /// believed mints download chips with nothing downstream to correct it, so
     /// before any `.entries` verdict is returned this issues a SECOND PROPFIND —
     /// same method, same depth, same session — against a sibling collection
-    /// under the same parent that cannot exist, and requires a definite `404`. A
-    /// `207` there means the server answers everything, so its `207` for the
-    /// real box says nothing about the real box.
+    /// under the same parent that cannot exist, and requires the server to say
+    /// it is not there. A server that reports it PRESENT answers everything, so
+    /// its `207` for the real box says nothing about the real box.
+    ///
+    /// WHAT "NOT THERE" MEANS IS THE APP'S ONE DEFINITION, not this function's.
+    /// `FileServerClient.negativeControlProvesNotFound` decides it over the
+    /// status AND the control's own bounded body — the same
+    /// `classifyAbsenceWitness` rule the pre-dispatch witness runs — so a bare
+    /// `404` passes and so does the compliant `207` whose single `<response>`
+    /// names that exact collection with a response-level `404`/`410`. A
+    /// status-only control would fail every host that answers the second way,
+    /// which are precisely the hosts the witness has just cleared to name the
+    /// folder: the agent writes into a folder Conduck named, every reply lands
+    /// on `.unusable(.namespaceAnswersEverything)`, and file return is broken end
+    /// to end against a server doing nothing wrong. Two definitions of a definite
+    /// miss is how that happens, so there is one.
+    ///
+    /// THE CONTROL'S BODY IS READ UNDER THE WITNESS'S CAP, not the listing's, and
+    /// only on a `207`. `FileServerClient.absenceWitnessMaxBytes` bounds it on
+    /// the wire and the rule re-checks the size at the parse, so nothing larger
+    /// than the bound that rule is documented at can reach it. The listing's own
+    /// budget is sized for `FileServerClient.listingMaxEntries` rows of
+    /// properties and is the wrong ceiling here: the control asks about ONE
+    /// collection that does not exist, a one-`<response>` document answers it,
+    /// and a body that needs more than the witness's cap has stopped being that
+    /// answer — so it proves nothing and the listing stays unbelieved. Any other
+    /// status settles the question on its status line and buys no body at all,
+    /// which keeps a catch-all host's login page out of memory.
     ///
     /// PER-LISTING, NEVER CACHED, AND IT DEFAULTS CLOSED. Not modelled on
     /// `folderCapable`, whose getter answers `true` when unset: that polarity is
@@ -1001,11 +1072,31 @@ final class BackgroundFileTransfer: NSObject {
 
         let controlKey = FileServerClient.negativeControlCollectionKey(siblingOf: collectionKey)
         do {
+            // THE CONTROL'S CAP IS THE WITNESS'S, not the listing's. The rule
+            // that reads this body refuses anything past
+            // `absenceWitnessMaxBytes`, so reading it under the listing's much
+            // larger budget would buffer bytes that could only ever be thrown
+            // away — and would hand a parser documented as bounded at 16 KiB a
+            // body a quarter of a megabyte long. Bounding the wire read at the
+            // rule's own bound makes over-cap mean the same thing in both
+            // places: this control proved nothing.
             let control = try await Self.boundedListingResponse(
                 session: session,
                 request: FileServerClient.buildPropfindRequest(
-                    snapshot: snapshot, collectionKey: controlKey, depth: 1))
-            guard FileServerClient.negativeControlProvesNotFound(status: control.status) else {
+                    snapshot: snapshot, collectionKey: controlKey, depth: 1),
+                maxBytes: FileServerClient.absenceWitnessMaxBytes,
+                readsBodyWhen: { $0 == 207 })
+            guard FileServerClient.negativeControlProvesNotFound(
+                status: control.status,
+                body: control.body,
+                bodyExceededCap: control.exceededCap,
+                // Built the way every other request in this file builds it, so
+                // the href match runs against the collection that was actually
+                // asked for — a second way of naming it is a second thing to
+                // keep in step with `buildPropfindRequest`.
+                requestedURL: FileServerClient.listingCollectionURL(
+                    snapshot: snapshot, collectionKey: controlKey)
+            ) else {
                 return .unusable(.namespaceAnswersEverything)
             }
         } catch {
@@ -1014,7 +1105,9 @@ final class BackgroundFileTransfer: NSObject {
         return verdict
     }
 
-    /// Issue one PROPFIND and read its body under a hard client-side cap.
+    /// Issue one PROPFIND and read its body under a hard client-side cap — or
+    /// take the status line and stop, when `readsBodyWhen` says this status has
+    /// no body worth having.
     ///
     /// `bytes(for:)` (NOT `data(for:)`) for the reason `collectProbeEvidence`
     /// uses it: the headers arrive before the body, so the read can be stopped
@@ -1025,18 +1118,37 @@ final class BackgroundFileTransfer: NSObject {
     /// reported as over-cap, which the caller turns into a refusal rather than
     /// parsing the truncated prefix.
     ///
-    /// CANCELLATION ORDER IS LOAD-BEARING — cancel, leave the loop, never touch
-    /// the iterator again — so our own cancellation can never surface as the
-    /// bare `-999` a certificate refusal throws.
+    /// `readsBodyWhen` IS THE STATUS-ONLY READ, folded in rather than kept as a
+    /// second reader beside this one. Its callers are the ones whose verdict a
+    /// body cannot change — a `404` is a definite miss however the server padded
+    /// it, a `405` has stated an incapability, an SSO wall's `200` is refused
+    /// before its login page is streamed — and giving them their own function
+    /// meant two cancellation orders and two places for a future caller to get
+    /// the bound wrong. Defaulting to "read it" keeps the listing callers exactly
+    /// as they were.
+    ///
+    /// CANCELLATION ORDER IS LOAD-BEARING on both paths — cancel, leave the loop
+    /// (or return), never touch the iterator again — so our own cancellation can
+    /// never surface as the bare `-999` a certificate refusal throws.
     static func boundedListingResponse(
         session: URLSession,
         request: URLRequest,
-        maxBytes: Int = FileServerClient.listingMaxBytes
+        maxBytes: Int = FileServerClient.listingMaxBytes,
+        readsBodyWhen: @Sendable (Int) -> Bool = { _ in true }
     ) async throws -> (status: Int, body: Data, exceededCap: Bool) {
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
             bytes.task.cancel()
             throw URLError(.badServerResponse)
+        }
+        guard readsBodyWhen(http.statusCode) else {
+            // `bytes(for:)` resumed when the HEADERS arrived, so cancelling here
+            // ends the transfer having consumed no body at all. `exceededCap` is
+            // false because nothing was capped: a body that was never wanted was
+            // not truncated, and reporting it as truncated would make a caller
+            // fail closed on a status that had already settled the question.
+            bytes.task.cancel()
+            return (http.statusCode, Data(), false)
         }
         var body = Data()
         var exceededCap = false
@@ -1731,7 +1843,7 @@ extension BackgroundFileTransfer {
     ///
     /// THE SILENT THREE ARE SILENT FOR THE SAME REASON: the user is not missing
     /// anything they were promised. No lane means they never asked for file
-    /// return; a return-incapable lane is a limitation their Settings screen
+    /// return; a return-incapable lane is a limitation the File transfer page
     /// states plainly and no retry of the turn can change — repairing the server
     /// can, and `FileTransferCapabilityRefresher` notices when they do; a wrist
     /// turn is a device
@@ -1742,15 +1854,36 @@ extension BackgroundFileTransfer {
     /// configured, WAS tested green, and stopped working. That is the one case
     /// where a turn quietly loses a capability the user is entitled to expect,
     /// and it is exactly the case that used to vanish.
+    ///
+    /// NO LANE MAY NAG FOREVER, and that is the boundary between the two groups
+    /// rather than a fourth rule. `.witnessFailed` and `.witnessSuppressed` are
+    /// earned by a lane that MIGHT answer differently next turn; the moment the
+    /// evidence says it never will — a whole run of freshly minted names claimed
+    /// occupied — the answer stops being a fault and becomes a capability, and
+    /// the outcome moves to `.laneCannotReturn` with it. A row the user can
+    /// neither act on nor dismiss is not information.
+    ///
+    /// THE PREDICATE THAT READS THIS TABLE LIVES IN THE TEST TARGET, and that is
+    /// deliberate. Nothing in production asks "is this outcome a fault": the
+    /// dispatch surfaces take `.key` and the thread derives its row from
+    /// `FileLaneWitnessBreaker.faultedSince`, lane-wide, long after the outcome
+    /// is gone. A production predicate here would be edited by a maintainer who
+    /// believed they were changing behaviour and would change nothing at all —
+    /// so the table above is the human-readable contract, and the suite mirrors
+    /// it in one place so a new case still has to be classified.
     enum OutboxMintOutcome: Equatable, Sendable {
         /// A folder was named AND a server-observed absence witnessed it fresh.
         case named(String)
         /// No file lane on this dispatch — unconfigured, or a device (the
         /// Watch) that holds no file-server credential.
         case noLane
-        /// The lane cannot answer a `PROPFIND` at all, so it can never return a
-        /// file. A capability, not a fault — and one the STAGED test settled and
-        /// persisted, never something this dispatch inferred.
+        /// This lane can never return a file, so there is nothing to name. A
+        /// capability, not a fault, and it has two possible authors — the STAGED
+        /// test's structural `405`/`501` finding, persisted per gateway; and the
+        /// dispatch path itself, once a lane has claimed a run of freshly minted
+        /// names is occupied and thereby shown it can never witness an absence
+        /// for any name at all. The second is process-local and writes nothing
+        /// durable.
         case laneCannotReturn
         /// The lane was probed this turn and did not witness the folder absent.
         case witnessFailed
@@ -1763,16 +1896,6 @@ extension BackgroundFileTransfer {
         var key: String? {
             if case .named(let key) = self { return key }
             return nil
-        }
-
-        /// Whether this outcome is a thing the user should be told about — the
-        /// single predicate every surface asks, so "which outcomes are silent"
-        /// is decided once here rather than re-derived per caller.
-        var isActionableFault: Bool {
-            switch self {
-            case .witnessFailed, .witnessSuppressed: return true
-            case .named, .noLane, .laneCannotReturn: return false
-            }
         }
     }
 
@@ -1796,15 +1919,68 @@ extension BackgroundFileTransfer {
     /// REQUESTS and nothing else — the configuration, the uploads, and what the
     /// thread says about a folder-less turn are all untouched.
     ///
-    /// IT AUTHORS NO CAPABILITY EITHER, only caches one. `recordCannotReturn` is
-    /// reachable exclusively through `noteStagedVerdict`, because the dispatch
-    /// witness's `405`/`501` comes from a collection that certainly does NOT
-    /// exist and therefore describes a route rather than the method (see this
-    /// file's header). Everything else this type holds is a spending guess about
-    /// whether another request is worth issuing — which is why it is safe for it
-    /// to be process-local, and why it is never persisted or couriered: a guess
-    /// about this instant, delivered late to another device, would withhold
-    /// folders from a lane that recovered while the message was in flight.
+    /// IT HOLDS ONE TERMINAL STATE WITH TWO WAYS IN, and the difference between
+    /// the two admissible inferences and the one forbidden one is the whole
+    /// argument. `recordCannotReturn` is reached by `noteStagedVerdict`, caching
+    /// the staged test's structural finding; and by a run of `.occupied` answers
+    /// at dispatch, which is this type's own conclusion rather than a cache of
+    /// anyone else's.
+    ///
+    /// WHY THE SECOND IS ADMISSIBLE WHERE THE `405`/`501` INFERENCE IS NOT. Both
+    /// come from the dispatch witness, asking about a collection that by
+    /// construction is not there — but they are answers of different kinds. A
+    /// `405` on a path that cannot exist describes the ROUTE that serves a
+    /// missing path (a path-scoped `dav_methods` rule, a WAF, an SSO layer, a
+    /// rewrite) on a server that may list existing collections perfectly, so the
+    /// answer is about the route and the route-scoped explanation is the likely
+    /// one; the witness may never conclude an incapability from it. A `207` for a
+    /// name carrying `OutboxKey.nonceHexCharacters` of fresh entropy is a
+    /// POSITIVE claim about a path that is not there, which no route-scoped
+    /// explanation rescues: the route did not decline to answer, it answered
+    /// wrongly. One of those is a coincidence; a run of them, each on a different
+    /// fresh name, is a lane that will occupy every name Conduck can ever mint.
+    ///
+    /// HOW A LANE GETS OUT OF IT, stated plainly because the state is narrower
+    /// to leave than the rest of this reads. Once `returnCapable == false` is
+    /// latched, `decide` answers `.cannotReturn` before any cooldown is
+    /// consulted, so no further witness runs on that lane — which means
+    /// `recordWitnessed`, the one call that widens the state, can never be
+    /// reached from the dispatch path again. There are exactly four exits, and
+    /// every one of them is off that path:
+    ///   - a process relaunch, since nothing here is persisted;
+    ///   - a passing Test Connection, via `noteStagedVerdict(returnCapable:
+    ///     true)` — the deliberate, user-watched measurement, which clears the
+    ///     lane outright;
+    ///   - an edit to the URL, the credential, or the device-local certificate
+    ///     pin, which lands the repaired lane on a brand-new `laneKey` with a
+    ///     clean slate;
+    ///   - `reset(lane:)`, an explicit "this is worth another look right now".
+    ///
+    /// AND THE THREAD DELIBERATELY OFFERS NO IN-THREAD "CHECK AGAIN" FOR IT.
+    /// `recordCannotReturn` clears the streak, so `faultedSince` returns nil and
+    /// the folder-less row — the only surface that carries the tap reaching
+    /// `reset(lane:)` — is not drawn at all. That is the intended shape: this
+    /// state says "this lane cannot return a file", which is a standing property
+    /// of the user's own server and belongs behind the File transfer page's test,
+    /// not under a chat bubble that would restate it under every turn.
+    ///
+    /// THE TRADE-OFF, STATED PLAINLY: the lane goes quiet and the Settings badge
+    /// is unchanged, so the user's route to the explanation is the File transfer
+    /// page's own test, not a per-turn row. That is accepted because the row it
+    /// replaces was unactionable — it named no cause it could name, offered no
+    /// control that would silence it, and repeated under every agent turn for as
+    /// long as the lane stayed configured. A staged test says what a row could
+    /// not, and this state is process-local, so nothing durable is narrowed and
+    /// nothing reaches another device.
+    ///
+    /// Everything else this type holds is a spending guess about whether another
+    /// request is worth issuing — which is why it is safe for it to be
+    /// process-local, and why it is never persisted or couriered: a guess about
+    /// this instant, delivered late to another device, would withhold folders
+    /// from a lane that recovered while the message was in flight. The terminal
+    /// state is process-local for the same reason and one more: a durable
+    /// narrowing is the staged test's exclusive verdict, and the mint takes a
+    /// SNAPSHOT by design and holds no `RemoteAgentRef` to write one against.
     ///
     /// TWO THRESHOLDS, NOT ONE, because the two failure shapes deserve different
     /// patience. A lane that produced no HTTP response at all (`.unreachable`:
@@ -1836,8 +2012,10 @@ extension BackgroundFileTransfer {
         enum Decision: Equatable {
             /// Issue the witness.
             case probe
-            /// The STAGED test showed this lane incapable of answering a
-            /// `PROPFIND`. Skip the request and stay silent.
+            /// This lane cannot return a file — the STAGED test found it unable
+            /// to answer a `PROPFIND`, or a run of dispatches found it unable to
+            /// witness an absence for any name at all. Skip the request and stay
+            /// silent.
             case cannotReturn
             /// This lane is inside its failure cooldown. Skip the request; the
             /// turn is still folder-less and the caller still says so.
@@ -1848,17 +2026,40 @@ extension BackgroundFileTransfer {
         /// bad the failure is — a ranking of how much a SECOND sample could
         /// still teach us.
         enum FailureSeverity: Equatable, Sendable {
-            /// No HTTP response arrived. A host that is not there will not be
-            /// there next turn.
+            /// The read failed. A host that is not there will not be there next
+            /// turn.
+            ///
+            /// IT COVERS A CONNECTION THAT BROKE MID-ANSWER, not only one that
+            /// never opened, and that is a deliberate reading rather than an
+            /// accident of the call site. The witness reads a `207`'s body, so a
+            /// server that sends a status line and then drops the connection
+            /// lands here and is charged ONE observation instead of three. A
+            /// truncated transfer is a fact about the connection, not about
+            /// whether the collection is there — the sentence that would have
+            /// settled it is precisely the part that never arrived — so treating
+            /// it as an answer would be crediting the lane with an answer it did
+            /// not give. Being wrong is bounded and self-healing: the cooldown
+            /// suppresses REQUESTS only, the turn is folder-less either way, and
+            /// one witnessed absence clears the lane outright.
             case unreachable
             /// The server answered, unhelpfully. Might not next turn.
             case answered
+            /// The server answered that the freshly minted collection is ALREADY
+            /// THERE. Its own case, sharing `.answered`'s patience, because it is
+            /// the one answer whose repetition means something the others'
+            /// repetition does not: each observation is about a DIFFERENT name
+            /// with fresh entropy, so a run of them is not a lane having a bad
+            /// few minutes, it is a lane that occupies every name. Counted
+            /// separately from the general streak for exactly that reason — a
+            /// `502` mixed into the run breaks the proof, because the `502`
+            /// answered nothing about occupancy.
+            case occupied
 
             /// Consecutive failures required before the cooldown opens.
             var opensAfter: Int {
                 switch self {
                 case .unreachable: return 1
-                case .answered: return 3
+                case .answered, .occupied: return 3
                 }
             }
         }
@@ -1893,6 +2094,15 @@ extension BackgroundFileTransfer {
             /// cooldown three rungs up — half an hour where five minutes was
             /// meant, on a lane the user may have repaired seconds ago.
             var pastThresholdFailures: Int = 0
+            /// How many CONSECUTIVE `.occupied` answers this lane has given —
+            /// tracked apart from `consecutiveFailures` because it is evidence
+            /// of a different kind. The general streak asks "is another request
+            /// worth spending"; this asks "can this lane ever say no", and only
+            /// an unbroken run of occupancy claims about fresh names answers
+            /// that. Any other failure zeroes it: a `502` is not evidence about
+            /// occupancy, so a lane that mixes one into the run has not proved
+            /// anything and must not be silenced.
+            var consecutiveOccupied: Int = 0
             var lastFailureAt: ContinuousClock.Instant?
             /// When the CURRENT unbroken failure streak began. Cleared on any
             /// success. Nothing else in this type reads it.
@@ -1962,9 +2172,11 @@ extension BackgroundFileTransfer {
         }
 
         /// The lane witnessed the folder absent: it is reachable, authorised,
-        /// and speaks `PROPFIND`. Everything resets, including a previously
-        /// recorded incapability — the app narrows on proof and must widen on
-        /// proof too.
+        /// speaks `PROPFIND`, and can say no about a name it has never seen.
+        /// Everything resets — the streak, the cooldown, the occupancy run and a
+        /// previously recorded incapability — because the app narrows on proof
+        /// and must widen on proof too, and this one answer contradicts every
+        /// narrowing the dispatch path is allowed to make.
         func recordWitnessed(lane: String) {
             lock.lock()
             defer { lock.unlock() }
@@ -1972,26 +2184,33 @@ extension BackgroundFileTransfer {
             lanes[lane] = LaneState(returnCapable: true)
         }
 
-        /// The lane answered that it does not implement `PROPFIND`. Recorded as
-        /// a CAPABILITY rather than a failure, so it neither counts toward the
-        /// streak nor decays out of a cooldown: there is nothing to wait for.
+        /// This lane cannot return a file. Recorded as a CAPABILITY rather than
+        /// a failure, so it neither counts toward the streak nor decays out of a
+        /// cooldown: there is nothing to wait for. It also clears the streak
+        /// outright, which is what makes the state silent — `faultedSince` is
+        /// the thread row's only live input, and a limitation must draw no row.
         ///
-        /// ONLY `noteStagedVerdict` MAY REACH THIS, and the dispatch path
-        /// deliberately cannot. The staged test asks the served root, a
-        /// collection that certainly exists, which is the only question whose
-        /// `405`/`501` answer is about the METHOD; the witness can only ask
-        /// about a collection that by construction is not there, where the same
-        /// answer is about the route. So this is a same-process cache of a
-        /// verdict the staged test also persists — never a second, weaker author
-        /// of one.
+        /// TWO CALLERS, AND THE `405`/`501` INFERENCE IS NOT ONE OF THEM.
+        /// `noteStagedVerdict` caches the staged test's structural finding,
+        /// taken against the served root — a collection that certainly exists,
+        /// which is the only question whose `405`/`501` answer is about the
+        /// METHOD. `recordFailure` reaches it when a lane completes a run of
+        /// `.occupied` answers, which is a positive claim about paths that are
+        /// not there and admits no route-scoped excuse. What may NOT reach it is
+        /// a `405`/`501` from the dispatch witness: that asks about a collection
+        /// which by construction is not there, so the answer describes the route
+        /// serving a missing path, and `FileServerClient.probeListingCapability`
+        /// refuses the same inference on the same request.
         func recordCannotReturn(lane: String) {
             lock.lock()
             defer { lock.unlock() }
-            evictIfNeeded()
-            lanes[lane] = LaneState(returnCapable: false)
+            lockedRecordCannotReturn(lane: lane)
         }
 
-        /// One witness failure on `lane`.
+        /// One witness failure on `lane`. A failure that COMPLETES an `.occupied`
+        /// run does not land as a failure at all — it lands as the terminal
+        /// capability state, because at that point the lane has stopped being a
+        /// thing that might answer differently next turn.
         func recordFailure(
             lane: String,
             severity: FailureSeverity,
@@ -2002,6 +2221,19 @@ extension BackgroundFileTransfer {
             defer { lock.unlock() }
             evictIfNeeded()
             var state = lanes[lane] ?? LaneState(returnCapable: nil)
+            // The occupancy run is extended only by occupancy and zeroed by
+            // anything else, so the run always describes an unbroken sequence of
+            // fresh names this lane claimed were taken.
+            state.consecutiveOccupied = severity == .occupied ? state.consecutiveOccupied + 1 : 0
+            // The run's length is measured against the SAME patience an answered
+            // failure earns, because it is the same question asked once more: is
+            // one more sample going to teach us anything. Past that count the
+            // answer is no, and unlike a cooldown there is nothing to wait out —
+            // every future name is as fresh as the ones already claimed.
+            guard state.consecutiveOccupied < FailureSeverity.answered.opensAfter else {
+                lockedRecordCannotReturn(lane: lane)
+                return
+            }
             state.consecutiveFailures += 1
             state.opensAfter = severity.opensAfter
             // A rung is climbed only by a failure that ARRIVES at or past the
@@ -2017,11 +2249,22 @@ extension BackgroundFileTransfer {
             lanes[lane] = state
         }
 
+        /// Caller holds `lock`. The single write of the terminal state, so both
+        /// its authors leave the lane in exactly the same shape — no streak, no
+        /// cooldown, no `faultedSince`, and `decide` answering `.cannotReturn`
+        /// before any cooldown is consulted.
+        private func lockedRecordCannotReturn(lane: String) {
+            evictIfNeeded()
+            lanes[lane] = LaneState(returnCapable: false)
+        }
+
         /// Apply the staged Test Connection's verdict. The one deliberate,
         /// user-watched measurement of this lane, so it supersedes whatever the
-        /// dispatch path inferred — including a cooldown, which a passing test
-        /// must clear outright or the user who just repaired their server would
-        /// keep sending folder-less turns for up to an hour.
+        /// dispatch path inferred — a cooldown, which a passing test must clear
+        /// outright or the user who just repaired their server would keep sending
+        /// folder-less turns for up to an hour, and an occupancy run, which a
+        /// server that now answers a fresh name with a definite miss has just
+        /// disproved.
         func noteStagedVerdict(lane: String, returnCapable: Bool) {
             if returnCapable {
                 recordWitnessed(lane: lane)

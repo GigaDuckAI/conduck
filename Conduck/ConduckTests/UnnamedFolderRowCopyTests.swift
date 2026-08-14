@@ -10,14 +10,20 @@
 //
 // THE BUG IT EXISTS FOR. The row was titled "Your file server didn't answer" and was
 // shown for every witness failure. Two of the three failing answers are cases where
-// the server demonstrably DID answer: `.occupied` (a `2xx`/`207` for the freshly
-// minted path — the shape a commercial WebDAV host produces when it replies to a
-// PROPFIND of a nonexistent collection with an outer `207` whose inner propstat is
-// `404`) and `.indeterminate` (a rejected credential, a `5xx`, a redirect). A fourth
-// population never issued a request at all: the turns dispatched while the witness
-// breaker's cooldown was open. So the title was false three ways, and its particular
-// falseness was expensive — it sent a user whose server is responding perfectly off
-// to debug reachability.
+// the server demonstrably DID answer: `.occupied` (a `2xx` claiming the freshly
+// minted path is taken, or a `207` whose body does not say otherwise — a namespace
+// that answers everything, or an answer nobody could read) and `.indeterminate` (a
+// rejected credential, a `5xx`, a redirect). A fourth population never issued a
+// request at all: the turns dispatched while the witness breaker's cooldown was open.
+// So the title was false three ways, and its particular falseness was expensive — it
+// sent a user whose server is responding perfectly off to debug reachability.
+//
+// The compliant multistatus miss is NOT among these populations, and that matters to
+// the copy's scope rather than to its rule. A host that answers a PROPFIND of a
+// nonexistent collection with an outer `207` whose inner response-level status is
+// `404` is saying "not there" in the second form RFC 4918 allows, and
+// `FileServerClient.classifyAbsenceWitness` reads it as `.absent` — that turn gets its
+// folder and draws no row at all.
 //
 // THE RULE THE COPY NOW FOLLOWS is the one the neighbouring "Couldn't finish the
 // check just now." already followed: when the causes are indistinguishable at the
@@ -97,7 +103,7 @@ final class UnnamedFolderRowCopyTests: XCTestCase {
     func testTwoOfTheThreeFailingWitnessAnswersMeanTheServerAnswered() {
         XCTAssertEqual(
             FileServerClient.classifyAbsenceWitness(status: 207), .occupied,
-            "A multistatus for the freshly minted path is the server answering, clearly and on the record.")
+            "A multistatus that does not say 'not there' is the server answering, clearly and on the record.")
         XCTAssertEqual(
             FileServerClient.classifyAbsenceWitness(status: 200), .occupied,
             "So is any other 2xx — a wall that answers everything is still answering.")
@@ -131,8 +137,9 @@ final class UnnamedFolderRowCopyTests: XCTestCase {
     }
 
     /// And the outcomes that stay SILENT must not be dragged into the row's story:
-    /// a lane that structurally cannot list is a displayed, correct configuration,
-    /// not a fault, so the copy above is never shown for it.
+    /// a lane that cannot list — structurally, or because it has proved it claims
+    /// every fresh name — is a standing property of the user's own server, not a
+    /// fault, so the copy above is never shown for it.
     func testTheSilentOutcomesDrawNoRow() {
         for outcome: BackgroundFileTransfer.OutboxMintOutcome in [.noLane, .laneCannotReturn] {
             XCTAssertFalse(outcome.isActionableFault,

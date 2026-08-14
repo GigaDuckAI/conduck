@@ -1567,19 +1567,28 @@ private struct MessageBubble: View, Equatable {
     ///
     /// IT NAMES NO CAUSE, and that is a correctness constraint rather than a
     /// style choice. The turns this row covers are selected from a LANE-WIDE
-    /// failure streak, and every one of `FileServerAbsenceWitness`'s non-`404`
-    /// answers can open that streak: `.unreachable` (no HTTP response at all),
-    /// `.indeterminate` (a rejected credential, a `5xx`, a redirect — the server
-    /// answered), `.occupied` (a `207`/`2xx` for a freshly minted path, which a
-    /// commercial WebDAV host produces by answering an outer `207` whose inner
-    /// propstat is `404` — the server answered clearly and correctly), plus the
-    /// suppressed turns where the breaker spent no request at all. A title
-    /// saying the server "didn't answer" is therefore false on three of those
-    /// four, and worse than false: it sends a user whose server is responding
-    /// perfectly off to debug reachability. The neighbouring "Couldn't finish
-    /// the check just now." makes the same move for the same reason — when the
-    /// causes are indistinguishable HERE, name none of them and say only what
-    /// is true of all of them.
+    /// failure streak, and every answer short of a definite miss can open that
+    /// streak: `.unreachable` (no HTTP response at all), `.indeterminate` (a
+    /// rejected credential, a `5xx`, a redirect — the server answered),
+    /// `.cannotAnswer` (a `405`/`501` on the route a missing path is served by),
+    /// `.occupied` (a namespace that claims a freshly minted path is already
+    /// there, or a `207` whose body settles nothing — the server answered, just
+    /// not with anything that can be read as absence), plus the suppressed turns
+    /// where the breaker spent no request at all. A title saying the server
+    /// "didn't answer" is therefore false on four of those five, and worse than
+    /// false: it sends a user whose server is responding perfectly off to debug
+    /// reachability. The neighbouring "Couldn't finish the check just now."
+    /// makes the same move for the same reason — when the causes are
+    /// indistinguishable HERE, name none of them and say only what is true of
+    /// all of them.
+    ///
+    /// A LANE THAT KEEPS CLAIMING OCCUPANCY STOPS DRAWING THIS ROW ALTOGETHER,
+    /// which is the boundary this row's silence is measured against rather than
+    /// a sixth population. An unbroken run of `.occupied` answers about
+    /// different freshly minted names is a capability limit, not a fault, so
+    /// `FileLaneWitnessBreaker` clears the streak `faultedSince` reads and the
+    /// mint returns `.laneCannotReturn` — no row, because a row the user can
+    /// neither act on nor dismiss is not information.
     ///
     /// THE FACT TRUE OF ALL OF THEM is what the copy says: this turn carried no
     /// folder, nothing could come back with it, and the lane is not currently
