@@ -209,14 +209,16 @@ final class WatchConversationViewModel {
     /// Resolve one list row's activity SYNCHRONOUSLY, for `body` — the row
     /// renders it in the date slot, so this must not await and must not fetch.
     ///
-    /// `lastViewedAt: nil` and `tailRole: nil` are LOAD-BEARING, not
-    /// placeholders. The Watch keeps no read state: its app has its own
-    /// container, so a wrist marker could only ever record wrist-viewing, and
-    /// "I read this on my watch" is not a fact the phone should inherit. And it
-    /// projects no tail role: that costs a per-row message fetch on the slowest
-    /// device in the fleet, which is the same reason the rows carry no preview.
-    /// Both nils suppress the unseen branch entirely, so `.answeredUnseen`
-    /// cannot arise here — the wrist shows DELIVERY state only.
+    /// `lastViewedAt: nil`, `failureSeenAt: nil` and `tailRole: nil` are
+    /// LOAD-BEARING, not placeholders. The Watch keeps no read state: its app
+    /// has its own container, so a wrist marker could only ever record
+    /// wrist-viewing, and "I read this on my watch" is not a fact the phone
+    /// should inherit. And it projects no tail role: that costs a per-row
+    /// message fetch on the slowest device in the fleet, which is the same
+    /// reason the rows carry no preview. The first and last nils suppress the
+    /// unseen branch entirely, so `.answeredUnseen` cannot arise here; the
+    /// middle one leaves a failure permanently unacknowledged on the wrist,
+    /// which is correct — the phone's acknowledgement is the phone's.
     ///
     /// `locallyLiveSince` is this wrist's own App-Group in-flight marker, read
     /// through `WatchRecordingService` rather than the raw defaults keys. It is
@@ -228,6 +230,7 @@ final class WatchConversationViewModel {
             ConversationActivityInputs(record: convo, tailRole: nil),
             locallyLiveSince: WatchRecordingService.shared.liveTurnStartedAt(for: convo.id, now: now),
             lastViewedAt: nil,
+            failureSeenAt: nil,
             now: now
         )
     }

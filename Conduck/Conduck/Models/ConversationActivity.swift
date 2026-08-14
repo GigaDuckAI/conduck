@@ -69,13 +69,26 @@ nonisolated enum ConversationActivity: Sendable, Hashable {
 /// is what `activity` becomes when delivery is idle AND a reply is unseen, so
 /// the four-state mark vocabulary survives while `failed + unseen` and
 /// `working + unseen` stay representable.
+///
+/// `failureAcknowledged` is the SECOND attention fact, and it is deliberately
+/// not folded into `activity` either. A seen failure is still a failure — the
+/// message did not go — so the row keeps saying so; what it loses is the alert,
+/// because the user has already been told. Meaningful only when `activity` is
+/// `.failed`; false everywhere else, and always false on a surface that keeps no
+/// read state.
 nonisolated struct ConversationRowState: Sendable, Hashable {
     let activity: ConversationActivity
     let hasUnseenReply: Bool
+    let failureAcknowledged: Bool
 
-    init(activity: ConversationActivity, hasUnseenReply: Bool) {
+    init(
+        activity: ConversationActivity,
+        hasUnseenReply: Bool,
+        failureAcknowledged: Bool = false
+    ) {
         self.activity = activity
         self.hasUnseenReply = hasUnseenReply
+        self.failureAcknowledged = failureAcknowledged
     }
 }
 
@@ -91,8 +104,10 @@ nonisolated struct ConversationActivityInputs: Sendable, Hashable {
     /// whole-store aggregate. NOT the tail.
     let newestSendingAt: Date?
     /// Newest unresolved `failed` USER turn in this conversation. Terminal and
-    /// never cleared, so the resolver reports it only while it is still the
-    /// conversation's last activity — see `ConversationActivityResolver.resolve`.
+    /// never cleared, so the resolver bounds it two ways — it is reported only
+    /// while it is still the conversation's last activity, and it stops carrying
+    /// a mark once the user has seen it. See
+    /// `ConversationActivityResolver.resolve`.
     let newestFailedAt: Date?
     /// Role of the newest message, when the surface projected it. `nil` means
     /// NOT PROJECTED (watchOS, CarPlay) — never "unknown role" — and suppresses
@@ -157,10 +172,17 @@ nonisolated enum ConversationActivityResolver {
     ///   be a write based on local ignorance about another device's turn.
     /// - Parameter lastViewedAt: `nil` on a surface that does not track read
     ///   state (watchOS, CarPlay) → `hasUnseenReply` is always false there.
+    /// - Parameter failureSeenAt: `ReadStateStore.shared.lastFailureSeen(id)` on
+    ///   iOS/macOS; `nil` on a surface that keeps no read state, which leaves
+    ///   the failure mark exactly as it was before acknowledgement existed.
+    ///   DELIBERATELY NOT `lastViewedAt` — that marker is stamped when the
+    ///   user's own message appears, which is before the failure it would have
+    ///   to acknowledge exists. See the `ReadStateStore` header.
     static func resolve(
         _ inputs: ConversationActivityInputs,
         locallyLiveSince: Date?,
         lastViewedAt: Date?,
+        failureSeenAt: Date?,
         now: Date = Date()
     ) -> ConversationRowState {
         // 1. DELIVERY — the NEWEST unresolved turn wins.
@@ -168,28 +190,30 @@ nonisolated enum ConversationActivityResolver {
         //    turn and a fresh sending turn is WORKING, and rendering it red
         //    would be a lie the moment the user re-sends. Both timestamps come
         //    from the same aggregate, so the comparison is total.
+        //
+        // A `failed` turn is TERMINAL, and nothing in the app ever clears one:
+        // only an explicit Retry on that exact bubble flips it back to
+        // `sending`, so the stamp is monotone for the life of the install.
+        // `sending` needs no such bound (the launch sweep resolves it just past
+        // the grace), but an unbounded `failed` arm would paint a row red
+        // FOREVER after a single offline send or a user-tapped Stop — and,
+        // because a non-idle delivery state suppresses the fold to
+        // `.answeredUnseen` in step 3, would also kill that conversation's amber
+        // "new reply" disc permanently, on every device.
+        //
+        // So a failure is reported only while it is still the last thing that
+        // happened here. Every message append — including the successful re-ask
+        // that is how users actually recover, rather than scrolling back to
+        // Retry — bumps `lastActivityAt` past it. A failure that IS the tail
+        // compares EQUAL, not less: the append writes `Message.createdAt` and
+        // `Conversation.lastActivityAt` from one `now` in one transaction, and a
+        // status flip bumps neither.
+        let failed = inputs.newestFailedAt.flatMap {
+            $0 >= inputs.lastActivityAt ? $0 : nil
+        }
+
         let activity: ConversationActivity = {
             let sending = inputs.newestSendingAt
-            // A `failed` turn is TERMINAL, and nothing in the app ever clears
-            // one: only an explicit Retry on that exact bubble flips it back to
-            // `sending`, so the stamp is monotone for the life of the install.
-            // `sending` needs no such bound (the launch sweep resolves it just
-            // past the grace), but an unbounded `failed` arm would paint a row
-            // red FOREVER after a single offline send or a user-tapped Stop —
-            // and, because a non-idle delivery state suppresses the fold to
-            // `.answeredUnseen` in step 3, would also kill that conversation's
-            // amber "new reply" disc permanently, on every device.
-            //
-            // So a failure is reported only while it is still the last thing
-            // that happened here. Every message append — including the
-            // successful re-ask that is how users actually recover, rather than
-            // scrolling back to Retry — bumps `lastActivityAt` past it. A
-            // failure that IS the tail compares EQUAL, not less: the append
-            // writes `Message.createdAt` and `Conversation.lastActivityAt` from
-            // one `now` in one transaction, and a status flip bumps neither.
-            let failed = inputs.newestFailedAt.flatMap {
-                $0 >= inputs.lastActivityAt ? $0 : nil
-            }
 
             if let sending, failed == nil || sending > failed! {
                 if let locallyLiveSince {
@@ -217,11 +241,30 @@ nonisolated enum ConversationActivityResolver {
             return inputs.lastActivityAt > lastViewedAt   // strict: equal is NOT unseen
         }()
 
-        // 3. Fold to the four-state mark vocabulary, keeping `unseen` alongside.
+        // 2b. The failure's SECOND bound: has the user already been shown it?
+        //     Answered from its own marker, never from `lastViewedAt` — see the
+        //     parameter doc. Only the failure the row would actually paint is
+        //     considered, so a superseded one cannot report itself acknowledged.
+        //     Non-strict: the marker's clamp pulls it up to at least the failed
+        //     turn's stamp, so equality is exactly the "seen it" case.
+        let acknowledged: Bool = {
+            guard let failed, let failureSeenAt else { return false }
+            return failureSeenAt >= failed
+        }()
+
+        // 3. Fold to the four-state mark vocabulary, keeping both attention
+        //    facts alongside.
         if case .idle = activity, unseen {
             return ConversationRowState(activity: .answeredUnseen, hasUnseenReply: true)
         }
-        return ConversationRowState(activity: activity, hasUnseenReply: unseen)
+        return ConversationRowState(
+            activity: activity,
+            hasUnseenReply: unseen,
+            // Never claim acknowledgement on a row that is not reporting the
+            // failure: a fresh `sending` turn outranks an older failure, and a
+            // stale acknowledgement must not survive into that state.
+            failureAcknowledged: activity == .failed && acknowledged
+        )
     }
 }
 

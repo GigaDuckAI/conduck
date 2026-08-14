@@ -211,7 +211,9 @@ Every row in the conversation list resolves to an activity — a turn is in flig
 
 **Delivery is aggregated over the conversation's unresolved turns, never read off the last message.** Two turns can be in flight in one conversation at once — a headless wrist relay racing an in-app send — and a reply that resolves one of them says nothing about the other. Within delivery, the newest unresolved turn wins.
 
-**A failure is reported only while it is still the conversation's last activity.** Asking again clears it, so the row stops claiming a state the user has already moved past without them having to go back and dismiss a Retry.
+**A failure ends two different ways, because there are two different things to end.** Asking again ends the state itself: the failure is no longer the conversation's last activity, the row has genuinely moved on, and it stops reporting one without the user having to go back and dismiss a Retry. Opening the thread ends only the alarm: the row goes on saying the message was not sent, because it still was not, and drops the mark, because the user has now been told and does not need telling on every later glance at the list. Without the second ending a single failure sits red until the user happens to send into that thread again, which is not a thing they reliably do — the failed conversation is often exactly the one they abandon.
+
+**Whether a failure has been seen is a separate fact from whether the thread has been looked at, and it is recorded separately because it cannot be derived.** Looking is stamped by the arrival of messages, the user's own included; failing moves no timestamp at all. So the looking marker already runs ahead of the failure it would have to acknowledge, and a design that read one from the other would retire the mark for every failure sent from the composer. Seeing is therefore recorded only where a failure is actually on screen — which is also what makes watching your own send fail count as having seen it, and what makes asking again spend the acknowledgement rather than inherit it.
 
 The Watch records a sending state like every other surface, so a turn dispatched from the wrist shows as in-flight on the phone and the Mac rather than surfacing only once its reply lands.
 
@@ -237,13 +239,15 @@ Several agents answering at once produce several banners and one sound. The wind
 
 The Mac raises a reply notification like every other surface. A menu-bar dot on its own reports that something happened without saying what, or where.
 
-### Whether a reply has been seen is a fact about one device, and never syncs
+### What the user has already seen is a fact about one device, and never syncs
 
-The marker recording when a conversation was last looked at lives in device-local storage, not in the synced database, so the unseen state on the iPad is genuinely the iPad's.
+Two markers record it — when a conversation was last looked at, and when it was last looked at while it was showing a failure — and both live in device-local storage rather than the synced database. So the unseen state on the iPad is genuinely the iPad's, and so is the answer to whether that iPad has shown its user the failure.
 
-**Why it is not a field on the conversation:** the production CloudKit schema is additive-only and permanent. A field added to drive a dot could never be withdrawn, and would have to be carried and reasoned about for as long as the app exists. A dot does not justify that price. It is also not what a user wants — "I read this on my phone" is not a fact the iPad should inherit, because the question the dot answers is whether there is something here you have not looked at *on this screen*.
+**Why neither is a field on the conversation:** the production CloudKit schema is additive-only and permanent. A field added to drive a mark could never be withdrawn, and would have to be carried and reasoned about for as long as the app exists. A mark does not justify that price. It is also not what a user wants — "I read this on my phone" is not a fact the iPad should inherit, because the question these markers answer is whether there is something here you have not looked at *on this screen*.
 
-The Watch keeps no such marker. Its app has its own container, so a wrist marker could only ever record wrist-viewing; the wrist shows delivery state and says nothing about attention.
+A stamp of when this device first saw the feature keeps an imported history from arriving bold — activity from before the device existed is not news. The failure mark deliberately takes no such optimism: an unacknowledged failure over-reports and costs one click, while an acknowledged one goes silent, and a mark that never appears is a message the user never learns did not send. That asymmetry is also what lets asking again re-arm a mark at all, since a retry leaves every timestamp it would otherwise be judged against untouched.
+
+The Watch keeps neither marker. Its app has its own container, so a wrist marker could only ever record wrist-viewing; the wrist shows delivery state and says nothing about attention. A failure therefore stays marked there, which is correct — the phone's acknowledgement is the phone's.
 
 ### Everything persistent goes through one seam
 

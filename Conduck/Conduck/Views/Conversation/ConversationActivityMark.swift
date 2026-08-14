@@ -46,6 +46,7 @@ enum ConversationRowActivity {
             inputs,
             locallyLiveSince: InFlightTurnRegistry.shared.liveSince(conversationID, now: now),
             lastViewedAt: ReadStateStore.shared.lastViewed(conversationID),
+            failureSeenAt: ReadStateStore.shared.lastFailureSeen(conversationID),
             now: now
         )
     }
@@ -131,7 +132,7 @@ struct ConversationActivityMark: View {
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        glyph(state.activity)
+        mark
             .frame(width: slot, height: slot)
             // Same gating as `CaptureCircleButton`: the symbol cross-fade is
             // motion, so Reduce Motion swaps it for a hard cut.
@@ -140,6 +141,26 @@ struct ConversationActivityMark: View {
             // independently focusable glyph would announce it a second time, out
             // of order.
             .accessibilityHidden(true)
+    }
+
+    /// An acknowledged failure keeps its WORDS and loses its MARK. The row still
+    /// says the message was not sent, because it still was not; what it drops is
+    /// the alert, which has already been delivered and does not need repeating
+    /// every time the user scans the list. Renders the same reserved-empty slot
+    /// `.idle` does, so nothing shifts when a failure is retired.
+    /// The `.failed` check is NOT redundant with the flag. The resolver only
+    /// ever sets `failureAcknowledged` alongside `.failed`, but the memberwise
+    /// initializer accepts any pairing and validates nothing, so a stray
+    /// `failureAcknowledged: true` on `.answeredUnseen` would silently blank the
+    /// amber disc — the list's only call-to-action. The view is the wrong layer
+    /// to depend on a constructor's discipline.
+    @ViewBuilder
+    private var mark: some View {
+        if state.failureAcknowledged, case .failed = state.activity {
+            Color.clear
+        } else {
+            glyph(state.activity)
+        }
     }
 
     @ViewBuilder
@@ -259,9 +280,13 @@ struct ConversationActivityLine: View {
             .lineLimit(1)
 
         case .failed:
+            // The words are the same either way — the message did not go, and
+            // that stays true after the user has read the error. Only the
+            // URGENCY is spent, so an acknowledged failure drops to the ordinary
+            // metadata colour and stops reading as a live alert.
             Text(ConversationActivityCopy.notSent)
                 .font(.caption)
-                .foregroundStyle(AppColors.error)
+                .foregroundStyle(resolved.failureAcknowledged ? statusColor : AppColors.error)
                 .lineLimit(1)
         }
     }

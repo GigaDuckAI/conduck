@@ -339,8 +339,28 @@ final class MenuBarCoordinator {
     /// opening a thread clears BOTH its unread and failed flags.
     func clearFailure(_ id: UUID) {
         failedOrder.removeAll { $0 == id }
-        failedConversationIDs.remove(id)
+        // Membership BEFORE the removal: this method is called on every open,
+        // failed or not, and only a thread that actually had a failure to show
+        // can have had one seen. Acknowledging unconditionally would retire the
+        // list's red mark for a failure the user never opened.
+        let hadFailure = failedConversationIDs.remove(id) != nil
         markViewedLocally(id)
+        guard hadFailure else { return }
+        // Same reasoning as `markViewedLocally`: the two surfaces settle
+        // together, so the menu-bar dot and the list row are never left
+        // disagreeing about whether the user has seen this failure.
+        //
+        // `failedAt: nil` — acknowledge as of NOW, deliberately, because this
+        // seam does not hold the failed turn's stamp. `quickRecents` is fetched
+        // WITHOUT turn states, so its `newestFailedAt` is always nil here, and
+        // substituting `lastActivityAt` would be a different field wearing the
+        // right parameter's name. Nil resolves to `now`, which acknowledges
+        // correctly whenever the turn was stamped by a clock this device agrees
+        // with. The residue is the clock-ahead-sibling case, where the mark
+        // simply survives until the user opens the real thread — and
+        // `ConversationThreadView`, which does hold the exact stamp, settles it
+        // there. A mark that clears one screen later is the safe direction.
+        ReadStateStore.shared.markFailureSeen(id, failedAt: nil)
     }
 
     // MARK: - macOS reply banner

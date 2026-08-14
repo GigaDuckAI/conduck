@@ -149,6 +149,29 @@ final class ConversationRowFormatterTests: XCTestCase {
         XCTAssertTrue(label.hasPrefix(ConversationActivityCopy.notSent))
     }
 
+    /// Acknowledgement is PRESENTATIONAL — it retires the red mark and cools the
+    /// metadata colour, neither of which a VoiceOver user perceives. The spoken
+    /// label is therefore identical: the message still was not sent, and a label
+    /// that changed on being read would announce the row twice for no new fact.
+    func testASeenFailureSpeaksExactlyAsAnUnseenOneDoes() {
+        func label(acknowledged: Bool) -> String {
+            MessageRowFormatters.rowAccessibilityLabel(
+                state: ConversationRowState(
+                    activity: .failed,
+                    hasUnseenReply: false,
+                    failureAcknowledged: acknowledged
+                ),
+                title: "Kitchen renovation",
+                subtitle: "You: can you check the permit",
+                gatewayName: "OpenClaw",
+                lastActivityAt: noon,
+                showsGateway: false,
+                now: noon)
+        }
+        XCTAssertEqual(label(acknowledged: true), label(acknowledged: false))
+        XCTAssertTrue(label(acknowledged: true).hasPrefix(ConversationActivityCopy.notSent))
+    }
+
     /// "Not sent … Sent at 12:00" tells a VoiceOver user the turn both was and
     /// was not sent — and the sighted row says only the first half, because a
     /// failed row's metadata line replaces the date with "Not sent".
