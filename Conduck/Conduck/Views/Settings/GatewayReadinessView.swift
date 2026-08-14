@@ -17,22 +17,41 @@
 //     needs no second action: one filled "Yes, it's running" CTA in the pinned
 //     footer, and `onAdapterEscape` is never passed.
 //
-//   .custom — "Can Conduck reach your AI?" over the user's own OpenAI-compatible
-//     server. Its body card is TWO LINES (lead + a link to the site's compatibility
-//     section) because the answers sit below it: the product examples — Ollama,
-//     LiteLLM — ride the first answer card instead, where the choice is actually
-//     made, and are said once per viewport. The answer is TWO `OnboardingChoiceCard`s
-//     in the scrollable content, the same pattern the chooser and the fork use: the
-//     cards ARE the actions, so the footer is empty.
+//   .custom — "Is your AI running as a server?" over the user's own OpenAI-compatible
+//     server. Its body card is TWO SHORT LINES because the answers sit below it: a
+//     premise carrying an `InfoTipButton`, and one reassurance. The product examples
+//     — Ollama, LM Studio — ride the first answer card instead, where the choice is
+//     actually made. The answer is TWO `OnboardingChoiceCard`s in the scrollable
+//     content, the same pattern the chooser and the fork use: the cards ARE the
+//     actions, so the footer is empty.
 //
-// Why the custom lane's two cards carry EQUAL weight (no `emphasis:`, no
-// filled-vs-bordered pairing) and why "I'm not sure" rides the second card:
-// answering yes wrongly is the EXPENSIVE mistake — it sends the user to a
-// terminal to run a pairing command against a server that isn't there. The
-// second card costs one screen they can back out of, and the adapter brief it
-// opens leads with "Your AI stays exactly as it is", which reads fine to someone
-// who arrived merely uncertain. So the screen makes the cheap failure the easy
-// one to fall into, and neither card is styled as the consolation prize.
+// The custom lane sorts on ONE axis: does an OpenAI-compatible server EXIST, or
+// is the user's AI a script / something they built. Reachability is deliberately
+// NOT part of that question — the helper step immediately after this one is what
+// creates it ("Sets up a secure link to your devices"; the user picks Tailscale, a
+// free public link, Cloudflare, or their own HTTPS). Gating on reachability here
+// sends the commonest self-hoster of all — Ollama on `localhost`, honestly unable
+// to claim their phone can reach it — down the adapter lane, which solves a problem
+// they do not have. Hence the second body line: it retires the objection out loud
+// rather than letting it decide the answer.
+//
+// Terminal access on the server's machine is likewise absent from the cards: BOTH
+// answers end at the helper step (the adapter brief continues there too), so it
+// sorts nothing. It is stated where it applies — the heads-up and commands steps.
+//
+// Why the two cards carry EQUAL weight (no `emphasis:`, no filled-vs-bordered
+// pairing) and why "I'm not sure" rides the second card: answering yes wrongly is
+// the EXPENSIVE mistake — it sends the user to a terminal to run a pairing command
+// against a server that isn't there. The second card costs one screen they can back
+// out of, and the adapter brief it opens leads with "Your AI stays exactly as it
+// is", which reads fine to someone who arrived merely uncertain. So the screen makes
+// the cheap failure the easy one to fall into, and neither card is styled as the
+// consolation prize.
+//
+// The premise takes a TIP, not a link to the site's compatibility section: this is
+// the entry step on the `.quickConnect` path, so a web link here ejects a first-timer
+// to Safari before they have done anything, and on the guided path the heads-up step
+// one screen earlier already hands them the lane's site page.
 //
 // Like every guided sub-step, the container paints the gradient + Back/Close
 // chrome; this view renders only the mascot / title / body card (plus the custom
@@ -52,14 +71,15 @@ struct GatewayReadinessView: View {
     var onAdapterEscape: (() -> Void)? = nil
 
     /// Lane-specific screen title. The full-agent lane can presume a server (the
-    /// lane IS "run OpenClaw or Hermes"); the custom lane can't, so it asks for the
-    /// actual requirement — reachability — instead of presuming the thing exists.
+    /// lane IS "run OpenClaw or Hermes"), so it asks whether that server is up. The
+    /// custom lane can't presume one at all, so it asks the question its two answers
+    /// actually sort on: is the user's AI server-shaped in the first place.
     private var title: LocalizedStringKey {
         switch lane {
         case .fullAgent:
             return "Is your server running?" // xcstrings: gateway-readiness
         case .custom:
-            return "Can Conduck reach your AI?" // xcstrings: gateway-readiness
+            return "Is your AI running as a server?" // xcstrings: gateway-readiness
         }
     }
 
@@ -114,28 +134,45 @@ struct GatewayReadinessView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
             case .custom:
-                // Two lines only — a lead naming WHAT (an OpenAI-compatible gateway)
-                // + WHERE (a server you run), then the learn-more link. The card is
-                // deliberately SHORT on this lane because the two answer cards sit
-                // below it: every row here pushes them further under the fold, and on
-                // a phone an answer the user has to scroll to find is worse than an
-                // unstated requirement. What the lane needs (chat now, files later)
-                // the lead sentence and the cards already carry.
-                Text("Conduck connects to an OpenAI-compatible gateway on a server you run — a VPS, a Mac mini, a Raspberry Pi.") // xcstrings: gateway-readiness
-                    .onboardingScaledFont(.subheadline)
-                    .foregroundStyle(AppColors.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Two short lines only. The card is deliberately minimal on this
+                // lane because the two answer cards sit below it: every row here
+                // pushes them further under the fold, and on a phone an answer the
+                // user has to scroll to find is worse than an unstated requirement.
+                //
+                // Line 1 — the premise, stated in the same word the rest of the lane
+                // uses ("server", as on the chooser, the commands step and the
+                // gateway editor's own tips). NOT "gateway": this was the only screen
+                // in the flow spelling it that way, and it is the techiest word a
+                // first-timer meets here. The definition — including what
+                // "OpenAI-compatible" and https mean for them — lives in the tip, so
+                // the screen stays two lines and the reader opts in to the detail.
+                //
+                // The tip button is a SIBLING of the text, never inside a choice card:
+                // `OnboardingChoiceCard` claims its whole row, and a nested tip would
+                // hand its taps to the card's action (`InfoTipButton`'s placement
+                // contract). No `Spacer` after it — the enclosing VStack is already
+                // leading-aligned, and a flexible spacer competes with the Text for
+                // width and wraps the sentence earlier than it needs to.
+                HStack(spacing: 0) {
+                    Text("Conduck needs your AI running as a server.") // xcstrings: gateway-readiness
+                        .onboardingScaledFont(.subheadline)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                // Learn-more — the custom lane's analog of the full-agent lane's
-                // "Get OpenClaw or Hermes" sentence, pointing at the site's
-                // compatibility section (the durable OpenAI-API rule + what works),
-                // NOT the install walkthrough. It names no products: the answer
-                // cards below name them at the point the choice is made, and saying
-                // them twice in one viewport reads as padding.
-                Text(customLearnMore)
+                    InfoTipButton(tip: GatewayFieldTips.runningAsServer)
+                }
+
+                // Line 2 — the objection this screen exists to disarm. Someone running
+                // Ollama on `localhost` can answer the title honestly and still fear
+                // the "yes" card, because their phone plainly cannot reach that
+                // address today; without this line they take the adapter branch, which
+                // is the wrong lane for them. "this device", not "this phone" — the
+                // guided flow reaches readiness on macOS too (where the iOS-only
+                // heads-up step is skipped), and it matches the gateway editor's own
+                // URL tip.
+                Text("It doesn't have to be reachable from this device yet — the next step sets that up.") // xcstrings: gateway-readiness
                     .onboardingScaledFont(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
-                    .tint(.blue)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -166,30 +203,6 @@ struct GatewayReadinessView: View {
         )) ?? AttributedString("Don't have one yet? Get OpenClaw or Hermes.")
     }
 
-    /// The custom lane's "learn more" sentence as a markdown `AttributedString`,
-    /// with only the call-to-read phrase linked to the site's compatibility section
-    /// (`setupGuideURL` + `#compatibility`). Plain-text fallback if the markdown
-    /// fails to parse. The product examples live on the answer cards, not here.
-    ///
-    /// Key is `…custom.compat.open`, NOT the retired `…custom.compat`: rewording an
-    /// existing catalog key's `defaultValue:` never shows at runtime — the catalog
-    /// entry wins — so a reworded string MUST take a new key or it silently keeps
-    /// rendering the old text.
-    private var customLearnMore: AttributedString {
-        let url = Constants.setupGuideURL + "#compatibility"
-        let template = String(localized: LocalizedStringResource(
-            "gatewaySetup.readiness.custom.compat.open",
-            defaultValue: "Not sure what counts? [See what Conduck can talk to](%1$@)."
-        ))
-        let markdown = String(format: template, url)
-        return (try? AttributedString(
-            markdown: markdown,
-            options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .inlineOnlyPreservingWhitespace
-            )
-        )) ?? AttributedString("Not sure what counts? See what Conduck can talk to.")
-    }
-
     // MARK: - Custom-lane answers (equal-weight cards, in-content)
 
     /// The custom lane's two answers, as the chooser/fork choice cards rather than
@@ -198,26 +211,32 @@ struct GatewayReadinessView: View {
     /// no `emphasis:`, no badge — so the only steer is reading order.
     private var customAnswerCards: some View {
         VStack(spacing: 12) {
-            // Answers the title's question — REACHABLE, not merely running. A server
-            // that is up on a box this device cannot route to is the case that used
-            // to slip through a bare "Yes, it's running" and land the user in the
-            // terminal step anyway, which is the expensive failure this screen exists
-            // to prevent.
+            // Answers the title's question. "already running" is permissive on
+            // purpose — the bar is that the server EXISTS, not that it is exposed,
+            // holds a certificate, or answers from outside its own machine; the
+            // helper step handles all three. The examples are two names a first-timer
+            // plausibly recognizes (LM Studio earns its slot over a proxy like
+            // LiteLLM by being the one with a window and buttons), and the trailing
+            // clause carries everyone else. The glyph matches the tip's `server.rack`
+            // so the definition and the answer it qualifies read as one thing.
             OnboardingChoiceCard(
                 icon: "server.rack",
-                title: "Yes — it's running and I can reach it", // xcstrings: gateway-readiness
-                subtitle: "Ollama, LiteLLM, or a server you already run.", // xcstrings: gateway-readiness
+                title: "Yes — it's already running", // xcstrings: gateway-readiness
+                subtitle: "Ollama, LM Studio, or a server you set up yourself.", // xcstrings: gateway-readiness
                 action: proceed
             )
             .accessibilityIdentifier("guidedSetup.readiness.proceed")
 
             // `cpu` (the chooser's glyph for "an AI you built") against the first
             // card's `server.rack`: the difference between the two answers is
-            // whether there is a server around the AI at all.
+            // whether there is a server around the AI at all — which is the whole
+            // axis this step sorts on. "No" rather than "Not yet" so the pair reads
+            // as the two answers to the title; "or I'm not sure" keeps uncertainty
+            // landing on the cheap, reversible branch.
             if let onAdapterEscape {
                 OnboardingChoiceCard(
                     icon: "cpu",
-                    title: "Not yet, or I'm not sure", // xcstrings: gateway-readiness
+                    title: "No, or I'm not sure", // xcstrings: gateway-readiness
                     subtitle: "You built your own AI, or it's a script — not a server.", // xcstrings: gateway-readiness
                     action: onAdapterEscape
                 )

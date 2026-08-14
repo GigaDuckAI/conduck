@@ -3,10 +3,11 @@
 // Conduck
 // GatewayFieldTips.swift
 //
-// Single source of truth for the gateway editor's field-tip copy — the popover
-// definitions behind each `InfoTipButton`. Mirrors `GatewayGroupCopy`: a pure
-// `enum` of constants, shared iOS + macOS, so the two shells can't drift and a
-// copy change lands in one place.
+// Single source of truth for every `InfoTipButton`'s popover copy — the gateway
+// editor's field tips, the file-transfer rows, and the guided flow's one
+// concept tip. Mirrors `GatewayGroupCopy`: a pure `enum` of constants, shared
+// iOS + macOS, so the two shells can't drift and a copy change lands in one
+// place.
 //
 // Register: plain, warm, concrete. A tip says what the thing IS and what Conduck
 // does with it — never restates the label, never leads with jargon, never assumes
@@ -172,6 +173,39 @@ enum GatewayFieldTips {
         message: LocalizedStringResource(
             "fileTransfer.tip.url.message",
             defaultValue: "Your gateway carries the conversation, but it has nowhere to put a file. So files go to a second small service you run alongside it — a file server — and your agent picks them up from there. This is that service's address, which is why it's a different address and port from the gateway's. Conduck uploads straight to it; the file passes through no one else."
+        )
+    )
+
+    // MARK: - Guided setup
+    //
+    // The custom lane's readiness step. Not an editor field — the one place in the
+    // guided flow where a word the screen can't avoid ("server") needs a definition,
+    // and the tip is what keeps that definition OFF the screen: the step sorts two
+    // answers, and a paragraph explaining the premise pushes them under the fold.
+    // Keys carry the `gatewaySetup.readiness.` prefix of the step that shows it; it
+    // lives here so all tip copy has ONE home.
+
+    /// What "a server" means, for someone who has never run one. Says the two
+    /// requirements the app actually enforces — the OpenAI-compatible chat API, and
+    /// https — but pairs each with the reason it isn't a wall: the API is what AI
+    /// servers already speak, and the setup step can supply the https.
+    ///
+    /// Deliberately names no products: the answer cards below it carry Ollama and
+    /// LM Studio, at the point the choice is made. The tip owns the RULE, the cards
+    /// own the EXAMPLES.
+    static let runningAsServer = GatewayFieldTip(
+        symbol: "server.rack",
+        accessibilityLabel: LocalizedStringResource(
+            "gatewaySetup.readiness.tip.server.a11y",
+            defaultValue: "About running as a server"
+        ),
+        title: LocalizedStringResource(
+            "gatewaySetup.readiness.tip.server.title",
+            defaultValue: "Running as a server"
+        ),
+        message: LocalizedStringResource(
+            "gatewaySetup.readiness.tip.server.message",
+            defaultValue: "A program that stays on and answers requests at a web address — not something you start, use, and close when you're done. It has to speak the OpenAI-compatible chat API, which is what most AI servers already use. Conduck only connects over https, and the setup step can put that in front of your server for you."
         )
     )
 

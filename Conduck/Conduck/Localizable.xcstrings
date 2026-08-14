@@ -655,9 +655,6 @@
         }
       }
     },
-    "Can Conduck reach your AI?" : {
-
-    },
     "Can't reach %@. Check connection." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1072,9 +1069,6 @@
       }
     },
     "Conduck connects straight to your AI — we never see your data." : {
-
-    },
-    "Conduck connects to an OpenAI-compatible gateway on a server you run — a VPS, a Mac mini, a Raspberry Pi." : {
 
     },
     "Conduck couldn't send what you shared. Try sharing it again." : {
@@ -5653,17 +5647,6 @@
         }
       }
     },
-    "gatewaySetup.readiness.custom.compat.open" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not sure what counts? [See what Conduck can talk to](%1$@)."
-          }
-        }
-      }
-    },
     "gatewaySetup.readiness.getServer" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -6303,9 +6286,6 @@
           }
         }
       }
-    },
-    "Not yet, or I'm not sure" : {
-
     },
     "Nothing in your conversations matches that search." : {
       "extractionState" : "manual",
@@ -16320,9 +16300,6 @@
 
     },
     "Works on every Apple Watch" : {
-
-    },
-    "Yes — it's running and I can reach it" : {
 
     },
     "Yes, it's running" : {
