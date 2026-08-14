@@ -215,6 +215,36 @@ final class WatchSettingsReader {
     /// outliving the multi-gateway sender that vouched for it.
     private(set) var remoteAgentFileLaneIDByRef: [String: String] = [:]
 
+    /// Per-ref cached file-server RETURN capability — whether that gateway's file
+    /// server can LIST a collection at all (the iPhone's
+    /// `FileTransferSnapshot.returnCapable`, couriered in each sub-envelope's
+    /// `fileTransferReturnCapable`).
+    ///
+    /// ABSENT KEY = CAPABLE, the opposite polarity to every sibling map here, and
+    /// deliberately so. The flag is a NARROWING the app applies only on a
+    /// structural refusal the server itself stated (a `405`/`501` answer to a
+    /// `PROPFIND` of a collection that certainly exists); everything else —
+    /// transport failure, timeout, 401, 403, 429, 5xx, redirect — proves nothing.
+    /// "No stored value" is therefore absence of evidence, not evidence of
+    /// absence, and a `false` default would switch wrist file return off for
+    /// every pair mid-upgrade and for every pair whose iPhone predates this
+    /// courier. Matches `SettingsManager.getFileServerReturnCapable`, which the
+    /// iPhone reads with the same default before broadcasting.
+    ///
+    /// THE WRIST CANNOT MEASURE THIS ITSELF and must never try: it holds no
+    /// file-server credential by design, so it issues no absence witness and has
+    /// no way to discover a refusal. This cache is its only source, and it exists
+    /// because the wrist still NAMES a per-dispatch output folder — naming a path
+    /// needs no credential — which on an upload-only lane invites the agent to
+    /// write into a directory nothing can ever list. Read at dispatch through
+    /// `remoteAgentFileLane(for:)`.
+    ///
+    /// Rebuilt ATOMICALLY per multi-envelope, same posture as the two maps above,
+    /// so a ref that lost (or repaired) its lane on the iPhone can never retain a
+    /// stale verdict — including a stale `false` for a server the user has since
+    /// fixed, which would otherwise silently outlive the repair.
+    private(set) var remoteAgentFileReturnCapableByRef: [String: Bool] = [:]
+
     /// The custom-gateway roster received via the multi-envelope and persisted to
     /// the Watch App Group (`customGatewaysRegistryKey`). Source of truth for a
     /// custom's name / model / badge AND the known-customs index for clearing
@@ -375,6 +405,33 @@ final class WatchSettingsReader {
     /// normal envelope carrying real backends is accepted.
     private static let remoteAgentTornDownKey = "watch.remoteAgentTornDown"
 
+    /// **Watch App Group only** (NO KVS) key for a SPECIFIC ref's couriered
+    /// file-server RETURN capability — the iPhone's
+    /// `FileTransferSnapshot.returnCapable`, delivered in that ref's
+    /// `RemoteAgentBroadcastEnvelope.fileTransferReturnCapable`. Format
+    /// `fileServer.returnCapable.<suffix>`, the same shape the iPhone uses for
+    /// its own copy, so the two sides name one fact one way.
+    ///
+    /// Exists purely for COLD-LAUNCH durability, exactly like
+    /// `Constants.fileServerLaneIDKey`: a ControlWidget-launched wrist process
+    /// can dispatch a turn before any envelope arrives, and without this slot
+    /// that turn would fall back to the capable default and name a folder on a
+    /// server that has already proved it can never list one.
+    ///
+    /// NOT read from iCloud KVS even though the iPhone dual-writes this key
+    /// there. KVS on watchOS is a laggy mirror with no ubiquity token, and the
+    /// verdict must stay paired with the READINESS and LANE IDENTITY the same
+    /// envelope carried — three facts read from one iPhone-side snapshot. A live
+    /// KVS read could hand back a verdict describing a different lane than the
+    /// one this dispatch is about to use.
+    ///
+    /// Internal rather than private so the wrist's own contract tests can seed
+    /// and clear the durable slot without duplicating the literal — the sibling
+    /// keys live in `Constants`, which is the iPhone target's file.
+    static func fileServerReturnCapableKey(for ref: RemoteAgentRef) -> String {
+        "fileServer.returnCapable." + ref.storageKeySuffix
+    }
+
     /// Atomic update for { activePresetID, apiKey, activeCustomModel, the TTS
     /// triple, lastEnvelopeTimestamp } triggered by an incoming
     /// `STTBroadcastEnvelope`. Rejects out-of-order envelopes via the monotonic-
@@ -532,11 +589,23 @@ final class WatchSettingsReader {
         // identity, which is the thing that authorizes a later probe, is dropped.
         // A missing lane costs a chip; a wrong lane costs trust.
         remoteAgentFileLaneIDByRef = [:]
+        // The RETURN verdict retires on the same terms and in the same breath.
+        // It was couriered by that same multi-gateway sender, and a verdict is a
+        // fact about a server this sender cannot even name — so keeping it would
+        // leave a `false` orphaned against a gateway nobody currently vouches
+        // for. Dropping it resolves to the CAPABLE default, which is the right
+        // answer for a legacy sender: an unstated capability is not a proven
+        // incapability. It costs nothing here in practice — the lane identity
+        // just went with it, and a dispatch with no identity names no folder
+        // regardless — but the two must never be able to drift apart.
+        remoteAgentFileReturnCapableByRef = [:]
         for builtin in RemoteAgentBackend.allCases {
             appGroupDefaults.removeObject(forKey: Constants.fileServerLaneIDKey(for: .builtin(builtin)))
+            appGroupDefaults.removeObject(forKey: Self.fileServerReturnCapableKey(for: .builtin(builtin)))
         }
         for gateway in customGateways {
             appGroupDefaults.removeObject(forKey: Constants.fileServerLaneIDKey(for: gateway.ref))
+            appGroupDefaults.removeObject(forKey: Self.fileServerReturnCapableKey(for: gateway.ref))
         }
         // The single envelope carries no default pointer; treat its backend as
         // the default for a legacy install (matches the iPhone single-gateway
@@ -586,6 +655,7 @@ final class WatchSettingsReader {
         var newAuthSchemes: [String: RemoteAgentAuthScheme] = [:]
         var newFileTransferReady: [String: Bool] = [:]
         var newFileLaneIDs: [String: String] = [:]
+        var newFileReturnCapable: [String: Bool] = [:]
         var newCustoms: [CustomGateway] = []
         for sub in envelope.backends {
             let ref = sub.backendRef
@@ -605,6 +675,16 @@ final class WatchSettingsReader {
             if sub.fileTransferAvailable, let laneID = sub.fileTransferLaneID {
                 newFileLaneIDs[ref] = laneID
             }
+            // Per-ref RETURN capability. Recorded for EVERY ref in the envelope,
+            // ready or not, and unconditionally — unlike the lane identity above,
+            // which is withheld without readiness. The two are asymmetric on
+            // purpose: an identity authorizes a later probe, so it must never
+            // outlive the readiness it was paired with, whereas this is a plain
+            // fact about the server that stays true whether or not the lane is
+            // ready right now. The wire key is always encoded and decodes to
+            // `true` when missing, so an un-upgraded iPhone lands the capable
+            // default here rather than silently disabling wrist file return.
+            newFileReturnCapable[ref] = sub.fileTransferReturnCapable
             if let fp = sub.certFingerprintHex, !fp.isEmpty {
                 newCerts[ref] = fp
             }
@@ -644,6 +724,11 @@ final class WatchSettingsReader {
             appGroupDefaults.removeObject(forKey: Constants.remoteAgentAuthSchemeKey(for: oldGateway.ref))
             appGroupDefaults.removeObject(forKey: Constants.fileTransferAvailableKey(for: oldGateway.ref))
             appGroupDefaults.removeObject(forKey: Constants.fileServerLaneIDKey(for: oldGateway.ref))
+            // The return verdict goes with the gateway it described. A forgotten
+            // custom can be re-added later under a NEW uuid, but the suffix here
+            // is the OLD one — leaving the slot behind would strand a verdict
+            // pointing at a gateway that no longer exists.
+            appGroupDefaults.removeObject(forKey: Self.fileServerReturnCapableKey(for: oldGateway.ref))
             Task { await WatchIdentityResolver.shared.clearRemoteAgentToken(for: ref) }
             // Freeze this gateway's badge before its roster entry goes. This
             // loop IS the wrist's view of "the user forgot a custom on the
@@ -695,6 +780,16 @@ final class WatchSettingsReader {
             } else {
                 appGroupDefaults.removeObject(forKey: Constants.fileServerLaneIDKey(for: .builtin(backend)))
             }
+            // Return capability, same present-write / absent-clear rule. Clearing
+            // is what lets a REPAIRED server heal without a wrist relaunch quirk:
+            // the slot reads capable again the moment the iPhone stops sending a
+            // `false`, and a built-in dropped from the configured set leaves no
+            // verdict behind to resurrect on the next cold hydrate.
+            if let capable = newFileReturnCapable[ref] {
+                appGroupDefaults.set(capable, forKey: Self.fileServerReturnCapableKey(for: .builtin(backend)))
+            } else {
+                appGroupDefaults.removeObject(forKey: Self.fileServerReturnCapableKey(for: .builtin(backend)))
+            }
         }
 
         // Persist per-CUSTOM url + cert to the Watch App Group (cold-launch
@@ -725,6 +820,11 @@ final class WatchSettingsReader {
             } else {
                 appGroupDefaults.removeObject(forKey: Constants.fileServerLaneIDKey(for: gateway.ref))
             }
+            if let capable = newFileReturnCapable[ref] {
+                appGroupDefaults.set(capable, forKey: Self.fileServerReturnCapableKey(for: gateway.ref))
+            } else {
+                appGroupDefaults.removeObject(forKey: Self.fileServerReturnCapableKey(for: gateway.ref))
+            }
         }
 
         // Persist the custom roster (App Group JSON) — the known-customs index for
@@ -744,6 +844,11 @@ final class WatchSettingsReader {
         // envelope must lose its lane identity entirely rather than let a wrist
         // turn be stamped with a lane the iPhone no longer has.
         remoteAgentFileLaneIDByRef = newFileLaneIDs
+        // ATOMIC replacement, third of three. A ref omitted from this envelope
+        // loses its verdict entirely (→ the capable default), and a ref whose
+        // server was REPAIRED loses its `false` the moment the iPhone re-measures
+        // — the wrist must never be the last holder of a stale incapability.
+        remoteAgentFileReturnCapableByRef = newFileReturnCapable
         customGateways = newCustoms
 
         // Effective-default change → clear this Watch's OWN active-conversation
@@ -934,24 +1039,56 @@ final class WatchSettingsReader {
         remoteAgentFileTransferReadyByRef[ref] ?? false
     }
 
-    /// The file-lane facts a converse dispatch needs, resolved TOGETHER: whether
-    /// to splice the per-turn file-delivery instruction, and the lane identity to
-    /// stamp on the reply so a capable device's retroactive output scan can prove
-    /// which lane that turn belongs to.
+    /// Whether the gateway bound to `ref` (a `rawString`) has a file server that
+    /// can LIST a collection, per the iPhone-couriered per-ref cache. Absent key
+    /// → TRUE (see `remoteAgentFileReturnCapableByRef` for why the default runs
+    /// the other way from every sibling accessor here).
     ///
-    /// One accessor, not two reads, because the two answers are one decision: a
-    /// turn that carries the instruction should carry the identity, and an
-    /// identity without readiness must never be stamped (it would authorize a
-    /// later probe for a turn that never invited a file). `laneID` is therefore
-    /// nil whenever `ready` is false, whatever the caches hold.
+    /// Deliberately NOT gated on readiness. Readiness is a live property of the
+    /// lane; this is a property of the SERVER, and answering "capable" for a
+    /// currently-unready lane is honest — the mint gate refuses on readiness
+    /// anyway, so folding the two here would only hide which fact did the
+    /// refusing.
+    func remoteAgentFileReturnCapable(for ref: String) -> Bool {
+        remoteAgentFileReturnCapableByRef[ref] ?? true
+    }
+
+    /// The file-lane facts a converse dispatch needs, resolved TOGETHER: whether
+    /// to splice the per-turn file-delivery instruction, the lane identity to
+    /// stamp on the reply so a capable device's retroactive output scan can prove
+    /// which lane that turn belongs to, and whether that lane's server can list a
+    /// folder at all.
+    ///
+    /// One accessor, not three reads, because the three answers are one decision:
+    /// a turn that carries the instruction should carry the identity, an identity
+    /// without readiness must never be stamped (it would authorize a later probe
+    /// for a turn that never invited a file), and a folder must not be named on a
+    /// lane that can never list one. `laneID` is therefore nil whenever `ready`
+    /// is false, whatever the caches hold.
     ///
     /// `laneID == nil` with `ready == true` is legitimate and means exactly one
     /// thing: the sender is an iPhone that predates the lane courier. The turn
     /// still asks for the file; it simply can't be scanned later. That is the
     /// old behavior preserved, never a new failure.
-    func remoteAgentFileLane(for ref: String) -> (ready: Bool, laneID: String?) {
+    ///
+    /// `returnCapable == false` with a READY lane and a real identity is the
+    /// upload-only server (plain nginx with `dav_methods PUT DELETE`, say): the
+    /// wrist may still send files UP and its earlier uploads stay reachable, so
+    /// the identity is handed back in full. WITHHOLDING THE IDENTITY IS NOT A
+    /// SUBSTITUTE FOR THE FLAG and must not be tried — `ConversationHistoryAssembler`
+    /// reads the same id to recognise a thread's earlier server files as
+    /// reachable, and an upload-only lane's earlier uploads genuinely are, so a
+    /// withheld id would make every wrist turn claim the user's own attachments
+    /// unavailable. Only the folder-minting decision narrows.
+    func remoteAgentFileLane(
+        for ref: String
+    ) -> (ready: Bool, laneID: String?, returnCapable: Bool) {
         let ready = remoteAgentFileTransferReady(for: ref)
-        return (ready, ready ? remoteAgentFileLaneIDByRef[ref] : nil)
+        return (
+            ready,
+            ready ? remoteAgentFileLaneIDByRef[ref] : nil,
+            remoteAgentFileReturnCapable(for: ref)
+        )
     }
 
     /// Resolve the pinned cert fingerprint for the gateway bound to `ref` (a
@@ -1329,6 +1466,7 @@ final class WatchSettingsReader {
             var schemes: [String: RemoteAgentAuthScheme] = [:]
             var ready: [String: Bool] = [:]
             var laneIDs: [String: String] = [:]
+            var returnCapable: [String: Bool] = [:]
             // Built-in refs (URL dual-written to KVS by iOS; App Group fallback).
             for backend in RemoteAgentBackend.allCases {
                 let ref = RemoteAgentRef.builtin(backend).rawString
@@ -1359,6 +1497,18 @@ final class WatchSettingsReader {
                    !laneID.isEmpty {
                     laneIDs[ref] = laneID
                 }
+                // Return capability: Watch App Group only (envelope-couriered),
+                // and the ONLY one of these three whose absence is the permissive
+                // answer. Hydrating it matters most on exactly the launch that
+                // hydrates the lane identity — a ControlWidget cold start can
+                // dispatch before any envelope arrives, and without this read the
+                // wrist would fall back to "capable" and name a folder on the one
+                // kind of server that has already proved it can never list one.
+                if let capable = appGroupDefaults.object(
+                    forKey: Self.fileServerReturnCapableKey(for: .builtin(backend))
+                ) as? Bool {
+                    returnCapable[ref] = capable
+                }
             }
             // Custom refs (URL + cert in the Watch App Group only — the multi
             // envelope is the sole source; iOS does not KVS-write custom URLs to
@@ -1386,6 +1536,11 @@ final class WatchSettingsReader {
                    !laneID.isEmpty {
                     laneIDs[ref] = laneID
                 }
+                if let capable = appGroupDefaults.object(
+                    forKey: Self.fileServerReturnCapableKey(for: gateway.ref)
+                ) as? Bool {
+                    returnCapable[ref] = capable
+                }
             }
             remoteAgentURLs = urls
             remoteAgentCertFingerprints = certs
@@ -1393,6 +1548,7 @@ final class WatchSettingsReader {
             remoteAgentAuthSchemes = schemes
             remoteAgentFileTransferReadyByRef = ready
             remoteAgentFileLaneIDByRef = laneIDs
+            remoteAgentFileReturnCapableByRef = returnCapable
         }
         if remoteAgentDefaultBackendRef == nil {
             // DEVICE-LOCAL: the Watch default now comes from the couriered +

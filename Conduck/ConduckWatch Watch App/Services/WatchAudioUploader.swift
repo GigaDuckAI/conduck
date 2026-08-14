@@ -423,15 +423,43 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// and the device that eventually READS the folder is the one that can tell a
     /// real listing from a catch-all server.
     ///
-    /// Takes the resolver's whole verdict rather than a bare id so the readiness
-    /// half stays visible at the decision: `ready == false` must mint nothing even
-    /// if an identity is somehow in hand, which is the same fail-closed rule the
+    /// GATED ON THE RETURN CAPABILITY TOO, and it is a gate, not a nuance. A
+    /// server that answers `405`/`501` to a `PROPFIND` can never list this folder,
+    /// so naming one on that lane invites the agent to write into a directory
+    /// nothing can ever read — and a capable device that later opens the thread
+    /// runs the retroactive scan, fails, and shows a permanent "couldn't read your
+    /// file server" fault for a limitation Settings already states plainly, in
+    /// amber, as "Uploads only". The wrist cannot discover this for itself (it
+    /// holds no file-server credential by design and issues no absence witness),
+    /// so the iPhone — which can, and did — couriers the answer on
+    /// `RemoteAgentBroadcastEnvelope.fileTransferReturnCapable`; the wrist caches
+    /// it per ref and hands it back through `remoteAgentFileLane(for:)`. An
+    /// un-upgraded iPhone omits the key, it decodes and defaults to `true`, and
+    /// this surface keeps its pre-courier behaviour rather than losing file return
+    /// for want of a key nobody wrote.
+    ///
+    /// Gating on the LANE ID instead is not a substitute and must not be tried:
+    /// the id is also what `ConversationHistoryAssembler` uses to recognise a
+    /// thread's earlier server files as reachable, and an upload-only lane's
+    /// earlier files ARE reachable — withholding it would make every wrist turn
+    /// claim the user's own uploads are unavailable.
+    ///
+    /// NOTHING IS SAID when the refusal is the capability, matching what the
+    /// iPhone's own mint does with `OutboxMintOutcome.laneCannotReturn`: a
+    /// permanent property of the user's server is a limitation they can read in
+    /// Settings, and a per-turn complaint about it is the definition of noise.
+    /// The turn still goes out, still carries the spoken clause, and still uploads
+    /// attachments — only the invitation to send something back is withheld.
+    ///
+    /// Takes the resolver's whole verdict rather than a bare id so every half
+    /// stays visible at the decision: `ready == false` must mint nothing even if
+    /// an identity is somehow in hand, which is the same fail-closed rule the
     /// resolver already applies one layer down.
     static func outboxKey(
-        forLane lane: (ready: Bool, laneID: String?),
+        forLane lane: (ready: Bool, laneID: String?, returnCapable: Bool),
         conversationID: UUID
     ) -> String? {
-        guard lane.ready, lane.laneID != nil else { return nil }
+        guard lane.ready, lane.laneID != nil, lane.returnCapable else { return nil }
         return OutboxKey.mint(conversationID: conversationID)
     }
 
@@ -495,7 +523,13 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         // file-lane readiness itself (the credential never syncs to it), so it
         // reads the iPhone-couriered per-ref value; a lane that also couriered
         // its identity splices the outbox location first (location → spoken).
-        // Readiness AND lane identity in ONE resolve. The identity is captured
+        // Readiness, lane identity AND return capability in ONE resolve, because
+        // they are one decision — see `outboxKey(forLane:conversationID:)`.
+        // `fileServerReady` stays the READINESS half alone on purpose: an
+        // upload-only lane can still take files, so the turn keeps its delivery
+        // clause and loses only the outbox location, which is exactly the shape
+        // the iPhone/CarPlay dispatch produces for the same server.
+        // The identity is captured
         // HERE, at dispatch, and carried on the task — it is a dispatch-time fact
         // that cannot be reconstructed when the reply lands (a wrist turn can run
         // for minutes, and the user can repoint the file server on the iPhone
