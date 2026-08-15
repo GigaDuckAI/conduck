@@ -1446,6 +1446,29 @@ enum Constants {
     /// against an accidental giant attachment.
     static let fileTransferSoftConfirmBytes = 100 * 1024 * 1024
 
+    /// Byte ceiling on the encoded list of output-folder entries a reply
+    /// remembers refusing (`OutputDeliveryOutcome.encodedNames`). Over this, the
+    /// list is shortened from the tail until it fits; the COUNT beside it is
+    /// untouched, so the row still reports the full census and only loses part of
+    /// the offer.
+    ///
+    /// It bounds ADVERSARY-CHOSEN TEXT, which is why it exists at all: the names
+    /// come from whatever wrote into the user's folder, the blob rides on the
+    /// message record into the user's own iCloud database, and it replicates to
+    /// every device they own.
+    ///
+    /// It is a SECOND, INDEPENDENT bound and it does not fire today — the name
+    /// gate already caps each component at `storedKeyComponentMaxBytes`, so the
+    /// retained dozen encode to under 3 KiB even at that ceiling. It is here so
+    /// that raising `OutputDeliveryOutcome.maxRetainedRefusedNames`, or admitting
+    /// a longer component, cannot quietly grow a synced field: the two caps
+    /// answer different questions ("how many will we offer" and "how much will we
+    /// store"), and only this one is about the record.
+    ///
+    /// `nonisolated` because the encoder that reads it runs inside a Core Data
+    /// background context's `perform` block, off the main actor.
+    nonisolated static let outputRefusedNamesMaxBytes = 4 * 1024
+
     /// How long the macOS pane-drop target waits for ONE dragged item to
     /// resolve before failing that item and letting the rest of the batch
     /// through (seconds). FOUNDER-TUNABLE. Generous because the source may be a

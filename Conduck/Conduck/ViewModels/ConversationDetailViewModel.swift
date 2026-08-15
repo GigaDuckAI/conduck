@@ -1149,7 +1149,8 @@ final class ConversationDetailViewModel {
     /// result caption.
     var outputRecheckStates: [UUID: OutputRecheckState] = [:]
 
-    /// What a user-initiated look found. Deliberately four-valued, because three
+    /// What a user-initiated look DID. Split first on whether it handed anything
+    /// over, then — inside the empty half — on why it was empty, because three
     /// materially different things all end with no new chip on the row. An empty
     /// result from a lane-wide failure (bad credential, untrusted certificate,
     /// server down, timeout) is NOT the same claim as an empty result from a
@@ -1158,8 +1159,35 @@ final class ConversationDetailViewModel {
     /// same as a folder that held files this app is not able to hand over —
     /// reporting THAT as "nothing found" makes ten refused files look exactly
     /// like an empty folder.
+    ///
+    /// The FIRST split is the load-bearing one, because it is the one that failed
+    /// silently: every case below except `.delivered` says, in one wording or
+    /// another, that the look produced nothing, and a state carrying that claim
+    /// must be unreachable from a look that produced something.
     enum OutputRecheckState: Equatable, Sendable {
         case checking
+        /// The look HANDED FILES OVER — `fileCount` of them.
+        ///
+        /// A CASE OF ITS OWN, NOT A NUMBER ON THE OTHERS, and that is the whole
+        /// point of it. "This look delivered" and "this look delivered nothing"
+        /// are the two answers a tap can have, and while the difference was
+        /// recoverable only by comparing one census against another, a look that
+        /// handed over eight files could — and did — describe itself as one that
+        /// handed over none. The two states below are now produced by exactly one
+        /// branch of `commitTappedOutputs`, the branch guarded on having inserted
+        /// nothing, so no edit can put a delivering look back in front of the
+        /// sentence that denies it.
+        ///
+        /// `fileCount` is the number of entries the listing found that were not
+        /// on the reply, every one of which is on it once the commit returns —
+        /// the store skips a draft whose `storedKey` is ALREADY there, which
+        /// means a skipped one is a file another device inserted first, not a
+        /// file that failed to arrive. So the count describes the row, which is
+        /// what the sentence claims, rather than this device's insert tally.
+        ///
+        /// Carries NO census, and needs none: it reports what the LOOK did, and
+        /// no number of chips arriving afterwards can make that untrue.
+        case delivered(fileCount: Int)
         /// The server answered, and there was nothing to hand over.
         ///
         /// `chipCount` is the row's server-file chip census AT THE MOMENT OF THE
@@ -1173,17 +1201,16 @@ final class ConversationDetailViewModel {
         /// The server answered, and the folder held `count` entries this app is
         /// not able to hand over.
         ///
-        /// NOT A FLAVOUR OF `.noneFound`, because it is the PARTIAL case too. A
-        /// folder holding a report plus one refused name delivers a chip and
-        /// still owes the user the other half of the answer — which "nothing
-        /// found" cannot carry, and which the chip that DID land actively argues
-        /// against. Without this the refused entry is exactly as invisible as it
-        /// is in an all-refused folder.
+        /// NOT A FLAVOUR OF `.noneFound`. Both describe a look that handed over
+        /// nothing, and only this one can say WHY the folder was empty-handed:
+        /// "no returned files were discovered" is equally true of a folder the
+        /// server read out clean and of one holding ten names this app will not
+        /// address, and saying it of the second makes those ten invisible.
         ///
         /// `chipCount` is the same census `.noneFound` carries, retired by the
-        /// same rule — and stamped POST-INSERT, because this state is also set on
-        /// a look that just added chips of its own; a stamp taken before those
-        /// landed would retire the caption on the very next reload.
+        /// same rule. It is a PRE-EXISTING count in both cases — the branch that
+        /// sets either one inserted nothing, so there is no post-insert stamp to
+        /// take.
         case undeliverableEntries(count: Int, chipCount: Int)
         /// The lane could not be reached / would not answer, or it no longer
         /// matches the lane this turn was dispatched to.
@@ -1222,7 +1249,13 @@ final class ConversationDetailViewModel {
             switch state {
             case .noneFound(let chipsThen), .undeliverableEntries(_, let chipsThen):
                 return chipsNow <= chipsThen
-            case .checking, .couldNotCheck:
+            case .checking, .couldNotCheck, .delivered:
+                // NOTHING TO OUTRUN. These report what the LOOK did, not what the
+                // folder holds, so a chip arriving afterwards adds to them rather
+                // than contradicting them: a file that lands later does not make
+                // "the check couldn't finish" or "eight files came back" false.
+                // Only a claim about what is THERE can be overtaken by what is
+                // there.
                 return true
             }
         }
@@ -1569,9 +1602,56 @@ final class ConversationDetailViewModel {
                 messageID: candidate.id,
                 drafts: reconciliation.drafts,
                 markScanned: reconciliation.conclusive,
-                expectedLaneID: expectedLaneID
+                expectedLaneID: expectedLaneID,
+                // CARRIED, NOT DROPPED. This is the ONLY path by which the
+                // AUTOMATIC lane can tell anyone that a file was in the folder
+                // and is not on the row: a tap can report it for as long as the
+                // process lives, but a user who never taps had, without this,
+                // no way to learn it at all. It rides INSIDE the reconciliation
+                // so the post-listing lane-drift check drops it along with the
+                // chips — a side channel would route around that guard.
+                deliveryOutcome: deliveryOutcome(from: reconciliation)
             ),
             verdict: reconciliation.verdict
+        )
+    }
+
+    /// Project one listing into the census the row persists, or nil when this
+    /// pass took no census at all. PURE, so the nil-vs-zero rule is provable
+    /// without a store, a server or a clock.
+    ///
+    /// NIL ON EVERY VERDICT BUT `.entries`, and this is the single most important
+    /// rule in the feature. `.unusable` is a listing the app does not have and
+    /// `.absent` is a folder that is not there — neither observed a folder, so
+    /// neither may report zero withheld entries. Writing zero for them would
+    /// retire a true standing refusal the moment someone's tunnel blinked.
+    ///
+    /// `.absent` is deliberately in that group even though it closes the turn: a
+    /// folder that is gone held nothing to withhold, but it also says nothing
+    /// about what an earlier pass legitimately found in it.
+    static func deliveryOutcome(
+        from reconciliation: FileTransferOutputDetector.OutboxReconciliation
+    ) -> OutputDeliveryOutcome? {
+        guard case .entries = reconciliation.verdict else { return nil }
+        return OutputDeliveryOutcome(
+            typeRefusedCount: reconciliation.typeRefusedEntries.count,
+            shapeRefused: reconciliation.shapeRefused,
+            // THE WHOLE CAP STATE, not just its count. What a budget left behind
+            // and whether the message can still hold it are one fact, and the
+            // count alone forced the row to re-derive the second from
+            // `outputScanDone` — a column that also goes true when a truncated
+            // pass merely ages out past `truncatedScanHorizon`. A reply whose
+            // folder still holds deliverable files then claimed the ceiling was
+            // reached and that nothing more would arrive, over a "Check again"
+            // that would have delivered them.
+            remainder: reconciliation.capState.remainder,
+            // The persisted offer keeps the name and the size and drops the
+            // storedKey the listing minted: `<outputBoxKey>/<name>` rebuilds it
+            // from a column the row already carries, and one key stored twice is
+            // one more pair of values that can drift apart.
+            typeRefusedEntries: reconciliation.typeRefusedEntries.map {
+                RefusedOutputEntry(name: $0.name, byteSize: $0.byteSize)
+            }
         )
     }
 
@@ -1988,11 +2068,14 @@ final class ConversationDetailViewModel {
                 },
                 list: { outboxKey, excluded in
                     guard let snapshot else {
-                        // No lane, so nothing was listed and nothing was
-                        // refused: a census of zero is the honest count, not a
-                        // default that could hide one.
+                        // NO LANE, SO NOTHING WAS LISTED — and `.unusable` is
+                        // the honest encoding of that, which is why the census
+                        // fields are left at their empty defaults rather than
+                        // stated. A zero census here would claim a folder was
+                        // read and found clean by a pass that never opened a
+                        // socket, and that claim would overwrite a real one.
                         return .init(drafts: [], conclusive: false,
-                                     verdict: .unusable(.transport), refusedEntryCount: 0)
+                                     verdict: .unusable(.transport))
                     }
                     return await FileTransferOutputDetector.reconcileOutbox(
                         outboxKey: outboxKey,
@@ -2451,6 +2534,233 @@ final class ConversationDetailViewModel {
         canRecheckOutputs(message) || canSearchMentionedFiles(message)
     }
 
+    /// Whether this turn carries a settled census worth a STANDING row, and what
+    /// it says. Pure, like its two neighbours above, so the visibility rule is
+    /// provable without a store, a server or a view.
+    ///
+    /// NO VIEW-MODEL STATE BACKS THIS, deliberately. The census lives on the
+    /// record, `messages` is already the observable the thread renders from, and
+    /// a bubble already repaints when its own `MessageRecord` compares unequal —
+    /// so a changed census repaints for free. It also needs no pruning: the two
+    /// transient row-drivers beside it (`outputDiscoveryFaultIDs`,
+    /// `outputRecheckStates`) each need a live-id sweep on every reload, while a
+    /// field on a row cannot outlive the row.
+    ///
+    /// Nil for a turn with NO census recorded (UNKNOWN) and for one whose census
+    /// is SILENT (OBSERVED NONE). Those are different facts and the store keeps
+    /// them apart, but they draw the same thing: nothing.
+    ///
+    /// A row with no `outputBoxKey` never qualifies however its census reads — a
+    /// rescue resolves `<outputBoxKey>/<name>`, so a census with no folder
+    /// describes files nothing could fetch. The clone path is why that clause is
+    /// not theoretical: a cloned agent turn can carry a lane with no folder.
+    static func outputDeliveryRow(for message: MessageRecord) -> OutputDeliveryOutcome? {
+        guard message.role == "agent",
+              message.outputScanLaneID != nil,
+              message.outputBoxKey != nil,
+              let outcome = message.outputDeliveryOutcome,
+              !outcome.isSilent,
+              !typeClaimHasGoneStale(outcome) else {
+            return nil
+        }
+        return outcome
+    }
+
+    /// Whether the ONLY thing this census still claims is a type refusal the
+    /// allowlist has since overtaken.
+    ///
+    /// THE ALLOWLIST IS THE ONE INPUT THAT MOVES between the pass that wrote a
+    /// census and the render that reads it, and `rescuableEntries` already
+    /// re-asks the verdict for exactly that reason — so a row could reach the
+    /// screen saying "the folder held 2 files Conduck doesn't open on its own"
+    /// with no name under it and no Review button beside it, because every name
+    /// it had was dropped one layer down. A bare count with nothing to act on is
+    /// the worst of both surfaces: it makes a claim the app can no longer
+    /// support and offers nothing to do about it, over files the thread is about
+    /// to show as ordinary chips.
+    ///
+    /// THREE CONDITIONS, and each is load-bearing:
+    ///   - The other two populations must be EMPTY. A shape count and a
+    ///     remainder are bare integers about names that were never persisted, so
+    ///     nothing can overtake them and the row stands on either.
+    ///   - The claim must be FULLY DESCRIBED by the names it retained
+    ///     (`typeRefusedCount == typeRefusedEntries.count`). A census that
+    ///     counted more of the folder than it kept has an unexamined remainder,
+    ///     and "the ones I kept are deliverable now" says nothing about it.
+    ///   - Every retained name must be deliverable TODAY. An unreadable blob
+    ///     decodes to no entries, which fails this test at the clause above
+    ///     rather than here — a row that lost its names still has its count, and
+    ///     "there were N" is the correct degradation.
+    private static func typeClaimHasGoneStale(_ outcome: OutputDeliveryOutcome) -> Bool {
+        guard outcome.shapeRefusedCount == 0,
+              outcome.undeliveredCount == 0,
+              outcome.typeRefusedCount > 0,
+              outcome.typeRefusedCount == outcome.typeRefusedEntries.count else {
+            return false
+        }
+        return outcome.typeRefusedEntries.allSatisfy { entry in
+            if case .deliverable = FileServerClient.outboxEntryVerdict(entry.name) { return true }
+            return false
+        }
+    }
+
+    /// The caption a manual look leaves on the row, or nil when a clean success
+    /// leaves nothing to annotate.
+    ///
+    /// A TAP IS ALWAYS ANSWERED. That is the rule this function exists to
+    /// enforce, and it is the one an earlier shape broke: the two FINDING
+    /// captions were suppressed outright whenever a standing held-back row was
+    /// up, so a user who tapped "Check again" on exactly the row that offers the
+    /// verb got no acknowledgement of any kind — no caption, no change, nothing
+    /// to distinguish a completed re-read from a tap that missed the button. The
+    /// same silence swallowed "Search mentioned files", which asks about the
+    /// SERVED ROOT and therefore cannot contradict a row about the folder at all.
+    ///
+    /// WHAT THE SUPPRESSION WAS ACTUALLY FOR is narrower than what it did: the
+    /// held-back row is PERSISTED and outlives the look, so a later clean look
+    /// printing "No returned files were discovered." under a row naming a file
+    /// contradicts it, and a shape count printed under a row that already states
+    /// one says the same number twice. Both are fixed by REPHRASING under a row
+    /// rather than by going quiet — and "Nothing new came back" is provable of
+    /// both, because the only branch that can produce either state is the one
+    /// that inserted nothing.
+    ///
+    /// THE REPHRASE IS FOR THE EMPTY HALF ONLY. Every state that reports what the
+    /// LOOK did — `.couldNotCheck`, `.delivered` — is left alone, because a
+    /// sentence about the look cannot contradict a row about the folder: a
+    /// standing refusal and a re-read that got no answer are both true at once,
+    /// and so are a standing refusal and eight files that have just landed. What
+    /// separates those two is only whether they are worth saying at all — see
+    /// `.delivered` below.
+    ///
+    /// `hasStandingRow` is therefore read for two unrelated jobs, and mixing them
+    /// up is what a caller must not do: it decides the WORDING of an empty result,
+    /// and it decides whether a delivery is worth narrating.
+    static func lookResultCaption(
+        for state: OutputRecheckState?,
+        hasStandingRow: Bool
+    ) -> LocalizedStringResource? {
+        switch state {
+        case .checking, nil:
+            return nil
+        case .couldNotCheck:
+            // Deliberately names NO cause. This one state covers a lane that no
+            // longer matches the turn's, a look the app itself declined because
+            // another pass held the turn, a settings edit mid-request, and a
+            // genuine transport/auth/certificate failure. Only the last is a
+            // server the app could not reach, so naming reachability would send
+            // most users to debug a server that is working perfectly.
+            return LocalizedStringResource(
+                "thread.outputs.result.couldNotCheck",
+                defaultValue: "Couldn't finish the check just now.")
+        case .delivered(let fileCount):
+            guard hasStandingRow else {
+                // NOTHING LEFT TO ANNOTATE, which is the same rule a clean
+                // success has always followed: with no row above them the new
+                // chips are the entire visible change, and a sentence counting
+                // what the user can already see is one more line between them and
+                // the files.
+                return nil
+            }
+            // THE ROW SURVIVED THE TAP, and that is what makes this one delivery
+            // worth narrating. A held-back row is persisted, so it repaints
+            // unchanged after a look that added files — the screen a user gets
+            // back from "Check again" is the screen they tapped, with the new
+            // chips folded in among the old ones and the same warning above them.
+            // The count is the only proof on screen that the tap did anything.
+            //
+            // A COUNT, NEVER A NAME: this sentence sits beside a census that may
+            // include shape refusals, and a name is exactly what the gate that
+            // refused them exists to keep out of the app's own voice.
+            return LocalizedStringResource(
+                "thread.outputs.result.delivered",
+                defaultValue: "^[\(fileCount) file](inflect: true) came back.")
+        case .noneFound, .undeliverableEntries:
+            guard !hasStandingRow else {
+                // The row is the richer surface and it is already saying what
+                // the folder holds. This says only what the LOOK did, which is
+                // the half the row cannot cover — and it is what turns a tap
+                // into an answered question.
+                //
+                // TRUE OF BOTH STATES BY CONSTRUCTION, not by inspection: neither
+                // is reachable except from the branch of `commitTappedOutputs`
+                // guarded on having inserted nothing. That is the guarantee the
+                // sentence rests on, and the reason a delivering look can no
+                // longer arrive here to deny its own chips.
+                return LocalizedStringResource(
+                    "thread.outputs.result.nothingNew",
+                    defaultValue: "Nothing new came back.")
+            }
+            // BELOW HERE THE FOLDER HAS NO ROW SPEAKING FOR IT, which for a
+            // refusal count is the narrow window before the census this same
+            // commit persisted has been read back onto the reply. The row is the
+            // better surface once it is up — it names the mechanism and the
+            // remedy — so this arm is what the user sees in the meantime rather
+            // than a second, competing description of the folder.
+            if case .undeliverableEntries(let count, _) = state, count > 0 {
+                // SHAPE REFUSALS ONLY, and that is the whole of what this
+                // caption covers. The other population — a name refused for its
+                // TYPE — has the held-back row, which names it and offers a
+                // rescue; a caption that counted both would report the same file
+                // twice, once as a number under a row that had just named it.
+                //
+                // THE COUNT, NEVER THE NAME, which is precisely why the shape
+                // half stayed here. A shape-refused name is one the outbound
+                // gate was unwilling to address at all, so printing it would put
+                // the deceptive string the gate exists to stop in front of the
+                // user, in the app's own voice.
+                //
+                // AND NO CAUSE. The listing proves the folder held something
+                // this app will not address; it does not prove whether the agent
+                // meant to write it, wrote it by accident, or was handed it by a
+                // tool.
+                return LocalizedStringResource(
+                    "thread.outputs.result.undeliverable",
+                    defaultValue: "The folder for this reply held ^[\(count) file](inflect: true) Conduck can't hand over.")
+            }
+            // DISCOVERY, never a claim about the agent. The server answered and
+            // there was nothing to hand over — which is equally consistent with
+            // a reply that produced nothing, one that wrote somewhere else, and
+            // one whose write tool failed silently. Saying "the agent produced
+            // nothing" would pick one of those out of no evidence.
+            return LocalizedStringResource(
+                "thread.outputs.result.noneFound",
+                defaultValue: "No returned files were discovered.")
+        }
+    }
+
+    /// What a tap's result may write, decided BEFORE any of it happens so the two
+    /// halves cannot drift apart in the body of an `async` method.
+    ///
+    /// TWO SEPARATE QUESTIONS, and conflating them is what this type prevents.
+    /// A census is worth writing on its own — a folder holding only names this
+    /// app will not address IS the zero-draft case, and it is precisely the case
+    /// the standing row exists for. STAMPING the turn is a different and
+    /// PERMANENT act: it removes the turn from the automatic candidate set
+    /// forever. So a tap on a readable but empty folder records what it saw and
+    /// closes nothing, which is what the tap did before the census existed to be
+    /// written.
+    ///
+    /// `conclusive` still owns the age gate on top of the draft test — a pass
+    /// that delivered inside the grace window may not close the turn either.
+    struct TappedOutputCommit: Equatable, Sendable {
+        /// Whether the store is opened at all.
+        let writesToStore: Bool
+        /// Whether that write also stamps `outputScanDone`.
+        let stampsTurnScanned: Bool
+    }
+
+    static func tappedOutputCommit(
+        draftCount: Int,
+        conclusive: Bool,
+        hasCensus: Bool
+    ) -> TappedOutputCommit {
+        TappedOutputCommit(
+            writesToStore: draftCount > 0 || hasCensus,
+            stampsTurnScanned: conclusive && draftCount > 0
+        )
+    }
+
     /// Whether a folder re-read got a real ANSWER about the folder — the evidence
     /// half of what the USER'S tap reports when it hands over no chips.
     ///
@@ -2601,8 +2911,17 @@ final class ConversationDetailViewModel {
             // …and this is the rest of what it said. A listing that delivered
             // nothing is not the same fact as a listing that delivered nothing
             // BECAUSE the folder held only names this app cannot address, and
-            // only the folder-reading verb can tell them apart.
-            refusedEntryCount: reconciliation.refusedEntryCount
+            // only the folder-reading verb can tell them apart. The SHAPE half
+            // alone: the type half has the held-back row, which names those
+            // files, and counting them here as well would report each of them
+            // twice on the same bubble.
+            shapeRefusedCount: reconciliation.shapeRefusedCount,
+            // …and this is the half of it that outlives the process. The caption
+            // above is the answer to a tap; this is the settled fact about the
+            // folder, and a tap must leave the row in the same state the
+            // automatic pass would — or a user who asks gets something a user who
+            // waits never does, and loses it on relaunch besides.
+            deliveryOutcome: Self.deliveryOutcome(from: reconciliation)
         )
         // EARNED, and only now. A `207` or a `404` is the lane answering (an
         // `.unusable` verdict is not), which makes "your file server didn't
@@ -2696,7 +3015,15 @@ final class ConversationDetailViewModel {
             // The type gate does its work upstream, on the candidate tokens, and
             // a name it filtered out was a word in a sentence — not a file
             // anybody's server was found to be holding.
-            refusedEntryCount: 0
+            shapeRefusedCount: 0,
+            // NIL, AND NEVER A ZEROED CENSUS. The persisted census is a claim
+            // about ONE FOLDER as one listing read it, and this verb never opens
+            // a folder — so it has no such claim to make. A zero here would
+            // overwrite a real refusal the automatic lane earned, from a look
+            // that could not have seen it. Zero above and nil here are not
+            // inconsistent: the caption reports what THIS look found, and nil is
+            // how the store is told nothing was looked at.
+            deliveryOutcome: nil
         )
         // EARNED, and only on evidence the server spoke — see
         // `rootSearchGotAnAnswer` for why `scan.conclusive` alone is not that.
@@ -2780,22 +3107,48 @@ final class ConversationDetailViewModel {
     }
 
     /// Persist what a tap found and report the outcome on the row. Shared by both
-    /// tap paths: the identity re-check, the store write and the three-valued
-    /// caption are one policy, and two copies of it would drift on the one thing
-    /// that matters — never reporting "nothing there" for a server that did not
-    /// answer.
+    /// tap paths: the identity re-check, the store write and the reported state
+    /// are one policy, and two copies of it would drift on the one thing that
+    /// matters — never reporting "nothing there" for a server that did not
+    /// answer, and never reporting it for a look that just handed files over.
     ///
-    /// `conclusive` decides only whether the turn is PERMANENTLY stamped scanned.
-    /// `reportedNothingWhen` is the separate evidence half — did the server
-    /// answer the question this look asked — and it is REQUIRED rather than
-    /// defaulted to `conclusive`, because the two are different questions and the
-    /// default was how the age gate leaked into the caption.
+    /// The `drafts.isEmpty` guard below is the SEAM the reported state is chosen
+    /// on, and it is a branch rather than a comparison for a reason: every state
+    /// this method can set except `.delivered` carries the claim that the look
+    /// produced nothing, so a look that produced something must not be able to
+    /// reach one by arithmetic.
     ///
-    /// `refusedEntryCount` is the listing's census of entries the app is not able
-    /// to hand over, and it is REQUIRED for the same reason: the root search
-    /// reads no folder and therefore has no census, so a default would let it
-    /// claim zero refusals it never looked for — the exact silence this count
-    /// exists to end.
+    /// `conclusive` decides only whether the turn is PERMANENTLY stamped scanned,
+    /// and only on a look that actually delivered a chip — a tap that reads a
+    /// readable-but-empty folder writes its census and closes nothing, because
+    /// closing a turn removes it from the automatic pass forever and that is not
+    /// a decision a reporting change gets to make. `reportedNothingWhen` is the
+    /// separate evidence half — did the server answer the question this look
+    /// asked — and it is REQUIRED rather than defaulted to `conclusive`, because
+    /// the two are different questions and the default was how the age gate
+    /// leaked into the caption.
+    ///
+    /// `shapeRefusedCount` is the listing's census of entries whose NAME the app
+    /// will not address at all, and it is REQUIRED for the same reason: the root
+    /// search reads no folder and therefore has no census, so a default would
+    /// let it claim zero refusals it never looked for — the exact silence this
+    /// count exists to end.
+    ///
+    /// IT IS THE SHAPE HALF ONLY, and deliberately not the whole refusal census.
+    /// The other half — a name refused for its TYPE — is carried by the standing
+    /// held-back row, which NAMES the file and offers a rescue; a caption that
+    /// counted both would report the same file twice, once as a bare number
+    /// underneath a row that had just named it. What is left here is exactly the
+    /// population whose whole presentation is a count: a name the gate exists to
+    /// keep out of the app's own voice.
+    ///
+    /// READ ON THE EMPTY BRANCH ONLY. It answers "why did this look hand nothing
+    /// over", which is a question a look that handed something over does not ask.
+    ///
+    /// `deliveryOutcome` is the FULL census in the classified, persistable form
+    /// that row reads, and it is required on the same grounds. The count above
+    /// dies with the process; this is what survives a relaunch, so a user who
+    /// taps and one who waits are left looking at the same row.
     private func commitTappedOutputs(
         _ drafts: [AttachmentDraft],
         conclusive: Bool,
@@ -2804,7 +3157,8 @@ final class ConversationDetailViewModel {
         ref: RemoteAgentRef,
         snapshot: SettingsManager.FileTransferSnapshot,
         reportedNothingWhen serverAnswered: Bool,
-        refusedEntryCount: Int
+        shapeRefusedCount: Int,
+        deliveryOutcome: OutputDeliveryOutcome?
     ) async {
         guard await FileTransferOutputDetector.configuredLaneStillMatches(
             ref: ref,
@@ -2812,6 +3166,32 @@ final class ConversationDetailViewModel {
         ) else {
             outputRecheckStates[message.id] = .couldNotCheck
             return
+        }
+        // A ZERO-DRAFT LOOK IS NOT A LOOK WITH NOTHING TO PERSIST, and a look
+        // worth persisting is not therefore a look that may CLOSE the turn.
+        // `tappedOutputCommit` is where those two questions are separated, and
+        // it is a pure function so the separation is provable without a store,
+        // a server or a lane.
+        let commit = Self.tappedOutputCommit(
+            draftCount: drafts.count,
+            conclusive: conclusive,
+            hasCensus: deliveryOutcome != nil
+        )
+        var inserted = false
+        if commit.writesToStore {
+            guard let didInsert = try? await ConversationStore.shared.reconcileOutputScan([
+                .init(
+                    messageID: message.id,
+                    drafts: drafts,
+                    markScanned: commit.stampsTurnScanned,
+                    expectedLaneID: laneID,
+                    deliveryOutcome: deliveryOutcome
+                )
+            ]) else {
+                outputRecheckStates[message.id] = .couldNotCheck
+                return
+            }
+            inserted = didInsert
         }
         guard !drafts.isEmpty else {
             guard serverAnswered else {
@@ -2824,43 +3204,49 @@ final class ConversationDetailViewModel {
             let chipsNow = message.attachments.count(where: \.isServerFile)
             // A refusal is the more specific true thing: "nothing was discovered"
             // is also true of a folder holding ten refused names, and it is the
-            // sentence that makes them invisible.
-            outputRecheckStates[message.id] = refusedEntryCount > 0
-                ? .undeliverableEntries(count: refusedEntryCount, chipCount: chipsNow)
+            // sentence that makes them invisible. A folder whose only refusals
+            // were TYPE refusals falls through to `.noneFound` here, and under
+            // the held-back row the view REPHRASES either state to what the look
+            // did — the row is the surface that says what the folder holds, with
+            // the names and a way to get the files, so the caption stops
+            // competing with it and reports the tap instead.
+            //
+            // THE ONLY SITE FOR EITHER STATE, and it is inside a guard on having
+            // no drafts. Both carry, in some wording, the claim that this look
+            // produced nothing; setting one anywhere else is how that claim
+            // reached a user whose files had just arrived.
+            outputRecheckStates[message.id] = shapeRefusedCount > 0
+                ? .undeliverableEntries(count: shapeRefusedCount, chipCount: chipsNow)
                 : .noneFound(chipCount: chipsNow)
             return
         }
-        let inserted = (try? await ConversationStore.shared.reconcileOutputScan([
-            .init(
-                messageID: message.id,
-                drafts: drafts,
-                markScanned: conclusive,
-                expectedLaneID: laneID
-            )
-        ])) ?? false
+        // `inserted == false` means the lane moved under the write or every
+        // draft was already there — a real failure ONLY on a look that had
+        // drafts to insert, which the guard above has already established.
         guard inserted else {
             outputRecheckStates[message.id] = .couldNotCheck
             return
         }
-        // The insert posts `.conversationsDidChange`, so the reload repaints the
-        // row on its own. Clear the caption now so the success frame never shows
-        // a stale one — UNLESS the same listing also held entries it could not
-        // hand over. That is the partial case, and the chips that did land are
-        // precisely what makes it look settled: a folder of one report plus one
-        // refused name renders identically to a folder of one report.
+        // THE LOOK DELIVERED, AND THAT IS THE WHOLE OF WHAT IT REPORTS. The
+        // insert posts `.conversationsDidChange`, so the reload repaints the row
+        // on its own; this states what the tap achieved, which the repaint alone
+        // does not when a persisted held-back row comes back looking exactly as
+        // it did before the tap.
         //
-        // The census is POST-INSERT, this commit's own rows counted in, because
-        // the reload it just triggered is what evaluates the retire rule — a
-        // pre-insert stamp would read the chips this look delivered as the row
-        // outrunning the answer and drop the caption before it was ever seen. The
-        // store may dedupe a draft against a row another device wrote, which can
-        // only make the real count SMALLER; over-stamping keeps the caption,
-        // which is the safe direction.
-        outputRecheckStates[message.id] = refusedEntryCount > 0
-            ? .undeliverableEntries(
-                count: refusedEntryCount,
-                chipCount: message.attachments.count(where: \.isServerFile) + drafts.count)
-            : nil
+        // `shapeRefusedCount` IS DELIBERATELY NOT READ HERE. What a listing could
+        // not hand over is a standing fact about the FOLDER, it is already on its
+        // way to the row inside `deliveryOutcome`, and the row states it with the
+        // mechanism and the remedy attached. Consulting it on this path is what
+        // let a look that handed over eight files pick a state meaning "this look
+        // handed over nothing" — and the row that same count guarantees is what
+        // then turned that state into "Nothing new came back."
+        //
+        // `drafts.count`, not an insert tally, because the store skips only a
+        // draft whose `storedKey` is ALREADY on the reply — a skip means another
+        // device inserted that same file first, so every one of these files is on
+        // the row by the time this returns. `inserted` above has already ruled out
+        // the case where nothing was written at all.
+        outputRecheckStates[message.id] = .delivered(fileCount: drafts.count)
     }
 
     /// Fold one listing verdict into the observable fault set. Compared before

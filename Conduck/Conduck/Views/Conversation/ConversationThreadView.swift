@@ -141,6 +141,16 @@ struct ConversationThreadView: View {
     /// scroll while presented.
     @State private var showingFileSetup = false
 
+    /// The type-refusal review sheet, keyed on the turn whose entries it shows.
+    /// Owned HERE for the same reason as the two above, and NOT by the row that
+    /// opens it: a row-owned sheet inside the recycling `LazyVStack` is torn
+    /// down by a scroll while presented.
+    ///
+    /// ITEM-DRIVEN rather than an `isPresented` flag beside a separate payload:
+    /// the payload IS the presentation state, so dismissing cannot leave one
+    /// turn's entries behind for the next tap to flash before it re-renders.
+    @State private var reviewingRefusals: OutputRefusalReview?
+
     var body: some View {
         @Bindable var vm = viewModel
         @Bindable var preview = filePreview
@@ -209,6 +219,21 @@ struct ConversationThreadView: View {
                 }
                 .frame(minWidth: 520, minHeight: 600)
             }
+        }
+        // "Review file…" from a held-back row: what the folder held that Conduck
+        // does not open on its own, and the one way to get it anyway. A SHEET
+        // for the same reason the setup route is one — a mid-conversation
+        // diagnostic must land the user back in the thread.
+        // NO `NavigationStack` around it, unlike the setup sheet above: this one
+        // carries its own title and its own Done, exactly as `CertificateTrustSheet`
+        // does, so a navigation container would only add an empty bar above copy
+        // that already says what the sheet is.
+        .sheet(item: $reviewingRefusals) { review in
+            OutputRefusalReviewSheet(
+                entries: review.entries,
+                boundRef: viewModel.boundRef,
+                expectedLaneID: review.laneID
+            )
         }
         // Quick Look for attachment files — downloaded server files AND
         // locally-stored inline text files (see `filePreview` doc).
@@ -337,7 +362,13 @@ struct ConversationThreadView: View {
                             onKeepChattingWithoutPhotos: { Task { await viewModel.enableHideEarlierPhotos() } },
                             onRecheckOutputs: { Task { await viewModel.recheckOutputs(for: message) } },
                             onSearchMentionedFiles: { Task { await viewModel.searchMentionedFiles(for: message) } },
-                            onOpenFileSetup: { showingFileSetup = true }
+                            onOpenFileSetup: { showingFileSetup = true },
+                            // The payload is derived HERE, from the record, so
+                            // the row hands over an intent and never a snapshot
+                            // it might have taken a repaint ago. The failable
+                            // init is what keeps a turn with nothing to review
+                            // from presenting an empty sheet.
+                            onReviewHeldBack: { reviewingRefusals = OutputRefusalReview(message: message) }
                         )
                         .equatable()
                         .id(message.id)
@@ -1209,6 +1240,12 @@ private struct MessageBubble: View, Equatable {
     let onSearchMentionedFiles: () -> Void
     /// Open the bound gateway's file-transfer setup ("Review file setup").
     let onOpenFileSetup: () -> Void
+    /// Open the review sheet for this turn's type-refused entries ("Review
+    /// file…"). Routed to the THREAD ROOT and never presented from here: these
+    /// rows live in a recycling `LazyVStack`, so a row-owned sheet is torn down
+    /// by a scroll while presented (same reasoning as `filePreview` and
+    /// `showingFileSetup`).
+    let onReviewHeldBack: () -> Void
 
     @State private var didCopy = false
     /// Full-screen gallery state (start index = tapped thumbnail).
@@ -1221,7 +1258,9 @@ private struct MessageBubble: View, Equatable {
     /// in the `ForEach`, this short-circuits a non-speaking bubble's `body` when the
     /// `@Observable ThreadSpeaker` publishes a phase change: only the bubble whose
     /// `speakState` actually changed re-renders, not the whole thread. `message` is
-    /// `Hashable` so its `==` covers text/status/attachments.
+    /// `Hashable` so its `==` covers text/status/attachments — and the persisted
+    /// output census with them, which is why the held-back row needs no arm of
+    /// its own here and no view-model state behind it.
     static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
         lhs.message == rhs.message
             && lhs.showsGatewayWaitIndicator == rhs.showsGatewayWaitIndicator
@@ -1271,6 +1310,23 @@ private struct MessageBubble: View, Equatable {
             bubbleRow
             if isUser, message.status == "failed", !awaitsCloneContinuation {
                 deliveryErrorRow
+            }
+            // A POSITIVE FINDING, so it is a SIBLING of the fault chain below
+            // rather than a fourth arm of it. That chain's arms are disjoint by
+            // construction — one needs a folder that failed a read, the other
+            // needs there to have been no folder — and this row is disjoint from
+            // NEITHER: a turn whose listing recorded a refusal can later fail a
+            // re-read, and both sentences stay true at once. Stacking is the
+            // honest shape; an `else if` would silently drop whichever claim
+            // lost the ordering.
+            //
+            // FIRST, nearest the bubble, because it is the only row here that
+            // reports something the reply actually produced and the only one
+            // whose action ends in a file. The fault rows report an inability,
+            // which is the weaker claim, so they sit further out. Never more
+            // than these two.
+            if !isUser {
+                outputHeldBackRow
             }
             // Handback diagnostic: sits UNDER the agent bubble, outside its
             // background — device-local metadata about THIS turn's delivery,
@@ -1496,6 +1552,344 @@ private struct MessageBubble: View, Equatable {
             + (presentation.hint.map { " \($0)" } ?? "")))
     }
 
+    // MARK: - Held-back row (what this reply's output folder kept)
+
+    /// Standing row under an agent turn whose output folder was READ and held
+    /// something it did not hand over — a name whose type Conduck does not open
+    /// on its own, a name Conduck will not repeat, or a deliverable a budget
+    /// left behind.
+    ///
+    /// AUTOMATIC, WITH NO TAP, because the alternative already shipped and was
+    /// worse: an entry the app would not open was exactly as invisible as an
+    /// empty folder, and the only user who ever learned otherwise was one who
+    /// happened to tap "Check again" and read a count that died with the
+    /// process.
+    ///
+    /// IT NAMES THE FILE (in the single case), and the licence for that is
+    /// structural rather than a judgement. The extension test is the LAST guard
+    /// in `FileServerClient.outboxEntryVerdict`, so an entry that reaches it has
+    /// already cleared the single-path-component test, the Unicode accept-list,
+    /// the leading-dot / leading-dash / whitespace / combining-mark tests and
+    /// both length budgets. The name is therefore exactly as safe to render as a
+    /// delivered chip's label — same name, same guards, one test further on. A
+    /// SHAPE refusal never reaches a name-bearing surface anywhere in this app;
+    /// its whole presentation is the count on one of the lines below.
+    ///
+    /// WARNING-TINTED, NOT ERROR-TINTED. Nothing failed: the server answered,
+    /// the folder was read, the files are there. What happened is that Conduck
+    /// declined to open something on its own — a policy, stated out loud.
+    /// `AppColors.error` stays reserved for the delivery-error row, where the
+    /// message genuinely did not land.
+    ///
+    /// DELIBERATELY NOT CHIP-SHAPED. A chip means "tap and this file opens", and
+    /// this row means the opposite — hence radius 12 rather than 10, the full
+    /// row measure rather than 220pt, a warning wash and stroke where a chip has
+    /// a flat card fill and none, a warning triangle rather than the type-tinted
+    /// file glyph, no `square.and.arrow.down`, and no size caption under the
+    /// name (the size lives in the sheet, where it is metadata rather than a
+    /// promise).
+    ///
+    /// The row is NOT one big button, and that is a consequence of it carrying
+    /// up to two verbs: a sheet ("Review file…") and a server re-read ("Check
+    /// again"). It therefore takes the fault rows' action-strip shape and their
+    /// `.contain` accessibility treatment, which is what `.contain` is for —
+    /// several independently focusable children inside one group.
+    /// This turn's settled census of what its folder held and did not hand over,
+    /// or nil when there is nothing standing to say. READ OFF THE RECORD, with
+    /// no view-model state behind it: the census is a field on the row, and a
+    /// bubble already repaints when its own `MessageRecord` compares unequal, so
+    /// a changed census repaints for free and can never outlive its row.
+    private var heldBackOutcome: OutputDeliveryOutcome? {
+        ConversationDetailViewModel.outputDeliveryRow(for: message)
+    }
+
+    /// Whether the held-back row is the one that reports an in-flight look.
+    ///
+    /// EXACTLY ONE ROW UNDER A BUBBLE MAY, and that is why this is a rule rather
+    /// than three independent `== .checking` tests: two "Checking…" indicators
+    /// stacked one above the other read as two separate requests against the
+    /// user's home server, when there is only ever one. The read-fault row wins
+    /// when it is up — it is the row whose own verb started most of these looks
+    /// — this row takes it otherwise, and `outputLookStatusLine` speaks only
+    /// when neither row is present. (The folder-less row never competes: it
+    /// requires no `outputBoxKey`, and this row requires one.)
+    private var heldBackOwnsBusyIndicator: Bool {
+        outputRecheckState == .checking && !showsOutputDiscoveryFault
+    }
+
+    @ViewBuilder
+    private var outputHeldBackRow: some View {
+        if let outcome = heldBackOutcome {
+            let rescues = OutputTypeRefusal.rescuableEntries(in: message)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(AppColors.warning)
+                    Text(LocalizedStringResource(
+                        "thread.outputs.heldBack.title",
+                        defaultValue: "Not everything came back"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppColors.textSecondary)
+                }
+                heldBackLines(outcome, rescues: rescues)
+                heldBackActions(outcome, rescues: rescues)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(AppColors.warning.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(AppColors.warning.opacity(0.35), lineWidth: 1)
+            )
+            .frame(maxWidth: 520, alignment: .leading)
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    /// One line per POPULATION, and only the ones that are non-zero. They are
+    /// different facts about the same folder — a type Conduck does not open, a
+    /// name it will not repeat (in two classes, which are two different
+    /// sentences), and a deliverable a budget left behind — and each one carries
+    /// its own count, because a single total would let the user read a shape
+    /// refusal as something they could go and rescue.
+    ///
+    /// Each sentence is written so the noun phrase carries the inflection and
+    /// the verb does not, which is what lets one string be grammatical at both
+    /// counts (the shipped "held ^[N file](inflect: true) Conduck can't hand
+    /// over" is the same construction).
+    @ViewBuilder
+    private func heldBackLines(
+        _ outcome: OutputDeliveryOutcome,
+        rescues: [OutputTypeRefusal]
+    ) -> some View {
+        // Resolved ONCE, before any sentence is chosen: every line in the type
+        // arm has to agree about which of its numbers today's code can still
+        // observe, and re-deriving that per line is how they drift apart.
+        let claimed = OutputHeldBackCopy.claimedTypeCount(outcome, stillRefused: rescues.count)
+        VStack(alignment: .leading, spacing: 4) {
+            if outcome.typeRefusedCount > 0 {
+                // Nothing to count is not the same as nothing to say — a
+                // widening can leave the row with no provable number at all, and
+                // the closing line below is what still speaks for that case.
+                if claimed > 0 {
+                    Text(LocalizedStringResource(
+                        "thread.outputs.heldBack.type",
+                        defaultValue: "The folder held ^[\(claimed) file](inflect: true) Conduck doesn't open on its own."))
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // THE NAME on a single refusal, nothing on several. One name
+                    // is the whole answer; five stacked names are a list, and a
+                    // list belongs in the sheet where each entry gets its own
+                    // reason and its own action.
+                    //
+                    // BOTH COUNTS, because a name may only stand for the number
+                    // the line above just printed. A census that counted three
+                    // and kept one name prints the three and no name — one name
+                    // under a claim of three reads as the whole population, and
+                    // the capped line below is what explains that gap instead.
+                    if claimed == 1, rescues.count == 1, let only = rescues.first {
+                        Text(only.name)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(AppColors.textPrimary)
+                            .lineLimit(1)
+                            // MIDDLE, not tail: the extension is what this row is
+                            // about, and tail truncation eats it first.
+                            .truncationMode(.middle)
+                    }
+                    // The census counts the WHOLE folder; the record retains a
+                    // bounded offer. When they disagree the sheet would silently
+                    // show fewer files than the line above just claimed, so say
+                    // so rather than let the user count.
+                    //
+                    // ONLY WHEN THE CAP IS WHAT BIT — the whole of that judgement
+                    // lives in `blamesRetentionCap`, so it can be asserted
+                    // rather than merely read.
+                    if OutputHeldBackCopy.blamesRetentionCap(
+                        outcome, stillRefused: rescues.count) {
+                        Text(LocalizedStringResource(
+                            "thread.outputs.heldBack.type.capped",
+                            defaultValue: "Review lists the first ^[\(rescues.count) file](inflect: true)."))
+                            .font(.caption2)
+                            .foregroundStyle(AppColors.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                // NEVER A NUMBER WITH NOTHING BESIDE IT. With no rescuable name
+                // there is no name under the count and no "Review files…" beside
+                // it, so without this line the type arm states a bare figure and
+                // offers neither a verb nor a reason — the dead end this whole
+                // surface exists to remove.
+                //
+                // TWO STATES REACH IT and one sentence is true of both, which is
+                // why it is one line rather than two: a census whose names never
+                // decoded (a blob a newer build wrote, arriving through CloudKit
+                // — the counts survive that intact, the names do not), and one
+                // whose retained names are all deliverable today while the
+                // retention cap left the rest of the folder unexamined. In both,
+                // what Conduck lacks is a NAME for whatever it actually left
+                // behind, and the file server is where that file still is.
+                //
+                // A PROVEN WIDENING IS A THIRD STATE AND THE SENTENCE IS FALSE OF
+                // IT. When every retained name is deliverable today, Conduck has
+                // those names and would now hand those files over — the row is
+                // standing for its shape or remainder population, not for the
+                // type one, and `typeClaimHasGoneStale` cannot retire it while
+                // that other population is non-zero. Claiming the names are
+                // missing there contradicts the recheck verb beside it, which is
+                // enabled for exactly this case and is about to deliver them.
+                if rescues.isEmpty,
+                   !OutputHeldBackCopy.allowlistWidened(outcome, stillRefused: rescues.count) {
+                    Text(LocalizedStringResource(
+                        "thread.outputs.heldBack.type.unnamed",
+                        defaultValue: "There's nothing here to review — Conduck doesn't have the names for what it left in the folder. It's all still on your file server."))
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            // ONE LINE PER SHAPE CLASS, not one line for the population. The two
+            // classes are two different sentences: a name refused only for its
+            // LENGTH is an honest agent naming a file after a section heading,
+            // and the accusation the single line made of it — that the name
+            // could be read as an instruction, or hides itself from a listing —
+            // described an attack that did not happen.
+            ForEach(OutputHeldBackCopy.shapeLines(for: outcome.shapeRefused), id: \.self) { line in
+                Text(OutputHeldBackCopy.sentence(for: line))
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let remainder = OutputHeldBackCopy.remainderLine(for: outcome.remainder) {
+                heldBackRemainderLine(remainder)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// What a budget left behind, and whether anything can still change it.
+    ///
+    /// NOTHING IS POLLING, and the copy must never imply otherwise. A truncated
+    /// pass only keeps the turn OPEN; the next pass fires on a thread open, a
+    /// foreground reload, a notification tap, or the user's own "Check again".
+    /// A row reading "still checking" beside no spinner promises background work
+    /// that is not happening, and the user who waits for it gets nothing.
+    ///
+    /// THE PERMANENT CASE IS READ OFF THE REMAINDER'S OWN CAUSE, never off
+    /// `outputScanDone`. That column answers a different question — is the TURN
+    /// CLOSED — and a merely truncated pass closes on AGE once
+    /// `truncatedScanHorizon` elapses. A row deriving permanence from it would
+    /// tell the user the ceiling was hit and nothing more will come, on a folder
+    /// whose tail "Check again" would hand over immediately.
+    ///
+    /// The WORDS live in `OutputHeldBackCopy`, which is what makes the choice
+    /// testable; what is left here is the one thing only a view can do — join the
+    /// ceiling's two sentences into a single wrapping paragraph.
+    private func heldBackRemainderLine(_ line: OutputHeldBackCopy.RemainderLine) -> Text {
+        // The MESSAGE goes in because the second sentence is decided by the same
+        // live chip count that gates "Check again" beside it. Passing the row
+        // rather than a precomputed Bool is what keeps the two from drifting: a
+        // caller cannot hand the sentence one answer and the verb another.
+        let sentences = OutputHeldBackCopy.sentences(for: line, on: message)
+        guard let first = sentences.first else { return Text(verbatim: "") }
+        return sentences.dropFirst().reduce(Text(first)) { joined, next in
+            joined + Text(verbatim: " ") + Text(next)
+        }
+    }
+
+    /// Whether a later pass can still add to this turn — the ONE condition that
+    /// makes "Check again" honest here. A folder whose only leftovers are
+    /// refusals answers a re-read with the identical refusals, so offering the
+    /// verb there would spend a request to reprint the same row.
+    ///
+    /// THE LIVE GATE IS THE CHIP COUNT, not the remainder's recorded cause. A
+    /// `.ceilingCapped` remainder says the ceiling bound THAT PASS; the message
+    /// itself still admits files whenever it has free slots, and those slots
+    /// change as chips arrive from the user's other devices. Reading the census
+    /// here would hide the verb on a row that would genuinely gain from it.
+    ///
+    /// A PROVEN WIDENING QUALIFIES ON THAT SAME STANDARD, and the entries it
+    /// describes have no other way home: the turn is closed, so nothing re-lists
+    /// it on its own, and the review sheet drops exactly the names that became
+    /// deliverable. `rescuableEntries` has just re-asked the verdict and found a
+    /// name this build delivers, so a re-read mints a chip for it — which is the
+    /// one thing this verb is claiming.
+    private func offersHeldBackRecheck(
+        _ outcome: OutputDeliveryOutcome,
+        rescues: [OutputTypeRefusal]
+    ) -> Bool {
+        // Suppressed under a read-fault row, which carries its own "Check
+        // again": the two rows stack by design, and two identical verbs one
+        // above the other read as two different actions.
+        canRecheckOutputs
+            && !showsOutputDiscoveryFault
+            && (outcome.undeliveredCount > 0
+                || OutputHeldBackCopy.allowlistWidened(outcome, stillRefused: rescues.count))
+            && OutputHeldBackCopy.admitsMoreChips(message)
+    }
+
+    /// The action strip. Rendered only when it has something in it — an empty
+    /// `HStack` still claims the parent `VStack`'s spacing.
+    @ViewBuilder
+    private func heldBackActions(
+        _ outcome: OutputDeliveryOutcome,
+        rescues: [OutputTypeRefusal]
+    ) -> some View {
+        let offersRecheck = offersHeldBackRecheck(outcome, rescues: rescues)
+        if !rescues.isEmpty || offersRecheck || heldBackOwnsBusyIndicator {
+            HStack(spacing: 14) {
+                // NOT replaced by the busy indicator, unlike the server verb
+                // beside it: this one opens a local sheet from a census that is
+                // already on the record, so an in-flight look has no bearing on
+                // whether it can be tapped.
+                if !rescues.isEmpty {
+                    Button(action: onReviewHeldBack) {
+                        Text(rescues.count == 1
+                            ? LocalizedStringResource(
+                                "thread.outputs.heldBack.action.one",
+                                defaultValue: "Review file…")
+                            : LocalizedStringResource(
+                                "thread.outputs.heldBack.action.many",
+                                defaultValue: "Review files…"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppColors.brandAmber)
+                    }
+                    .inlineLinkButton()
+                }
+                if heldBackOwnsBusyIndicator {
+                    HStack(spacing: 5) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(AppColors.textTertiary)
+                        Text(LocalizedStringResource(
+                            "thread.outputs.checking",
+                            defaultValue: "Checking…"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppColors.textTertiary)
+                    }
+                } else if offersRecheck {
+                    Button(action: onRecheckOutputs) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.clockwise")
+                            Text(LocalizedStringResource(
+                                "thread.outputs.action.checkAgainShort",
+                                defaultValue: "Check again"))
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppColors.brandAmber)
+                    }
+                    .inlineLinkButton()
+                }
+            }
+        }
+    }
+
     // MARK: - Output-discovery fault row (the file server could not be read)
 
     /// Persistent inline row under an agent turn whose output folder could not be
@@ -1527,9 +1921,18 @@ private struct MessageBubble: View, Equatable {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.textSecondary)
             }
+            // THE REASSURANCE IS ABOUT CONDUCK, NOT ABOUT THE SERVER, and that
+            // is the only form it can honestly take here. A read that failed
+            // establishes nothing about the folder — nothing creates it in
+            // advance, so the app does not know it exists, let alone that it
+            // still holds anything. What IS true by construction is that this
+            // lane only ever LISTS and GETs: nothing in it writes to or deletes
+            // from an output folder, so whatever the agent put there is
+            // untouched. The conditional phrasing carries that without asserting
+            // anything was put there at all.
             Text(LocalizedStringResource(
                 "thread.outputs.fault.body",
-                defaultValue: "Conduck couldn't check whether this reply returned any files. Nothing is lost — the folder is still on your server."))
+                defaultValue: "Conduck couldn't check whether this reply returned any files. It only ever reads that folder, so anything your agent put there is untouched."))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
                 .multilineTextAlignment(.leading)
@@ -1618,12 +2021,12 @@ private struct MessageBubble: View, Equatable {
     /// pre-dispatch freshness check.
     ///
     /// A DIFFERENT STORY FROM THE ROW ABOVE, and the difference is the reason it
-    /// exists. That row's copy — "Nothing is lost, the folder is still on your
-    /// server" — is a reassurance that depends on there BEING a folder. Here
-    /// there never was one: the turn went out with no location line at all, so
-    /// the agent was never told where to put anything and nothing could come
-    /// back. Reusing the other copy would tell the user to go looking on their
-    /// server for something that cannot be there.
+    /// exists. That row is about a folder this turn WAS given and the app then
+    /// failed to read, so its copy points at a folder and at what Conduck does
+    /// and does not do to one. Here there never was a folder: the turn went out
+    /// with no location line at all, so the agent was never told where to put
+    /// anything and nothing could come back with the reply. Reusing the other
+    /// row's copy would point the user at a folder that does not exist.
     ///
     /// IT NAMES NO CAUSE, and that is a correctness constraint rather than a
     /// style choice. The turns this row covers are selected from a LANE-WIDE
@@ -1676,9 +2079,16 @@ private struct MessageBubble: View, Equatable {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.textSecondary)
             }
+            // "NOWHERE TO PUT FILES" WAS FALSE, and expensively so: the agent
+            // always has its own working directory — frequently the very folder
+            // the "Search mentioned files" button beside this copy probes — so
+            // the old sentence told the user a file could not exist while the
+            // button under it offered to go and find that file. What is actually
+            // true is narrower: Conduck never told the agent WHERE, so nothing
+            // could ride back with the reply. The remedy sentence is unchanged.
             Text(LocalizedStringResource(
                 "thread.outputs.noFolder.body",
-                defaultValue: "Conduck couldn't confirm a fresh folder on your file server for this message, so the agent had nowhere to put files and nothing could come back with the reply. Check your file server, then send again."))
+                defaultValue: "Conduck couldn't confirm a fresh folder on your file server for this message, so it never told the agent where to put files and nothing could come back with the reply. Anything the agent wrote went to its own working folder — if the reply names a file, you can search for it. Check your file server, then send again."))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
                 .multilineTextAlignment(.leading)
@@ -1739,9 +2149,13 @@ private struct MessageBubble: View, Equatable {
     /// turn with no fault row to carry them. Renders nothing at all in the
     /// resting state, which is almost always — this is a transient answer to a
     /// question the user just asked, not a standing diagnostic.
+    ///
+    /// The busy half stands down under a held-back row, which carries the
+    /// indicator itself when no fault row does — see `heldBackOwnsBusyIndicator`
+    /// for why exactly one row may.
     @ViewBuilder
     private var outputLookStatusLine: some View {
-        if outputRecheckState == .checking {
+        if outputRecheckState == .checking, heldBackOutcome == nil {
             HStack(spacing: 5) {
                 ProgressView()
                     .controlSize(.small)
@@ -1763,54 +2177,17 @@ private struct MessageBubble: View, Equatable {
     }
 
     /// Caption for the last manual look. A CLEAN SUCCESS has no caption: the
-    /// chips appear and there is nothing left to annotate. A success over a
-    /// folder that also held entries the app cannot hand over still gets one —
-    /// the files that arrived report nothing about the ones that did not.
+    /// chips appear and there is nothing left to annotate.
+    ///
+    /// The CHOICE lives in `ConversationDetailViewModel.lookResultCaption` — a
+    /// pure function of the look's outcome and whether a standing row is up — so
+    /// the rule that a tap is always answered is provable rather than buried in
+    /// a `switch` inside a recycling row.
     private var resultCaption: LocalizedStringResource? {
-        switch outputRecheckState {
-        case .noneFound:
-            // DISCOVERY, never a claim about the agent. The server answered and
-            // there was nothing to hand over — which is equally consistent with a
-            // reply that produced nothing, one that wrote somewhere else, and one
-            // whose write tool failed silently. Saying "the agent produced
-            // nothing" would pick one of those out of no evidence.
-            return LocalizedStringResource(
-                "thread.outputs.result.noneFound",
-                defaultValue: "No returned files were discovered.")
-        case .undeliverableEntries(let count, _):
-            // THE COUNT, NEVER THE NAME. A refused name is by definition one the
-            // outbound gate was unwilling to address, so printing it here would
-            // put the deceptive string the gate exists to stop in front of the
-            // user — in the app's own voice, which is the one place it could do
-            // real damage. The count carries everything actionable anyway: there
-            // was something there, and it is still on the server.
-            //
-            // AND NO CAUSE, on the same discipline as the two captions around it.
-            // The listing proves the folder held something this app cannot hand
-            // over. It does not prove whether the agent meant to write it, wrote
-            // it by accident, or was handed it by a tool — and "its type isn't
-            // supported" would pick one of the gate's two refusals out of no
-            // evidence, since a hostile or malformed NAME is refused just as
-            // hard as an unwelcome extension.
-            //
-            // Shown for the partial case too, where chips did land: the files
-            // that arrived say nothing at all about the ones that did not.
-            return LocalizedStringResource(
-                "thread.outputs.result.undeliverable",
-                defaultValue: "The folder for this reply held ^[\(count) file](inflect: true) Conduck can't hand over.")
-        case .couldNotCheck:
-            // Deliberately names NO cause. This one state covers a lane that no
-            // longer matches the turn's, a look the app itself declined because
-            // another pass held the turn, a settings edit mid-request, and a
-            // genuine transport/auth/certificate failure. Only the last is a
-            // server the app could not reach, so naming reachability would send
-            // most users to debug a server that is working perfectly.
-            return LocalizedStringResource(
-                "thread.outputs.result.couldNotCheck",
-                defaultValue: "Couldn't finish the check just now.")
-        case .checking, nil:
-            return nil
-        }
+        ConversationDetailViewModel.lookResultCaption(
+            for: outputRecheckState,
+            hasStandingRow: heldBackOutcome != nil
+        )
     }
 
     @ViewBuilder

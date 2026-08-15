@@ -174,7 +174,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: seeded.agentID,
                 drafts: duplicateDrafts,
                 markScanned: true,
-                expectedLaneID: laneID
+                expectedLaneID: laneID,
+                deliveryOutcome: nil
             )
         ])
         let replay = try await seeded.store.reconcileOutputScan([
@@ -182,7 +183,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: seeded.agentID,
                 drafts: duplicateDrafts,
                 markScanned: true,
-                expectedLaneID: laneID
+                expectedLaneID: laneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -207,7 +209,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: seeded.agentID,
                 drafts: [serverRef("wrong-server.pdf")],
                 markScanned: true,
-                expectedLaneID: wrongLaneID
+                expectedLaneID: wrongLaneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -228,7 +231,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: agentID,
                 drafts: [serverRef("watch-output.pdf")],
                 markScanned: true,
-                expectedLaneID: currentLaneID
+                expectedLaneID: currentLaneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -249,7 +253,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: agentID,
                 drafts: [],
                 markScanned: true,
-                expectedLaneID: currentLaneID
+                expectedLaneID: currentLaneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -270,7 +275,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: seeded.agentID,
                 drafts: [serverRef("wrong-server.pdf")],
                 markScanned: true,
-                expectedLaneID: wrongLaneID
+                expectedLaneID: wrongLaneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -290,7 +296,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: agentID,
                 drafts: [serverRef("a.pdf"), serverRef("b.pdf")],
                 markScanned: false,
-                expectedLaneID: reconciliationLaneID
+                expectedLaneID: reconciliationLaneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -307,7 +314,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: agentID,
                 drafts: [serverRef("b.pdf")],
                 markScanned: false,
-                expectedLaneID: reconciliationLaneID
+                expectedLaneID: reconciliationLaneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -326,7 +334,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: agentID,
                 drafts: [serverRef("out.pdf")],
                 markScanned: true,
-                expectedLaneID: reconciliationLaneID
+                expectedLaneID: reconciliationLaneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -342,7 +351,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: agentID,
                 drafts: [serverRef("out.pdf")],
                 markScanned: false,
-                expectedLaneID: reconciliationLaneID
+                expectedLaneID: reconciliationLaneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -362,7 +372,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: agentID,
                 drafts: [],
                 markScanned: true,
-                expectedLaneID: reconciliationLaneID
+                expectedLaneID: reconciliationLaneID,
+                deliveryOutcome: nil
             )
         ])
 
@@ -382,7 +393,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: agentID,
                 drafts: [serverRef("out.pdf")],
                 markScanned: true,
-                expectedLaneID: reconciliationLaneID
+                expectedLaneID: reconciliationLaneID,
+                deliveryOutcome: nil
             )
         ])
         XCTAssertTrue(first, "first insert lands")
@@ -392,7 +404,8 @@ final class ConversationStoreReconcileOutputScanTests: XCTestCase {
                 messageID: agentID,
                 drafts: [serverRef("out.pdf")],
                 markScanned: true,
-                expectedLaneID: reconciliationLaneID
+                expectedLaneID: reconciliationLaneID,
+                deliveryOutcome: nil
             )
         ])
         XCTAssertFalse(second, "replaying the same storedKey inserts nothing")

@@ -15857,7 +15857,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Conduck couldn't check whether this reply returned any files. Nothing is lost — the folder is still on your server."
+            "value" : "Conduck couldn't check whether this reply returned any files. It only ever reads that folder, so anything your agent put there is untouched."
           }
         }
       }
@@ -15873,13 +15873,263 @@
         }
       }
     },
+    "thread.outputs.heldBack.action.many" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Review files…"
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.action.one" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Review file…"
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.ceiling" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more file stayed in the folder."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more files stayed in the folder."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.ceiling.full" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck can't bring these back to this reply — they're still on your file server."
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.ceiling.partial" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck can't fit them all on this reply — checking again brings back what still fits, and the rest stay on your file server."
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.more" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more file stayed in the folder. Conduck brings back a batch at a time and picks up more each time it checks this reply."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more files stayed in the folder. Conduck brings back a batch at a time and picks up more each time it checks this reply."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.more.unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more file stayed in the folder. Conduck can't tell whether checking again brings it back; it's still on your file server either way."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld more files stayed in the folder. Conduck can't tell whether checking again brings it back; it's still on your file server either way."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.shape.overlong" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Conduck left %lld file alone because the name is longer than it can address. A shorter name comes back normally."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Conduck left %lld files alone because the name is longer than it can address. A shorter name comes back normally."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.shape.spaced" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Conduck left %lld file alone because the name starts or ends with a space. Ask your agent for the same name without it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Conduck left %lld files alone because the name starts or ends with a space. Ask your agent for the same name without it."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.shape.unusable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Conduck left %lld file alone because of how the name is written — a name other software could read as an instruction, or one that hides itself from a listing. There's nothing to review."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Conduck left %lld files alone because of how the name is written — a name other software could read as an instruction, or one that hides itself from a listing. There's nothing to review."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not everything came back"
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.type" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The folder held %lld file Conduck doesn't open on its own."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The folder held %lld files Conduck doesn't open on its own."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.type.capped" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Review lists the first %lld file."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Review lists the first %lld files."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "thread.outputs.heldBack.type.unnamed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "There's nothing here to review — Conduck doesn't have the names for what it left in the folder. It's all still on your file server."
+          }
+        }
+      }
+    },
     "thread.outputs.noFolder.body" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Conduck couldn't confirm a fresh folder on your file server for this message, so the agent had nowhere to put files and nothing could come back with the reply. Check your file server, then send again."
+            "value" : "Conduck couldn't confirm a fresh folder on your file server for this message, so it never told the agent where to put files and nothing could come back with the reply. Anything the agent wrote went to its own working folder — if the reply names a file, you can search for it. Check your file server, then send again."
           }
         }
       }
@@ -15906,6 +16156,29 @@
         }
       }
     },
+    "thread.outputs.result.delivered" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld file came back."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld files came back."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "thread.outputs.result.noneFound" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -15913,6 +16186,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "No returned files were discovered."
+          }
+        }
+      }
+    },
+    "thread.outputs.result.nothingNew" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing new came back."
           }
         }
       }
@@ -15936,6 +16220,237 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "thread.outputs.review.file.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File %@"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.installer.title.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This kind of file can change a device"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.installer.trust" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open it only if you asked for it and you know what it sets up."
+          }
+        }
+      }
+    },
+    "thread.outputs.review.installer.what.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Files like this are meant to configure, install, or run something rather than to be read. A profile or certificate changes settings like Wi-Fi, VPN and trust; an installer or program puts software on a machine."
+          }
+        }
+      }
+    },
+    "thread.outputs.review.installer.when.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saving it changes nothing. Opening it later — here, or wherever you move it — is the step that does."
+          }
+        }
+      }
+    },
+    "thread.outputs.review.macro.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This kind of file can run code when it's opened"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.macro.trust" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open it only if you asked for it and a macro is something you'd expect in it."
+          }
+        }
+      }
+    },
+    "thread.outputs.review.macro.what" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "These file endings mark Word, Excel and PowerPoint files that are allowed to hold macros — small programs saved inside the file itself. The ending says a macro is allowed, not that there is one."
+          }
+        }
+      }
+    },
+    "thread.outputs.review.macro.when" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saving it changes nothing. Opening it in an app that runs macros — Word, Excel or PowerPoint — is the step that can run one."
+          }
+        }
+      }
+    },
+    "thread.outputs.review.reason.noType" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This file's name doesn't say what kind of file it is, so Conduck can't tell what it would be opening."
+          }
+        }
+      }
+    },
+    "thread.outputs.review.reason.type" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck doesn't open .%@ files on its own."
+          }
+        }
+      }
+    },
+    "thread.outputs.review.save" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Save anyway…"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.save.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Save %@ anyway"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.save.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Save Anyway…"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.saving" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Downloading…"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.size.unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Size unknown"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.title.many" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "About these files"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.title.one" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "About this file"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.why" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck puts a one-tap download in the chat for the file types an agent usually produces — documents, images, audio, data, code. Anything else stays in the folder until you've had a look."
+          }
+        }
+      }
+    },
+    "thread.outputs.review.why.byName" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck goes by the file's name, not by what's inside it. So this is about what your agent called the file, not a judgment about the file itself."
           }
         }
       }

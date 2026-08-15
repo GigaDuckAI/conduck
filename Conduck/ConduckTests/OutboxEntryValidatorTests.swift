@@ -295,7 +295,16 @@ final class OutboxEntryValidatorTests: XCTestCase {
             "profile.mobileconfig", // a configuration profile is not a document
             "installer.exe",
             "payload.dylib",
-            "clip.mp4",             // widening to video is a product decision, taken elsewhere
+            // Video IS on the allowlist now (`mp4`/`mov`), so the example that
+            // measures "an extension off the list is refused" has to be a
+            // container that stays off it. `webm` is that container, and for a
+            // reason specific to it rather than to video: it conforms to
+            // `public.movie` on both platforms but ships with NO system decoder
+            // (`QLPreviewController.canPreview` is false and it is absent from
+            // `AVURLAsset.audiovisualTypes()`), so admitting it would mint a
+            // one-tap chip that cannot open. A chip that fails on tap is worse
+            // than no chip — the escape hatch already reaches this file.
+            "clip.webm",
             "README",               // no extension at all
             "archive.",             // an empty extension
         ] {

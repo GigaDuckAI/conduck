@@ -339,6 +339,281 @@ final class OutboxReconcileTests: XCTestCase {
         XCTAssertFalse(result.conclusive)
     }
 
+    // MARK: - capState: WHICH cap bound the pass, and whether it is recoverable
+
+    /// A pass that handed over everything it saw left nothing behind, and
+    /// `.complete` is the ONLY value a caller may read as "the folder is fully
+    /// accounted for". Its `undeliveredCount` is zero by construction, so a row
+    /// can never be drawn for a folder that had no remainder.
+    func testAFullyDeliveredFolderIsComplete() async {
+        let result = await reconcile(.entries((1...5).map { entry("f\($0).txt") }))
+        XCTAssertEqual(result.drafts.count, 5)
+        XCTAssertEqual(result.capState, .complete)
+        XCTAssertEqual(result.capState.undeliveredCount, 0)
+    }
+
+    /// A verdict nobody could read walks no entries, so it can never yield a
+    /// `remaining` — there is no listing to pull one out of. Both non-`.entries`
+    /// verdicts are pinned, because a `.complete` invented for an unread folder
+    /// would let a row claim a clean census the app never took.
+    func testAVerdictWithNoListingLeavesNothingBehind() async {
+        for verdict in [FileServerListingVerdict.absent, .unusable(.transport)] {
+            let result = await reconcile(verdict)
+            XCTAssertEqual(result.capState, FileTransferOutputDetector.OutboxCapState.complete,
+                           "\(verdict) examined no entries, so no budget could stop it")
+            XCTAssertEqual(result.capState.undeliveredCount, 0)
+        }
+    }
+
+    /// THE WALKING CAP, over two passes, which is the only way to show that
+    /// `.passTruncated` means what it says. Pass one is stopped by the PER-PASS
+    /// allowance with a countable remainder; pass two — with the first pass's
+    /// chips excluded — finishes the folder and reports `.complete`.
+    ///
+    /// The two facts have to be measured together: `.passTruncated` alone is just
+    /// a label, and its claim of recoverability is only true if the next pass
+    /// actually recovers.
+    func testThePerPassCapIsTruncatedAndTheNextPassRecoversIt() async {
+        let overflow = 3
+        let names = (1...(FileTransferOutputDetector.maxOutboxEntriesPerReply + overflow))
+            .map { "f\($0).txt" }
+
+        let first = await reconcile(.entries(names.map { entry($0) }))
+        XCTAssertEqual(first.drafts.count, FileTransferOutputDetector.maxOutboxEntriesPerReply)
+        XCTAssertEqual(first.capState, .passTruncated(remaining: overflow),
+                       "the per-pass allowance stopped it, and the tail is countable")
+        XCTAssertEqual(first.capState.undeliveredCount, overflow)
+        XCTAssertFalse(first.conclusive, "a recoverable remainder holds the turn open")
+
+        let second = await reconcile(
+            .entries(names.map { entry($0) }),
+            excludedKeys: Set(first.drafts.compactMap(\.storedKey))
+        )
+        XCTAssertEqual(second.drafts.count, overflow, "the window walked forward onto the tail")
+        XCTAssertEqual(second.capState, .complete,
+                       "the recoverable cap recovered — which is what made it recoverable")
+    }
+
+    /// THE PERMANENT CEILING, walked to its end. A folder far larger than a
+    /// message may ever hold is delivered in windows until the LIFETIME ceiling
+    /// binds, and from that point the remainder is reported as permanent rather
+    /// than as "not yet".
+    ///
+    /// The distinction is the whole reason `OutboxCapState` is not a Bool: both
+    /// caps end a delivery identically, and telling a user "Conduck picks up more
+    /// each time it checks" about files no later pass can ever reach would be an
+    /// invitation to keep tapping a button that cannot work.
+    ///
+    /// THE FIRST PASS ALREADY REPORTS THE CEILING, and that is the rule rather
+    /// than an off-by-one: the comparison is CAPACITY AGAINST DEMAND. After pass
+    /// one the message has 8 slots left and the folder still holds 13 deliverable
+    /// entries, so five of them can never arrive here however often it is
+    /// re-read — and a row promising batches over those five would be false from
+    /// the moment it was drawn, not merely premature.
+    func testTheLifetimeCeilingIsReportedAsPermanentOnceItBinds() async {
+        let ceiling = FileTransferOutputDetector.maxOutputChipsPerMessage
+        let perPass = FileTransferOutputDetector.maxOutboxEntriesPerReply
+        let surplus = 5
+        let names = (1...(ceiling + surplus)).map { "f\($0).txt" }
+        let listing = FileServerListingVerdict.entries(names.map { entry($0) })
+
+        let first = await reconcile(listing)
+        XCTAssertEqual(first.drafts.count, perPass)
+        XCTAssertGreaterThan(ceiling + surplus - perPass, ceiling - perPass,
+                             "the fixture's whole point: what is left outruns what is left to give")
+        XCTAssertEqual(first.capState, .messageCeilingReached(remaining: ceiling + surplus - perPass),
+                       "the per-pass allowance is what STOPPED this walk, but it is not what BINDS "
+                       + "the message — the slots left over cannot cover the tail, so the honest "
+                       + "word for the remainder is permanent from here on")
+
+        var delivered = Set(first.drafts.compactMap(\.storedKey))
+        let second = await reconcile(listing, excludedKeys: delivered)
+        XCTAssertEqual(second.drafts.count, ceiling - perPass,
+                       "the second window is bound by what the message may ever hold")
+        XCTAssertEqual(second.capState, .messageCeilingReached(remaining: surplus),
+                       "and from here the remainder is permanent — no later pass computes a budget")
+
+        delivered.formUnion(second.drafts.compactMap(\.storedKey))
+        let third = await reconcile(listing, excludedKeys: delivered)
+        XCTAssertTrue(third.drafts.isEmpty, "the ceiling is reached; nothing more may be minted")
+        XCTAssertEqual(third.capState, .messageCeilingReached(remaining: surplus),
+                       "the same permanent remainder, reported identically rather than forgotten")
+        XCTAssertTrue(third.conclusive,
+                      "a turn whose remainder no pass can reach is CLOSED, not held open forever")
+    }
+
+    /// THE PASS THAT SPENDS THE LAST SLOT. The message enters with exactly one
+    /// pass's worth of allowance left, so the walk both fills the per-pass budget
+    /// AND exhausts the message — and what it left behind is therefore permanent,
+    /// even though the two caps produce the identical budget and stop at the
+    /// identical entry.
+    ///
+    /// This is the case that proves the decision is read off the pass's EXIT
+    /// state. On entry the message had room, so an entry-state rule would call
+    /// this recoverable and promise batches over two files that can never arrive.
+    func testAtExactParityTheBindingCapIsThePermanentOne() async {
+        let perPass = FileTransferOutputDetector.maxOutboxEntriesPerReply
+        let used = FileTransferOutputDetector.maxOutputChipsPerMessage - perPass
+        let already = Set((1...used).map { "\(boxKey)/have\($0).txt" })
+
+        let result = await reconcile(
+            .entries((1...(perPass + 2)).map { entry("new\($0).txt") }),
+            excludedKeys: already
+        )
+        XCTAssertEqual(result.drafts.count, perPass, "the budget is the same number either way")
+        XCTAssertEqual(result.capState, .messageCeilingReached(remaining: 2),
+                       "but this pass exhausts the message, so its remainder is permanent")
+    }
+
+    /// THE TRUNCATED-THEN-CLOSED TURN, which is the exact state a row derived
+    /// from `outputScanDone` got wrong.
+    ///
+    /// A pass stopped by the PER-PASS allowance on a message with room to spare
+    /// is recoverable — and it CLOSES anyway once `truncatedScanHorizon` has
+    /// elapsed, because the long horizon is a horizon and not "forever". So the
+    /// turn is stamped scanned while its remainder is still perfectly
+    /// deliverable, and any row reading permanence off that column tells the
+    /// user the ceiling was hit and nothing more will come, over a tail that
+    /// "Check again" hands over on the next tap.
+    ///
+    /// Driven through the real cap arithmetic rather than a hand-built
+    /// `OutboxCapState`, because the claim being pinned is that these two facts
+    /// co-occur — a fixture asserting them together would prove only that a
+    /// struct can hold them.
+    func testATruncatedPassClosedByAgeIsStillRecoverable() async throws {
+        let overflow = 3
+        let names = (1...(FileTransferOutputDetector.maxOutboxEntriesPerReply + overflow))
+            .map { "f\($0).txt" }
+
+        let closed = await reconcile(.entries(names.map { entry($0) }), scanStartedAt: pastHorizon)
+
+        XCTAssertTrue(closed.conclusive,
+                      "the long horizon elapsed, so this pass PERMANENTLY stamps the turn")
+        XCTAssertEqual(closed.capState, .passTruncated(remaining: overflow),
+                       "and yet what it left behind is recoverable — the message has slots for "
+                       + "every one of them, so the two facts are true at the same instant")
+
+        let census = try XCTUnwrap(ConversationDetailViewModel.deliveryOutcome(from: closed))
+        XCTAssertEqual(census.remainder, .recoverable(count: overflow))
+        XCTAssertEqual(OutputHeldBackCopy.remainderLine(for: census.remainder),
+                       .batching(count: overflow),
+                       "so the row promises a batch, which is the sentence a later pass keeps")
+
+        // And the verb that keeps that promise is still offered: the gate is the
+        // message's LIVE chip census, not the closed marker and not the census.
+        let closedTurn = MessageRecord(
+            id: UUID(), role: "agent", text: "reply", createdAt: created, sourceDevice: "phone",
+            outputScanDone: true, outputScanLaneID: "lane", outputBoxKey: boxKey,
+            outputDeliveryOutcome: census
+        )
+        XCTAssertTrue(OutputHeldBackCopy.admitsMoreChips(closedTurn),
+                      "a stamped turn with free slots still admits files — the stamp only stops "
+                      + "the AUTOMATIC pass, and a deliberate tap is exactly what it does not stop")
+    }
+
+    /// THE EXIT-STATE RULE, at the numbers it was specified with: a message
+    /// already carrying seven chips, over a folder of thirty entries.
+    ///
+    /// On ENTRY there are thirteen slots left and the per-pass allowance is
+    /// twelve, so the per-pass cap is what stops the walk and an entry-state rule
+    /// calls the remainder recoverable. On EXIT there is ONE slot left against
+    /// eighteen entries still in the folder — seventeen of which can never arrive
+    /// on this message however often it is re-read. The batching promise would be
+    /// false from the moment it was drawn rather than merely premature.
+    ///
+    /// AND ONE SLOT IS NOT NONE, which is the half a permanent WORDING got wrong.
+    /// The row draws "Check again" on this very state and the tap delivers a
+    /// nineteenth file, so a line saying nothing more will arrive is disproved by
+    /// the verb printed under it, inside one request. What the arithmetic proves
+    /// is the SHORTFALL, and the shortfall is all the copy may claim.
+    func testSevenChipsAndThirtyEntriesReportThePermanentShortfall() async {
+        let already = Set((1...7).map { "\(boxKey)/have\($0).txt" })
+        let result = await reconcile(
+            .entries((1...30).map { entry("f\($0).txt") }),
+            excludedKeys: already
+        )
+
+        XCTAssertEqual(result.drafts.count, FileTransferOutputDetector.maxOutboxEntriesPerReply,
+                       "the per-pass allowance is what STOPPED the walk")
+        XCTAssertEqual(result.capState, .messageCeilingReached(remaining: 18),
+                       "but the message is what BINDS it — one slot left against eighteen entries")
+        XCTAssertEqual(result.capState.remainder, .ceilingCapped(count: 18))
+        XCTAssertEqual(OutputHeldBackCopy.remainderLine(for: result.capState.remainder),
+                       .ceiling(count: 18),
+                       "so the row reports a permanent shortfall — seventeen of the eighteen have "
+                       + "nowhere on this message to land")
+
+        // The WORDS are then read off the message the user is looking at, never
+        // off the cap state alone: this pass exits with a slot still free, so the
+        // sentence has to be one the next tap cannot disprove.
+        func turn(chips: Int) -> MessageRecord {
+            MessageRecord(
+                id: UUID(), role: "agent", text: "reply", createdAt: created,
+                sourceDevice: "phone", outputScanLaneID: "lane", outputBoxKey: boxKey,
+                attachments: (0..<chips).map { index in
+                    AttachmentRecord(
+                        id: UUID(), mimeType: "text/plain", filename: "f\(index).txt",
+                        thumbnailData: nil, extractedText: nil,
+                        width: 0, height: 0, byteSize: 1, sequence: index, createdAt: created,
+                        isServerReference: true, storedKey: "\(boxKey)/f\(index).txt")
+                }
+            )
+        }
+        func printed(on message: MessageRecord) -> String {
+            OutputHeldBackCopy.sentences(for: .ceiling(count: 18), on: message)
+                .map { String(localized: $0) }
+                .joined(separator: " ")
+        }
+
+        let spent = turn(chips: already.count + result.drafts.count)
+        XCTAssertTrue(OutputHeldBackCopy.admitsMoreChips(spent),
+                      "one lifetime slot survives the pass, which is what makes the verb honest")
+        XCTAssertFalse(printed(on: spent).lowercased().contains("nothing more"),
+                       "and what makes finality false — the row would deny a file it is about to "
+                       + "hand over")
+        XCTAssertNotEqual(
+            printed(on: spent),
+            printed(on: turn(chips: FileTransferOutputDetector.maxOutputChipsPerMessage)),
+            "a message with a slot left and a message with none are two different claims; one "
+            + "string for both is how the false one shipped")
+    }
+
+    /// A message that somehow carries MORE chips than the ceiling — two devices'
+    /// inserts merged by CloudKit — yields a negative remainder, a clamped-zero
+    /// budget, and the same permanent answer. Pinned because the alternative to a
+    /// clamp here is a negative budget, which delivers nothing while reporting
+    /// `.passTruncated`: a turn held open forever on a window that can never open.
+    func testAnOverfullMessageStaysConsistentRatherThanGoingNegative() async {
+        let over = FileTransferOutputDetector.maxOutputChipsPerMessage + 3
+        let already = Set((1...over).map { "\(boxKey)/have\($0).txt" })
+        let result = await reconcile(
+            .entries((1...4).map { entry("new\($0).txt") }),
+            excludedKeys: already
+        )
+        XCTAssertTrue(result.drafts.isEmpty)
+        XCTAssertEqual(result.capState, .messageCeilingReached(remaining: 4))
+        XCTAssertTrue(result.conclusive, "there is no later window, so the turn closes")
+    }
+
+    /// The census and the cap state are INDEPENDENT populations and must not be
+    /// conflated: a refused entry was never deliverable, so it is not something a
+    /// budget left behind, and an undelivered entry is perfectly deliverable and
+    /// carries no refusal. A folder holding both reports both, separately.
+    func testRefusalsAreNotCountedAsUndeliveredNorTheReverse() async {
+        let perPass = FileTransferOutputDetector.maxOutboxEntriesPerReply
+        let deliverable = (1...(perPass + 2)).map { entry("f\($0).txt") }
+        let result = await reconcile(
+            .entries(deliverable + [entry("keys.sqlite"), entry("../../escape.pdf")])
+        )
+        XCTAssertEqual(result.drafts.count, perPass)
+        XCTAssertEqual(result.capState.undeliveredCount, 2,
+                       "only the DELIVERABLE tail is what a budget left behind")
+        XCTAssertEqual(result.typeRefusedEntries.map(\.name), ["keys.sqlite"])
+        XCTAssertEqual(result.shapeRefusedCount, 1)
+        XCTAssertEqual(result.refusedEntryCount, 2,
+                       "and the refusal census is the sum of its two parts, never of three")
+    }
+
     // MARK: - Missing metadata means UNKNOWN, never EMPTY
 
     /// THE load-bearing invariant of the whole design, asserted at the selection

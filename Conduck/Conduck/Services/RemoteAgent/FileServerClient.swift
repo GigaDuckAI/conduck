@@ -329,6 +329,126 @@ struct FileServerEntry: Equatable, Sendable {
     let byteSize: Int
 }
 
+/// WHICH KIND of shape guard refused a name — a CLASS, never an instance.
+///
+/// It exists because one sentence was being asked to cover nine guards, and it
+/// was false for the two commonest of them. An agent that derives a filename
+/// from a section heading writes a long, ordinary, perfectly printable name; an
+/// agent that assembles one from a template writes a stray trailing space.
+/// Telling either author that the name "could be read as an instruction, or
+/// hides itself from a listing" describes an attack that did not happen, and
+/// telling them "there's nothing to review" ends a conversation they could have
+/// won by asking for a shorter name, or for the same name without the space.
+///
+/// IT CARRIES NOTHING FROM THE LISTING — no name, no bytes, not even a measured
+/// length. Every case is a constant, so the whole population of values this type
+/// can ever hold is written here in this file, and a caller that renders one is
+/// rendering text this file chose. That is what keeps the shape arm displayable
+/// while `.refusedShape` itself stays a bare count of anonymous entries: the
+/// class is Conduck's word, the name is the server's.
+///
+/// THREE CASES, AND THE SPLIT IS BY WHAT THE USER CAN DO ABOUT IT rather than
+/// by guard. `.overlong` is a budget the agent can be asked to stay inside and
+/// `.whitespaceBounded` is a stray character it can be asked to drop — both are
+/// requests an agent can act on, and between them they are the refusals an
+/// HONEST agent actually earns. Everything else is a property of the name the
+/// user cannot negotiate away and would not want to, so it stays one residual.
+/// Splitting that residual further would multiply sentences without adding a
+/// decision — and every extra class is another string that has to stay true.
+nonisolated enum OutboxShapeRefusal: Equatable, Sendable {
+    /// The name overran `storedKeyComponentMaxCharacters` or
+    /// `storedKeyComponentMaxBytes`. THE BENIGN ONE, and the reason this type
+    /// exists: nothing about such a name is hostile or hidden, it is simply
+    /// longer than the lane carries, which is the one shape refusal a user can
+    /// act on ("ask for a shorter name").
+    ///
+    /// It means the length was the FIRST thing wrong, not the only one — the
+    /// length guard runs first, deliberately, so that every scan after it is
+    /// bounded by a budget rather than by whatever the server sent. A name that
+    /// is both overlong and otherwise unusable therefore lands here, and the
+    /// sentence it earns ("the name is too long") is still true of it.
+    case overlong
+    /// The name opens or closes on a space. THE OTHER BENIGN ONE, and the second
+    /// commonest refusal after length: only U+0020 survives the scalar alphabet
+    /// (`outboxEntryScalarIsAddressable`), so this is never an exotic separator
+    /// smuggled in — it is an agent writing `report.pdf ` with a stray trailing
+    /// space, and "ask for the name without the space" is as actionable as "ask
+    /// for a shorter name".
+    ///
+    /// It is split from `.unusable` for exactly the reason `.overlong` is: the
+    /// residual's sentence has to cover names that read as an instruction or
+    /// hide themselves from a listing, and that sentence is FALSE of a trailing
+    /// space — it accuses an honest agent of an attack it did not attempt.
+    ///
+    /// The REFUSAL itself does not soften, only the sentence: the display half
+    /// trims and collapses whitespace runs while the stored key keeps them
+    /// verbatim, so a trimmed name addresses a file that is not on the server.
+    case whitespaceBounded
+    /// Every other shape guard: empty, a path separator, an unaddressable
+    /// scalar, a leading combining mark, `.`/`..`, or a leading dot or dash. THE
+    /// RESIDUAL, on purpose — these guards refuse names for reasons the user
+    /// cannot fix by asking differently, and a row that enumerated them would
+    /// trade a true generic sentence for seven specific ones nobody can act on.
+    case unusable
+}
+
+/// What one entry name from a listing established — CLASSIFIED, because the
+/// answers below are different sentences to the user and a bare optional makes
+/// them one silence.
+///
+/// THE ONE THING THE CASES DIFFER ON IS WHETHER A NAME MAY BE SHOWN, and the
+/// split is a consequence of guard ORDER rather than a judgement call. The type
+/// test is the LAST guard in `outboxEntryVerdict`, so reaching it proves every
+/// shape and addressability guard already passed: the name is a single path
+/// component inside both filesystem budgets, built only of addressable graphic
+/// scalars, carrying no rejected literal, not opening or closing on whitespace,
+/// not opening on a combining mark, not hidden and not dash-led. That is exactly
+/// the property a DELIVERED chip's label rests on, so a type refusal may carry
+/// its name into the UI on the same terms — which is what gives the user
+/// something honest to decide about.
+///
+/// A SHAPE refusal carries NO NAME AND NO BYTES, and that is not caution for its
+/// own sake: the name failed one of the guards that make a name printable, so
+/// printing it is the one thing that must not happen. Its payload is a
+/// `OutboxShapeRefusal` — a closed set of three constants, holding nothing from
+/// the listing — so there is still no field for a later caller to reach into and
+/// render, and the rule stays structural rather than a convention someone
+/// downstream has to remember.
+///
+/// `.refusedUntyped` is split from `.refusedExtension` because the sentences
+/// diverge: one names a type Conduck will not open by itself, the other says
+/// Conduck could not read a type at all. Folding them would force the second to
+/// borrow the first's wording, and the borrowed sentence would be false for
+/// `README` and misleading for a tail that merely FOLDS onto an allowlisted one
+/// (`payload.\u{212A}t` renders as "payload.Kt" — see `outboxEntryExtension`).
+///
+/// `nonisolated` so the prose-scan lane, which runs off the main actor, can
+/// switch on it and compare it (`FileTransferOutputDetector.extractCandidates`);
+/// without it the synthesized `==` is `@MainActor` and every off-actor equality
+/// breaks. `Sendable` for the same reason; `Equatable` so a test can name the
+/// case it expects rather than assert a bare nil.
+nonisolated enum OutboxEntryVerdict: Equatable, Sendable {
+    /// Deliverable. The payload is the name BYTE-IDENTICAL to the listing's —
+    /// never repaired, because a repaired name addresses a file that is not
+    /// there.
+    case deliverable(String)
+    /// Every shape guard passed; the extension is ASCII, readable, and not on
+    /// `allowedExtensions`. `ext` is already lowercased ASCII alphanumeric, so a
+    /// consumer classifying it further needs no folding of its own and the set
+    /// it compares against must be all-lowercase.
+    case refusedExtension(name: String, ext: String)
+    /// Every shape guard passed; the name carries no ASCII extension to judge —
+    /// extensionless, an empty tail, or a tail that is not ASCII alphanumeric
+    /// before any case folding. UNKNOWN TYPE, never "no type": it is why nothing
+    /// downstream may assert what this file is.
+    case refusedUntyped(name: String)
+    /// A shape guard refused. NO NAME: nothing about this string has been
+    /// established, so nothing about it may be rendered. The payload names the
+    /// CLASS of guard and carries nothing from the listing — see
+    /// `OutboxShapeRefusal`.
+    case refusedShape(OutboxShapeRefusal)
+}
+
 /// Why a directory listing could not be believed. EVERY case means the same
 /// thing to the caller — the app learned nothing about what the agent produced,
 /// so the turn stays open — and they are kept apart because they name different
@@ -726,7 +846,7 @@ enum FileServerClient {
     ///
     /// That equivalence belongs to the mint alone. An inbound entry name may be
     /// any Unicode, where a character is one to four bytes, so
-    /// `validatedOutboxEntryName` counts the filesystem's budget in the unit the
+    /// `outboxEntryVerdict` counts the filesystem's budget in the unit the
     /// filesystem uses — `storedKeyComponentMaxBytes` — and keeps this cap only
     /// for what it still measures there: an accepted name stays no longer, in
     /// characters, than a name Conduck would have minted, which is what bounds
@@ -737,7 +857,11 @@ enum FileServerClient {
     /// once the server appends its own suffix fails just as hard as one that
     /// overflows on its own, and diagnosing that from an opaque 5xx is far worse
     /// than reserving the room up front.
-    static let storedKeyComponentMaxCharacters = 200
+    ///
+    /// `nonisolated` because `outboxEntryVerdict` reads it and that gate is
+    /// reachable from the off-actor prose lane. It widens where the number may
+    /// be READ and changes no value and no mint code path.
+    nonisolated static let storedKeyComponentMaxCharacters = 200
 
     /// Longest single path component an inbound entry name may occupy, in UTF-8
     /// BYTES — the unit `NAME_MAX` is actually counted in.
@@ -751,7 +875,9 @@ enum FileServerClient {
     /// ASCII name meets both bounds at exactly the same length, so admitting
     /// non-ASCII changes no verdict this gate reached before, and the two can
     /// never drift into disagreeing about the same headroom.
-    static let storedKeyComponentMaxBytes = storedKeyComponentMaxCharacters
+    ///
+    /// `nonisolated` for the reason the character cap is.
+    nonisolated static let storedKeyComponentMaxBytes = storedKeyComponentMaxCharacters
 
     /// The WebDAV-safe alphabet every MINTED key component is mapped into.
     ///
@@ -759,7 +885,7 @@ enum FileServerClient {
     /// answer different questions. The mint IMPOSES a shape it controls end to
     /// end — it chooses the prefix, the folder and every surviving character —
     /// so it can pick the narrowest alphabet that still addresses a file, and
-    /// anything it drops it also replaces. `validatedOutboxEntryName` ASSERTS a
+    /// anything it drops it also replaces. `outboxEntryVerdict` ASSERTS a
     /// property of a name the SERVER already chose, which it may not rewrite (a
     /// repaired name addresses a file that does not exist), so its standard is
     /// what that name's two consumers can survive: a path inside Conduck's own
@@ -2084,7 +2210,7 @@ enum FileServerClient {
     ///   - **Directories** are dropped: a nested folder is not a deliverable.
     ///
     /// What this function deliberately does NOT do is judge the NAME. That is
-    /// `validatedOutboxEntryName`'s job and it is a separate question: this one
+    /// `outboxEntryVerdict`'s job and it is a separate question: this one
     /// answers "is this a direct child of the folder I asked about", that one
     /// answers "is this a name I am willing to mint a key for".
     ///
@@ -2159,9 +2285,9 @@ enum FileServerClient {
         return .entries(entries)
     }
 
-    /// Whether an entry name from a listing may become a stored key, and the
-    /// name itself when it may. **REJECTS, NEVER REPAIRS** — `nil` means "do not
-    /// deliver this file", not "clean it up".
+    /// Whether an entry name from a listing may become a stored key, and WHAT
+    /// REFUSED IT when it may not. **REJECTS, NEVER REPAIRS** — a refusal means
+    /// "do not deliver this file", not "clean it up".
     ///
     /// WHY NOT `makeStoredKey`. That is a MINTER: it prepends `<8hex>__` and a
     /// folder, so running a server-supplied name through it produces a key that
@@ -2208,7 +2334,32 @@ enum FileServerClient {
     ///   - **An extension on `allowedExtensions`** — the outbound TYPE gate,
     ///     which is what keeps a `.mobileconfig` or a live `.sqlite` out of the
     ///     lane. Read by `outboxEntryExtension`, which requires the RAW slice to
-    ///     be ASCII alphanumeric BEFORE any case folding.
+    ///     be ASCII alphanumeric BEFORE any case folding. It splits in two:
+    ///     `.refusedUntyped` when there is no readable extension at all,
+    ///     `.refusedExtension` when there is one and it is off the list.
+    ///
+    /// A SHAPE REFUSAL NAMES ITS CLASS, never its name: the length budgets answer
+    /// `.overlong`, the leading/trailing-space guard answers
+    /// `.whitespaceBounded`, and the other seven guards answer `.unusable`
+    /// (`OutboxShapeRefusal`). The length guard runs FIRST for a reason unrelated
+    /// to reporting — it bounds every scan below it against an adversary-chosen
+    /// string — and the classification simply follows the guard that fired.
+    ///
+    /// THE TYPE GATE IS DELIBERATELY LAST, and every consumer of the classified
+    /// refusal depends on it staying last. Reaching it proves guards 1–9 already
+    /// passed, which is precisely what makes a type-refused name exactly as
+    /// display-safe as a delivered chip's label — same two consumers, same
+    /// established properties. Move a shape guard below it and a name that never
+    /// earned those properties starts arriving with a payload attached.
+    ///
+    /// IT IS NOT A CONTENT-SECURITY BOUNDARY, and reading it as one is the
+    /// mistake it invites. The gate reads the FILENAME and never the bytes, so a
+    /// hostile agent renames to `.txt` and walks straight through it while an
+    /// honest one is the only party it ever stops. What it actually decides is
+    /// narrower and still worth deciding: what Conduck opens automatically, with
+    /// no user involvement. Widening the list is therefore a UX call about the
+    /// default, never a security regression, and narrowing it protects nobody
+    /// from an adversary.
     ///
     /// SURROGATES get no arm, and the reason is worth stating so nobody adds
     /// one: `Unicode.Scalar` cannot hold a surrogate, and a listing whose bytes
@@ -2220,29 +2371,88 @@ enum FileServerClient {
     /// detector and so a caller with a narrower policy can pass one; the default
     /// IS the shipped outbound allowlist, because a second copy of that list is
     /// a second thing to keep in step.
-    static func validatedOutboxEntryName(
+    ///
+    /// `nonisolated` because the prose-scan lane applies the same policy and
+    /// runs off the main actor (`FileTransferOutputDetector.extractCandidates`,
+    /// hopped through `Task.detached`). Pure, content-free, and it logs nothing.
+    nonisolated static func outboxEntryVerdict(
+        _ name: String,
+        allowedExtensions: Set<String> = FileTransferOutputDetector.outputAllowlist
+    ) -> OutboxEntryVerdict {
+        // SPLIT FROM THE LENGTH GUARD BELOW, not folded into it: an empty name is
+        // not a long one, and the sentence `.overlong` earns — ask for a shorter
+        // name — is the one thing an empty name can never act on.
+        guard !name.isEmpty else { return .refusedShape(.unusable) }
+        // FIRST, AND IT STAYS FIRST. Every scan below walks the name, so the
+        // budgets are what keep an adversary-chosen string from buying an
+        // unbounded walk per listing entry. The classification consequence is
+        // stated on `OutboxShapeRefusal.overlong`: this reports the first thing
+        // wrong, which is still true of a name that is also unusable.
+        guard name.count <= storedKeyComponentMaxCharacters,
+              name.utf8.count <= storedKeyComponentMaxBytes else {
+            return .refusedShape(.overlong)
+        }
+        guard !name.utf8.contains(UInt8(ascii: "/")) else { return .refusedShape(.unusable) }
+        // Closure form, not the bare function reference. Passing a static as a
+        // VALUE converts it to a nonisolated function type, so a bare reference
+        // makes this line depend on the `nonisolated` annotation below staying
+        // put — drop that annotation and the same line becomes a Swift-6
+        // isolation diagnostic instead of a compile. A closure body inherits
+        // whatever isolation the caller has and is right either way.
+        guard name.unicodeScalars.allSatisfy({ outboxEntryScalarIsAddressable($0) }) else {
+            return .refusedShape(.unusable)
+        }
+        // TWO GUARDS, NOT ONE, so each answers only for what it actually saw. The
+        // bindings cannot fail — the empty guard above already returned — but a
+        // folded `guard let … , !isWhitespace` would answer "the name opens or
+        // closes on a space" for a name with no scalars at all, which is a
+        // sentence about a string nobody observed. The bindings are needed
+        // regardless: the combining-mark guard below reads `first`.
+        guard let first = name.unicodeScalars.first,
+              let last = name.unicodeScalars.last else {
+            return .refusedShape(.unusable)
+        }
+        guard !first.properties.isWhitespace, !last.properties.isWhitespace else {
+            return .refusedShape(.whitespaceBounded)
+        }
+        guard !isCombiningMark(first) else { return .refusedShape(.unusable) }
+        guard name != ".", name != ".." else { return .refusedShape(.unusable) }
+        let firstByte = name.utf8.first
+        guard firstByte != UInt8(ascii: "."), firstByte != UInt8(ascii: "-") else {
+            return .refusedShape(.unusable)
+        }
+        // PAST EVERY SHAPE GUARD. From here the name is printable on the same
+        // terms a delivered chip's label is, so both remaining refusals carry it
+        // — that is what gives a user-facing refusal something honest to name.
+        guard let ext = outboxEntryExtension(of: name) else { return .refusedUntyped(name: name) }
+        guard allowedExtensions.contains(ext) else {
+            return .refusedExtension(name: name, ext: ext)
+        }
+        return .deliverable(name)
+    }
+
+    /// The ACCEPT half of `outboxEntryVerdict`, for callers that only need yes
+    /// or no: the name when it is deliverable, nil otherwise.
+    ///
+    /// IT IS NOT THE ONE TO REACH FOR WHEN THE ANSWER REACHES A USER. Its nil is
+    /// ten different refusals wearing one face, and a caller that has to TELL
+    /// someone what happened — a row, a caption, a sheet — must take the verdict,
+    /// because that is the only form that knows whether a name may be shown.
+    ///
+    /// Kept as a shim rather than migrated away because the refusal corpus in
+    /// `OutboxEntryValidatorTests` is the regression net for this gate, and it
+    /// shares its hostile names VERBATIM with the outbound-mint tripwire in
+    /// `ConverseWireTests` — rewriting those assertions to name a case would
+    /// trade a proven net for a rewritten one, and would make the corpus brittle
+    /// to a future re-split of the taxonomy that changes no verdict at all. A
+    /// test asserting "this name is refused" genuinely does not care why.
+    nonisolated static func validatedOutboxEntryName(
         _ name: String,
         allowedExtensions: Set<String> = FileTransferOutputDetector.outputAllowlist
     ) -> String? {
-        guard !name.isEmpty,
-              name.count <= storedKeyComponentMaxCharacters,
-              name.utf8.count <= storedKeyComponentMaxBytes else { return nil }
-        guard !name.utf8.contains(UInt8(ascii: "/")) else { return nil }
-        // Closure form, not the bare function reference: passing an isolated
-        // static as a VALUE converts it to a nonisolated function type, while a
-        // closure body inherits this caller's isolation. Same verdict, no
-        // Swift-6 isolation diagnostic.
-        guard name.unicodeScalars.allSatisfy({ outboxEntryScalarIsAddressable($0) }) else {
-            return nil
-        }
-        guard let first = name.unicodeScalars.first, let last = name.unicodeScalars.last,
-              !first.properties.isWhitespace, !last.properties.isWhitespace else { return nil }
-        guard !isCombiningMark(first) else { return nil }
-        guard name != ".", name != ".." else { return nil }
-        let firstByte = name.utf8.first
-        guard firstByte != UInt8(ascii: "."), firstByte != UInt8(ascii: "-") else { return nil }
-        guard let ext = outboxEntryExtension(of: name),
-              allowedExtensions.contains(ext) else { return nil }
+        guard case let .deliverable(name) = outboxEntryVerdict(
+            name, allowedExtensions: allowedExtensions
+        ) else { return nil }
         return name
     }
 
@@ -2271,7 +2481,7 @@ enum FileServerClient {
     /// `/` is absent because it is refused one guard earlier, on BYTES — the
     /// reading `URL.appending(path:)` obeys, and the one a separator fused with
     /// a combining mark cannot hide from.
-    private static let outboxEntryRejectedScalars: Set<Unicode.Scalar> = [
+    nonisolated private static let outboxEntryRejectedScalars: Set<Unicode.Scalar> = [
         "\"", "`", "\\", "$", "[", "]", "!",
     ]
 
@@ -2313,7 +2523,7 @@ enum FileServerClient {
     /// fall off the end of the switch: both are `Cn` today, and both are
     /// refusals of POLICY that must survive a future Unicode reclassifying
     /// either one.
-    private static func outboxEntryScalarIsAddressable(_ scalar: Unicode.Scalar) -> Bool {
+    nonisolated private static func outboxEntryScalarIsAddressable(_ scalar: Unicode.Scalar) -> Bool {
         guard !outboxEntryRejectedScalars.contains(scalar) else { return false }
         let properties = scalar.properties
         guard properties.generalCategory != .unassigned,
@@ -2337,7 +2547,7 @@ enum FileServerClient {
 
     /// Whether `scalar` is a combining mark (`Mn` / `Mc` / `Me`) — a scalar that
     /// renders by attaching itself to the character before it.
-    private static func isCombiningMark(_ scalar: Unicode.Scalar) -> Bool {
+    nonisolated private static func isCombiningMark(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.properties.generalCategory {
         case .nonspacingMark, .spacingMark, .enclosingMark: return true
         default: return false
@@ -2365,7 +2575,7 @@ enum FileServerClient {
     /// passes therefore has an unfused final dot, where both readings return the
     /// same extension, so the later probe can never classify a delivered key as
     /// a different type than this gate accepted it as.
-    private static func outboxEntryExtension(of name: String) -> String? {
+    nonisolated private static func outboxEntryExtension(of name: String) -> String? {
         let bytes = Array(name.utf8)
         guard let dot = bytes.lastIndex(of: UInt8(ascii: ".")), dot > bytes.startIndex else {
             return nil

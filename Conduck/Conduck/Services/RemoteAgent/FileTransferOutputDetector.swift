@@ -58,12 +58,20 @@ import Foundation
 ///   - A listing is believed only through `BackgroundFileTransfer.listCollection`,
 ///     which requires a bounded, complete, well-formed `207` whose entries are
 ///     all direct children on a lane that demonstrated it can say no.
-///   - Every entry name must survive `FileServerClient.validatedOutboxEntryName`,
+///   - Every entry name must survive `FileServerClient.outboxEntryVerdict`,
 ///     which REJECTS rather than repairs and applies `outputAllowlist` as the
-///     outbound type gate.
+///     outbound type gate. Refusal is CLASSIFIED rather than silent: a name
+///     refused for its TYPE is nameable and rescuable, a name refused for its
+///     SHAPE is an anonymous count and never leaves this file as a string —
+///     split only by the KIND of guard that refused it, which is this app's own
+///     word and carries nothing from the listing.
 ///   - Entries per reply are capped (`maxOutboxEntriesPerReply`) and a message's
 ///     lifetime chip count is capped (`maxOutputChipsPerMessage`), so a box
-///     stuffed by a hostile gateway cannot fan out into unbounded chips.
+///     stuffed by a hostile gateway cannot fan out into unbounded chips. What a
+///     cap STOPPED is reported as well as bounded — `OutboxCapState` carries how
+///     many deliverable entries were left and whether the message can still hold
+///     them, decided from the state the pass EXITED in, because that is the only
+///     reading that is true of the row the user is looking at.
 ///   - A pass that could not read the box, or that ran before the turn's age
 ///     gate opened, does NOT close the turn — see `outputScanGrace`,
 ///     `truncatedScanHorizon` and `scanMayClose`. Closing a turn is permanent,
@@ -78,52 +86,202 @@ import Foundation
 /// text, candidate filenames, storedKeys, entry names, or the snapshot. Returns
 /// the structured drafts; no `print`/`os_log` anywhere in this path.
 enum FileTransferOutputDetector {
+    /// One entry the listing held and this pass will not hand over on its own,
+    /// carried BY NAME — which every other refusal in this lane deliberately is
+    /// not.
+    ///
+    /// WHY A NAME IS SAFE HERE AND NOWHERE ELSE. The type gate is the LAST guard
+    /// in `FileServerClient.outboxEntryVerdict`, so an entry that reaches it has
+    /// already proved a single path component, an addressable alphabet, no
+    /// leading dot / dash / combining mark, no opening or closing space, and both
+    /// length budgets. A name in this array is therefore exactly as displayable,
+    /// as quotable and as addressable as a DELIVERED chip's label — the one thing
+    /// it is not is a type Conduck opens by itself. A SHAPE refusal is the
+    /// opposite claim, which is why it is a bare count instead: that name failed
+    /// a guard ABOUT THE NAME, so putting it on screen in the app's own voice is
+    /// the single thing the gate exists to stop.
+    ///
+    /// Deliberately NOT `CustomStringConvertible` / `CustomDebugStringConvertible`
+    /// — either conformance invites a `logger.debug("\(entry)")` that would ship
+    /// a filename, which this file's privacy invariant forbids outright.
+    nonisolated struct RefusedOutboxEntry: Equatable, Sendable, Identifiable {
+        /// The server's own bytes, never repaired — a cleaned name addresses a
+        /// file that does not exist.
+        let name: String
+        /// Lowercased ASCII extension, or nil when the name carries none this app
+        /// can read (no dot, an empty tail, or a tail that is not ASCII
+        /// alphanumeric before any case folding). nil means UNKNOWN TYPE, never
+        /// "no type" — it is the reason nothing downstream may assert what the
+        /// file is.
+        let ext: String?
+        /// `<D:getcontentlength>` at listing time; 0 means the server omitted it,
+        /// exactly as it does on a delivered draft's `byteSize`.
+        let byteSize: Int
+        /// The key a rescue download would GET. Minted from the SAME
+        /// concatenation the delivery arm uses, in the same walk, so the rescue
+        /// path can never build a different key from a name and a folder that
+        /// have since drifted apart.
+        let storedKey: String
+
+        var id: String { storedKey }
+    }
+
+    /// Why a delivery stopped short of the folder, and whether the message can
+    /// still hold what it left. THE TWO CAPS ARE NOT THE SAME EVENT and a Bool
+    /// cannot say which one bit: one of them is a pass that will be re-run, the
+    /// other is the end of what this message can ever hold.
+    ///
+    /// THE QUESTION IS DECIDED FROM THE PASS'S EXIT STATE, never its entry state.
+    /// Both caps end the delivery identically, so the only honest way to name the
+    /// binding one is to ask what the message looks like AFTER this pass's chips
+    /// landed: the remaining lifetime allowance is `maxOutputChipsPerMessage`
+    /// minus the chips already there minus the ones just delivered. Deciding it
+    /// on entry reports the per-pass cap for a pass that then fills the message
+    /// to its ceiling — a row promising batches over a reply that will never
+    /// receive another file. It self-corrects on the next pass, which is no
+    /// comfort inside the window it is shown in.
+    nonisolated enum OutboxCapState: Equatable, Sendable {
+        /// Every entry the listing held was delivered, already on the message,
+        /// refused, or a directory. Nothing was left behind by a budget.
+        case complete
+        /// The PER-PASS allowance (`maxOutboxEntriesPerReply`) stopped the walk
+        /// with `remaining` deliverable entries still in the folder, AND the
+        /// message's lifetime allowance can still cover every one of them. The
+        /// only case that may be phrased as a promise: each later pass drops the
+        /// keys already chipped, so the window walks forward until the folder is
+        /// exhausted.
+        case passTruncated(remaining: Int)
+        /// `remaining` deliverable entries are still in the folder and the
+        /// MESSAGE's lifetime chip ceiling (`maxOutputChipsPerMessage`) means at
+        /// least one of them will never arrive here however often the folder is
+        /// re-read. Stated as "at least one" rather than "none of them" because
+        /// that is what the arithmetic proves — a message with slots left over
+        /// still fills them on a later pass, and the escape hatch is what covers
+        /// the rest.
+        case messageCeilingReached(remaining: Int)
+
+        /// Deliverable entries this pass saw and did not hand over. 0 on
+        /// `.complete`, which is the only value that may be read as "the folder
+        /// is fully accounted for".
+        var undeliveredCount: Int {
+            switch self {
+            case .complete: return 0
+            case .passTruncated(let remaining), .messageCeilingReached(let remaining):
+                return remaining
+            }
+        }
+
+        /// The same fact in the form the row PERSISTS, so the count and its cause
+        /// travel together into the store and cannot be recombined wrongly on the
+        /// way out. Built through `OutputRemainder`'s clamping initializer, so a
+        /// zero remainder can never acquire a cause.
+        var remainder: OutputRemainder {
+            switch self {
+            case .complete:
+                return .nothingLeft
+            case .passTruncated(let remaining):
+                return OutputRemainder(count: remaining, isRecoverable: true)
+            case .messageCeilingReached(let remaining):
+                return OutputRemainder(count: remaining, isRecoverable: false)
+            }
+        }
+    }
+
     /// What one listing of one dispatch box established. The `verdict` rides
     /// alongside the drafts because the caller needs to tell three different
     /// things apart that all produce zero chips: a folder that is not there, a
     /// folder that is there and empty, and a server that could not be read. Only
     /// the last is a fault, and only the last may drive a user-visible row.
     ///
-    /// `refusedEntryCount` is a FOURTH zero-chip shape the verdict cannot
+    /// The refusal fields are a FOURTH zero-chip shape the verdict cannot
     /// express: a folder holding ten names the outbound gate refuses answers
     /// `.entries` and yields no drafts, i.e. exactly what an empty folder
-    /// answers. Its symptom is a reply that names a file over a thread that
-    /// shows none, with nothing anywhere to say the folder was not empty.
+    /// answers. Its symptom is a reply that names a file over a thread that shows
+    /// none, with nothing anywhere to say the folder was not empty. `capState` is
+    /// a FIFTH: a folder read successfully whose tail a budget left behind.
+    ///
+    /// EVERY COUNT HERE IS A CENSUS OF THE LISTING, NOT OF THE DELIVERY. One walk
+    /// visits every entry and the budget decides only whether an entry becomes a
+    /// CHIP — never whether it is EXAMINED. A census that stopped at the cap
+    /// would under-report hardest on the fullest folders, which are exactly the
+    /// ones worth telling the user about.
     struct OutboxReconciliation {
         let drafts: [AttachmentDraft]
         /// Whether this pass may PERMANENTLY stamp the turn scanned.
         let conclusive: Bool
         let verdict: FileServerListingVerdict
-        /// How many entries in the listing this pass is NOT ABLE to hand over —
-        /// real (non-directory) names `FileServerClient.validatedOutboxEntryName`
-        /// refuses, whether for their type or for their shape.
-        ///
-        /// A CENSUS OF THE LISTING, NOT OF THE DELIVERY, which is why it is taken
-        /// where it is rather than inside the loop that mints drafts. That loop
-        /// stops at the message's remaining chip allowance and does not run at
-        /// all when the allowance is zero, so a count taken inside it shrinks as
-        /// the turn fills up — under-reporting hardest on the fullest folders.
-        ///
-        /// It counts ONLY what the gate refused. A directory is not a file
-        /// withheld, and an entry already chipped on the message passed the gate
-        /// by definition (its storedKey exists only because a validated name
-        /// produced it) — reporting either would be a refusal that never
-        /// happened, about a folder that is behaving.
-        ///
-        /// ZERO on every verdict but `.entries`: an absent folder holds nothing,
-        /// and an unreadable one is a listing the app does not have.
-        let refusedEntryCount: Int
+
+        /// Entries refused for their TYPE ALONE — see `RefusedOutboxEntry` for
+        /// why these carry a name where the count below does not. An entry
+        /// already chipped on the message is excluded: its storedKey exists only
+        /// because a validated name produced it, so offering to rescue a file the
+        /// thread is already showing is a contradiction the user cannot resolve.
+        /// Empty on every verdict but `.entries`.
+        let typeRefusedEntries: [RefusedOutboxEntry]
+
+        /// Entries refused for their SHAPE, counted BY CLASS — a name that
+        /// overran a length budget on one arm, one that opens or closes on a
+        /// space on the second, every other shape guard on the third. NAMELESS,
+        /// and permanently so: this is the population the gate
+        /// exists to keep out of the app's voice, so there is nothing to show and
+        /// nothing to override. The class is Conduck's own word about the
+        /// refusal, not the server's, which is what lets a benign overlong name
+        /// earn a true sentence instead of an accusation. `.nothingRefused` on
+        /// every verdict but `.entries`.
+        let shapeRefused: ShapeRefusalCensus
+
+        /// What a budget stopped, and whether stopping is recoverable.
+        /// `.complete` on every verdict but `.entries`: a folder nobody read left
+        /// nothing behind, so no caller can ever read a `remaining` out of a
+        /// listing that does not exist.
+        let capState: OutboxCapState
+
+        /// The whole shape-refused population, for the callers that report it as
+        /// one number. Computed, so it can never disagree with its three classes.
+        var shapeRefusedCount: Int { shapeRefused.total }
+
+        /// The zero-chip census the callers that only need "was anything
+        /// withheld" ask for, preserved as the SUM of the two refusal
+        /// populations so there is exactly one number and it cannot disagree with
+        /// its own parts.
+        var refusedEntryCount: Int { typeRefusedEntries.count + shapeRefusedCount }
+
+        init(
+            drafts: [AttachmentDraft],
+            conclusive: Bool,
+            verdict: FileServerListingVerdict,
+            typeRefusedEntries: [RefusedOutboxEntry] = [],
+            shapeRefused: ShapeRefusalCensus = .nothingRefused,
+            capState: OutboxCapState = .complete
+        ) {
+            self.drafts = drafts
+            self.conclusive = conclusive
+            self.verdict = verdict
+            self.typeRefusedEntries = typeRefusedEntries
+            self.shapeRefused = shapeRefused
+            self.capState = capState
+        }
     }
 
     /// Curated set of output-file extensions Conduck is willing to address —
     /// document / data / archive / image / audio / code types an agent tool
     /// realistically WRITES. Lowercased for matching.
     ///
-    /// IT IS THE OUTBOUND TYPE GATE. `FileServerClient.validatedOutboxEntryName`
+    /// IT IS THE OUTBOUND TYPE GATE. `FileServerClient.outboxEntryVerdict`
     /// defaults to this set, so an entry in the box whose extension is not here
-    /// is not delivered at all. That is what keeps a `.mobileconfig`, a live
-    /// `.sqlite`, or an extensionless blob out of the lane even when the agent
-    /// puts one in the folder it was given.
+    /// is not delivered as a chip. That is what keeps a `.mobileconfig`, a live
+    /// `.sqlite`, or an extensionless blob out of the automatic lane even when
+    /// the agent puts one in the folder it was given.
+    ///
+    /// IT IS NOT A CONTENT-SECURITY BOUNDARY, and sizing it as if it were is the
+    /// mistake it invites. It reads the FILENAME and never the bytes, so a
+    /// hostile agent renames its payload to `.txt` and walks through untouched,
+    /// while an honest one is the only party a short list ever stops. What the
+    /// list actually decides is narrower and still worth deciding: WHAT CONDUCK
+    /// OPENS AUTOMATICALLY, with no user involvement. Everything it refuses stays
+    /// reachable through an explicit, named, one-at-a-time save the user
+    /// performs — so the answer to "this type is missing" is that escape hatch,
+    /// not a longer list.
     ///
     /// It is ALSO the prose-noise filter for the manual search: the candidate
     /// regex enumerates every `<base>.<ext>` token in a reply, and this set is
@@ -139,8 +297,12 @@ enum FileTransferOutputDetector {
     ///     twins.
     ///   - `rtf` / `epub` — document deliverables a "write this up for me" turn
     ///     genuinely produces.
-    ///   - `webp` — a modern raster output format; it also earns a thumbnail
+    ///   - `webp` / `heic` — modern raster output formats; both earn a thumbnail
     ///     (see `imagePreviewExtensions`).
+    ///   - Video `mp4` / `mov` — the two container formats every Apple surface
+    ///     has a system decoder for, so a delivered clip actually opens. They are
+    ///     also the first routinely-hundred-megabyte types here, which is what
+    ///     the download size confirmation exists for.
     ///   - Languages (`go`/`rs`/`rb`/`kt`/`java`/`swift`/`cpp`/`hpp`/`css`/
     ///     `scss`/`tex`/`bat`/`ps1`, on top of `py`/`js`/`ts`/`sh`/`sql`) — the
     ///     showcase gateways are CODING agents, so source files are the modal
@@ -155,17 +317,138 @@ enum FileTransferOutputDetector {
     ///   - `db` / `bin` / `dat` — generic and usually pre-existing.
     ///   - `sqlite` — legitimate but sensitive: delivering a live workspace
     ///     database is a worse mis-fire than delivering a stray document.
-    ///   - Video (`mp4`/`mov`/`webm`) and config (`ini`/`cfg`/`conf`) — widening
-    ///     handback to those artifact classes is a product decision, taken
-    ///     deliberately or not at all.
+    ///   - `webm`, where its two siblings are admitted, and the reason is
+    ///     MEASURED rather than editorial: it conforms to `public.movie` on both
+    ///     platforms but has no system decoder — absent from
+    ///     `AVURLAsset.audiovisualTypes()`, and Quick Look answers false for it —
+    ///     so admitting it would mint a chip that cannot be opened, which is a
+    ///     worse outcome than the honest refusal plus the save-anyway hatch.
+    ///   - Config (`ini`/`cfg`/`conf`) — widening handback to that artifact class
+    ///     is a product decision, taken deliberately or not at all.
     nonisolated static let outputAllowlist: Set<String> = [
         "pdf", "csv", "tsv", "json", "xml", "yaml", "yml", "toml", "txt", "md", "log",
-        "zip", "tar", "gz", "png", "jpg", "jpeg", "gif", "svg", "webp",
+        "zip", "tar", "gz", "png", "jpg", "jpeg", "gif", "svg", "webp", "heic",
         "xlsx", "xls", "docx", "doc", "pptx", "ppt", "html", "rtf", "epub",
-        "m4a", "mp3", "wav", "flac", "ogg", "aac", "opus",
+        "m4a", "mp3", "wav", "flac", "ogg", "aac", "opus", "mp4", "mov",
         "py", "js", "ts", "sh", "sql", "parquet", "ipynb",
         "go", "rs", "rb", "kt", "java", "swift", "cpp", "hpp", "css", "scss",
         "tex", "bat", "ps1"
+    ]
+
+    /// Extensions whose whole purpose is to CHANGE something when opened —
+    /// device policy, an install, or code that runs. A refusal in this class
+    /// earns a louder warning than an ordinary one, because "save it anyway" is
+    /// a different decision for a `.mobileconfig` than for a `.sqlite`.
+    ///
+    /// ITS MEMBERSHIP TEST IS THE SENTENCE, not the severity. A member belongs
+    /// here only if the class's own warning — the file is meant to configure,
+    /// install or run something rather than to be read — is TRUE of it. A type
+    /// whose risk is real but different does not get folded in for being risky;
+    /// it gets its own set and its own sentence (`macroEnabledDocumentExtensions`
+    /// is the second one). Reason: the user reads ONE sentence and it is the one
+    /// this set triggered, so a member the sentence does not describe is a
+    /// warning that is simultaneously alarming and uninformative — the shape that
+    /// teaches people to dismiss the warning that IS about their file.
+    ///
+    /// IT LIVES HERE, BESIDE THE ALLOWLIST, and not in `FileServerClient`. That
+    /// file is transport, naming and parsing; how loud a warning should be is
+    /// product policy, and the two belong to the same review. The validator stays
+    /// ignorant of this set entirely — the verdict carries the extension out and
+    /// whoever asks the question asks the detector. One direction of dependency,
+    /// no second field to keep in step.
+    ///
+    /// IT MUST STAY DISJOINT FROM `outputAllowlist`, and the reason is not
+    /// tidiness: this set can only ever be consulted about a
+    /// `.refusedExtension` verdict, and an allowlisted extension is by definition
+    /// never refused. So naming one here is dead code that READS like live
+    /// protection — the most expensive kind of wrong. A test pins the
+    /// disjointness in both directions so either list may move without the other
+    /// silently rotting. It must stay disjoint from
+    /// `macroEnabledDocumentExtensions` for a different reason: the sheet draws
+    /// one block per class it holds a member of, so an extension in both draws
+    /// two warnings about one file.
+    ///
+    /// EVERY MEMBER IS LOWERCASE ASCII, inherited from the guarantee
+    /// `FileServerClient.outboxEntryVerdict` makes about the `ext` it carries —
+    /// so membership is a plain `contains` and never a case fold.
+    ///
+    /// THE PRE-EXISTING ASYMMETRY, stated rather than hidden: `bat`, `ps1`, `sh`,
+    /// `py` and `js` are ALLOWLISTED, so a delivered `.bat` gets an ordinary chip
+    /// and no warning at all while a refused `.exe` gets the loud one. That is a
+    /// property of the allowlist, not of this set, and the disjointness rule is
+    /// what forces it to be visible here instead of being papered over.
+    nonisolated static let configurationInstallerExtensions: Set<String> = [
+        // Device / trust policy payloads — opening one is a CONFIGURATION change,
+        // not a read. The `.mobileconfig` class this warning is named for.
+        "mobileconfig", "mobileprovision", "provisionprofile",
+        "cer", "crt", "der", "pem", "p12", "pfx", "keychain",
+
+        // Installers and auto-mounting disk images.
+        "pkg", "mpkg", "dmg", "iso", "sparsebundle", "sparseimage",
+        "msi", "msix", "appx", "deb", "rpm", "apk", "aab", "ipa", "appimage", "snap",
+
+        // Executables and loadable code. A bundle DIRECTORY counts, because a
+        // `.app` is a folder the OS runs.
+        "app", "exe", "com", "scr", "dll", "dylib", "so", "jar",
+        "kext", "dext", "xpc", "bundle", "plugin", "prefpane", "saver", "framework",
+
+        // Documents whose whole purpose is to run something. `.command`,
+        // `.workflow` and `.scpt` are the Apple ones; `.url` / `.webloc` /
+        // `.lnk` / `.desktop` look like bookmarks and carry a launch target.
+        "command", "tool", "scpt", "scptd", "applescript", "workflow", "wflow",
+        "shortcut", "action", "vbs", "vbe", "wsf", "wsh", "hta", "reg",
+        "desktop", "lnk", "url", "webloc", "inetloc", "terminal",
+    ]
+
+    /// Office file endings that permit an embedded macro — a small program saved
+    /// inside the file, which the Office app can run when the file is opened.
+    /// The SECOND warning class, and separate from
+    /// `configurationInstallerExtensions` on the merits rather than for tidiness.
+    ///
+    /// WHY IT IS NOT IN THAT SET. A `.docm` is a document; it is meant to be
+    /// read, which is the exact opposite of what that class's warning asserts
+    /// about the file that triggered it. Filed there, an agent's `Q3-report.docm`
+    /// draws a sentence about profiles changing Wi-Fi and installers putting
+    /// software on a machine — two examples describing neither this file nor
+    /// anything else on the sheet — while nothing names the one thing that is
+    /// actually true of it. Alarming and uninformative at once is how a warning
+    /// stops being read.
+    ///
+    /// WHY IT IS NOT DROPPED ALTOGETHER EITHER. The ordinary refusal sentence
+    /// ("Conduck doesn't open .docm files on its own") is true but withholds the
+    /// only fact that distinguishes this tail from its inert twin: `.docx` cannot
+    /// carry a runnable macro and `.docm` can. That is a real, non-obvious
+    /// difference the user cannot infer from the name, so it earns a sentence of
+    /// its own. A member whose only honest sentence is the ordinary one belongs
+    /// in NO warning class — that test is what keeps both sets from growing into
+    /// a general "risky" bucket.
+    ///
+    /// WHAT THE SENTENCE MAY CLAIM. Conduck read a NAME and nothing else, so the
+    /// tail proves a macro is PERMITTED, never that one is present, and the copy
+    /// says exactly that. It also cannot claim the code runs on open: whether a
+    /// macro executes belongs to the app that opens the file and its own macro
+    /// settings, which is why the moment is located at "opening it in an app that
+    /// runs macros" and not at saving.
+    ///
+    /// `xlsb` (binary workbook) and the add-in tails `xlam` / `ppam` are here
+    /// with the documents and templates: all of them may hold VBA, which is the
+    /// single property the sentence turns on.
+    ///
+    /// THE SAME ASYMMETRY THE SET ABOVE HAS, and worth stating because this one
+    /// looks like an oversight rather than a policy: `doc`, `xls` and `ppt` are
+    /// ALLOWLISTED, and those legacy binary formats carry VBA exactly as the
+    /// `m`-tailed twins do — so a delivered `.doc` gets an ordinary chip and no
+    /// warning while a refused `.docm` gets this one. That is a property of the
+    /// allowlist (what Conduck opens by itself), not of this set (what a rescue
+    /// is told), and the fix for it is never to add an allowlisted tail here —
+    /// the disjointness rule makes that dead code, since an allowlisted
+    /// extension is never refused and so never reaches the sheet.
+    ///
+    /// Lowercase ASCII, disjoint from `outputAllowlist` and from
+    /// `configurationInstallerExtensions`, for the reasons stated on that set.
+    nonisolated static let macroEnabledDocumentExtensions: Set<String> = [
+        "docm", "dotm", "xlsm", "xlsb", "xltm", "xlam",
+        "pptm", "potm", "ppsm", "ppam", "sldm",
     ]
 
     /// Maximum distinct candidates the MANUAL search probes per reply — a
@@ -311,15 +594,24 @@ enum FileTransferOutputDetector {
     /// `list` is injectable so the verdict ladder is unit-testable without a live
     /// file server; the default is the real strict listing lane.
     ///
-    /// It also returns `refusedEntryCount`, the census of what the folder held
-    /// and this pass cannot hand over. The AUTOMATIC caller ignores it — a file
-    /// type Conduck does not deliver is a correct outcome, not a fault, and a
-    /// standing row per turn would make the ordinary case the loudest thing in
-    /// the thread. It exists for the USER-INITIATED look, where the question was
-    /// asked out loud and an unexplained silence is the wrong answer.
+    /// It also returns the CENSUS of what the folder held and this pass cannot
+    /// hand over — `typeRefusedEntries`, `shapeRefusedCount`, `capState`. A file
+    /// type Conduck does not open by itself is a correct outcome rather than a
+    /// fault, so nothing here is phrased as an error; what it is NOT is a reason
+    /// for the thread to say nothing at all, which is what a folder holding only
+    /// refused names produced when the count was the whole answer.
+    ///
+    /// ONE WALK, AND IT NEVER BREAKS EARLY. Every entry is classified exactly
+    /// once and the budget decides only whether an entry becomes a CHIP. That is
+    /// cheaper than examining the listing twice (which is what a separate census
+    /// pass costs) and it sees strictly more: the tail past the cap is counted
+    /// instead of abandoned, which is the whole reason a turn could close on a
+    /// full message and a silent remainder.
     ///
     /// PRIVACY (see the spec's Privacy & Security section): never logs the
-    /// collection key, entry names, storedKeys, or the snapshot.
+    /// collection key, entry names, storedKeys, or the snapshot. Entry names
+    /// travel OUT in the return value, as they always have on a delivered draft —
+    /// and only for the type-refused population, never the shape-refused one.
     static func reconcileOutbox(
         outboxKey: String,
         snapshot: SettingsManager.FileTransferSnapshot,
@@ -333,65 +625,159 @@ enum FileTransferOutputDetector {
         }
     ) async -> OutboxReconciliation {
         let verdict = await list(snapshot, outboxKey)
-        // THE CENSUS, TAKEN FROM THE LISTING — deliberately here and not inside
-        // the delivery loop, which `break`s at the budget and is skipped entirely
-        // when the budget is zero. A refusal counted in there is a refusal
-        // counted only while there was still room for a chip.
-        //
-        // Directories and already-chipped entries are NOT refusals: a folder is
-        // not a file withheld, and a key already on the message got there by
-        // passing this same gate. So the test is exactly "a real entry the gate
-        // will not address", and nothing else. The gate runs twice per entry
-        // (here and below) on a listing the strict lane already bounds — a
-        // pure string check, against a folder read for exactly one reply.
-        var refusedEntryCount = 0
-        if case .entries(let entries) = verdict {
-            refusedEntryCount = entries.count(where: { entry in
-                !entry.isDirectory && FileServerClient.validatedOutboxEntryName(entry.name) == nil
-            })
-        }
         // A pass may only deliver up to the message's REMAINING lifetime
         // allowance, so a walked window can never overshoot the ceiling.
-        //
-        // A message already AT its ceiling gets a budget of zero, and that is a
-        // COMPLETE examination rather than a truncated one — no future pass could
-        // add a chip either, so holding the turn open on the long horizon would
-        // re-list a folder forever to learn the same nothing.
         let budget = max(0, min(maxOutboxEntriesPerReply, maxOutputChipsPerMessage - excludedKeys.count))
-        var drafts: [AttachmentDraft] = []
-        var truncated = false
 
-        if case .entries(let entries) = verdict, budget > 0 {
+        var drafts: [AttachmentDraft] = []
+        var typeRefused: [RefusedOutboxEntry] = []
+        var shapeOverlongCount = 0
+        var shapeWhitespaceBoundedCount = 0
+        var shapeUnusableCount = 0
+        var undelivered = 0
+
+        // ONE mint for every arm that has a name. A rescue offered on a refusal
+        // must address the byte-identical key the delivery would have built, and
+        // the only way to guarantee that is for both to come from here.
+        func storedKey(for name: String) -> String { "\(outboxKey)/\(name)" }
+
+        /// Record one NAMEABLE refusal, dropping the ones already on the message.
+        /// A key already chipped is not a refusal to offer a rescue for — it is a
+        /// file that is already here. It can only reach this arm when a name an
+        /// earlier build DELIVERED has since left the allowlist, and offering to
+        /// rescue a chip the thread is already showing is a contradiction the
+        /// user cannot resolve.
+        func recordRefusal(name: String, ext: String?, byteSize: Int) {
+            let key = storedKey(for: name)
+            guard !excludedKeys.contains(key) else { return }
+            typeRefused.append(RefusedOutboxEntry(
+                name: name, ext: ext, byteSize: max(byteSize, 0), storedKey: key
+            ))
+        }
+
+        if case .entries(let entries) = verdict {
+            // ONE WALK OVER THE WHOLE LISTING, AND IT NEVER BREAKS. The budget
+            // decides whether an entry becomes a CHIP; it decides nothing about
+            // whether the entry is EXAMINED. A census that stops at the cap
+            // under-reports exactly the fullest folders — the ones the user most
+            // needs told about — and a delivery walk that stops at the cap cannot
+            // say how much it left, which is why a turn could close on a full
+            // message and a silent remainder.
             for entry in entries {
+                // A directory is not a file withheld, so it is neither refused
+                // nor undelivered. Dropped before any classification, because an
+                // extensionless folder name would otherwise read as a type
+                // refusal and offer a rescue for something that is not a file.
+                guard !entry.isDirectory else { continue }
                 // REJECT, never repair: a name Conduck is unwilling to address is
                 // a file it does not deliver, because a "cleaned" name is a key
                 // that no longer exists on the server.
-                guard !entry.isDirectory,
-                      let name = FileServerClient.validatedOutboxEntryName(entry.name) else {
-                    continue
+                switch FileServerClient.outboxEntryVerdict(entry.name) {
+                case .refusedShape(let reason):
+                    // NO NAME LEAVES THIS ARM, EVER. This is the population the
+                    // gate exists for: a name that failed a guard ABOUT THE NAME
+                    // — a path separator, a shell-live scalar, a bidi override, a
+                    // leading dot — so rendering it in the app's own voice is the
+                    // one thing that could do real damage. Counts are the whole
+                    // of what can be said, and there is nothing to rescue.
+                    //
+                    // THREE counts rather than one, because two of those guards
+                    // are not accusations: a name refused ONLY for its length is
+                    // an honest agent naming a file after a section heading, and
+                    // one refused ONLY for a leading or trailing space is that
+                    // same agent with a stray keystroke. The sentence a single
+                    // count forces onto either — that the name could be read as
+                    // an instruction or hides itself from a listing — describes
+                    // an attack that did not happen, and each of the two asks the
+                    // user for a DIFFERENT thing. The class comes from a closed
+                    // enum with no payload, so splitting the count costs this arm
+                    // none of its silence.
+                    switch reason {
+                    case .overlong: shapeOverlongCount += 1
+                    case .whitespaceBounded: shapeWhitespaceBoundedCount += 1
+                    case .unusable: shapeUnusableCount += 1
+                    }
+
+                case .refusedExtension(let name, let ext):
+                    recordRefusal(name: name, ext: ext, byteSize: entry.byteSize)
+
+                case .refusedUntyped(let name):
+                    // Shape-clean, but nothing this app can read as a type: no
+                    // dot, an empty tail, or a tail that is not ASCII
+                    // alphanumeric before folding. A nil ext, never a guessed one
+                    // — a tail that merely FOLDS onto an allowlisted extension
+                    // reaches here, so any type asserted about it could be a lie.
+                    recordRefusal(name: name, ext: nil, byteSize: entry.byteSize)
+
+                case .deliverable(let name):
+                    let key = storedKey(for: name)
+                    // Already on the message — dropped BEFORE the cap, so a chip
+                    // that landed on an earlier pass cannot eat a slot and stall
+                    // the walk. Neither a refusal nor an undelivered entry: it is
+                    // a file that is already here.
+                    guard !excludedKeys.contains(key) else { continue }
+                    guard drafts.count < budget else {
+                        // NOT a `break`. Counting what a budget left behind is the
+                        // entire reason the walk continues.
+                        undelivered += 1
+                        continue
+                    }
+                    var draft = AttachmentDraft(
+                        mimeType: mimeType(for: name),
+                        filename: name,
+                        data: Data(),
+                        thumbnailData: nil,
+                        width: 0,
+                        height: 0,
+                        byteSize: max(entry.byteSize, 0),
+                        sequence: drafts.count
+                    )
+                    draft.isServerReference = true
+                    draft.storedKey = key
+                    drafts.append(draft)
                 }
-                let storedKey = "\(outboxKey)/\(name)"
-                // Already on the message — drop it BEFORE the cap, so a chip that
-                // landed on an earlier pass cannot eat a slot and stall the walk.
-                guard !excludedKeys.contains(storedKey) else { continue }
-                guard drafts.count < budget else {
-                    truncated = true
-                    break
-                }
-                var draft = AttachmentDraft(
-                    mimeType: mimeType(for: name),
-                    filename: name,
-                    data: Data(),
-                    thumbnailData: nil,
-                    width: 0,
-                    height: 0,
-                    byteSize: max(entry.byteSize, 0),
-                    sequence: drafts.count
-                )
-                draft.isServerReference = true
-                draft.storedKey = storedKey
-                drafts.append(draft)
             }
+        }
+
+        // `truncated` KEEPS ITS EXACT MEANING and is deliberately NOT read off
+        // `capState`. It answers "could a LATER pass do better", which a pass
+        // whose budget was zero cannot: nothing was examined for delivery at all,
+        // and the ceiling that produced the zero is permanent, so holding the
+        // turn open on the long horizon would re-list a folder forever to learn
+        // the same nothing. Deriving it from the cap state instead would close a
+        // ceiling-bound turn one pass earlier than it does now — a change to WHEN
+        // A TURN IS STAMPED, which is permanent and has no business riding along
+        // with a reporting change.
+        let truncated = undelivered > 0 && budget > 0
+
+        // WHICH CAP BOUND THIS PASS, decided from the state the walk EXITED in
+        // and not the one it entered. What the message can still hold is its
+        // ceiling minus the chips that were already on it minus the ones this
+        // pass just added — so a pass that entered with room and then spent it
+        // reports the ceiling, which is what the NEXT pass would report anyway
+        // and what the user is actually looking at.
+        //
+        // `<` and not `<=` because the comparison is capacity against demand:
+        // the ceiling is binding exactly when the slots left cannot cover
+        // everything the walk left behind, which is the same as saying at least
+        // one of those entries will never arrive here. At parity every remaining
+        // entry still fits, so a later pass genuinely delivers them all and the
+        // recoverable arm is the true one. A message somehow carrying more than
+        // the ceiling (a sync merge of two devices' chips) clamps to zero slots
+        // and lands on the ceiling arm, consistently.
+        let lifetimeSlotsLeft = max(0, maxOutputChipsPerMessage - excludedKeys.count - drafts.count)
+        let ceilingIsBinding = lifetimeSlotsLeft < undelivered
+
+        // `.complete` needs no `.entries` special case: a verdict nobody could
+        // read walks no entries, so `undelivered` is zero and no caller can pull
+        // a `remaining` out of a listing that does not exist.
+        let capState: OutboxCapState
+        if undelivered == 0 {
+            capState = .complete
+        } else if ceilingIsBinding {
+            capState = .messageCeilingReached(remaining: undelivered)
+        } else {
+            capState = .passTruncated(remaining: undelivered)
         }
 
         return OutboxReconciliation(
@@ -403,7 +789,13 @@ enum FileTransferOutputDetector {
                 truncated: truncated
             ),
             verdict: verdict,
-            refusedEntryCount: refusedEntryCount
+            typeRefusedEntries: typeRefused,
+            shapeRefused: ShapeRefusalCensus(
+                overlongCount: shapeOverlongCount,
+                whitespaceBoundedCount: shapeWhitespaceBoundedCount,
+                unusableCount: shapeUnusableCount
+            ),
+            capState: capState
         )
     }
 
@@ -581,8 +973,9 @@ enum FileTransferOutputDetector {
     }
 
     /// Scan `reply` for filename-looking tokens (`<base>.<ext>`), keep only those
-    /// whose lowercased extension is in `outputAllowlist`, dedup preserving first
-    /// appearance. UNCAPPED — `probeNamedCandidates` applies `maxCandidates`
+    /// `FileServerClient.outboxEntryVerdict` calls deliverable — the SAME policy
+    /// the folder lane applies, so a name refused there cannot reach the network
+    /// through prose instead — dedup preserving first appearance. UNCAPPED — `probeNamedCandidates` applies `maxCandidates`
     /// AFTER its exclusions, so an echoed name never displaces a real output from
     /// the window. Pure + content-free (never logged). Internal (not private) for
     /// the test target.
@@ -603,19 +996,25 @@ enum FileTransferOutputDetector {
     /// linear (measured 2.2 s/MiB in its worst SURVIVING shape).
     ///
     /// THE ASCII-ONLY PATTERN IS DELIBERATE, and deliberately NARROWER than
-    /// `FileServerClient.validatedOutboxEntryName`, which admits any graphic
-    /// Unicode plus a space. The asymmetry is not drift — the two answer
-    /// different questions. The validator judges a name the SERVER already
-    /// delimited: a listing hands over one entry, whole, with its boundaries
-    /// established. This scanner has to GUESS a filename's boundaries inside
-    /// free prose, where whitespace is the only boundary available. Admit a
-    /// space and `the report.pdf is ready` yields the candidate
-    /// `the report.pdf` — and every wrong guess becomes a GET fired at the
-    /// user's own home server for a file that was never there. Non-ASCII
-    /// without spaces would be safer but buys little: those names already
-    /// arrive through the LISTING, which is the automatic lane, while this is
-    /// the tap-gated fallback for a reply that merely mentions a file. Do not
-    /// widen it to match the validator.
+    /// `FileServerClient.outboxEntryVerdict`, which admits any graphic Unicode
+    /// plus a space. The asymmetry is not drift — the two answer different
+    /// questions. The validator judges a name the SERVER already delimited: a
+    /// listing hands over one entry, whole, with its boundaries established. This
+    /// scanner has to GUESS a filename's boundaries inside free prose, where
+    /// whitespace is the only boundary available. Admit a space and
+    /// `the report.pdf is ready` yields the candidate `the report.pdf` — and
+    /// every wrong guess becomes a GET fired at the user's own home server for a
+    /// file that was never there. Non-ASCII without spaces would be safer but
+    /// buys little: those names already arrive through the LISTING, which is the
+    /// automatic lane, while this is the tap-gated fallback for a reply that
+    /// merely mentions a file. Do not widen it to match the validator.
+    ///
+    /// THE ASYMMETRY IS ONE-DIRECTIONAL AND STAYS THAT WAY. The verdict is
+    /// applied as a FILTER on what this pattern produced, so the candidate set is
+    /// a strict subset of what the folder lane would deliver — sharing the policy
+    /// narrows this lane and can never widen it. A candidate the pattern cannot
+    /// express (`Übersicht.md`, `报告.pdf`, `my report.pdf`) stays unreachable
+    /// here whatever the validator says, which is the property to keep.
     ///
     /// The pattern itself and the UNCAPPED contract stay deliberately unchanged:
     /// a bounded quantifier would alter match EXTENT, and a truncated token
@@ -641,9 +1040,27 @@ enum FileTransferOutputDetector {
         for match in regex.matches(in: scanned, range: range) {
             guard let r = Range(match.range, in: scanned) else { continue }
             let token = String(scanned[r])
-            guard let dot = token.lastIndex(of: ".") else { continue }
-            let ext = token[token.index(after: dot)...].lowercased()
-            guard outputAllowlist.contains(ext) else { continue }
+            // THE SHARED POLICY, SHAPE AND TYPE TOGETHER — one call, one
+            // definition. A candidate becomes a storedKey the moment it is
+            // probed, so a name the folder lane refuses must not reach the
+            // network through the prose door instead: `.hidden.pdf` and `-rf.txt`
+            // both match this pattern and both carry allowlisted tails, and both
+            // are refused on the lane that reads a folder. It also buys a
+            // checkable invariant — every candidate this returns is a name the
+            // folder lane would deliver.
+            //
+            // IT CAN ONLY NARROW, NEVER WIDEN, and that direction is the whole
+            // safety of sharing the policy at all. The pattern's class is a
+            // strict subset of the validator's alphabet, so every shape guard
+            // either already holds structurally here (no `/`, no space, no
+            // combining mark, every scalar addressable, none of the shell-live
+            // literals) or refuses a token the folder lane refuses too. THE GATE
+            // IS A FILTER ON THE OUTPUT; it is never an input to the pattern.
+            //
+            // The payload is not bound: it is byte-identical to `token` by
+            // construction, and re-binding it here would shadow the name the
+            // dedup below depends on.
+            guard case .deliverable = FileServerClient.outboxEntryVerdict(token) else { continue }
             if seen.insert(token).inserted {
                 ordered.append(token)
             }
@@ -744,6 +1161,12 @@ enum FileTransferOutputDetector {
     /// Best-effort MIME type from a filename's extension; defaults to
     /// `application/octet-stream` (the agent's tools wrote the real bytes — this
     /// only labels the download chip).
+    ///
+    /// IT COVERS THE ALLOWLIST AND NOTHING ELSE, deliberately. A type the gate
+    /// refuses reaches a user only through an explicit save, and the
+    /// `application/octet-stream` default is part of what makes the system
+    /// decline to auto-open it there. Adding an arm for a refused extension would
+    /// quietly undo the policy that refusal exists to state.
     private static func mimeType(for filename: String) -> String {
         guard let dot = filename.lastIndex(of: ".") else { return "application/octet-stream" }
         switch filename[filename.index(after: dot)...].lowercased() {
@@ -766,7 +1189,13 @@ enum FileTransferOutputDetector {
         case "jpg", "jpeg": return "image/jpeg"
         case "gif": return "image/gif"
         case "webp": return "image/webp"
+        // Matches what `ImageFormatSniffer` mints for sniffed HEIC bytes, on
+        // purpose: two producers labelling the same file differently would make
+        // the type depend on which lane delivered it.
+        case "heic": return "image/heic"
         case "svg": return "image/svg+xml"
+        case "mp4": return "video/mp4"
+        case "mov": return "video/quicktime"
         case "m4a", "aac": return "audio/mp4"
         case "mp3": return "audio/mpeg"
         case "wav": return "audio/wav"
@@ -825,10 +1254,17 @@ enum FileTransferOutputDetector {
     /// never name an extension the lane wouldn't deliver (drop one from
     /// `outputAllowlist` and it drops here too). `svg` is in the allowlist but
     /// excluded: ImageIO cannot rasterize it, so reading one would burn the
-    /// budget only to fail the decode. `webp` IS included — ImageIO has decoded
-    /// it since long before this app's deployment floor.
+    /// budget only to fail the decode. `webp` and `heic` ARE included — ImageIO
+    /// has decoded both since long before this app's deployment floor, and
+    /// without `heic` a HEIC server chip keeps a permanently dead placeholder
+    /// marker on the wrist.
+    ///
+    /// VIDEO IS EXCLUDED for the `svg` reason, one step harder: ImageIO cannot
+    /// decode a movie at all, so `mp4` / `mov` would spend the source budget only
+    /// to fail. A poster frame is `AVAssetImageGenerator` work — different
+    /// machinery, a separate decision.
     nonisolated static let imagePreviewExtensions: Set<String> =
-        outputAllowlist.intersection(["png", "jpg", "jpeg", "gif", "webp"])
+        outputAllowlist.intersection(["png", "jpg", "jpeg", "gif", "webp", "heic"])
 
     /// Build first-writer preview patches for `drafts`, SEQUENTIALLY in draft
     /// order — no parallel reads. Pure orchestration over a supplied `fetch` +

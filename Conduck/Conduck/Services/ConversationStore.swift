@@ -631,6 +631,12 @@ nonisolated enum AgentFileOverlay {
                 outputScanDone: message.outputScanDone,
                 outputScanLaneID: message.outputScanLaneID,
                 outputBoxKey: message.outputBoxKey,
+                // Carried explicitly. This rebuild is field-by-field against a
+                // memberwise init whose later parameters all default, so an
+                // omission here COMPILES and silently blanks the census on every
+                // row a couriered descriptor touches — a refusal the user was
+                // told about would vanish the moment the wrist delivered a file.
+                outputDeliveryOutcome: message.outputDeliveryOutcome,
                 attachments: (message.attachments + additions).sorted { $0.sequence < $1.sequence }
             )
         }
@@ -765,16 +771,29 @@ actor ConversationStore {
         let drafts: [AttachmentDraft]
         let markScanned: Bool
         let expectedLaneID: String
+        /// What THIS pass observed about entries it did NOT hand over, or nil
+        /// when it took no census at all — a listing that could not be read, a
+        /// folder that is not there, and the root name search, which probes names
+        /// one at a time and never sees a folder to refuse an entry from.
+        ///
+        /// REQUIRED rather than defaulted, and deliberately so: a caller that
+        /// forgot this field would silently claim a clean folder it never
+        /// listed, and silence about a withheld file is the entire defect this
+        /// value exists to end. The compiler asking every future caller is worth
+        /// more than the construction sites a default would save.
+        let deliveryOutcome: OutputDeliveryOutcome?
         init(
             messageID: UUID,
             drafts: [AttachmentDraft],
             markScanned: Bool,
-            expectedLaneID: String
+            expectedLaneID: String,
+            deliveryOutcome: OutputDeliveryOutcome?
         ) {
             self.messageID = messageID
             self.drafts = drafts
             self.markScanned = markScanned
             self.expectedLaneID = expectedLaneID
+            self.deliveryOutcome = deliveryOutcome
         }
     }
 
@@ -2625,9 +2644,14 @@ actor ConversationStore {
     ///     the render layer still dedupes as belt-and-braces);
     ///   - allocate each inserted attachment's `sequence` continuing AFTER the
     ///     message's current max (the draft's own pass-local sequence is ignored);
+    ///   - replace the output-delivery census (`deliveryOutcome`) when the result
+    ///     carries one and it differs from the stored one. A nil census — no
+    ///     listing was taken — writes nothing at all, so a transient outage can
+    ///     never erase a standing refusal;
     ///   - set `outputScanDone = true` when `markScanned`.
     /// Returns whether ANY attachment was INSERTED — that is the caller's gate
-    /// for preview enrichment, so it stays strictly about chips.
+    /// for preview enrichment, so it stays strictly about chips. An
+    /// outcome-only write therefore returns `false`, which is not a failure.
     ///
     /// Also posts `.agentFilesDidAttachLocally` with a metadata descriptor for
     /// every row it INSERTED (never for a row it skipped as a duplicate, and
@@ -2638,9 +2662,9 @@ actor ConversationStore {
     /// so they report what was actually persisted — the real clamped `sequence`,
     /// the real `createdAt` — not what the caller proposed.
     ///
-    /// Posts `.conversationsDidChange` ONCE, when either an attachment was
-    /// inserted OR a turn's `outputScanDone` actually TRANSITIONED false → true.
-    /// The marker selects a turn INTO the automatic pass
+    /// Posts `.conversationsDidChange` ONCE, when an attachment was inserted, a
+    /// turn's `outputScanDone` actually TRANSITIONED false → true, or a stored
+    /// census actually CHANGED. The marker selects a turn INTO the automatic pass
     /// (`retroScanCandidates` requires `outputScanDone == false`), and that pass
     /// runs off each thread's in-memory `messages`. Without the second
     /// condition, a deferred grace-window pass that closes a turn would write
@@ -2648,7 +2672,9 @@ actor ConversationStore {
     /// went on re-listing a folder already settled, until some unrelated reload
     /// caught up. The post is gated on the TRANSITION, not on `markScanned` — a
     /// re-stamp of an already-true marker changes nothing, so a reload storm
-    /// cannot be manufactured by repeatedly reconciling the same turn.
+    /// cannot be manufactured by repeatedly reconciling the same turn. The census
+    /// is compared before it is written for that same reason, and its encoding is
+    /// key-sorted so an identical census really does compare equal.
     func reconcileOutputScan(
         _ results: [OutputScanReconciliation]
     ) async throws -> Bool {
@@ -2733,6 +2759,94 @@ actor ConversationStore {
                     nextSequence += 1
                     insertedAny = true
                     changedVisibleState = true
+                }
+
+                // What this pass observed about entries it did NOT hand over,
+                // written under the SAME lane compare-and-set as the chips and in
+                // the SAME save: a folder's withheld entries are a fact about the
+                // lane that listed it, so a result from lane B must no more be
+                // able to state them than to attach a file from them — and a
+                // census that landed without the rows it describes, or rows
+                // without the census, would be unrecoverable rather than late.
+                //
+                // NIL IS NOT ZERO, and the row depends on it. A pass that took no
+                // listing — an unreadable server, a folder that is not there, the
+                // root name search that probes names one at a time — carries nil,
+                // and a nil writes NOTHING. Writing zero for those would retire a
+                // true standing refusal because someone's server blipped once.
+                //
+                // Read before write, exactly like the marker below: an unchanged
+                // census is not a visible change, and a reload storm must not be
+                // manufacturable by reconciling a settled turn repeatedly. That
+                // comparison is only sound because `encodedNames` is DOUBLY
+                // deterministic — key-sorted objects AND name-sorted entries. A
+                // `PROPFIND` returns entries in the server's own directory order,
+                // which changes after any unrelated create or unlink in that
+                // folder, so without the entry sort an identical census would
+                // re-encode differently, write, post a reload and push to
+                // CloudKit on every thread open on every device, forever.
+                if let outcome = result.deliveryOutcome {
+                    let encodedNames = OutputDeliveryOutcome.encodedNames(outcome.typeRefusedEntries)
+                    // Clamped BEFORE the comparison, not after. The columns are
+                    // Integer 32, so a value that clamped on the way in would
+                    // never read back equal to the one it was compared against —
+                    // and every later pass would see a "change", write the same
+                    // clamped number again, and post a reload. The census cannot
+                    // exceed the listing's own entry ceiling, so this only ever
+                    // bites a number that is already wrong; it costs nothing to
+                    // make that case converge instead of oscillate.
+                    let typeCount = Int(Int32(clamping: outcome.typeRefusedCount))
+                    let shapeCount = Int(Int32(clamping: outcome.shapeRefusedCount))
+                    let shapeOverlong = Int(Int32(clamping: outcome.shapeRefused.overlongCount))
+                    let shapeWhitespace = Int(Int32(clamping: outcome.shapeRefused.whitespaceBoundedCount))
+                    let undelivered = Int(Int32(clamping: outcome.undeliveredCount))
+                    // The remainder's CAUSE, written beside its count and never
+                    // apart from it. Nil means the cause is unknown, which is
+                    // what a zero remainder and an unattributed one both read
+                    // back as — and neither may be read as "a later pass will
+                    // deliver these". Without this column the row had to guess
+                    // permanence from `outputScanDone`, which also goes true when
+                    // a truncated pass simply ages out past
+                    // `truncatedScanHorizon`: a folder whose tail is still
+                    // deliverable then claims the ceiling was hit and nothing
+                    // more will come, under a "Check again" that would in fact
+                    // deliver it.
+                    let remainderIsRecoverable = outcome.remainder.isRecoverable
+                    let storedTypeCount = (message.value(forKey: "outputRefusedTypeCount") as? NSNumber)?.intValue
+                    let storedShapeCount = (message.value(forKey: "outputRefusedShapeCount") as? NSNumber)?.intValue
+                    let storedShapeOverlong = (message.value(forKey: "outputRefusedShapeOverlongCount") as? NSNumber)?.intValue
+                    let storedShapeWhitespace = (message.value(forKey: "outputRefusedShapeWhitespaceCount") as? NSNumber)?.intValue
+                    let storedUndelivered = (message.value(forKey: "outputUndeliveredCount") as? NSNumber)?.intValue
+                    let storedRecoverable = (message.value(forKey: "outputRemainderIsRecoverable") as? NSNumber)?.boolValue
+                    let storedNames = message.value(forKey: "outputRefusedTypeNames") as? String
+                    if storedTypeCount != typeCount
+                        || storedShapeCount != shapeCount
+                        || storedShapeOverlong != shapeOverlong
+                        || storedShapeWhitespace != shapeWhitespace
+                        || storedUndelivered != undelivered
+                        || storedRecoverable != remainderIsRecoverable
+                        || storedNames != encodedNames {
+                        message.setValue(NSNumber(value: Int32(typeCount)), forKey: "outputRefusedTypeCount")
+                        message.setValue(NSNumber(value: Int32(shapeCount)), forKey: "outputRefusedShapeCount")
+                        message.setValue(NSNumber(value: Int32(shapeOverlong)), forKey: "outputRefusedShapeOverlongCount")
+                        message.setValue(NSNumber(value: Int32(shapeWhitespace)), forKey: "outputRefusedShapeWhitespaceCount")
+                        message.setValue(NSNumber(value: Int32(undelivered)), forKey: "outputUndeliveredCount")
+                        // `map`, not a bare `NSNumber(value:)`: nil has to reach
+                        // the column as nil, because that is the value the read
+                        // side turns back into UNKNOWN.
+                        message.setValue(
+                            remainderIsRecoverable.map { NSNumber(value: $0) },
+                            forKey: "outputRemainderIsRecoverable"
+                        )
+                        message.setValue(encodedNames, forKey: "outputRefusedTypeNames")
+                        // A census IS user-visible state — it drives a standing
+                        // row — so a census that actually changed has to say so,
+                        // or the row appears only on the next unrelated reload.
+                        // `insertedAny` is deliberately NOT touched: this method
+                        // returns whether a CHIP was inserted, which gates preview
+                        // enrichment, and an outcome-only write inserted none.
+                        changedVisibleState = true
+                    }
                 }
 
                 if result.markScanned {

@@ -54,7 +54,18 @@ final class UnnamedFolderRowCopyTests: XCTestCase {
     private var body: String {
         String(localized: LocalizedStringResource(
             "thread.outputs.noFolder.body",
-            defaultValue: "Conduck couldn't confirm a fresh folder on your file server for this message, so the agent had nowhere to put files and nothing could come back with the reply. Check your file server, then send again."))
+            defaultValue: "Conduck couldn't confirm a fresh folder on your file server for this message, so it never told the agent where to put files and nothing could come back with the reply. Anything the agent wrote went to its own working folder — if the reply names a file, you can search for it. Check your file server, then send again."))
+    }
+
+    /// The read-FAULT row's body, which sits one branch away in the same view and
+    /// is drawn for a listing that could not be read at all. Pinned here rather
+    /// than left unpinned because it is under the same obligation as the copy
+    /// above and had the same class of defect — a sentence about a state the row
+    /// cannot know.
+    private var faultBody: String {
+        String(localized: LocalizedStringResource(
+            "thread.outputs.fault.body",
+            defaultValue: "Conduck couldn't check whether this reply returned any files. It only ever reads that folder, so anything your agent put there is untouched."))
     }
 
     /// Phrases that pick ONE of the four causes. Each is false for at least one
@@ -92,6 +103,55 @@ final class UnnamedFolderRowCopyTests: XCTestCase {
                       "The user has to be told the reply could not carry files — that is the whole reason the row is drawn.")
         XCTAssertTrue(body.lowercased().contains("file server"),
                       "The remedy is on the file server (or the setup screen behind it), and it is the same remedy for all four causes.")
+    }
+
+    // MARK: - The copy claims nothing about the AGENT's side of the wire
+
+    /// A SECOND falseness, and a subtler one than the cause claims above: the row
+    /// covers turns where the agent was never given a folder, which is not the
+    /// same as the agent having been unable to write. An agent handed no outbox
+    /// line writes wherever it normally writes — its own working directory — and
+    /// the file is sitting there. Copy that says otherwise tells a user their
+    /// work was destroyed when it was merely somewhere else, and it contradicts
+    /// the *Search mentioned files* button drawn directly beside it, whose entire
+    /// premise is that the file may exist under a name the reply mentions.
+    func testTheBodyDoesNotClaimTheAgentCouldNotWrite() {
+        for claim in ["nowhere to put", "nowhere to write", "nowhere to save",
+                      "couldn't write", "could not write", "wasn't written", "was not written"] {
+            XCTAssertFalse(
+                body.lowercased().contains(claim),
+                "The body must not assert \"\(claim)\": Conduck withheld a destination, it did not stop the agent from writing, and the search button beside this row exists because the file may well be on the server already.")
+        }
+    }
+
+    /// And the positive obligation the claim above leaves behind: having declined
+    /// to say the file is gone, the copy has to say where it actually is, or the
+    /// button beside the row is an offer with no stated reason to accept it.
+    func testTheBodyPointsAtWhereTheFileActuallyIs() {
+        XCTAssertTrue(body.lowercased().contains("working folder"),
+                      "The one place the file can be is the agent's own working folder; naming it is what makes the search offer legible.")
+    }
+
+    // MARK: - The read-fault row makes no claim about a folder it could not read
+
+    /// The fault row is drawn precisely when the LISTING FAILED, so at the moment
+    /// it renders the app knows nothing about the folder — not that it exists,
+    /// not that it holds anything, not that it survived. A reassurance phrased as
+    /// a fact about the folder ("the folder is still on your server") is a claim
+    /// the failing pass had no way to establish, and it is false outright for the
+    /// population where no folder was ever created.
+    ///
+    /// What the row MAY say is a fact about CONDUCK, which is true regardless of
+    /// what the server did: this lane only ever reads.
+    func testTheFaultBodyAssertsNothingAboutTheFolderItFailedToRead() {
+        for claim in ["nothing is lost", "still on your server", "is still there",
+                      "the folder is still", "your files are safe"] {
+            XCTAssertFalse(
+                faultBody.lowercased().contains(claim),
+                "The fault row must not assert \"\(claim)\": the pass that drew it could not read the folder, so it cannot report on the folder's state.")
+        }
+        XCTAssertTrue(faultBody.lowercased().contains("reads"),
+                      "The reassurance has to rest on what Conduck does — read-only access — which is knowable from inside the app and true on every path that draws this row.")
     }
 
     // MARK: - Why the copy cannot name a cause (the taxonomy premise)

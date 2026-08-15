@@ -108,6 +108,92 @@ final class FileTransferOutputDetectorTests: XCTestCase {
                        "generic/secret/one-character tails must not reach the network")
     }
 
+    /// The media widening, and the one container it deliberately stops short of.
+    ///
+    /// `heic` is what an iPhone camera writes and `mp4`/`mov` are what a
+    /// screen-recording or render tool writes, so an agent handed a media task
+    /// produces exactly these. `webm` is NOT admitted, and for a reason specific
+    /// to it rather than to video: it conforms to `public.movie` on both
+    /// platforms but ships with NO system decoder (`QLPreviewController.canPreview`
+    /// answers false and it is absent from `AVURLAsset.audiovisualTypes()`), so a
+    /// chip minted for one could not open when tapped. A chip that fails on tap
+    /// is worse than no chip — and since the escape hatch now reaches every
+    /// refused file, the cost of leaving it out is a row rather than silence.
+    func testMediaOutputsAreCandidatesExceptTheOneWithNoDecoder() {
+        let reply = "Rendered shot.heic, demo.mp4 and capture.mov; also raw.webm."
+        XCTAssertEqual(
+            FileTransferOutputDetector.extractCandidates(from: reply),
+            ["shot.heic", "demo.mp4", "capture.mov"],
+            "webm is the container the system cannot decode, so it stays off the automatic lane")
+    }
+
+    /// The image-preview subset must gain HEIC and NOTHING ELSE from the media
+    /// widening. ImageIO can raster a HEIC; it cannot raster a movie, and an
+    /// `mp4` in this set would send the preview builder off to decode a video
+    /// frame it has no code path for.
+    func testOnlyTheStillImageJoinsThePreviewSubset() {
+        XCTAssertTrue(FileTransferOutputDetector.imagePreviewExtensions.contains("heic"),
+                      "a HEIC is a still image and ImageIO reads it")
+        for moving in ["mp4", "mov", "webm"] {
+            XCTAssertFalse(FileTransferOutputDetector.imagePreviewExtensions.contains(moving),
+                           "\(moving) is a movie container — ImageIO cannot decode one")
+        }
+        XCTAssertTrue(
+            FileTransferOutputDetector.imagePreviewExtensions
+                .isSubset(of: FileTransferOutputDetector.outputAllowlist),
+            "the preview subset is defined as an intersection WITH the allowlist, so a preview "
+            + "can never be attempted for a type the gate refuses to deliver in the first place")
+    }
+
+    // MARK: - The louder-warning class
+
+    /// `configurationInstallerExtensions` MUST STAY DISJOINT FROM `outputAllowlist`,
+    /// and this is the test that makes the rule enforceable rather than
+    /// aspirational.
+    ///
+    /// The two sets answer different questions — "does Conduck open this on its
+    /// own" and "does saving this deserve a louder warning" — but naming an
+    /// ALLOWLISTED extension in the warning set would be dead code that READS
+    /// like live protection: an allowlisted file never reaches the refusal sheet,
+    /// so the callout it appears to earn could never be drawn. Dead safety code
+    /// is worse than none, because it is what a reader trusts.
+    func testTheWarningClassIsDisjointFromTheAllowlist() {
+        let overlap = FileTransferOutputDetector.configurationInstallerExtensions
+            .intersection(FileTransferOutputDetector.outputAllowlist)
+        XCTAssertTrue(overlap.isEmpty,
+                      "an extension in both sets can never reach the sheet that would warn about "
+                      + "it, so its presence in the warning set is a promise nothing keeps: "
+                      + "\(overlap.sorted())")
+    }
+
+    /// Both sets are matched against an extension the gate has ALREADY folded to
+    /// lowercase, so an upper-case member would simply never match. Pinned on
+    /// both sets together because a mixed-case entry in either is the same silent
+    /// no-op.
+    func testBothExtensionSetsAreLowercasedForMatching() {
+        for ext in FileTransferOutputDetector.configurationInstallerExtensions {
+            XCTAssertEqual(ext, ext.lowercased(), "\(ext) would never match a folded extension")
+        }
+        for ext in FileTransferOutputDetector.outputAllowlist {
+            XCTAssertEqual(ext, ext.lowercased(), "\(ext) would never match a folded extension")
+        }
+    }
+
+    /// The classes the louder callout exists for, named individually. A profile
+    /// can rewrite Wi-Fi, VPN, certificates and MDM policy; an installer puts
+    /// software on the machine; a script or shortcut runs. Each reaches the user
+    /// only through an explicit save, and the sheet's job is to make the
+    /// difference between SAVING and OPENING legible before that happens.
+    func testTheWarningClassCoversProfilesInstallersAndRunnables() {
+        for ext in ["mobileconfig", "mobileprovision", "pkg", "dmg", "app",
+                    "msi", "deb", "rpm", "apk", "ipa",
+                    "command", "scpt", "workflow", "shortcut",
+                    "p12", "cer", "webloc"] {
+            XCTAssertTrue(FileTransferOutputDetector.configurationInstallerExtensions.contains(ext),
+                          "\(ext) changes a device or runs on it, so its rescue earns the callout")
+        }
+    }
+
     // MARK: - probeNamedCandidates (the tap-only lane's zero-network exits)
 
     /// Nothing to ask about ⇒ no request and a CONCLUSIVE answer. This is the
@@ -210,13 +296,50 @@ final class FileTransferOutputDetectorTests: XCTestCase {
                        ["report.pdf", "archive.tar.gz", "a-long_file.name.v2.csv"])
     }
 
-    /// A run at exactly the ceiling is a filename a server could actually hold,
-    /// so it must survive.
-    func testRunAtTheCeilingSurvives() {
+    /// A run at exactly the ceiling is a run the COST bound must not touch. This
+    /// is measured on `boundedRunInput` itself rather than through
+    /// `extractCandidates`, because the two ends of the pipeline answer different
+    /// questions and only this one is about cost: `maxFilenameRunScalars` (255,
+    /// POSIX `NAME_MAX`) is the point past which no *storable* name can exist, so
+    /// the excision below it must be invisible. What happens to the surviving
+    /// token afterwards is the ADDRESSABILITY bound's business — see
+    /// `testTheProseCandidateCeilingIsTheAddressabilityBoundNotTheCostBound`.
+    func testARunAtTheCostCeilingIsNotExcised() {
         let base = String(repeating: "a", count: FileTransferOutputDetector.maxFilenameRunScalars - 4)
         let name = base + ".csv"          // exactly maxFilenameRunScalars scalars
-        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: "wrote \(name) ok"), [name],
-                       "a name at POSIX NAME_MAX is storable and must still be a candidate")
+        let reply = "wrote \(name) ok"
+        XCTAssertEqual(FileTransferOutputDetector.boundedRunInput(reply), reply,
+                       "a run at POSIX NAME_MAX is inside the cost budget and must pass through verbatim")
+    }
+
+    /// THE two bounds are different numbers on different properties, and the
+    /// candidate ceiling is the SMALLER of them. `maxFilenameRunScalars` (255)
+    /// asks "could this run ever have been a filename"; the outbound gate's
+    /// `storedKeyComponentMaxCharacters` (200) asks "can Conduck ADDRESS this
+    /// name on the file server" — a token that survives the first and fails the
+    /// second is a name Conduck could never fetch, so offering it as a candidate
+    /// would only ever mint a probe guaranteed to miss.
+    ///
+    /// Pinned as a relation between the two constants, not as literals: the
+    /// numbers may move, but the prose lane must keep refusing everything the
+    /// folder lane refuses.
+    func testTheProseCandidateCeilingIsTheAddressabilityBoundNotTheCostBound() {
+        XCTAssertLessThan(FileServerClient.storedKeyComponentMaxCharacters,
+                          FileTransferOutputDetector.maxFilenameRunScalars,
+                          "the premise: addressability bites first, so it is the ceiling that shows")
+
+        func name(ofLength length: Int) -> String {
+            String(repeating: "a", count: length - 4) + ".csv"
+        }
+        let addressable = name(ofLength: FileServerClient.storedKeyComponentMaxCharacters)
+        let unaddressable = name(ofLength: FileServerClient.storedKeyComponentMaxCharacters + 1)
+
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: "wrote \(addressable) ok"),
+                       [addressable],
+                       "a name Conduck can address is a candidate")
+        XCTAssertEqual(FileTransferOutputDetector.extractCandidates(from: "wrote \(unaddressable) ok"),
+                       [],
+                       "one character past the addressability budget and the probe could never resolve")
     }
 
     /// THE bound: a hostile unbroken run is excised, and — the part that makes it

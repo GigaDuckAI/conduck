@@ -15,7 +15,11 @@
 //    • `adopt(data:)` — the inline-attachment route (bytes from the local
 //      store, no temp): same directory/leaf contract, content written intact.
 //    • `discard` — removes exactly its own per-download directory, leaves
-//      sibling entries alone.
+//      sibling entries alone, and is harmless when it runs twice (the export
+//      settle's guard depends on that).
+//    • the export settle — a picker dismissed by GESTURE reports no outcome at
+//      all, so nothing may claim a save, and the reclaim the binding drives
+//      still leaves the scratch directory gone.
 //    • `sweep` — age-bounded: reclaims only entries older than `maxEntryAge`,
 //      spares young ones (the guarantee that a relaunch can't yank a file an
 //      Open-with app picked up minutes ago).
@@ -229,6 +233,53 @@ final class AgentDownloadScratchTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: drop.directory.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: keep.url.path))
     }
+
+    #if os(iOS)
+    /// REGRESSION — an export the user dismissed BY GESTURE leaves no claim and
+    /// no file behind.
+    ///
+    /// The picker's callback is the wrong thing to hang a reclaim on. A
+    /// swipe-down (or a tap outside on iPad) nils the presentation binding and
+    /// tears the representable down without ever entering
+    /// `UIDocumentPickerDelegate`, so neither arm fires: a reclaim waiting on
+    /// that closure never runs, and a row waiting on it sits on "Downloading…"
+    /// forever with a dead button. The caller settles on the binding's
+    /// non-nil → nil transition instead, which every exit shares.
+    ///
+    /// Both halves of what that settle rests on are pinned here. The picker
+    /// reports NOTHING on this exit — so no "Saved" can be manufactured for a
+    /// copy nobody made — and the reclaim it drives removes the whole
+    /// per-download directory and is harmless if it runs again (the settle
+    /// clears its ledger before the work, so a second call is a no-op).
+    ///
+    /// What stays out of reach here is the ROW's own resolution, which lives in
+    /// SwiftUI `@State`; the founder's QA pass covers that half.
+    @MainActor
+    func testAGestureDismissedExportReportsNothingAndLeavesNoScratchBehind() async throws {
+        let item = try await AgentDownloadScratch.shared.adopt(
+            try makeTemp(), preferredName: "profile.mobileconfig", mimeType: nil)
+        createdItems.append(item)
+
+        // The picker as the caller builds it, taken to the exit a gesture takes:
+        // constructed, its coordinator made, and dropped without either delegate
+        // arm being reached.
+        final class Outcomes { var reported: [Bool] = [] }
+        let outcomes = Outcomes()
+        let picker = ServerFileExportPicker(url: item.url) { outcomes.reported.append($0) }
+        _ = picker.makeCoordinator()
+        XCTAssertTrue(outcomes.reported.isEmpty,
+                      "the closure reports an OUTCOME, not a lifecycle event — a caller that reads "
+                      + "silence as a save would claim a copy that never happened")
+
+        // The settle's reclaim, and a repeat of it.
+        await AgentDownloadScratch.shared.discard(item)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: item.directory.path),
+                       "the bytes were adopted for one export and that export is over")
+        await AgentDownloadScratch.shared.discard(item)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: item.directory.path),
+                       "settling twice must be harmless — the 24 h sweep is the net, never the plan")
+    }
+    #endif
 
     // MARK: - sweep
 
