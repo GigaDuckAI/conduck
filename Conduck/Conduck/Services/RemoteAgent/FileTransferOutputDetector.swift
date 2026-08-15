@@ -83,11 +83,36 @@ enum FileTransferOutputDetector {
     /// things apart that all produce zero chips: a folder that is not there, a
     /// folder that is there and empty, and a server that could not be read. Only
     /// the last is a fault, and only the last may drive a user-visible row.
+    ///
+    /// `refusedEntryCount` is a FOURTH zero-chip shape the verdict cannot
+    /// express: a folder holding ten names the outbound gate refuses answers
+    /// `.entries` and yields no drafts, i.e. exactly what an empty folder
+    /// answers. Its symptom is a reply that names a file over a thread that
+    /// shows none, with nothing anywhere to say the folder was not empty.
     struct OutboxReconciliation {
         let drafts: [AttachmentDraft]
         /// Whether this pass may PERMANENTLY stamp the turn scanned.
         let conclusive: Bool
         let verdict: FileServerListingVerdict
+        /// How many entries in the listing this pass is NOT ABLE to hand over —
+        /// real (non-directory) names `FileServerClient.validatedOutboxEntryName`
+        /// refuses, whether for their type or for their shape.
+        ///
+        /// A CENSUS OF THE LISTING, NOT OF THE DELIVERY, which is why it is taken
+        /// where it is rather than inside the loop that mints drafts. That loop
+        /// stops at the message's remaining chip allowance and does not run at
+        /// all when the allowance is zero, so a count taken inside it shrinks as
+        /// the turn fills up — under-reporting hardest on the fullest folders.
+        ///
+        /// It counts ONLY what the gate refused. A directory is not a file
+        /// withheld, and an entry already chipped on the message passed the gate
+        /// by definition (its storedKey exists only because a validated name
+        /// produced it) — reporting either would be a refusal that never
+        /// happened, about a folder that is behaving.
+        ///
+        /// ZERO on every verdict but `.entries`: an absent folder holds nothing,
+        /// and an unreadable one is a listing the app does not have.
+        let refusedEntryCount: Int
     }
 
     /// Curated set of output-file extensions Conduck is willing to address —
@@ -286,6 +311,13 @@ enum FileTransferOutputDetector {
     /// `list` is injectable so the verdict ladder is unit-testable without a live
     /// file server; the default is the real strict listing lane.
     ///
+    /// It also returns `refusedEntryCount`, the census of what the folder held
+    /// and this pass cannot hand over. The AUTOMATIC caller ignores it — a file
+    /// type Conduck does not deliver is a correct outcome, not a fault, and a
+    /// standing row per turn would make the ordinary case the loudest thing in
+    /// the thread. It exists for the USER-INITIATED look, where the question was
+    /// asked out loud and an unexplained silence is the wrong answer.
+    ///
     /// PRIVACY (see the spec's Privacy & Security section): never logs the
     /// collection key, entry names, storedKeys, or the snapshot.
     static func reconcileOutbox(
@@ -301,6 +333,23 @@ enum FileTransferOutputDetector {
         }
     ) async -> OutboxReconciliation {
         let verdict = await list(snapshot, outboxKey)
+        // THE CENSUS, TAKEN FROM THE LISTING — deliberately here and not inside
+        // the delivery loop, which `break`s at the budget and is skipped entirely
+        // when the budget is zero. A refusal counted in there is a refusal
+        // counted only while there was still room for a chip.
+        //
+        // Directories and already-chipped entries are NOT refusals: a folder is
+        // not a file withheld, and a key already on the message got there by
+        // passing this same gate. So the test is exactly "a real entry the gate
+        // will not address", and nothing else. The gate runs twice per entry
+        // (here and below) on a listing the strict lane already bounds — a
+        // pure string check, against a folder read for exactly one reply.
+        var refusedEntryCount = 0
+        if case .entries(let entries) = verdict {
+            refusedEntryCount = entries.count(where: { entry in
+                !entry.isDirectory && FileServerClient.validatedOutboxEntryName(entry.name) == nil
+            })
+        }
         // A pass may only deliver up to the message's REMAINING lifetime
         // allowance, so a walked window can never overshoot the ceiling.
         //
@@ -353,7 +402,8 @@ enum FileTransferOutputDetector {
                 scanStartedAt: scanStartedAt,
                 truncated: truncated
             ),
-            verdict: verdict
+            verdict: verdict,
+            refusedEntryCount: refusedEntryCount
         )
     }
 
@@ -551,6 +601,21 @@ enum FileTransferOutputDetector {
     /// Moving it off the main actor (`extractCandidatesOffMainActor`, still
     /// required) only relocates that; `boundedRunInput` is what BOUNDS it, to
     /// linear (measured 2.2 s/MiB in its worst SURVIVING shape).
+    ///
+    /// THE ASCII-ONLY PATTERN IS DELIBERATE, and deliberately NARROWER than
+    /// `FileServerClient.validatedOutboxEntryName`, which admits any graphic
+    /// Unicode plus a space. The asymmetry is not drift — the two answer
+    /// different questions. The validator judges a name the SERVER already
+    /// delimited: a listing hands over one entry, whole, with its boundaries
+    /// established. This scanner has to GUESS a filename's boundaries inside
+    /// free prose, where whitespace is the only boundary available. Admit a
+    /// space and `the report.pdf is ready` yields the candidate
+    /// `the report.pdf` — and every wrong guess becomes a GET fired at the
+    /// user's own home server for a file that was never there. Non-ASCII
+    /// without spaces would be safer but buys little: those names already
+    /// arrive through the LISTING, which is the automatic lane, while this is
+    /// the tap-gated fallback for a reply that merely mentions a file. Do not
+    /// widen it to match the validator.
     ///
     /// The pattern itself and the UNCAPPED contract stay deliberately unchanged:
     /// a bounded quantifier would alter match EXTENT, and a truncated token

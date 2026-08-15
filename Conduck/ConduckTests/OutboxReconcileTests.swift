@@ -19,6 +19,14 @@
 // creates the folder in advance. It closes on the same age ladder as an empty
 // folder and surfaces nothing. Only `.unusable` is a fault.
 //
+// A FOURTH conflation lives one level inside `.entries` and has the same shape:
+// a folder holding only names the outbound gate refuses yields the same drafts,
+// the same close decision and the same verdict as a folder holding nothing.
+// `refusedEntryCount` is what separates them, and the cases below pin it to the
+// LISTING rather than to the delivery walk — that walk stops at the message's
+// remaining chip allowance and never starts when the allowance is spent, so a
+// count taken inside it under-reports precisely when the folder is fullest.
+//
 // The listing itself is injected, so every case runs with no network, no Core
 // Data and no Keychain. Synthetic keys and filenames only; nothing is logged.
 //
@@ -173,6 +181,11 @@ final class OutboxReconcileTests: XCTestCase {
     /// The outbound TYPE gate. An entry Conduck is unwilling to address is not
     /// delivered — and it is REJECTED, never repaired, because a cleaned name is
     /// a key that no longer exists on the server.
+    ///
+    /// The two names with spaces in them are the point of the fixture as much as
+    /// the refusals are: the gate's job is a NAME POLICY, not an alphabet, so a
+    /// filename a person would recognise rides all the way to a draft while the
+    /// things that would actually break something do not.
     func testDisallowedAndHostileEntryNamesAreRejectedNotRepaired() async {
         let result = await reconcile(.entries([
             entry("keys.sqlite"),            // sensitive, off the allowlist
@@ -180,12 +193,43 @@ final class OutboxReconcileTests: XCTestCase {
             entry("README"),                 // extensionless
             entry(".hidden.txt"),            // leading dot
             entry("-rf.txt"),                // reads as a CLI option
-            entry("a b.txt"),                // outside the mint's alphabet
+            entry("pay$load.txt"),           // still special inside the quotes the key rides in
             entry("nested/inner.txt"),       // not a single component
-            entry("keep.txt")                // the only survivor
+            entry("my report.txt"),          // an ordinary human filename — DELIVERED
+            entry("Übersicht.md"),           // and so is this one
+            entry("keep.txt")
         ]))
-        XCTAssertEqual(result.drafts.map(\.filename), ["keep.txt"])
-        XCTAssertEqual(result.drafts.map(\.storedKey), ["\(boxKey)/keep.txt"])
+        XCTAssertEqual(result.drafts.map(\.filename), ["my report.txt", "Übersicht.md", "keep.txt"],
+                       "a space and a diacritic are filenames, not attacks")
+        XCTAssertEqual(result.drafts.map(\.storedKey),
+                       ["\(boxKey)/my report.txt", "\(boxKey)/Übersicht.md", "\(boxKey)/keep.txt"],
+                       "and the key keeps the server's own bytes — a repaired one addresses nothing")
+        // THE PARTIAL CASE, and the reason the census is not simply "delivered
+        // nothing": some files land and seven do not, and the chips that appear
+        // are exactly what makes the folder look settled. Uncounted, those seven
+        // are as invisible here as they are in a folder that delivered nothing
+        // at all.
+        XCTAssertEqual(result.refusedEntryCount, 7)
+    }
+
+    /// A folder the gate refuses ENTIRELY answers `.entries` and hands over
+    /// nothing — the same two fields an EMPTY folder produces. The census is the
+    /// only thing that separates them, and separating them is what keeps "a
+    /// reply naming a file over a thread showing none" from being a silence the
+    /// user cannot interrogate.
+    func testAFolderRefusedInFullIsCountedRatherThanSilent() async {
+        let refused = await reconcile(.entries([
+            entry("keys.sqlite"),
+            entry("profile.mobileconfig"),
+            entry("README")
+        ]))
+        let empty = await reconcile(.entries([]))
+        XCTAssertEqual(refused.drafts.count, empty.drafts.count)
+        XCTAssertEqual(refused.conclusive, empty.conclusive,
+                       "the two are indistinguishable in every other field, which is the point")
+        XCTAssertEqual(refused.refusedEntryCount, 3)
+        XCTAssertEqual(empty.refusedEntryCount, 0,
+                       "an empty folder refused nothing — a count here would invent a claim")
     }
 
     /// A directory inside the folder is not a file to hand over.
@@ -195,6 +239,56 @@ final class OutboxReconcileTests: XCTestCase {
             entry("out.txt")
         ]))
         XCTAssertEqual(result.drafts.map(\.filename), ["out.txt"])
+        // …and it is not a file WITHHELD either. `scratch` is extensionless, so
+        // the name gate would refuse it outright were it a file; counting it
+        // would report a refusal to a user whose folder is behaving perfectly.
+        XCTAssertEqual(result.refusedEntryCount, 0)
+    }
+
+    /// An entry already chipped on the message is not a refusal. Its storedKey
+    /// exists only because a validated name produced it, so it PASSED this gate
+    /// on an earlier pass and is dropped now for being a duplicate. Counting it
+    /// would fire the caption on the commonest re-check there is: a second look
+    /// at a folder that already delivered.
+    func testAnAlreadyDeliveredEntryIsNotCountedAsARefusal() async {
+        let result = await reconcile(
+            .entries([entry("report.pdf"), entry("keys.sqlite")]),
+            excludedKeys: ["\(boxKey)/report.pdf"]
+        )
+        XCTAssertTrue(result.drafts.isEmpty,
+                      "the one deliverable entry is already on the message")
+        XCTAssertEqual(result.refusedEntryCount, 1, "the sqlite, and only the sqlite")
+    }
+
+    /// THE CENSUS IS OF THE LISTING, NOT OF THE DELIVERY. The loop that mints
+    /// drafts `break`s at the message's remaining allowance and is skipped
+    /// outright when that allowance is zero, so a count taken inside it reports a
+    /// number that shrinks exactly as the folder gets fuller — under-reporting
+    /// hardest in the case the user most needs told.
+    func testTheRefusalCensusIsUnaffectedByTheDeliveryBudget() async {
+        // A message at its lifetime ceiling: the budget is zero and the loop
+        // never runs at all.
+        let full = Set((1...FileTransferOutputDetector.maxOutputChipsPerMessage)
+            .map { "\(boxKey)/have\($0).txt" })
+        let atCeiling = await reconcile(
+            .entries([entry("keys.sqlite"), entry("profile.mobileconfig")]),
+            excludedKeys: full
+        )
+        XCTAssertTrue(atCeiling.drafts.isEmpty)
+        XCTAssertEqual(atCeiling.refusedEntryCount, 2,
+                       "a pass that may deliver nothing still read the folder")
+
+        // A TRUNCATED pass: the loop stops at the cap, so a refusal sitting past
+        // the cut is never reached by the delivery walk.
+        let filled = (1...FileTransferOutputDetector.maxOutboxEntriesPerReply)
+            .map { entry("f\($0).txt") }
+        let truncated = await reconcile(
+            .entries(filled + [entry("tail.sqlite"), entry("late.txt")])
+        )
+        XCTAssertEqual(truncated.drafts.count,
+                       FileTransferOutputDetector.maxOutboxEntriesPerReply)
+        XCTAssertEqual(truncated.refusedEntryCount, 1,
+                       "the refusal past the cut is still in the folder being asked about")
     }
 
     // MARK: - The walk
@@ -413,6 +507,35 @@ final class OutboxReconcileTests: XCTestCase {
         XCTAssertTrue(
             ConversationDetailViewModel.liveRecheckStates(states, after: [nowHasAChip]).isEmpty,
             "a chip on screen makes 'none found' a contradiction, not a caveat")
+    }
+
+    /// The refusal caption is census-gated on the SAME rule, and it has to be:
+    /// unlike "none found" it is also set on the PARTIAL case, where the look
+    /// itself just added chips. A census stamped before those landed would read
+    /// them back as the row outrunning the answer and retire the caption on the
+    /// very next reload — before anyone had read it.
+    @MainActor
+    func testAnUndeliverableCaptionRetiresOnlyWhenTheRowOutrunsIt() {
+        let id = UUID()
+        // A look that delivered one chip and refused two entries, stamped
+        // POST-INSERT: one chip is already accounted for.
+        let states: [UUID: ConversationDetailViewModel.OutputRecheckState] =
+            [id: .undeliverableEntries(count: 2, chipCount: 1)]
+
+        let asStamped = MessageRecord(
+            id: id, role: "agent", text: "Done.", createdAt: created, sourceDevice: "mac",
+            attachments: [serverChip(named: "report.pdf")])
+        XCTAssertEqual(
+            ConversationDetailViewModel.liveRecheckStates(states, after: [asStamped]),
+            states,
+            "the chip this very look delivered is not the row outrunning its own answer")
+
+        let grewLater = MessageRecord(
+            id: id, role: "agent", text: "Done.", createdAt: created, sourceDevice: "mac",
+            attachments: [serverChip(named: "report.pdf"), serverChip(named: "late.pdf")])
+        XCTAssertTrue(
+            ConversationDetailViewModel.liveRecheckStates(states, after: [grewLater]).isEmpty,
+            "a chip the look never accounted for means a later pass has overtaken it")
     }
 
     /// A caption whose row is GONE goes with it — the pruning the reload already

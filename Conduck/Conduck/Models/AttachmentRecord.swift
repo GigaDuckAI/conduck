@@ -147,9 +147,19 @@ struct AttachmentRecord: Identifiable, Hashable, Sendable {
     /// to keep in step with the key it describes. `nil` on either side means the
     /// claim cannot be supported, which is the honest direction — a row that
     /// synced ahead of its `outputBoxKey` must read as weaker, never stronger.
+    ///
+    /// COMPARED ON UTF-8 BYTES, and the separator is the reason. The app
+    /// concatenates that `/` itself; an entry name opening with a combining mark
+    /// FUSES with it into one grapheme cluster that is not `/`, so a
+    /// `hasPrefix(outputBoxKey + "/")` answers false for a key that is plainly
+    /// inside the box and the chip loses provenance it actually has — degrading
+    /// to the weaker root-search label, which is a claim about a different file.
     static func isFromReplyOutputBox(storedKey: String?, outputBoxKey: String?) -> Bool {
         guard let storedKey, let outputBoxKey, !outputBoxKey.isEmpty else { return false }
-        return storedKey.hasPrefix(outputBoxKey + "/")
+        let key = storedKey.utf8
+        let box = outputBoxKey.utf8
+        guard key.count > box.count, key.starts(with: box) else { return false }
+        return key.dropFirst(box.count).first == UInt8(ascii: "/")
     }
 
     // MARK: - Watch display classification

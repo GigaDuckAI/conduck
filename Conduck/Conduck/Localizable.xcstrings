@@ -1088,6 +1088,9 @@
     "Conduck is a client, not an AI service — it has no AI of its own. Think of it like a remote control that talks to the AI you set up and run yourself." : {
 
     },
+    "Conduck needs your AI running as a server." : {
+
+    },
     "Conduck needs your microphone and Speech Recognition to turn speech into text." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2064,6 +2067,17 @@
         }
       }
     },
+    "diagnostics.files.badge.returnUnchecked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads verified — couldn't check returns"
+          }
+        }
+      }
+    },
     "diagnostics.files.badge.testing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2082,17 +2096,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Unconfirmed"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.returnUnchecked" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads verified — couldn't check returns"
           }
         }
       }
@@ -3966,6 +3969,17 @@
         }
       }
     },
+    "fileTransfer.inline.listingUnchecked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sending files works. Conduck couldn't check whether files can come back — try the test again."
+          }
+        }
+      }
+    },
     "fileTransfer.inline.manualLink" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4006,17 +4020,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Test"
-          }
-        }
-      }
-    },
-    "fileTransfer.inline.listingUnchecked" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sending files works. Conduck couldn't check whether files can come back — try the test again."
           }
         }
       }
@@ -4824,13 +4827,13 @@
         }
       }
     },
-    "fileTransfer.status.uploadsOnly.short" : {
+    "fileTransfer.status.uploadOnly.meaning" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Uploads only"
+            "value" : "Conduck uploaded a test file and read it back. This server can't list folders, so files the agent creates won't come back on their own — you'll still find them on the server."
           }
         }
       }
@@ -4846,13 +4849,13 @@
         }
       }
     },
-    "fileTransfer.status.uploadOnly.meaning" : {
+    "fileTransfer.status.uploadsOnly.short" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Conduck uploaded a test file and read it back. This server can't list folders, so files the agent creates won't come back on their own — you'll still find them on the server."
+            "value" : "Uploads only"
           }
         }
       }
@@ -5768,6 +5771,39 @@
         }
       }
     },
+    "gatewaySetup.readiness.tip.server.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "About running as a server"
+          }
+        }
+      }
+    },
+    "gatewaySetup.readiness.tip.server.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A program that stays on and answers requests at a web address — not something you start, use, and close when you're done. It has to speak the OpenAI-compatible chat API, which is what most AI servers already use. Conduck only connects over https, and the setup step can put that in front of your server for you."
+          }
+        }
+      }
+    },
+    "gatewaySetup.readiness.tip.server.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Running as a server"
+          }
+        }
+      }
+    },
     "Get a %@ API key" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5881,7 +5917,13 @@
     "iPhone, iPad, Mac, Watch and CarPlay." : {
 
     },
+    "Is your AI running as a server?" : {
+
+    },
     "Is your server running?" : {
+
+    },
+    "It doesn't have to be reachable from this device yet — the next step sets that up." : {
 
     },
     "Just connect your personal AI and you can start talking." : {
@@ -6386,6 +6428,9 @@
         }
       }
     },
+    "No, or I'm not sure" : {
+
+    },
     "Not now" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6419,7 +6464,7 @@
         }
       }
     },
-    "Ollama, LiteLLM, or a server you already run." : {
+    "Ollama, LM Studio, or a server you set up yourself." : {
 
     },
     "On-device voice isn't ready. Open Conduck on your iPhone to set it up." : {
@@ -15828,17 +15873,6 @@
         }
       }
     },
-    "thread.outputs.noFolder.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No folder for this reply"
-          }
-        }
-      }
-    },
     "thread.outputs.noFolder.body" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -15846,6 +15880,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Conduck couldn't confirm a fresh folder on your file server for this message, so the agent had nowhere to put files and nothing could come back with the reply. Check your file server, then send again."
+          }
+        }
+      }
+    },
+    "thread.outputs.noFolder.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No folder for this reply"
           }
         }
       }
@@ -15868,6 +15913,29 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "No returned files were discovered."
+          }
+        }
+      }
+    },
+    "thread.outputs.result.undeliverable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The folder for this reply held %lld file Conduck can't hand over."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The folder for this reply held %lld files Conduck can't hand over."
+                }
+              }
+            }
           }
         }
       }
@@ -16465,6 +16533,9 @@
 
     },
     "Works on every Apple Watch" : {
+
+    },
+    "Yes — it's already running" : {
 
     },
     "Yes, it's running" : {

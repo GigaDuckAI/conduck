@@ -295,8 +295,6 @@
 		};
 		630434032FCC000000000003 /* ConduckTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = ConduckTests;
 			sourceTree = "<group>";
 		};

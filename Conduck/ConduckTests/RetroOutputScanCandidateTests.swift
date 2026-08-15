@@ -415,7 +415,9 @@ final class RetroOutputScanCandidateTests: XCTestCase {
                     didClaim: {},
                     list: { _, _ in
                         probes += 1
-                        return .init(drafts: [], conclusive: true, verdict: .entries([]))
+                        return .init(
+                            drafts: [], conclusive: true, verdict: .entries([]),
+                            refusedEntryCount: 0)
                     }
                 )
 
@@ -452,7 +454,8 @@ final class RetroOutputScanCandidateTests: XCTestCase {
                 didClaim: {},
                 list: { _, _ in
                     probes += 1
-                    return .init(drafts: [], conclusive: true, verdict: .entries([]))
+                    return .init(drafts: [], conclusive: true, verdict: .entries([]),
+                                 refusedEntryCount: 0)
                 }
             )
 
@@ -486,7 +489,8 @@ final class RetroOutputScanCandidateTests: XCTestCase {
                     return .init(
                         drafts: [self.serverRef("watch-output.pdf")],
                         conclusive: true,
-                        verdict: .entries([])
+                        verdict: .entries([]),
+                        refusedEntryCount: 0
                     )
                 }
             )

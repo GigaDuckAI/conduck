@@ -545,8 +545,14 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// reference. A key is `[<folder>/]<8hex>__<name>`: take the last path
     /// component, then the segment AFTER the `__` separator (the original
     /// sanitized name). Falls back to the last path component, then the raw key.
+    ///
+    /// The component split is on UTF-8 BYTES: a `/` followed by a combining mark
+    /// is a single Character that is not `/`, so a grapheme split keeps the whole
+    /// key and the agent reads a folder path where a filename belongs.
     private static func displayFilename(forStoredKey key: String) -> String {
-        let lastComponent = key.split(separator: "/").last.map(String.init) ?? key
+        let lastComponent = key.utf8
+            .split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: true)
+            .last.map { String(decoding: $0, as: UTF8.self) } ?? key
         if let range = lastComponent.range(of: "__") {
             let name = String(lastComponent[range.upperBound...])
             return name.isEmpty ? lastComponent : name
@@ -579,17 +585,27 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     static let wireNameMaxCharacters = 120
 
     /// Scalars dropped outright from a wire display name:
-    /// - Cc + Cf (`\n`, `\r`, `\t`, bidi overrides, zero-width joiners…) — the
-    ///   only characters that can ADD a line to a block, and the ones that can
-    ///   make a rendered name lie about what it says.
+    /// - Cc + Cf (`\n`, `\r`, `\t`, bidi overrides, soft hyphens…) — the only
+    ///   characters that can ADD a line to a block, and the ones that can make a
+    ///   rendered name lie about what it says.
     /// - `/` — a leftover separator after the leaf split below; a display name
     ///   must never look like a second path.
     /// - `"` and `` ` `` — the two characters the renders below use as
     ///   delimiters (the quotes around every name, and `safeFence`'s backticks),
     ///   so a name can neither close its own quotes nor open/close a fence.
+    ///
+    /// ZWNJ (U+200C) and ZWJ (U+200D) are SUBTRACTED BACK — `Foundation`'s
+    /// `controlCharacters` is Cc + Cf, so they arrive here by category and must
+    /// leave by name. Both are orthographically load-bearing (ZWNJ in Persian
+    /// and Urdu, ZWJ in every emoji sequence), and
+    /// `FileServerClient.validatedOutboxEntryName` admits them for exactly that
+    /// reason. Stripping them here while the key keeps them is precisely the
+    /// display-versus-key divergence that gate refuses NBSP to avoid: the label
+    /// would name a file the path does not.
     private static let wireNameStrippedScalars: CharacterSet = CharacterSet.controlCharacters
         .union(.newlines)
         .union(CharacterSet(charactersIn: "/\"`"))
+        .subtracting(CharacterSet(charactersIn: "\u{200C}\u{200D}"))
 
     /// Render a filename safe to interpolate into the wire's TRUSTED region.
     ///
@@ -639,8 +655,12 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     static func wireDisplayName(_ raw: String) -> String {
         // A name is a LEAF: keep only the last `/`-delimited segment, so a name
         // shaped like `../../.ssh/id_rsa` cannot read as a path in a block whose
-        // entire job is naming paths.
-        let leaf = raw.split(separator: "/").last.map(String.init) ?? raw
+        // entire job is naming paths. Split on UTF-8 BYTES, because a `/`
+        // followed by a combining mark is one Character equal to neither, and a
+        // grapheme split would hand the whole path back as if it were a leaf.
+        let leaf = raw.utf8
+            .split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: true)
+            .last.map { String(decoding: $0, as: UTF8.self) } ?? raw
 
         var filtered = ""
         filtered.reserveCapacity(leaf.count)
@@ -755,20 +775,40 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// `wireDisplayName` and is QUOTED — the `storedKey` beside it is the
     /// authoritative path (already reduced to `[A-Za-z0-9._-]` at mint).
     ///
-    /// **The `storedKey` is untrusted too, and is rendered BARE** — it is the path
-    /// the agent must open, so it cannot be quoted or clipped here. Because the
-    /// mint maps every character outside `[A-Za-z0-9._-]` to `_` (or `-`) rather
-    /// than dropping it, a hostile name survives inside the key as
-    /// underscore-separated prose. That is an ACCEPTED residual, bounded rather
-    /// than eliminated, and it is acceptable only because the key is
-    /// STRUCTURALLY INERT: it can contain no newline, space, quote, backtick or
-    /// bracket, so it can never add a line, forge a second bullet, close a fence,
-    /// or introduce a `[Conduck …]` scoping marker — and the trusted `<8hex>__`
-    /// prefix means no path component can be `..` or begin with `.` or `-`.
-    /// `ConverseWireTests.testStoredKeyIsStructurallyInertForEveryHostileName`
-    /// pins exactly that, so widening the mint's safe set fails loudly instead of
-    /// quietly opening an instruction channel. Length is bounded at ingress, not
-    /// here — see `wireNameMaxCharacters`.
+    /// **The `storedKey` is untrusted too, and is rendered by
+    /// `wireStoredKeyReference`** — bare when it can be, quoted when it cannot.
+    /// It is the path the agent must open, so it is never clipped and never
+    /// filtered; the only question the render answers is whether it needs a
+    /// terminator. Both branches are safe, for different reasons, and the two
+    /// reasons must both stay true:
+    ///
+    /// - **BARE**, for a key entirely inside `[A-Za-z0-9._-/]`. Every key
+    ///   Conduck MINTS is such a key: the mint maps each character outside
+    ///   `[A-Za-z0-9._-]` to `_` (or `-`) rather than dropping it, so a hostile
+    ///   name survives inside as underscore-separated prose — an ACCEPTED
+    ///   residual, bounded rather than eliminated, acceptable because the key is
+    ///   STRUCTURALLY INERT: no newline, space, quote, backtick or bracket, so
+    ///   it can never add a line, forge a second bullet, close a fence, or
+    ///   introduce a `[Conduck …]` scoping marker — and the trusted `<8hex>__`
+    ///   prefix means no component can be `..` or begin with `.` or `-`.
+    ///   `ConverseWireTests.testStoredKeyIsStructurallyInertForEveryHostileName`
+    ///   pins exactly that, so widening the mint's safe set fails loudly instead
+    ///   of quietly opening an instruction channel.
+    /// - **QUOTED**, for anything else — which today means one thing: an
+    ///   AGENT-OUTPUT key, `<outboxKey>/<entry name>`, whose name half came off
+    ///   the user's own server. `FileServerClient.validatedOutboxEntryName`
+    ///   admits a space there, and a bare `out-abc/the blue whale.MD` hands the
+    ///   agent a path with no terminator plus attacker-chosen prose sitting
+    ///   OUTSIDE any quotes inside Conduck's own imperative block — the exact
+    ///   position the quoted display half has always been safe BECAUSE it is
+    ///   quoted. The quotes hold because that validator refuses `"`, `` ` ``,
+    ///   `\`, `$`, `[`, `]`, `!`, every line-breaking scalar, and every
+    ///   whitespace scalar except U+0020, and because the folder half is
+    ///   `OutboxKey.mint` output. So a quoted key can close neither its quotes
+    ///   nor the parenthetical, and the shell an agent hands it to reads it as
+    ///   one word.
+    ///
+    /// Length is bounded at ingress, not here — see `wireNameMaxCharacters`.
     ///
     /// This block is a pure INPUT reference — output guidance lives in the single
     /// per-turn `outboxLocationLine` (appended once by `assembleMessages`,
@@ -786,10 +826,53 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         guard !serverFiles.isEmpty else { return base }
         var lines = ["The following file(s) are in your working directory — use them for this request:"]
         for file in serverFiles {
-            lines.append("- \"\(Self.wireDisplayName(file.originalName))\" (saved as \(file.storedKey))")
+            lines.append(
+                "- \"\(Self.wireDisplayName(file.originalName))\" (saved as \(Self.wireStoredKeyReference(file.storedKey)))")
         }
         let block = lines.joined(separator: "\n")
         return base.isEmpty ? block : [base, block].joined(separator: "\n\n")
+    }
+
+    /// Render a `storedKey` for a `(saved as …)` bullet: BARE when every byte of
+    /// it is in `[A-Za-z0-9._-/]`, wrapped in double quotes when any is not.
+    ///
+    /// CONDITIONAL rather than always-quoted, and the condition is the whole
+    /// design. Every key Conduck MINTS is inside that set, so every minted key
+    /// still renders byte-identically — the agent-facing wire for the input
+    /// routes does not move, and the inertness the bare branch's rationale rests
+    /// on is the same property it always was. Always quoting would change three
+    /// live wire shapes to solve a problem only the fourth has.
+    ///
+    /// The keys that leave the set are the AGENT-OUTPUT keys,
+    /// `<outboxKey>/<entry name>`, where the name half is whatever the user's
+    /// own agent wrote. Two things go wrong if such a key rides bare. A path
+    /// with a space in it has no terminator: an agent that shells out unquoted
+    /// simply fails the turn, so widening the inbound alphabet without this
+    /// would trade a silently discarded file for a chip the agent cannot open.
+    /// And a `)` in the name closes the parenthetical early, leaving
+    /// attacker-chosen prose OUTSIDE any quotes inside Conduck's own imperative
+    /// block — the position the quoted display half has always tolerated prose
+    /// in precisely because it is quoted.
+    ///
+    /// Quoting is sufficient, not merely conventional: the only names that reach
+    /// the quoted branch have passed
+    /// `FileServerClient.validatedOutboxEntryName`, which refuses `"`, `` ` ``,
+    /// `\`, `$`, `[`, `]` and `!`, every scalar that could add a line, and every
+    /// whitespace scalar but U+0020. So the quoted string can close neither its
+    /// own quotes nor the parenthetical around it, and the agent's shell reads
+    /// it as one word.
+    ///
+    /// Byte-level, not scalar-level: a `/` fused with a combining mark carries
+    /// the mark as non-ASCII bytes, so such a key takes the quoted branch, which
+    /// is the safe direction either way.
+    private static func wireStoredKeyReference(_ storedKey: String) -> String {
+        let isBareSafe = storedKey.utf8.allSatisfy { byte in
+            (0x30...0x39).contains(byte) || (0x41...0x5A).contains(byte)
+                || (0x61...0x7A).contains(byte)
+                || byte == UInt8(ascii: ".") || byte == UInt8(ascii: "_")
+                || byte == UInt8(ascii: "-") || byte == UInt8(ascii: "/")
+        }
+        return isBareSafe ? storedKey : "\"\(storedKey)\""
     }
 
     /// The single per-turn OUTBOX-LOCATION line (file-transfer route). Appended
@@ -834,11 +917,12 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     ///
     /// THE PATH IS RENDERED BARE — it must never pass through `wireDisplayName`,
     /// which strips `/` and would hand the agent a folder name it cannot open.
-    /// Safety rests on the same argument as `spliceServerFileRefs`' storedKey:
-    /// the key is STRUCTURALLY INERT by construction (`OutboxKey.mint` emits a
-    /// UUID, one `/`, `out-`, and lowercase hex — no newline, space, quote,
-    /// backtick or bracket), so it can never add a line or forge a second
-    /// `[Conduck …]` marker.
+    /// It does not go through `wireStoredKeyReference` either, and it needs no
+    /// such branch: this line receives ONLY `OutboxKey.mint` output — a UUID,
+    /// one `/`, `out-`, and lowercase hex — never a name from a server. The key
+    /// is therefore STRUCTURALLY INERT by construction (no newline, space,
+    /// quote, backtick or bracket), so it can never add a line or forge a second
+    /// `[Conduck …]` marker, and the byte sequence stays frozen as published.
     static func outboxLocationLine(_ key: String) -> String {
         "[Conduck file transfer] Files you produce for this reply go in: \(key)"
     }
@@ -919,7 +1003,10 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// with `"\n\n"` — the same idiom the other splices use — so a turn's assembled
     /// text reads base → text-file fences → non-image server refs → image refs →
     /// dual-text disk refs. `originalName` is untrusted → `wireDisplayName` +
-    /// quotes, exactly as in `spliceServerFileRefs`.
+    /// quotes, and the key goes through `wireStoredKeyReference`, exactly as in
+    /// `spliceServerFileRefs` — one render for every `(saved as …)` bullet, so a
+    /// future route feeding this one a server-chosen name is delimited by
+    /// default rather than by someone noticing.
     ///
     /// PRIVACY: `storedKey` + `originalName` are part of the turn the user
     /// deliberately sends to their OWN gateway; this method never logs them.
@@ -930,7 +1017,8 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         guard !textFiles.isEmpty else { return base }
         var lines = ["The readable contents of the file(s) below are already included above. The byte-faithful original of each is also saved in your working directory at the path shown — use it for file-tool operations (run / modify / produce derived files). Do not reopen it merely to summarize the included contents:"]
         for file in textFiles {
-            lines.append("- \"\(Self.wireDisplayName(file.originalName))\" (saved as \(file.storedKey))")
+            lines.append(
+                "- \"\(Self.wireDisplayName(file.originalName))\" (saved as \(Self.wireStoredKeyReference(file.storedKey)))")
         }
         let block = lines.joined(separator: "\n")
         return base.isEmpty ? block : [base, block].joined(separator: "\n\n")
@@ -962,7 +1050,8 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// cannot find the name it was told fails the turn. A source that genuinely
     /// has no name — a photo pick, a camera shot, a pasted bitmap — gets a
     /// synthesized one instead, so this name is ALWAYS untrusted →
-    /// `wireDisplayName` + quotes, exactly as in
+    /// `wireDisplayName` + quotes, and the key through
+    /// `wireStoredKeyReference`, exactly as in
     /// `spliceServerFileRefs`. Joined to the base with `"\n\n"` — the same idiom
     /// `spliceServerFileRefs` uses — so a turn's assembled text reads base →
     /// text-file fences → server-file refs → image refs.
@@ -979,7 +1068,8 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         guard !images.isEmpty else { return base }
         var lines = ["You can already see the attached image(s); the file(s) below are there only if you're asked to modify or process them — don't open them just to describe or answer questions about them:"]
         for image in images {
-            lines.append("- \"\(Self.wireDisplayName(image.filename))\" (saved as \(image.storedKey))")
+            lines.append(
+                "- \"\(Self.wireDisplayName(image.filename))\" (saved as \(Self.wireStoredKeyReference(image.storedKey)))")
         }
         let block = lines.joined(separator: "\n")
         return base.isEmpty ? block : [base, block].joined(separator: "\n\n")
@@ -1015,6 +1105,12 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// carry both this block and a `spliceServerFileRefs` block, and two bullet
     /// shapes in one message would read as a bug.
     ///
+    /// The key still goes through `wireStoredKeyReference`, which for a minted
+    /// key always chooses the bare branch and so changes nothing on the wire.
+    /// It is there so that ONE function decides how a `(saved as …)` path is
+    /// delimited: a per-block decision is a place for the four blocks to
+    /// disagree, and this is the block whose callers are hardest to re-audit.
+    ///
     /// PRIVACY: `storedKey` + `filename` are part of the turn the user already
     /// sent to their OWN gateway; this method never logs them.
     static func spliceImageTextRefs(
@@ -1024,7 +1120,7 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         guard !images.isEmpty else { return base }
         var lines = ["Earlier image(s) from this conversation are no longer attached inline but remain saved on disk at the path(s) below. If the user asks about visual details not covered by the text history, open/read the file before answering:"]
         for image in images {
-            lines.append("- \"\(image.filename)\" (saved as \(image.storedKey))")
+            lines.append("- \"\(image.filename)\" (saved as \(Self.wireStoredKeyReference(image.storedKey)))")
         }
         let block = lines.joined(separator: "\n")
         return base.isEmpty ? block : [base, block].joined(separator: "\n\n")

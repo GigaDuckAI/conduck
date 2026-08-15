@@ -716,13 +716,21 @@ enum FileServerClient {
 
     // MARK: - Stored-key minting
 
-    /// Longest single path component a stored key may occupy, in characters.
+    /// Longest single path component a stored key may occupy, in CHARACTERS.
     ///
     /// Every stored key's last segment becomes a real filename on whatever
     /// filesystem backs the user's file server, where POSIX `NAME_MAX` is 255
-    /// BYTES. Sanitization maps each character to one of `[A-Za-z0-9._-]`, all
-    /// single-byte, so a sanitized component's character count IS its byte count
-    /// and the budget can be counted in characters.
+    /// BYTES. The MINT maps each character to one of `[A-Za-z0-9._-]`, all
+    /// single-byte, so for a key Conduck mints this character count IS its byte
+    /// count and one number measures both budgets at once.
+    ///
+    /// That equivalence belongs to the mint alone. An inbound entry name may be
+    /// any Unicode, where a character is one to four bytes, so
+    /// `validatedOutboxEntryName` counts the filesystem's budget in the unit the
+    /// filesystem uses — `storedKeyComponentMaxBytes` — and keeps this cap only
+    /// for what it still measures there: an accepted name stays no longer, in
+    /// characters, than a name Conduck would have minted, which is what bounds
+    /// the chip label and the wire bullet.
     ///
     /// The cap sits below 255 to leave headroom for a temporary name the server
     /// may write and rename into place during a PUT. A key that only overflows
@@ -731,11 +739,33 @@ enum FileServerClient {
     /// than reserving the room up front.
     static let storedKeyComponentMaxCharacters = 200
 
-    /// The WebDAV-safe alphabet every minted key component is mapped into, and
-    /// the SAME set `validatedOutboxEntryName` measures an inbound listing entry
-    /// against. One declaration so the mint and the validator can never disagree
-    /// about what a safe path component is — a validator holding its own copy
-    /// would keep accepting names the mint has stopped producing.
+    /// Longest single path component an inbound entry name may occupy, in UTF-8
+    /// BYTES — the unit `NAME_MAX` is actually counted in.
+    ///
+    /// `Übersicht.md` is 12 characters and 13 bytes; a CJK name is three bytes
+    /// per character and an emoji four, so a name inside the character cap can
+    /// be four times past the filesystem's, and the failure lands as an opaque
+    /// server error on a file the user can see in their own listing.
+    ///
+    /// Derived from the character cap rather than written as its own number: an
+    /// ASCII name meets both bounds at exactly the same length, so admitting
+    /// non-ASCII changes no verdict this gate reached before, and the two can
+    /// never drift into disagreeing about the same headroom.
+    static let storedKeyComponentMaxBytes = storedKeyComponentMaxCharacters
+
+    /// The WebDAV-safe alphabet every MINTED key component is mapped into.
+    ///
+    /// The mint's alone, and deliberately NOT the inbound validator's. The two
+    /// answer different questions. The mint IMPOSES a shape it controls end to
+    /// end — it chooses the prefix, the folder and every surviving character —
+    /// so it can pick the narrowest alphabet that still addresses a file, and
+    /// anything it drops it also replaces. `validatedOutboxEntryName` ASSERTS a
+    /// property of a name the SERVER already chose, which it may not rewrite (a
+    /// repaired name addresses a file that does not exist), so its standard is
+    /// what that name's two consumers can survive: a path inside Conduck's own
+    /// instruction line, and a rendered chip label. Holding an inbound name to
+    /// THIS set instead silently discards every `Übersicht.md` a user's own
+    /// agent writes.
     static let storedKeySafeCharacters = Set(
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
     )
@@ -1050,10 +1080,25 @@ enum FileServerClient {
             snapshot: snapshot, collectionKey: collectionKey, session: session) == 201
     }
 
+    /// The `/`-delimited segments of a key, split on UTF-8 BYTES.
+    ///
+    /// Byte-level rather than `split(separator: "/")`, because a `Character`
+    /// comparison reads GRAPHEME CLUSTERS: a `/` followed by a combining mark is
+    /// the single Character `/́`, which is not `/`, so a grapheme split leaves a
+    /// real U+002F sitting inside what it calls one component — and
+    /// `URL.appending(path:)` treats that U+002F as a separator regardless. UTF-8
+    /// is self-synchronizing, so byte `0x2F` only ever encodes U+002F and the
+    /// split can never land inside a character.
+    private static func keySegments(_ key: String) -> [String] {
+        key.utf8
+            .split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: true)
+            .map { String(decoding: $0, as: UTF8.self) }
+    }
+
     /// The collection holding `collectionKey`, or nil when it already sits at
     /// the served root (nothing to create).
     static func parentCollectionKey(of collectionKey: String) -> String? {
-        var components = collectionKey.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        var components = keySegments(collectionKey)
         guard components.count > 1 else { return nil }
         components.removeLast()
         return components.joined(separator: "/")
@@ -1441,8 +1486,12 @@ enum FileServerClient {
     /// component), or `""` when it has none. Shared by the HTML veto and the
     /// negative-control key so the two can never disagree about what was asked
     /// for.
+    ///
+    /// The leaf is taken at BYTE level (`keySegments`): a `/` fused with a
+    /// combining mark is one Character, so a grapheme split hands this the whole
+    /// key and the extension is then read out of a folder name.
     static func probeKeyExtension(_ storedKey: String) -> String {
-        let name = storedKey.split(separator: "/").last.map(String.init) ?? storedKey
+        let name = keySegments(storedKey).last ?? storedKey
         guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return "" }
         return name[name.index(after: dot)...].lowercased()
     }
@@ -1548,7 +1597,11 @@ enum FileServerClient {
     /// Compares LAST PATH COMPONENTS, not whole URLs: a server is entitled to
     /// rewrite the host, add a signed-download query, or move the file under a
     /// different prefix, and none of that changes which file came back. A nil
-    /// final URL is not evidence of anything, so it passes.
+    /// final URL is not evidence of anything, so it passes. The requested key's
+    /// leaf comes off `keySegments`, so the comparison is against a leaf even
+    /// when a combining mark fuses with the separator ahead of it — a grapheme
+    /// split would compare a whole key against one component and call a response
+    /// from exactly the name we asked for a redirect.
     ///
     /// LIMIT, and the reason this is a cheap pre-filter rather than the
     /// mechanism: it can only see redirects the CLIENT was told about. An nginx
@@ -1556,8 +1609,7 @@ enum FileServerClient {
     /// the requested URL. Only the negative control catches that.
     static func responseCameFromRequestedName(_ evidence: FileProbeEvidence) -> Bool {
         guard let final = evidence.finalPathComponent else { return true }
-        let requested = evidence.requestedKey.split(separator: "/").last.map(String.init)
-            ?? evidence.requestedKey
+        let requested = keySegments(evidence.requestedKey).last ?? evidence.requestedKey
         return final == requested
     }
 
@@ -1763,7 +1815,7 @@ enum FileServerClient {
             UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(16)
         )
         let stem = "__conduck_absent_\(nonce)"
-        var components = collectionKey.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        var components = keySegments(collectionKey)
         guard !components.isEmpty else { return stem }
         components.removeLast()
         components.append(stem)
@@ -2014,8 +2066,21 @@ enum FileServerClient {
     ///     first is how `%2E%2E%2F%2E%2E%2Fetc%2Fpasswd` becomes a single entry
     ///     named `../../etc/passwd`, and `URL.appending(path:)` does not
     ///     normalise dot segments back out.
-    ///   - **Bounds.** Body bytes and response count are capped, and a duplicate
-    ///     name refuses the listing — one real collection cannot hold two.
+    ///   - **Bounds.** Body bytes and response count are capped.
+    ///   - **Duplicate names** refuse the listing — one real collection cannot
+    ///     hold two — and the comparison is Swift `String` equality, i.e.
+    ///     CANONICAL EQUIVALENCE, so the NFC and NFD spellings of one name
+    ///     collide here. That is DELIBERATE, and it is a fail-closed boundary
+    ///     rather than an oversight: everything downstream keys files by the
+    ///     same String equality (the conversation store's key lookups, the row
+    ///     formatters, the detail model's chip dedupe), so two spellings this
+    ///     parser admitted as distinct would be collapsed into one somewhere
+    ///     later, in a place with no way to say what happened. Deduping on UTF-8
+    ///     bytes instead would pass the parser and lose a file silently.
+    ///     THE HONEST CONSEQUENCE: a server whose folder really does list both
+    ///     spellings of one name makes that folder unreadable until the user
+    ///     renames one of them. A refusal the user can act on beats a file that
+    ///     disappears without one.
     ///   - **Directories** are dropped: a nested folder is not a deliverable.
     ///
     /// What this function deliberately does NOT do is judge the NAME. That is
@@ -2083,6 +2148,9 @@ enum FileServerClient {
             // and a server that reports the collection itself oddly must not
             // refuse a listing that is otherwise fine.
             guard case let .child(name) = resolved else { continue }
+            // Canonical equivalence, deliberately — see the duplicate-names
+            // bullet above. Two spellings of one name are one name to every
+            // consumer downstream, so they are one name here too.
             guard seen.insert(name).inserted else { return .unusable(.duplicateEntry) }
             guard response.isUsableResource else { continue }
             guard !response.isDirectory else { continue }
@@ -2101,20 +2169,52 @@ enum FileServerClient {
     /// name here already exists — the only question is whether Conduck is
     /// willing to address it — so the answer has to be yes or no.
     ///
-    /// Every rule is the property the mint GUARANTEES, asserted rather than
-    /// imposed, so a name from a server is held to exactly the standard a name
-    /// Conduck minted meets (`ConverseWireTests
-    /// .testStoredKeyIsStructurallyInertForEveryHostileName` pins the mint side):
+    /// The standard is a POSITIVE POLICY WITH NAMED EXCEPTIONS, derived from
+    /// what the name's two consumers can survive — a path inside Conduck's own
+    /// instruction line (`ConverseRequest.spliceServerFileRefs`, which renders a
+    /// key carrying anything outside `[A-Za-z0-9._-/]` inside double quotes) and
+    /// a rendered chip label. It is NOT the mint's alphabet: a name the user's
+    /// own agent wrote is not a name Conduck chose, and measuring `Übersicht.md`
+    /// against `[A-Za-z0-9._-]` discards it in silence.
     ///
-    ///   - the mint's own alphabet, `storedKeySafeCharacters` — which also makes
-    ///     the name structurally inert in the wire block, unable to open a line,
-    ///     a fence, a bullet or a `[Conduck …]` marker
-    ///   - a single path component: no `/`, so a name can never become a path
-    ///   - never `.` or `..`, never leading `.` (a hidden file) or `-` (a name
-    ///     that reads as a CLI option to the agent's own tooling)
-    ///   - within `storedKeyComponentMaxCharacters`, the filesystem budget
-    ///   - an extension on `allowedExtensions` — the outbound TYPE gate, which
-    ///     is what keeps a `.mobileconfig` or a live `.sqlite` out of the lane
+    ///   - **An ACCEPT-LIST of Unicode categories**, never a deny-list
+    ///     (`outboxEntryScalarIsAddressable`), plus the literal subtractions
+    ///     below.
+    ///   - **A single path component**: no `/`, tested on UTF-8 BYTES, so a name
+    ///     can never become a path.
+    ///   - **Never `.` or `..`**, and never a leading `.` (a hidden file) or `-`
+    ///     (a name that reads as a CLI option to the agent's own tooling). The
+    ///     leading-character test reads the first BYTE, because a `.` followed
+    ///     by a combining mark is ONE grapheme cluster equal to neither, so a
+    ///     Character test waves through a `.́hidden.pdf` the filesystem hides all
+    ///     the same.
+    ///   - **Never opening or closing on whitespace.** Only U+0020 survives the
+    ///     alphabet, so this is the leading/trailing SPACE rule: the display
+    ///     half trims and collapses runs while the key keeps them verbatim, and
+    ///     a name that disagrees with the path beside it sends the agent looking
+    ///     for a file that is not there.
+    ///   - **Never opening on a combining mark**, which is INTEROPERABILITY
+    ///     policy and nothing more: a mark with nothing to combine with attaches
+    ///     to whatever character happens to precede it — the bullet's opening
+    ///     quote, the `/` before it in the path, the previous cell in a file
+    ///     browser — so the name shown is not the name stored. It is explicitly
+    ///     NOT what keeps the path seam closed: concatenation never alters
+    ///     bytes, and what closes that seam is that every separator decision in
+    ///     this lane reads scalars or bytes rather than Characters.
+    ///   - **Both length budgets**: `storedKeyComponentMaxCharacters` and
+    ///     `storedKeyComponentMaxBytes`. Once a name may be non-ASCII the two
+    ///     stop being the same measurement, and only the byte one is the
+    ///     filesystem's.
+    ///   - **An extension on `allowedExtensions`** — the outbound TYPE gate,
+    ///     which is what keeps a `.mobileconfig` or a live `.sqlite` out of the
+    ///     lane. Read by `outboxEntryExtension`, which requires the RAW slice to
+    ///     be ASCII alphanumeric BEFORE any case folding.
+    ///
+    /// SURROGATES get no arm, and the reason is worth stating so nobody adds
+    /// one: `Unicode.Scalar` cannot hold a surrogate, and a listing whose bytes
+    /// are not valid UTF-8 never reaches here at all —
+    /// `removingPercentEncoding` answers nil and `parseListing` refuses the
+    /// whole folder.
     ///
     /// `allowedExtensions` is a parameter so the gate is testable without the
     /// detector and so a caller with a narrower policy can pass one; the default
@@ -2124,14 +2224,157 @@ enum FileServerClient {
         _ name: String,
         allowedExtensions: Set<String> = FileTransferOutputDetector.outputAllowlist
     ) -> String? {
-        guard !name.isEmpty, name.count <= storedKeyComponentMaxCharacters else { return nil }
-        guard !name.contains("/") else { return nil }
-        guard name.allSatisfy({ storedKeySafeCharacters.contains($0) }) else { return nil }
+        guard !name.isEmpty,
+              name.count <= storedKeyComponentMaxCharacters,
+              name.utf8.count <= storedKeyComponentMaxBytes else { return nil }
+        guard !name.utf8.contains(UInt8(ascii: "/")) else { return nil }
+        // Closure form, not the bare function reference: passing an isolated
+        // static as a VALUE converts it to a nonisolated function type, while a
+        // closure body inherits this caller's isolation. Same verdict, no
+        // Swift-6 isolation diagnostic.
+        guard name.unicodeScalars.allSatisfy({ outboxEntryScalarIsAddressable($0) }) else {
+            return nil
+        }
+        guard let first = name.unicodeScalars.first, let last = name.unicodeScalars.last,
+              !first.properties.isWhitespace, !last.properties.isWhitespace else { return nil }
+        guard !isCombiningMark(first) else { return nil }
         guard name != ".", name != ".." else { return nil }
-        guard !name.hasPrefix("."), !name.hasPrefix("-") else { return nil }
-        let ext = probeKeyExtension(name)
-        guard !ext.isEmpty, allowedExtensions.contains(ext) else { return nil }
+        let firstByte = name.utf8.first
+        guard firstByte != UInt8(ascii: "."), firstByte != UInt8(ascii: "-") else { return nil }
+        guard let ext = outboxEntryExtension(of: name),
+              allowedExtensions.contains(ext) else { return nil }
         return name
+    }
+
+    /// Scalars an inbound entry name may not carry as LITERALS, whatever their
+    /// Unicode category says about them.
+    ///
+    /// `"`, `` ` ``, `\` and `$` are the four characters that stay special
+    /// INSIDE POSIX double quotes. The quoted branch of the wire render invites
+    /// an agent to quote the path it was handed, and these would give it
+    /// parameter expansion, command substitution and escaping anyway — quoting
+    /// them would be theatre rather than containment.
+    ///
+    /// `[` and `]` are shell-inert and go for Conduck's OWN reason: the key
+    /// rides inside Conduck's imperative block, so a name carrying brackets
+    /// could introduce a second `[Conduck …]` scoping marker — the exact marker
+    /// `ConverseRequest.wireDisplayName` folds out of the DISPLAY half, which
+    /// leaving it addressable through the KEY half would simply reopen from the
+    /// other side.
+    ///
+    /// `!` is NOT POSIX-special; it history-expands in an INTERACTIVE shell.
+    /// Admitting it would mean narrowing the inertness claim to non-interactive
+    /// shells — a condition about tooling Conduck does not run and cannot check
+    /// from the client. A caveat that cannot be verified is worth less than a
+    /// character almost no real filename carries, so the character goes.
+    ///
+    /// `/` is absent because it is refused one guard earlier, on BYTES — the
+    /// reading `URL.appending(path:)` obeys, and the one a separator fused with
+    /// a combining mark cannot hide from.
+    private static let outboxEntryRejectedScalars: Set<Unicode.Scalar> = [
+        "\"", "`", "\\", "$", "[", "]", "!",
+    ]
+
+    /// Whether one scalar of an inbound entry name is addressable.
+    ///
+    /// AN ACCEPT-LIST, NEVER A DENY-LIST, and that choice is the design: a
+    /// deny-list admits every scalar the running OS's Unicode tables do not yet
+    /// describe, so the same filename would be accepted on one device and
+    /// refused on another as ICU versions drift between OS releases. An
+    /// accept-list fails CLOSED on the unknown, and a file the user can see is
+    /// worth less confusion than a file that appears on the iPad and not on the
+    /// Mac.
+    ///
+    /// ADMITTED: the graphic categories — letters, marks, numbers, punctuation,
+    /// symbols — which is what makes `Übersicht.md`, `报告.pdf` and an emoji
+    /// name ordinary deliverables, plus the ASCII space, which real filenames
+    /// carry constantly. The marks arm is also what carries U+FE0F, the
+    /// variation selector every emoji presentation depends on (`Mn`, not `Cf`).
+    ///
+    /// REFUSED, each for its own reason:
+    ///   - Every OTHER whitespace scalar. `Zs`/`Zl`/`Zp` sit outside the graphic
+    ///     set, so this is structural rather than a subtraction, and the `Zs`
+    ///     arm hands back exactly one scalar. `ConverseRequest.wireDisplayName`
+    ///     collapses whitespace runs while the key keeps them verbatim, so an
+    ///     NBSP would make the displayed name and the addressed path disagree
+    ///     invisibly.
+    ///   - `Cf` format characters EXCEPT ZWNJ (U+200C) and ZWJ (U+200D). Both
+    ///     are invisible, and both are load-bearing: ZWNJ is orthographic in
+    ///     Persian and Urdu, ZWJ is what builds an emoji sequence, and refusing
+    ///     them would re-create the discard-in-silence defect for exactly the
+    ///     users widening this gate exists to serve. Everything else in `Cf`
+    ///     goes — a bidi override can make a rendered name lie about its own
+    ///     extension, and the tag characters U+E0020–U+E007F buy little while
+    ///     judging them at all would need real emoji-tag-sequence validation.
+    ///   - `Cc`, `Co`, `Cs` and `Cn`, by falling outside every admitted
+    ///     category.
+    ///
+    /// Unassigned code points and noncharacters are named rather than left to
+    /// fall off the end of the switch: both are `Cn` today, and both are
+    /// refusals of POLICY that must survive a future Unicode reclassifying
+    /// either one.
+    private static func outboxEntryScalarIsAddressable(_ scalar: Unicode.Scalar) -> Bool {
+        guard !outboxEntryRejectedScalars.contains(scalar) else { return false }
+        let properties = scalar.properties
+        guard properties.generalCategory != .unassigned,
+              !properties.isNoncharacterCodePoint else { return false }
+        switch properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
+             .nonspacingMark, .spacingMark, .enclosingMark,
+             .decimalNumber, .letterNumber, .otherNumber,
+             .connectorPunctuation, .dashPunctuation, .openPunctuation, .closePunctuation,
+             .initialPunctuation, .finalPunctuation, .otherPunctuation,
+             .mathSymbol, .currencySymbol, .modifierSymbol, .otherSymbol:
+            return true
+        case .format:
+            return scalar == "\u{200C}" || scalar == "\u{200D}"
+        case .spaceSeparator:
+            return scalar == " "
+        default:
+            return false
+        }
+    }
+
+    /// Whether `scalar` is a combining mark (`Mn` / `Mc` / `Me`) — a scalar that
+    /// renders by attaching itself to the character before it.
+    private static func isCombiningMark(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.properties.generalCategory {
+        case .nonspacingMark, .spacingMark, .enclosingMark: return true
+        default: return false
+        }
+    }
+
+    /// The extension of an inbound entry name — the bytes after its last `.`,
+    /// lowercased — when EVERY one of them is ASCII alphanumeric, and nil
+    /// otherwise.
+    ///
+    /// THE ASCII TEST RUNS ON THE RAW SLICE, BEFORE ANY CASE FOLDING, and that
+    /// order is the whole function. `lowercased()` is a Unicode operation:
+    /// `"\u{212A}t"` — KELVIN SIGN, an `Lu` letter the alphabet gate admits
+    /// without complaint — folds to exactly `"kt"` and satisfies an allowlist
+    /// test for Kotlin. The type gate is the only thing keeping a
+    /// `.mobileconfig` or a live `.sqlite` out of the lane, so it must not be
+    /// reachable by a character that merely folds to the right answer. Folding
+    /// AFTER the test is safe because ASCII alphanumerics fold to ASCII
+    /// alphanumerics.
+    ///
+    /// The dot is found on BYTES, one step stricter than `probeKeyExtension`'s
+    /// grapheme reading. The two can disagree only when the final `.` is fused
+    /// with a combining mark, and then this reading yields a slice OPENING with
+    /// that mark — not ASCII, so the name is refused outright. Every name that
+    /// passes therefore has an unfused final dot, where both readings return the
+    /// same extension, so the later probe can never classify a delivered key as
+    /// a different type than this gate accepted it as.
+    private static func outboxEntryExtension(of name: String) -> String? {
+        let bytes = Array(name.utf8)
+        guard let dot = bytes.lastIndex(of: UInt8(ascii: ".")), dot > bytes.startIndex else {
+            return nil
+        }
+        let slice = bytes[bytes.index(after: dot)...]
+        guard !slice.isEmpty, slice.allSatisfy({ byte in
+            (0x30...0x39).contains(byte) || (0x41...0x5A).contains(byte) || (0x61...0x7A).contains(byte)
+        }) else { return nil }
+        return String(decoding: slice, as: UTF8.self).lowercased()
     }
 
     /// Where one resolved `<href>` sits relative to the collection that was
@@ -2228,6 +2471,13 @@ enum FileServerClient {
     /// SPLIT FIRST, DECODE SECOND. That order is the whole function: decoding
     /// first turns `%2F` into a real separator and `%2E%2E` into a dot segment,
     /// so a single component carries an entire path the split cannot see.
+    ///
+    /// AND THE DECODED COMPONENT IS READ BY SCALAR, never by Character:
+    /// a separator followed by a combining mark is ONE grapheme cluster equal to
+    /// neither `/` nor `\`, so a `contains("/")` calls `a%2F%CC%81b.pdf` a clean
+    /// component while `URL.appending(path:)` reads the U+002F inside it as a
+    /// separator — a second component smuggled through the direct-child test.
+    /// Separator, backslash and NUL are therefore one scalar pass.
     private static func listingPathComponents(of url: URL) -> [String]? {
         let encodedPath = url.absoluteURL.path(percentEncoded: true)
         var components: [String] = []
@@ -2236,9 +2486,9 @@ enum FileServerClient {
                   !decoded.isEmpty,
                   decoded != ".",
                   decoded != "..",
-                  !decoded.contains("/"),
-                  !decoded.contains("\\"),
-                  !decoded.unicodeScalars.contains(where: { $0.value == 0 }) else {
+                  !decoded.unicodeScalars.contains(where: {
+                      $0 == "/" || $0 == "\\" || $0.value == 0
+                  }) else {
                 return nil
             }
             components.append(decoded)

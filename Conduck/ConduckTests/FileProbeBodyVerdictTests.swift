@@ -387,6 +387,54 @@ final class FileProbeBodyVerdictTests: XCTestCase {
                        "a leading dot is not an extension separator")
     }
 
+    /// The keys reaching the probe are not all ASCII. An agent output key is
+    /// `<outboxKey>/<entry name>`, and the outbound gate delivers a space, a
+    /// diacritic and a name with no ASCII in it at all — so the extension read
+    /// that routes the HTML veto and mints the negative control has to find the
+    /// right suffix in every one of them, or the probe reasons about the wrong
+    /// type for a file it is about to hand the user.
+    func testProbeKeyExtensionReadsNonASCIIKeys() {
+        let box = "1F2E3D4C-5B6A-7890-ABCD-EF0123456789/out-\(String(repeating: "a", count: 32))"
+        XCTAssertEqual(FileServerClient.probeKeyExtension("\(box)/the blue whale.MD"), "md")
+        XCTAssertEqual(FileServerClient.probeKeyExtension("\(box)/Übersicht.md"), "md")
+        XCTAssertEqual(FileServerClient.probeKeyExtension("\(box)/报告.pdf"), "pdf")
+        XCTAssertEqual(FileServerClient.probeKeyExtension("\(box)/my report (final).tar.gz"), "gz")
+        XCTAssertEqual(FileServerClient.probeKeyExtension("\(box)/report.pdf 备份"), "pdf 备份",
+                       "the reader reports what the suffix IS, non-ASCII included; judging whether "
+                       + "that is an extension worth honouring is `validatedOutboxEntryName`'s job")
+    }
+
+    /// The negative control keeps the candidate's extension because servers
+    /// route on it, and a non-ASCII name must not leak into the control key —
+    /// the control has to be a name that CANNOT exist, and its stem is Conduck's
+    /// own ASCII nonce either way.
+    func testTheNegativeControlKeepsAnExtensionReadFromANonASCIIKey() {
+        let box = "1F2E3D4C-5B6A-7890-ABCD-EF0123456789/out-\(String(repeating: "a", count: 32))"
+        let extracted = FileServerClient.probeKeyExtension("\(box)/Übersicht.md")
+        let control = FileServerClient.negativeControlKey(forExtension: extracted)
+        XCTAssertTrue(control.hasSuffix(".md"))
+        XCTAssertTrue(control.hasPrefix("__conduck_absent_"))
+        XCTAssertTrue(control.allSatisfy(\.isASCII),
+                      "the control key is Conduck's own, and stays addressable on any server")
+    }
+
+    /// The HTML veto reads the key's extension, so it has to fire for a
+    /// non-ASCII name exactly as it does for an ASCII one: a server answering an
+    /// `Übersicht.md` request with its own login page is the same SSO wall
+    /// whatever the file is called. A veto that quietly stopped firing on
+    /// non-ASCII names would let the wall through for precisely the files the
+    /// widened gate exists to deliver.
+    func testTheHTMLVetoFiresForANonASCIIKeyToo() {
+        for key in ["out-abc/Übersicht.md", "out-abc/报告.pdf", "out-abc/the blue whale.MD"] {
+            XCTAssertEqual(
+                FileServerClient.classifyProbe(
+                    evidence(status: 200, contentType: "text/html; charset=utf-8",
+                             body: loginPage, key: key)),
+                .settled(.ambiguous, byteLength: nil),
+                "\(key) is not an HTML document, so HTML back from it is a disagreement")
+        }
+    }
+
     func testNegativeControlKeyIsRootOnlyUnguessableAndKeepsTheExtension() {
         let key = FileServerClient.negativeControlKey(forExtension: "pdf")
         XCTAssertFalse(key.contains("/"),

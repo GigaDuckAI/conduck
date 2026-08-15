@@ -1149,11 +1149,15 @@ final class ConversationDetailViewModel {
     /// result caption.
     var outputRecheckStates: [UUID: OutputRecheckState] = [:]
 
-    /// What a user-initiated look found. Deliberately three-valued: an empty
+    /// What a user-initiated look found. Deliberately four-valued, because three
+    /// materially different things all end with no new chip on the row. An empty
     /// result from a lane-wide failure (bad credential, untrusted certificate,
     /// server down, timeout) is NOT the same claim as an empty result from a
     /// folder the server read out clean, and reporting the former as the latter
-    /// would be the lie this state exists to prevent.
+    /// would be the lie this state exists to prevent. Nor is either of those the
+    /// same as a folder that held files this app is not able to hand over —
+    /// reporting THAT as "nothing found" makes ten refused files look exactly
+    /// like an empty folder.
     enum OutputRecheckState: Equatable, Sendable {
         case checking
         /// The server answered, and there was nothing to hand over.
@@ -1166,6 +1170,21 @@ final class ConversationDetailViewModel {
         /// for the rest of the session. A census that GREW means the row has
         /// outrun the answer — see `liveRecheckStates`.
         case noneFound(chipCount: Int)
+        /// The server answered, and the folder held `count` entries this app is
+        /// not able to hand over.
+        ///
+        /// NOT A FLAVOUR OF `.noneFound`, because it is the PARTIAL case too. A
+        /// folder holding a report plus one refused name delivers a chip and
+        /// still owes the user the other half of the answer — which "nothing
+        /// found" cannot carry, and which the chip that DID land actively argues
+        /// against. Without this the refused entry is exactly as invisible as it
+        /// is in an all-refused folder.
+        ///
+        /// `chipCount` is the same census `.noneFound` carries, retired by the
+        /// same rule — and stamped POST-INSERT, because this state is also set on
+        /// a look that just added chips of its own; a stamp taken before those
+        /// landed would retire the caption on the very next reload.
+        case undeliverableEntries(count: Int, chipCount: Int)
         /// The lane could not be reached / would not answer, or it no longer
         /// matches the lane this turn was dispatched to.
         case couldNotCheck
@@ -1177,10 +1196,10 @@ final class ConversationDetailViewModel {
     /// TWO reasons a caption dies. The row it annotates is GONE (a delete, a
     /// clone, a CloudKit import that dropped it) — an orphaned caption would
     /// otherwise float under whatever row inherited the position. Or the row has
-    /// OUTRUN the answer: "no returned files were discovered" is a report about
-    /// one look at one instant, and the automatic pass that lists the same folder
-    /// a minute later can find the agent's late write. Once a chip is on screen,
-    /// the caption underneath it is a contradiction, not a caveat.
+    /// OUTRUN the answer: every caption that reports a FINDING reports one look
+    /// at one instant, and the automatic pass that lists the same folder a minute
+    /// later can find the agent's late write. Once an unaccounted-for chip is on
+    /// screen, the caption underneath it is a contradiction, not a caveat.
     ///
     /// A census that merely stayed the same keeps the caption: the answer is
     /// still the most recent thing anyone learned about that row.
@@ -1195,8 +1214,17 @@ final class ConversationDetailViewModel {
         }
         return states.filter { id, state in
             guard let chipsNow = census[id] else { return false }
-            guard case .noneFound(let chipsThen) = state else { return true }
-            return chipsNow <= chipsThen
+            // EXHAUSTIVE, WITH NO `default` — that is the point of the switch. A
+            // finding state that forgets to be census-gated never retires, so it
+            // sits under a contradicting chip for the rest of the session; a
+            // default arm would let the next such case join silently, while this
+            // shape makes it a compile error at the one place the rule lives.
+            switch state {
+            case .noneFound(let chipsThen), .undeliverableEntries(_, let chipsThen):
+                return chipsNow <= chipsThen
+            case .checking, .couldNotCheck:
+                return true
+            }
         }
     }
 
@@ -1960,7 +1988,11 @@ final class ConversationDetailViewModel {
                 },
                 list: { outboxKey, excluded in
                     guard let snapshot else {
-                        return .init(drafts: [], conclusive: false, verdict: .unusable(.transport))
+                        // No lane, so nothing was listed and nothing was
+                        // refused: a census of zero is the honest count, not a
+                        // default that could hide one.
+                        return .init(drafts: [], conclusive: false,
+                                     verdict: .unusable(.transport), refusedEntryCount: 0)
                     }
                     return await FileTransferOutputDetector.reconcileOutbox(
                         outboxKey: outboxKey,
@@ -2565,7 +2597,12 @@ final class ConversationDetailViewModel {
             // is the seam where they part: `conclusive` still governs the
             // permanent marker (age gate included), while what the user is told
             // is whatever the server actually said.
-            reportedNothingWhen: Self.folderReadAnswered(reconciliation)
+            reportedNothingWhen: Self.folderReadAnswered(reconciliation),
+            // …and this is the rest of what it said. A listing that delivered
+            // nothing is not the same fact as a listing that delivered nothing
+            // BECAUSE the folder held only names this app cannot address, and
+            // only the folder-reading verb can tell them apart.
+            refusedEntryCount: reconciliation.refusedEntryCount
         )
         // EARNED, and only now. A `207` or a `404` is the lane answering (an
         // `.unusable` verdict is not), which makes "your file server didn't
@@ -2652,7 +2689,14 @@ final class ConversationDetailViewModel {
             // Probe evidence, with no age gate folded in: `probeNamedCandidates`
             // reports whether every probe came back definitive, which is already
             // "did the server answer" and nothing else.
-            reportedNothingWhen: scan.conclusive
+            reportedNothingWhen: scan.conclusive,
+            // NO CENSUS EXISTS HERE, and zero is the truthful report of that.
+            // A root search asks about names the reply mentioned, one key at a
+            // time; it never lists a folder, so it never sees an entry to refuse.
+            // The type gate does its work upstream, on the candidate tokens, and
+            // a name it filtered out was a word in a sentence — not a file
+            // anybody's server was found to be holding.
+            refusedEntryCount: 0
         )
         // EARNED, and only on evidence the server spoke — see
         // `rootSearchGotAnAnswer` for why `scan.conclusive` alone is not that.
@@ -2711,14 +2755,24 @@ final class ConversationDetailViewModel {
     ///
     /// Only the ROOT search needs this: a folder listing reads a path minted for
     /// one dispatch, which no inbound upload can be inside.
+    ///
+    /// The leaf is taken on UTF-8 BYTES, like every other separator read in this
+    /// lane. A key whose leaf opens with a combining mark fuses that mark with
+    /// the `/` before it into one Character, so a grapheme search finds an
+    /// earlier separator or none at all and inserts a folder path where the leaf
+    /// belongs — the suppression then misses, and the root search chips the
+    /// user's own file back at them. That is the NON-conservative direction, the
+    /// one this set exists to avoid.
     private func inboundStoredKeyTokens() -> Set<String> {
         var tokens = Set<String>()
         for message in messages where message.role != "agent" {
             for attachment in message.attachments {
                 guard let key = attachment.storedKey else { continue }
                 tokens.insert(key)
-                if let slash = key.lastIndex(of: "/") {
-                    tokens.insert(String(key[key.index(after: slash)...]))
+                if let leaf = key.utf8
+                    .split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: true)
+                    .last, leaf.count != key.utf8.count {
+                    tokens.insert(String(decoding: leaf, as: UTF8.self))
                 }
             }
         }
@@ -2736,6 +2790,12 @@ final class ConversationDetailViewModel {
     /// answer the question this look asked — and it is REQUIRED rather than
     /// defaulted to `conclusive`, because the two are different questions and the
     /// default was how the age gate leaked into the caption.
+    ///
+    /// `refusedEntryCount` is the listing's census of entries the app is not able
+    /// to hand over, and it is REQUIRED for the same reason: the root search
+    /// reads no folder and therefore has no census, so a default would let it
+    /// claim zero refusals it never looked for — the exact silence this count
+    /// exists to end.
     private func commitTappedOutputs(
         _ drafts: [AttachmentDraft],
         conclusive: Bool,
@@ -2743,7 +2803,8 @@ final class ConversationDetailViewModel {
         laneID: String,
         ref: RemoteAgentRef,
         snapshot: SettingsManager.FileTransferSnapshot,
-        reportedNothingWhen serverAnswered: Bool
+        reportedNothingWhen serverAnswered: Bool,
+        refusedEntryCount: Int
     ) async {
         guard await FileTransferOutputDetector.configuredLaneStillMatches(
             ref: ref,
@@ -2753,12 +2814,20 @@ final class ConversationDetailViewModel {
             return
         }
         guard !drafts.isEmpty else {
-            outputRecheckStates[message.id] = serverAnswered
-                // Census stamped now, so a later pass that actually finds
-                // something retires this caption instead of leaving it to
-                // contradict a visible chip (see `liveRecheckStates`).
-                ? .noneFound(chipCount: message.attachments.count(where: \.isServerFile))
-                : .couldNotCheck
+            guard serverAnswered else {
+                outputRecheckStates[message.id] = .couldNotCheck
+                return
+            }
+            // Census stamped now, so a later pass that actually finds something
+            // retires this caption instead of leaving it to contradict a visible
+            // chip (see `liveRecheckStates`).
+            let chipsNow = message.attachments.count(where: \.isServerFile)
+            // A refusal is the more specific true thing: "nothing was discovered"
+            // is also true of a folder holding ten refused names, and it is the
+            // sentence that makes them invisible.
+            outputRecheckStates[message.id] = refusedEntryCount > 0
+                ? .undeliverableEntries(count: refusedEntryCount, chipCount: chipsNow)
+                : .noneFound(chipCount: chipsNow)
             return
         }
         let inserted = (try? await ConversationStore.shared.reconcileOutputScan([
@@ -2775,8 +2844,23 @@ final class ConversationDetailViewModel {
         }
         // The insert posts `.conversationsDidChange`, so the reload repaints the
         // row on its own. Clear the caption now so the success frame never shows
-        // a stale one.
-        outputRecheckStates[message.id] = nil
+        // a stale one — UNLESS the same listing also held entries it could not
+        // hand over. That is the partial case, and the chips that did land are
+        // precisely what makes it look settled: a folder of one report plus one
+        // refused name renders identically to a folder of one report.
+        //
+        // The census is POST-INSERT, this commit's own rows counted in, because
+        // the reload it just triggered is what evaluates the retire rule — a
+        // pre-insert stamp would read the chips this look delivered as the row
+        // outrunning the answer and drop the caption before it was ever seen. The
+        // store may dedupe a draft against a row another device wrote, which can
+        // only make the real count SMALLER; over-stamping keeps the caption,
+        // which is the safe direction.
+        outputRecheckStates[message.id] = refusedEntryCount > 0
+            ? .undeliverableEntries(
+                count: refusedEntryCount,
+                chipCount: message.attachments.count(where: \.isServerFile) + drafts.count)
+            : nil
     }
 
     /// Fold one listing verdict into the observable fault set. Compared before

@@ -1762,8 +1762,10 @@ private struct MessageBubble: View, Equatable {
         }
     }
 
-    /// Caption for the last manual look. A SUCCESS has no caption: the chip
-    /// appears, so there is nothing left to annotate.
+    /// Caption for the last manual look. A CLEAN SUCCESS has no caption: the
+    /// chips appear and there is nothing left to annotate. A success over a
+    /// folder that also held entries the app cannot hand over still gets one —
+    /// the files that arrived report nothing about the ones that did not.
     private var resultCaption: LocalizedStringResource? {
         switch outputRecheckState {
         case .noneFound:
@@ -1775,6 +1777,27 @@ private struct MessageBubble: View, Equatable {
             return LocalizedStringResource(
                 "thread.outputs.result.noneFound",
                 defaultValue: "No returned files were discovered.")
+        case .undeliverableEntries(let count, _):
+            // THE COUNT, NEVER THE NAME. A refused name is by definition one the
+            // outbound gate was unwilling to address, so printing it here would
+            // put the deceptive string the gate exists to stop in front of the
+            // user — in the app's own voice, which is the one place it could do
+            // real damage. The count carries everything actionable anyway: there
+            // was something there, and it is still on the server.
+            //
+            // AND NO CAUSE, on the same discipline as the two captions around it.
+            // The listing proves the folder held something this app cannot hand
+            // over. It does not prove whether the agent meant to write it, wrote
+            // it by accident, or was handed it by a tool — and "its type isn't
+            // supported" would pick one of the gate's two refusals out of no
+            // evidence, since a hostile or malformed NAME is refused just as
+            // hard as an unwelcome extension.
+            //
+            // Shown for the partial case too, where chips did land: the files
+            // that arrived say nothing at all about the ones that did not.
+            return LocalizedStringResource(
+                "thread.outputs.result.undeliverable",
+                defaultValue: "The folder for this reply held ^[\(count) file](inflect: true) Conduck can't hand over.")
         case .couldNotCheck:
             // Deliberately names NO cause. This one state covers a lane that no
             // longer matches the turn's, a look the app itself declined because

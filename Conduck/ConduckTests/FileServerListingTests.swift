@@ -18,6 +18,13 @@
 //  a tolerant one from growing back beside it: leniency that is right for a
 //  browser reports a body nobody understood as an ordinary short listing.
 //
+//  ONE SECTION REACHES PAST `parseListing` into the rest of the file lane
+//  (`probeKeyExtension`, `AttachmentRecord.isFromReplyOutputBox`), because those
+//  answer the same question this parser does — where does a `/` actually sit —
+//  and a separator fused with a combining mark is invisible to every one of them
+//  unless the comparison runs on scalars or bytes. The property is pinned once,
+//  here, rather than once per caller.
+//
 //  Privacy: synthetic fixtures only; nothing is logged.
 //
 
@@ -345,6 +352,30 @@ final class FileServerListingTests: XCTestCase {
         }
     }
 
+    /// THE SAME BUG WEARING A COMBINING MARK. `%2F%CC%81` decodes to a real
+    /// U+002F followed by U+0301, and Swift fuses those into the single Character
+    /// `/́` — so a `contains("/")` reads the component as clean while
+    /// `URL.appending(path:)` reads the U+002F inside it as a separator, which is
+    /// a second path component smuggled through the direct-child test. Only a
+    /// SCALAR reading sees it. A backslash behaves identically.
+    func testSeparatorFusedWithACombiningMarkRefusesTheListing() {
+        // The premise, stated so this fixture cannot quietly stop discriminating:
+        // the decoded component carries a separator no Character test can find.
+        let decoded = "a%2F%CC%81b.pdf".removingPercentEncoding
+        XCTAssertEqual(decoded, "a/\u{0301}b.pdf")
+        XCTAssertFalse(decoded?.contains("/") ?? true,
+                       "a `/` fused with a combining mark is not the Character `/`")
+        XCTAssertTrue(decoded?.unicodeScalars.contains("/") ?? false,
+                      "but the scalar — the one `URL.appending(path:)` obeys — is right there")
+
+        for encodedName in ["a%2F%CC%81b.pdf", "a%5C%CC%81b.pdf"] {
+            XCTAssertEqual(
+                parse(multistatus(fileResponse(href: "\(boxPath)/\(encodedName)"))),
+                .unusable(.entryOutsideCollection),
+                "\(encodedName) hides a separator inside one component; the listing is refused whole")
+        }
+    }
+
     // MARK: - Per-resource status
 
     /// RFC 4918 lets a `207` carry not-found rows. Emitting one as an ordinary
@@ -501,12 +532,20 @@ final class FileServerListingTests: XCTestCase {
     /// this a name I will mint a key for". Keeping them separate is what lets the
     /// listing stay a statement about the SERVER while the name policy stays a
     /// statement about the CLIENT.
+    ///
+    /// The example is refused on TYPE rather than on shape, because the name
+    /// policy delivers a space: the two layers are still separate, but the
+    /// separation has to be demonstrated with a name that policy actually
+    /// rejects.
     func testPercentEncodedNameIsDecodedHereAndRejectedByTheNameValidator() {
-        let verdict = parse(multistatus(fileResponse(href: boxPath + "/my%20report.pdf")))
-        XCTAssertEqual(names(verdict), ["my report.pdf"],
-                       "a legitimate encoded name decodes to one component")
-        XCTAssertNil(FileServerClient.validatedOutboxEntryName("my report.pdf"),
-                     "and the name gate is where a space is refused, not the listing")
+        let verdict = parse(multistatus(fileResponse(href: boxPath + "/my%20report.exe")))
+        XCTAssertEqual(names(verdict), ["my report.exe"],
+                       "a legitimate encoded name decodes to one component, space and all")
+        XCTAssertNil(FileServerClient.validatedOutboxEntryName("my report.exe"),
+                     "and the name gate is where the TYPE is refused, not the listing")
+        XCTAssertEqual(FileServerClient.validatedOutboxEntryName("my report.pdf"), "my report.pdf",
+                       "the space itself is not what refuses a name — the listing decodes a "
+                       + "space and the gate delivers one")
     }
 
     // MARK: - A path-stripping reverse proxy
@@ -627,5 +666,40 @@ final class FileServerListingTests: XCTestCase {
         </D:response>
         """
         XCTAssertEqual(parse(multistatus(nested)), .unusable(.malformedBody))
+    }
+
+    // MARK: - The rest of the lane splits on the same separator
+
+    /// The chip's provenance claim survives a leaf that OPENS with a combining
+    /// mark. The `/` between the box and the entry is one Conduck concatenated
+    /// itself, and the mark fuses with it, so a `hasPrefix(box + "/")` answers
+    /// false for a key that is plainly inside the box — the chip then silently
+    /// degrades to the weaker root-search label, which is a claim about a file
+    /// found somewhere on the server rather than one this reply produced.
+    func testOutputBoxProvenanceSurvivesALeafOpeningWithACombiningMark() {
+        let storedKey = boxKey + "/\u{0301}report.pdf"
+        XCTAssertFalse(storedKey.hasPrefix(boxKey + "/"),
+                       "the premise: the concatenated `/` fuses with the mark into one Character")
+        XCTAssertTrue(
+            AttachmentRecord.isFromReplyOutputBox(storedKey: storedKey, outputBoxKey: boxKey),
+            "the key is inside the box, so the chip keeps the provenance it has")
+
+        XCTAssertFalse(
+            AttachmentRecord.isFromReplyOutputBox(
+                storedKey: "\(conversationID)/out-ffffffffffffffff/report.pdf",
+                outputBoxKey: boxKey),
+            "and a key from another box is still not this reply's output")
+        XCTAssertFalse(
+            AttachmentRecord.isFromReplyOutputBox(storedKey: boxKey, outputBoxKey: boxKey),
+            "the box is not a file inside itself")
+    }
+
+    /// The extension gate reads the LEAF's extension, and the leaf is found on
+    /// bytes: a grapheme split cannot see the `/` the mark is fused to, hands the
+    /// reader the whole key, and the extension then comes out of a folder name.
+    func testProbeKeyExtensionReadsTheLeafPastACombiningMark() {
+        XCTAssertEqual(FileServerClient.probeKeyExtension(boxKey + "/\u{0301}report.pdf"), "pdf")
+        XCTAssertEqual(FileServerClient.probeKeyExtension("archive.v2/\u{0301}README"), "",
+                       "a dot in a FOLDER name can never supply the leaf's extension")
     }
 }

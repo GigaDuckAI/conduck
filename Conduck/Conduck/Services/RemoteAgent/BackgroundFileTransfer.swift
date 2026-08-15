@@ -326,8 +326,10 @@ final class BackgroundFileTransfer: NSObject {
             // or the folder was deleted between MKCOL and PUT). ONE explicit MKCOL
             // + ONE re-PUT (the function-scoped temp-file `defer` keeps the body on
             // disk for it), then fail-fast as always. A flat key cannot have a
-            // missing parent — its 409 is not ours to fix.
-            guard storedKey.contains("/") else {
+            // missing parent — its 409 is not ours to fix. Flat vs nested is read
+            // on UTF-8 BYTES here and in `ensureParentCollection` (see its doc for
+            // why), so the pre-emptive create and this retry cannot disagree.
+            guard storedKey.utf8.contains(UInt8(ascii: "/")) else {
                 throw AppError.fileTransferUploadFailed
             }
             await Self.ensureParentCollection(forStoredKey: storedKey, snapshot: snapshot)
@@ -352,11 +354,18 @@ final class BackgroundFileTransfer: NSObject {
     /// definition of how the parent collection is derived and created — shared
     /// by the pre-emptive create before every nested PUT and the 409
     /// handshake's re-create, so the two can never drift.
+    ///
+    /// The separator is found on UTF-8 BYTES: a `/` followed by a combining mark
+    /// is a single Character that is not `/`, so a grapheme search finds no
+    /// separator at all and skips the MKCOL for a key that genuinely has a
+    /// parent — which the PUT then answers with the 409 this call exists to
+    /// prevent.
     private static func ensureParentCollection(
         forStoredKey storedKey: String,
         snapshot: SettingsManager.FileTransferSnapshot
     ) async {
-        guard let slash = storedKey.lastIndex(of: "/") else { return }
+        let bytes = storedKey.utf8
+        guard let slash = bytes.lastIndex(of: UInt8(ascii: "/")) else { return }
         // Best-effort, so the evaluator's verdict is deliberately not consulted:
         // the PUT that follows is the authoritative attempt, it runs on the
         // background session whose per-task notes DO carry the refusal, and it
@@ -366,7 +375,7 @@ final class BackgroundFileTransfer: NSObject {
         defer { session.finishTasksAndInvalidate() }
         await FileServerClient.ensureCollection(
             snapshot: snapshot,
-            collectionKey: String(storedKey[..<slash]),
+            collectionKey: String(decoding: bytes[..<slash], as: UTF8.self),
             session: session)
     }
 

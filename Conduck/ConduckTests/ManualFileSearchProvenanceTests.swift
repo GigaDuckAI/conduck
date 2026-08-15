@@ -93,4 +93,37 @@ final class ManualFileSearchProvenanceTests: XCTestCase {
             storedKey: "1F2E3D4C-5B6A-7890-ABCD-EF0123456789/a1b2c3d4__photo.jpg",
             outputBoxKey: box))
     }
+
+    /// THE LEAF IS NOT ASCII. The outbound gate delivers a space, a diacritic
+    /// and a name with no ASCII in it, so the keys this predicate judges carry
+    /// those names — and the predicate must not read a non-ASCII leaf as a
+    /// weaker finding. Getting this wrong is silent and one-directional: a real
+    /// output would render with the manual search's "found on your file server"
+    /// caption, i.e. a file this reply demonstrably produced presented as a file
+    /// that merely happens to be lying around.
+    func testANonASCIILeafKeepsTheReplysOwnProvenance() {
+        for leaf in [
+            "the blue whale.MD",
+            "Übersicht.md",
+            "报告.pdf",
+            "گزارش\u{200C}ها.pdf",
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}.png",
+            "re\u{0301}port.pdf",
+        ] {
+            XCTAssertEqual(FileServerClient.validatedOutboxEntryName(leaf), leaf,
+                           "the premise: \(leaf.debugDescription) is a name that gets delivered")
+            XCTAssertTrue(AttachmentRecord.isFromReplyOutputBox(
+                storedKey: "\(box)/\(leaf)", outputBoxKey: box),
+                "\(leaf.debugDescription) sits inside the folder this reply named")
+        }
+    }
+
+    /// And the boundary still holds under a non-ASCII leaf: the match ends on a
+    /// path separator, so a SIBLING box whose name merely starts with this one's
+    /// does not inherit the provenance just because the file inside it has an
+    /// unusual name.
+    func testANonASCIILeafInASiblingFolderStillDoesNotCount() {
+        XCTAssertFalse(AttachmentRecord.isFromReplyOutputBox(
+            storedKey: "\(box)-2/报告.pdf", outputBoxKey: box))
+    }
 }
