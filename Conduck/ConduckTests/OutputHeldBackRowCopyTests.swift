@@ -38,6 +38,10 @@
 //     whenever a standing row was up — including on the row that offers the verb,
 //     and including for the root search, which asks about a different place
 //     entirely and cannot contradict the row at all.
+//   - AN EMPTY LOOK DENYING THE CHIPS BESIDE IT. "No returned files were
+//     discovered" is absolute, and a rescue that completes RETIRES the row while
+//     leaving its files on screen — so the next quiet look printed it under
+//     fifteen delivered chips, with no row left to trigger the rephrase.
 //
 // Deterministic + headless: pure value and string assertions. No network, no
 // store, no clock. Synthetic names only, and nothing is logged.
@@ -353,6 +357,56 @@ final class OutputHeldBackRowCopyTests: XCTestCase {
         let alone = ConversationDetailViewModel.lookResultCaption(
             for: .undeliverableEntries(count: 4, chipCount: 0), hasStandingRow: false)
         XCTAssertTrue(text(try XCTUnwrap(alone)).contains("4"))
+    }
+
+    /// THE ROW IS NOT THE ONLY THING A CAPTION CAN CONTRADICT. A rescue ends with
+    /// the held-back row RETIRED — its last name arrived, so nothing is left to
+    /// hold back — and the chips it delivered stay on screen. A look after that
+    /// finds nothing to add and lands here with no row above it, where the
+    /// absolute sentence would deny the files the user is looking at.
+    @MainActor
+    func testAnEmptyLookNeverDeniesChipsAlreadyOnTheReply() throws {
+        // The census the commit stamped is the whole test, and zero is the only
+        // reading that earns the absolute wording: nothing has ever been found
+        // for this reply, so there is nothing on screen to contradict.
+        XCTAssertEqual(
+            text(try XCTUnwrap(ConversationDetailViewModel.lookResultCaption(
+                for: .noneFound(chipCount: 0), hasStandingRow: false))),
+            "No returned files were discovered.")
+
+        // One chip is already one too many — the sentence is absolute, so it
+        // takes exactly one visible file to make it read as a denial.
+        for chips in [1, 15] {
+            let rendered = text(try XCTUnwrap(ConversationDetailViewModel.lookResultCaption(
+                for: .noneFound(chipCount: chips), hasStandingRow: false)))
+            XCTAssertEqual(rendered, "Nothing new came back.",
+                           "with \(chips) chip(s) on the reply the look found nothing NEW, which "
+                           + "is the tap-scoped sentence — the folder-scoped one denies them")
+            XCTAssertFalse(rendered.lowercased().contains("no returned files"))
+        }
+
+        // And the standing-row arm is untouched: it reached the same sentence
+        // first, for its own reason, and still does.
+        XCTAssertEqual(
+            text(try XCTUnwrap(ConversationDetailViewModel.lookResultCaption(
+                for: .noneFound(chipCount: 15), hasStandingRow: true))),
+            "Nothing new came back.")
+    }
+
+    /// THE SHAPE COUNT ADDS, IT DOES NOT DENY, which is why chips do not silence
+    /// it the way they silence the absolute discovery sentence. "The folder held
+    /// 4 files Conduck can't hand over" is a claim about a DIFFERENT population
+    /// from the delivered chips and stays true beside any number of them —
+    /// collapsing it to "nothing new came back" would make those four invisible,
+    /// which is the entire reason `.undeliverableEntries` is not a flavour of
+    /// `.noneFound`.
+    @MainActor
+    func testTheShapeCountKeepsItsSentenceBesideDeliveredChips() throws {
+        let rendered = text(try XCTUnwrap(ConversationDetailViewModel.lookResultCaption(
+            for: .undeliverableEntries(count: 4, chipCount: 15), hasStandingRow: false)))
+        XCTAssertTrue(rendered.contains("4"),
+                      "the refusals are the more specific true thing, chips or no chips")
+        XCTAssertFalse(rendered.lowercased().contains("nothing new"))
     }
 
     /// REGRESSION — a look that DELIVERED is never reported as an empty one.

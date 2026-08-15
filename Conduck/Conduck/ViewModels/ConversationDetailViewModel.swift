@@ -2634,8 +2634,11 @@ final class ConversationDetailViewModel {
     /// `.delivered` below.
     ///
     /// `hasStandingRow` is therefore read for two unrelated jobs, and mixing them
-    /// up is what a caller must not do: it decides the WORDING of an empty result,
-    /// and it decides whether a delivery is worth narrating.
+    /// up is what a caller must not do: it is ONE of the two inputs to the WORDING
+    /// of an empty result — the chip census the state itself carries is the other,
+    /// because a look that added nothing to a reply ALREADY holding files found
+    /// nothing NEW rather than nothing at all — and it decides whether a delivery
+    /// is worth narrating.
     static func lookResultCaption(
         for state: OutputRecheckState?,
         hasStandingRow: Bool
@@ -2675,7 +2678,7 @@ final class ConversationDetailViewModel {
             return LocalizedStringResource(
                 "thread.outputs.result.delivered",
                 defaultValue: "^[\(fileCount) file](inflect: true) came back.")
-        case .noneFound, .undeliverableEntries:
+        case .noneFound(let chipCount), .undeliverableEntries(_, let chipCount):
             guard !hasStandingRow else {
                 // The row is the richer surface and it is already saying what
                 // the folder holds. This says only what the LOOK did, which is
@@ -2717,6 +2720,21 @@ final class ConversationDetailViewModel {
                 return LocalizedStringResource(
                     "thread.outputs.result.undeliverable",
                     defaultValue: "The folder for this reply held ^[\(count) file](inflect: true) Conduck can't hand over.")
+            }
+            // THE SUBJECT OF THE SENTENCE IS THE LOOK, NOT THE FOLDER, and the
+            // absolute wording only reads that way while the reply is empty. With
+            // chips already on the row — the ordinary end of a rescue, where the
+            // held-back row retired once its last name arrived and a later look
+            // then found nothing to add — "no returned files were discovered"
+            // sits under files that visibly did return and reads as a denial of
+            // them. The census the commit stamped is the whole test: a look that
+            // handed nothing over to a reply already holding server files found
+            // nothing NEW, not nothing at all — which is the tap-scoped sentence
+            // the standing-row arm above reaches for on the same grounds.
+            if chipCount > 0 {
+                return LocalizedStringResource(
+                    "thread.outputs.result.nothingNew",
+                    defaultValue: "Nothing new came back.")
             }
             // DISCOVERY, never a claim about the agent. The server answered and
             // there was nothing to hand over — which is equally consistent with
