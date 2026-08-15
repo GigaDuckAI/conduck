@@ -206,12 +206,53 @@ struct MainWindowView: View {
         )
     }
 
+    /// The narrowest either column can ever be. The sidebar declares it below;
+    /// the detail column is never narrower than 560pt (the scene's 880pt minimum
+    /// width less the sidebar's 320pt maximum), so ONE conservative number
+    /// governs both floors and cannot drift out of step with the declaration.
+    private static let columnMinWidth: CGFloat = 260
+    private static let sidebarIdealWidth: CGFloat = 280
+    private static let sidebarMaxWidth: CGFloat = 320
+
     /// The two-column shell, split from `body`'s event-modifier chain so the
     /// column builders type-check independently (keeps SourceKit within budget).
     private var splitView: some View {
         NavigationSplitView {
+            // WHY a width floor on the column CONTENT as well as the column
+            // width: each `NavigationSplitView` column is hosted in its OWN
+            // `NSHostingView`, which measures the column's minimum size by
+            // proposing ZERO width — a width this window can never actually
+            // give it. A `Text` carrying `.fixedSize(horizontal: false,
+            // vertical: true)` answers that probe with the height of its string
+            // set ONE CHARACTER PER LINE (measured: the unconfigured empty
+            // state's 94-character paragraph reports 1155pt, the whole empty
+            // state 1347pt, the sidebar with the iCloud banner drawn 969pt).
+            // AppKit turns that into a hard minimum height on the split view,
+            // which is then laid out taller than the window and centred in it —
+            // search field above the title bar, Settings footer below the bottom
+            // edge (measured in-app: a 949pt window carrying a 1399pt split
+            // group). Declaring the width the column will really have makes the
+            // probe measure what the user actually sees: 1347 → 289 (detail),
+            // 969 → 228 (sidebar), with pixel-identical rendering at every
+            // window size the user can produce, because the floor is below both
+            // columns' real minimum widths and therefore never binding.
+            //
+            // The trap only bites OUTSIDE a scroll container — a `ScrollView`
+            // does not propagate its content's minimum height, which is why the
+            // ~17 `.fixedSize(horizontal: false, vertical: true)` calls inside
+            // the thread transcript are harmless. `ConduckApp`'s scene root
+            // already does exactly this one level up with `.frame(minWidth:)`,
+            // which is why the full-window Settings mode swap — hosted directly
+            // under that frame rather than in a column — never sees this, and
+            // `MacSettingsView` needs no floor of its own (a plain `HStack`,
+            // every detail category scroll-contained).
             sidebar
-                .navigationSplitViewColumnWidth(min: 260, ideal: 280, max: 320)
+                .frame(minWidth: Self.columnMinWidth)
+                .navigationSplitViewColumnWidth(
+                    min: Self.columnMinWidth,
+                    ideal: Self.sidebarIdealWidth,
+                    max: Self.sidebarMaxWidth
+                )
                 // Compose is declared on the SIDEBAR COLUMN, not on the split
                 // view: that is the only way it enters the toolbar's sidebar
                 // region — the half bounded by the tracking separator at the
@@ -229,6 +270,7 @@ struct MainWindowView: View {
                 }
         } detail: {
             detailColumn
+                .frame(minWidth: Self.columnMinWidth)
         }
         .toolbar {
             // Gateway identity, centered in the title bar — fills the otherwise
