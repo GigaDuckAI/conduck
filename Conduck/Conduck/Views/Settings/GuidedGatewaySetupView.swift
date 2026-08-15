@@ -77,15 +77,15 @@
 //                     gateway (updating it), never a freshly minted one. Entry step
 //                     depends on whether the target is already set up: a configured
 //                     one opens on COMMANDS (a quick re-pair, one screen), an
-//                     unconfigured `.custom` one on READINESS, so a first-timer
-//                     walks the lane's middle (readiness → helper → commands) and
-//                     gets the prerequisite and the trust screen the bare command
-//                     step cannot give them. Readiness is then the ENTRY step, so
-//                     it carries no Back either (empty back-stack) — what the walk
-//                     buys is a Back arrow on every step AFTER it, including the
-//                     command step, which had none when it was the entry. OpenRouter
-//                     never quick-connects (no pairing lane); it maps defensively to
-//                     the hosted step.
+//                     unconfigured `.custom` one on the lane FORK, which asks the one
+//                     question that sorts them — do you have a code yet? From the fork
+//                     onward that entry is INDISTINGUISHABLE from the chooser's (same
+//                     steps, same order), so no step downstream branches on which door
+//                     opened the flow. OpenRouter never quick-connects (no pairing
+//                     lane); it maps defensively to the hosted step.
+//                     The fork also NAMES the target it was deep-linked to
+//                     (`forkGatewayName`) — the chooser's fork can't, having no
+//                     gateway chosen yet.
 //
 //  No manual-entry escape inside the guided lanes: the fork offers only the two
 //  guided branches. Hand-editing a URL/token stays reachable OUTSIDE the guide —
@@ -212,34 +212,67 @@ struct GuidedGatewaySetupView: View {
         case .hostedModel:  return .hostedModel
         case .quickConnect(let target, let needsSetup):
             // Straight to the Commands step in the target's lane — EXCEPT a custom
-            // gateway that was never set up, which enters its lane one beat
-            // earlier, at readiness (see below). OpenRouter has no pairing lane at
-            // all — a (never-constructed) hosted target maps defensively to its own
-            // step instead of a meaningless command screen.
+            // gateway that was never set up, which enters one beat earlier, at the
+            // lane FORK (see below). OpenRouter has no pairing lane at all — a
+            // (never-constructed) hosted target maps defensively to its own step
+            // instead of a meaningless command screen.
             switch target {
             case .builtin(.openrouter): return .hostedModel
             case .builtin:              return .commands(.fullAgent)
-            // An UNCONFIGURED custom gateway lands on readiness, not the command:
-            // its row's amber "Set up" is the loudest thing on the editor for a
-            // first-timer, and it used to open on a shell command with nothing
-            // behind it — no statement of the one prerequisite the helper can't
-            // supply (an OpenAI-compatible server already running), no trust screen
-            // for the script it tells you to run, and no Back, because the
-            // back-stack is empty on the entry step. Entering at readiness walks
-            // the lane's own middle instead (readiness → helper → commands, or
-            // → adapter for "not yet, or I'm not sure"), so the answer is asked as
-            // a QUESTION rather than added as a caveat on the command screen, which
-            // both lanes share and the guided path reaches having just answered it.
-            // Readiness is the entry step now, so IT has no Back — the walk moves
-            // that gap to a screen that costs one tap, and every step after it,
-            // command included, gains the arrow.
-            // Configured targets keep today's one-screen behaviour: "Set up again"
-            // is a re-pair of a gateway we KNOW works, so re-asking whether it is
-            // reachable would only slow the path whose promise is speed.
-            case .custom:               return needsSetup ? .readiness(.custom) : .commands(.custom)
+            // An UNCONFIGURED custom gateway lands on the FORK, not the command.
+            // The command step's whole subject is creating a code, so it serves
+            // only half of who arrives here: the natural order is to set the server
+            // up FIRST and open the app holding a `conduck-setup:v1` string, and
+            // that user should reach the paste box in one tap rather than read past
+            // a command they have already run. The fork is the screen that asks the
+            // one question sorting the two, and it already exists.
+            //
+            // This does not skip the lane's prerequisite check — it declines to
+            // re-ask it. A setup code IS the proof `readiness` looks for: holding
+            // one means `conduck-connect` ran against a live server and printed it.
+            // Someone who answers "create a code" instead still walks the full lane
+            // (heads-up on iPhone/iPad, then readiness → helper → commands), which is
+            // byte-identical to what the CHOOSER's fork does on the same platform —
+            // so the two entries converge one step in and nothing downstream needs to
+            // know which door opened the flow.
+            //
+            // Readiness is consequently no longer an entry step on ANY path, so it
+            // carries a Back arrow everywhere; the empty back-stack now belongs to
+            // the fork, whose two cards are themselves the way out.
+            // Configured targets keep the one-screen re-pair: "Set up again" acts on
+            // a gateway we KNOW works, so asking whether it exists would only slow
+            // the path whose promise is speed.
+            case .custom:               return needsSetup ? .fork(.custom) : .commands(.custom)
             }
         case .later, .none: return showPrimer ? .primer : .chooser
         }
+    }
+
+    /// The gateway name the FORK step confirms, or nil to keep its generic lane
+    /// title. Pure + `internal` for the same reason as `initialStep` — the decision
+    /// is unit-testable without a View.
+    ///
+    /// Non-nil only for a `.custom` quick-connect target, which is the only way the
+    /// fork is ever reached with a gateway already chosen: the chooser's fork has
+    /// none yet, and no built-in enters the lane here. Naming it turns the fork into
+    /// a confirmation of WHICH gateway is being paired, which matters most on the
+    /// path that arrived from one specific gateway's editor.
+    ///
+    /// Resolved from the roster directly rather than through
+    /// `SettingsViewModel.displayName(for:)`, which is wrong here TWICE: it yields
+    /// the EMPTY string for a freshly minted draft (the roster entry exists with
+    /// `name == ""`, so its `?? genericCustomName` fallback never fires) — and that
+    /// draft is the commonest quick-connect case of all, "+ Add custom gateway"
+    /// straight into Quick connect. Its generic fallback is no better: "Connect
+    /// Custom gateway" reads worse than the lane title it would replace. Both cases
+    /// want the same answer — nil, keep the lane title.
+    static func forkGatewayName(initialPath: GatewayPath?, customs: [CustomGateway]) -> String? {
+        guard case .quickConnect(let target, _) = initialPath,
+              case .custom(let id) = target,
+              let name = customs.first(where: { $0.id == id })?.name
+        else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// The ref a `.quickConnect` entry LOCKS the pairing import to — threaded into
@@ -402,8 +435,17 @@ struct GuidedGatewaySetupView: View {
             // The heads-up beat is phone/iPad-only — macOS forks straight to
             // readiness (a Mac user is already at a computer), so the step never
             // enters the macOS back-stack.
+            //
+            // Reached two ways, and the routing below is deliberately identical for
+            // both: pushed from the chooser, or as the ENTRY step of an unconfigured
+            // `.custom` quick connect (where it carries no Back — its two cards are
+            // the way out — and names the gateway it was deep-linked to).
             GatewaySetupForkView(
                 lane: lane,
+                gatewayName: Self.forkGatewayName(
+                    initialPath: initialPath,
+                    customs: viewModel.customGateways
+                ),
                 onCreateCode: {
                     #if os(macOS)
                     goTo(.readiness(lane))

@@ -10,6 +10,14 @@
 // code" to the secondary pick. Same view serves both self-hosted lanes
 // (`GatewaySetupLane`); only the title and the optional manual-fallback differ.
 //
+// Reached two ways. Pushed from the chooser it is an ordinary step with a Back
+// arrow and a generic lane title. As the ENTRY step of an unconfigured `.custom`
+// quick connect it has neither — the back-stack is empty there, which is fine
+// because its two cards ARE the way forward and the container's ✕ is the way out —
+// and it takes a `gatewayName` so the screen confirms WHICH gateway is being
+// paired, the one thing the chooser's fork cannot know. Routing is identical from
+// both entries, so the flow converges one step in.
+//
 // Mirrors `GatewayChooserStepView`'s contract with its container: the parent paints
 // the gradient + Back/Close chrome and owns all routing; this view renders only the
 // mascot/title/cards and hands each tap back through a closure. The fork offers ONLY
@@ -29,12 +37,17 @@ import SwiftUI
 struct GatewaySetupForkView: View {
     /// Which self-hosted lane drives the copy (`fullAgent` vs `custom`).
     let lane: GatewaySetupLane
+    /// Names the gateway this fork was deep-linked to, so the screen confirms WHICH
+    /// one is being paired. nil on the guided path (no gateway chosen yet) and for a
+    /// draft with no name — both keep the lane title. Resolved by
+    /// `GuidedGatewaySetupView.forkGatewayName`, which owns the nil rules.
+    var gatewayName: String? = nil
     /// Primary branch — walk the user through creating a `conduck-connect` code.
     let onCreateCode: () -> Void
     /// Secondary branch — scan/paste a code the user already minted.
     let onHaveCode: () -> Void
 
-    /// Lane-specific screen title.
+    /// Lane-specific screen title — the fallback when no gateway is named.
     private var title: LocalizedStringKey {
         switch lane {
         case .fullAgent:
@@ -42,6 +55,25 @@ struct GatewaySetupForkView: View {
         case .custom:
             return "Connect your own server" // xcstrings: gateway-setup-fork
         }
+    }
+
+    /// The title as a `Text`, because its two forms resolve differently and only one
+    /// of them may be looked up: the lane titles are catalog keys, while the named
+    /// form is ALREADY formatted at runtime and must render verbatim — handing it to
+    /// a `LocalizedStringKey` would send the user's own gateway name to the catalog
+    /// as a lookup key and show whatever came back.
+    private var titleText: Text {
+        guard let gatewayName else { return Text(title) }
+        // A NEW key, never a reword of the lane titles: a catalog value wins over
+        // `defaultValue:`, so re-pointing an existing key's copy renders nothing
+        // (`CLAUDE-apple.md` §4.5). Interpolation follows the same
+        // `String(localized:)` + `String(format:)` shape as
+        // `GatewayReadinessView.getServerSentence`.
+        let template = String(localized: LocalizedStringResource(
+            "gatewaySetup.fork.title.named",
+            defaultValue: "Connect %@"
+        ))
+        return Text(verbatim: String(format: template, gatewayName))
     }
 
     var body: some View {
@@ -53,7 +85,7 @@ struct GatewaySetupForkView: View {
                 .onboardingMascot()
 
             // Title
-            Text(title)
+            titleText
                 .onboardingScaledFont(.title2, weight: .bold)
                 .foregroundStyle(AppColors.textEmphasis)
                 .multilineTextAlignment(.center)
@@ -118,6 +150,26 @@ struct GatewaySetupForkView: View {
 
         GatewaySetupForkView(
             lane: .custom,
+            onCreateCode: {},
+            onHaveCode: {}
+        )
+    }
+}
+
+// The quick-connect entry: deep-linked to one named gateway, so the title confirms
+// it instead of asking the generic lane question.
+#Preview("Custom — named (quick connect)") {
+    ZStack {
+        LinearGradient(
+            colors: [AppColors.gradientStart, AppColors.gradientEnd],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+
+        GatewaySetupForkView(
+            lane: .custom,
+            gatewayName: "LiteLLM",
             onCreateCode: {},
             onHaveCode: {}
         )

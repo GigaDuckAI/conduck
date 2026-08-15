@@ -5617,6 +5617,17 @@
         }
       }
     },
+    "gatewaySetup.fork.title.named" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Connect %@"
+          }
+        }
+      }
+    },
     "gatewaySetup.headsUp.body" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

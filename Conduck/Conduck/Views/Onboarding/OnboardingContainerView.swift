@@ -51,8 +51,9 @@ enum GatewayPath {
     /// than arriving as a separate view parameter so destination and eligibility
     /// commit as one value — the same reason `GuidedGatewayPresentation` carries
     /// the path itself. A `.custom` target that needs setup enters its lane at the
-    /// READINESS step; a configured one still opens straight on Commands, which is
-    /// the whole point of a *quick* re-pair. Ignored for built-in targets.
+    /// FORK, so a user already holding a setup code reaches the paste box in one
+    /// tap; a configured one opens straight on Commands, which is the whole point
+    /// of a *quick* re-pair. Ignored for built-in targets.
     case quickConnect(target: RemoteAgentRef, needsSetup: Bool)
 }
 

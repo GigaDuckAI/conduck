@@ -8,11 +8,14 @@
 //      the primer precedes the chooser ONLY for an eligible unconfigured
 //      first-timer (`showPrimer`), and a lane deep-link never shows it;
 //      plus quick connect's setup-state branch, where an unconfigured CUSTOM
-//      target enters its lane at readiness while a configured one keeps the
+//      target enters its lane at the fork while a configured one keeps the
 //      one-screen re-pair, and neither built-in target branches at all.
 //      Extracted as a pure static so it's testable without a View or a live
 //      platform.
-//   2. The phantom-default fix (`SettingsViewModel.defaultSelectorDisplayName`) —
+//   2. The fork's gateway-name resolution (`GuidedGatewaySetupView.forkGatewayName`)
+//      — which quick-connect targets name their gateway on the fork screen, and
+//      (the case worth the test) which resolve to nil rather than a blank title.
+//   3. The phantom-default fix (`SettingsViewModel.defaultSelectorDisplayName`) —
 //      "Not configured" when nothing is configured, else the default's name.
 
 import XCTest
@@ -44,14 +47,16 @@ final class GuidedSetupStartTests: XCTestCase {
     }
 
     /// Quick connect on a custom gateway that was NEVER set up enters the lane at
-    /// READINESS — not on the bare command screen, which has no prerequisite, no
-    /// trust screen and (entry step ⇒ empty back-stack) no Back arrow.
-    func testUnconfiguredCustomQuickConnectStartsAtReadiness() {
+    /// its FORK — the screen that asks whether a setup code already exists. The
+    /// command screen is the wrong door for half of who arrives (it is about
+    /// CREATING a code), and the readiness screen re-asks a question a code already
+    /// answers.
+    func testUnconfiguredCustomQuickConnectStartsAtFork() {
         let path = GatewayPath.quickConnect(target: .custom(UUID()), needsSetup: true)
-        XCTAssertEqual(GuidedGatewaySetupView.initialStep(initialPath: path, showPrimer: false), .readiness(.custom))
+        XCTAssertEqual(GuidedGatewaySetupView.initialStep(initialPath: path, showPrimer: false), .fork(.custom))
         // Never the primer: a deep-link into a specific gateway is not a first-run
         // orientation, whatever the caller resolved `showPrimer` to.
-        XCTAssertEqual(GuidedGatewaySetupView.initialStep(initialPath: path, showPrimer: true), .readiness(.custom))
+        XCTAssertEqual(GuidedGatewaySetupView.initialStep(initialPath: path, showPrimer: true), .fork(.custom))
     }
 
     /// A CONFIGURED custom gateway keeps the one-screen re-pair: straight to the
@@ -90,6 +95,73 @@ final class GuidedSetupStartTests: XCTestCase {
                 ),
                 .hostedModel,
                 "OpenRouter quick connect must never reach a command step (\(needsSetup))"
+            )
+        }
+    }
+
+    // MARK: - Fork gateway name (the deep-linked fork's title)
+
+    /// A named custom target names itself on the fork, so the screen confirms WHICH
+    /// gateway is being paired.
+    func testForkNamesTheDeepLinkedCustomGateway() {
+        let id = UUID()
+        XCTAssertEqual(
+            GuidedGatewaySetupView.forkGatewayName(
+                initialPath: .quickConnect(target: .custom(id), needsSetup: true),
+                customs: [CustomGateway(id: id, name: "LiteLLM")]
+            ),
+            "LiteLLM"
+        )
+    }
+
+    /// THE regression this resolver exists for. A custom gateway minted by "+ Add
+    /// custom gateway" and taken straight into Quick connect has a roster entry whose
+    /// `name` is EMPTY — not missing — so any resolver keying off "is the entry
+    /// there?" hands back "" and the fork renders the title "Connect ". nil instead,
+    /// which falls back to the generic lane title.
+    func testForkFallsBackForUnnamedDraft() {
+        let id = UUID()
+        for name in ["", "   "] {
+            XCTAssertNil(
+                GuidedGatewaySetupView.forkGatewayName(
+                    initialPath: .quickConnect(target: .custom(id), needsSetup: true),
+                    customs: [CustomGateway(id: id, name: name)]
+                ),
+                "an unnamed draft must not produce a blank title (name: \(name.debugDescription))"
+            )
+        }
+    }
+
+    /// A target with no roster entry at all resolves to nil, NOT to the generic
+    /// "Custom gateway" label — "Connect Custom gateway" reads worse than the lane
+    /// title it would replace.
+    func testForkFallsBackWhenRosterEntryMissing() {
+        XCTAssertNil(
+            GuidedGatewaySetupView.forkGatewayName(
+                initialPath: .quickConnect(target: .custom(UUID()), needsSetup: true),
+                customs: []
+            )
+        )
+    }
+
+    /// Every non-custom entry keeps the lane title. Built-ins never reach the fork
+    /// with a target (they enter on commands), and the chooser's fork has no gateway
+    /// chosen yet — so there is nothing to name in any of these.
+    func testForkNamesNothingForNonCustomEntries() {
+        let paths: [GatewayPath?] = [
+            nil,
+            .later,
+            .selfHosted,
+            .hostedModel,
+            .quickConnect(target: .builtin(.openclaw), needsSetup: true),
+            .quickConnect(target: .builtin(.openrouter), needsSetup: false)
+        ]
+        for path in paths {
+            XCTAssertNil(
+                GuidedGatewaySetupView.forkGatewayName(
+                    initialPath: path,
+                    customs: [CustomGateway(id: UUID(), name: "LiteLLM")]
+                )
             )
         }
     }

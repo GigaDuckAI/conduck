@@ -48,10 +48,16 @@
 // the cheap failure the easy one to fall into, and neither card is styled as the
 // consolation prize.
 //
-// The premise takes a TIP, not a link to the site's compatibility section: this is
-// the entry step on the `.quickConnect` path, so a web link here ejects a first-timer
-// to Safari before they have done anything, and on the guided path the heads-up step
-// one screen earlier already hands them the lane's site page.
+// The premise takes a TIP, not a link to the site's compatibility section — for a
+// different reason per platform, and neither wants a link. On iPhone/iPad the
+// heads-up step one screen earlier has already handed over the lane's site page, so
+// a second link is the same handoff twice. On macOS there IS no heads-up step (the
+// fork routes straight here), but there is also nothing to hand off: that page
+// exists to move someone to a computer, and a Mac user is at one. Either way a link
+// here ejects the reader to Safari mid-question, before they have answered anything.
+// (This step is never an ENTRY step: the chooser, `.selfHosted`, and an unconfigured
+// `.custom` quick connect all open on the lane fork, so it always arrives with a
+// back-stack behind it and a Back arrow of its own.)
 //
 // Like every guided sub-step, the container paints the gradient + Back/Close
 // chrome; this view renders only the mascot / title / body card (plus the custom

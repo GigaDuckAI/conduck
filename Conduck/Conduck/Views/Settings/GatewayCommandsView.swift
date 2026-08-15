@@ -11,12 +11,15 @@
 //
 // The command card leads on every platform and the neutral what-happens-next
 // panel names where the code gets entered — THIS device — without presuming the
-// user walked off to a computer: the heads-up step that sends them there is
-// guided-path-only, and quick connect can enter this lane below it. (The "easier
-// from a computer" pointer — the lane-correct site page — is that step's job when
-// it runs; this screen repeats no handoff.) The footer stays the screen's
-// single FILLED CTA on every platform — this step is visited twice, and on the
-// return visit (QR code in hand) that button is the sole completion door.
+// user walked off to a computer. It cannot presume it, because quick connect
+// enters this lane DIRECTLY on this screen (a built-in, or a custom already set
+// up: a re-pair of something known to work), skipping the heads-up step that
+// sends people to a computer. (The "easier from a computer" pointer — the
+// lane-correct site page — is that step's job when it runs; this screen repeats no
+// handoff. An UNCONFIGURED custom quick connect does get it: that one enters at
+// the lane fork and walks the full lane, heads-up included.) The footer stays the
+// screen's single FILLED CTA on every platform — this step is visited twice, and
+// on the return visit (QR code in hand) that button is the sole completion door.
 //
 // The container owns routing; this view only reports the "scan or paste" tap.
 // Mirrors `GatewayChooserStepView`'s mascot + title + `.onboardingStepLayout`
@@ -182,10 +185,11 @@ struct GatewayCommandsView: View {
         // "here" — this device is where the code gets entered, whatever route the
         // user took to the terminal. The retired `…action.return` said "Come back
         // here", which presumed the heads-up step had sent them off to a computer:
-        // true on the guided path, false via quick connect, which skips that step
-        // and so was telling a user who had never left to come back. Says the same
-        // thing to the one who DID walk away — the code is entered on this device —
-        // without asserting a trip that may not have happened.
+        // true wherever the full lane runs, false for a quick connect that enters
+        // DIRECTLY on this screen (built-in, or a configured custom), which skips
+        // that step — so it told a user who had never left to come back. Says the
+        // same thing to the one who DID walk away — the code is entered on this
+        // device — without asserting a trip that may not have happened.
         //
         // New KEY, not a reworded `…action.return`: rewording an existing catalog
         // entry's `defaultValue:` never renders (the catalog value wins).

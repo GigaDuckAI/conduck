@@ -552,9 +552,10 @@ struct RemoteAgentConfigBody: View {
 
     /// One row into the guided cover, deep-linked to THIS ref
     /// (`GatewayPath.quickConnect(target:needsSetup:)` — the host owns
-    /// presentation). A ref that is not configured yet opens the lane at its
-    /// readiness step rather than on the bare command; a configured one still goes
-    /// straight to the command, so a re-pair stays one screen. Hosted
+    /// presentation). A CUSTOM ref that is not configured yet opens the lane at its
+    /// FORK, so someone already holding a setup code pastes it in one tap and
+    /// everyone else walks the full lane; a configured one goes straight to the
+    /// command, so a re-pair stays one screen. Hosted
     /// -model built-ins (OpenRouter) have NO guided server setup — no server to
     /// run, no pairing — so the zone is omitted for that lane, and it hides when
     /// the mounting surface carries no guided host (Watch companion settings).
@@ -580,7 +581,7 @@ struct RemoteAgentConfigBody: View {
                         // Destination + presence commit as ONE value (the host's
                         // `.fullScreenCover(item:)`) — writing them as separate
                         // fields raced the cover's first build on iOS 26 and
-                        // opened the CHOOSER instead of this ref's Commands step.
+                        // opened the CHOOSER instead of this ref's own entry step.
                         // `needsSetup` rides inside that same value, so the entry
                         // step is fixed by the state the row was RENDERED from.
                         host.wrappedValue.present(initialPath: .quickConnect(
