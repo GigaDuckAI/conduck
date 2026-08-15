@@ -205,6 +205,18 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 }
                 return
             }
+            // A capture with nowhere to land never starts. The quick lane mints
+            // on the persisted default (Decision F), so when that gateway cannot
+            // send, recording would spend a paid transcription and then seal a
+            // conversation to a gateway that must refuse it — a dead thread in
+            // the sidebar per press, since a bound ref never re-routes. The
+            // popover's own empty state names the missing piece and offers the
+            // one tap that fixes it, so open THAT instead of the recorder.
+            guard !coordinator.isQuickCaptureKnownUnavailable else {
+                coordinator.noteQuickCaptureRefused()
+                showPopover()
+                return
+            }
             // Starting a fresh capture abandons any stashed mint-failure turn —
             // the user chose to speak anew; keeping it would let a LATER error's
             // Retry replay the stale words. (No-op from `.idle`, where no stash
@@ -233,6 +245,16 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func handleRegionCapturePress() {
         if dictationService.state == .recording {
             dictationService.toggleRecording()   // stop-and-send the in-flight capture turn
+            return
+        }
+        // Same destination check as ⌘⇧1, and BEFORE the region drag: asking the
+        // user to select a region, then a microphone, for a turn that cannot be
+        // delivered is worse than the plain hotkey case. Covers text mode too —
+        // its compose surface is gated on the same readiness, so a staged
+        // screenshot would land somewhere with no thumbnail and no way to discard.
+        guard !coordinator.isQuickCaptureKnownUnavailable else {
+            coordinator.noteQuickCaptureRefused()
+            showPopover()
             return
         }
         Task { @MainActor in
@@ -276,6 +298,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     private func showPopover() {
         guard let button = statusItem?.button else { return }
+        // Re-read gateway readiness on every summon. The cached flags can only go
+        // stale in one direction that matters — a refresh that ran while the
+        // Keychain was still locked reads a healthy `.bearer` gateway as gone —
+        // and the press guards would then refuse forever, since a refusal is not
+        // an event that triggers a re-read. The user opening the popover is.
+        Task { [weak self] in await self?.coordinator.refreshGatewayReadiness() }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         // Keyboard focus WITHOUT `NSApp.activate`: activating a regular-policy
         // (Dock) app raises its main+key windows, so an open main chat window
@@ -397,6 +425,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
         removeEscMonitor()
         coordinator.popoverDidCloseHook()
+        // The refusal notice belongs to the press that raised it.
+        coordinator.clearQuickCaptureRefusalNotice()
         // Popover no longer showing any thread — a reply that lands now marks
         // its thread unread (raises the dot).
         coordinator.setPopoverVisibleConversation(nil)
@@ -817,6 +847,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // could have been built a beat before a Settings change landed).
         guard coordinator.menuBarInputMode == .voice else {
             openPopoverForTyping()
+            return
+        }
+        // The third door into the quick lane, gated like the other two.
+        guard !coordinator.isQuickCaptureKnownUnavailable else {
+            coordinator.noteQuickCaptureRefused()
+            showPopover()
             return
         }
         // Same press-time destination freeze as the ⌘⇧1 hotkey — this is a

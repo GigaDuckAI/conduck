@@ -32,7 +32,16 @@
 //                              reserved) so the phases NEVER resize the popover.
 //                              The X is live only in the answering phase — it
 //                              is the only one with a task to cancel.
-//   3. !isRemoteAgentConfigured → `unconfiguredEmptyState` (gear → Settings)
+//   3. !isQuickCaptureReady    → `unconfiguredEmptyState` (gear → Settings), in
+//                              one of TWO wordings: the beginner "bring your own
+//                              AI" pitch when nothing is configured, and the
+//                              default-needs-setup wording when other gateways
+//                              DO work and only the quick lane's destination
+//                              does not (`GatewayGate` carries why that state is
+//                              legitimate). The pitch on a device with five
+//                              working gateways is simply false. Ranked BELOW
+//                              the error and reply arms — it says "no NEW capture
+//                              can start", never "there is nothing to show".
 //   4. VM `sendError` (idle)  → `sendErrorView` — the AGENT turn failed (gateway
 //                              unreachable / auth / timeout). Rendered in the
 //                              content slot so the popover never falls back to
@@ -309,7 +318,11 @@ struct DictationPopoverView: View {
             recordingStatusView
         } else if isWorking {
             workingView
-        } else if !coordinator.isRemoteAgentConfigured {
+        } else if coordinator.showsQuickCaptureUnavailableNotice {
+            // A press was just REFUSED. This outranks the reply and the error
+            // because it is the answer to what the user did a moment ago: without
+            // it the popover opens on the previous answer and the hotkey reads as
+            // a silent no-op. Raised by the press guards, dropped on close.
             unconfiguredEmptyState
         } else if service.state == .idle, let sendError = activeSendError {
             // Gated on `.idle` so a LATER STT `.error` (whose message renders in
@@ -317,6 +330,21 @@ struct DictationPopoverView: View {
             sendErrorView(message: sendError)
         } else if let reply = lastAgentReply {
             replyView(reply: reply)
+        } else if coordinator.isQuickCaptureKnownUnavailable {
+            // The PASSIVE arm — the user opened the popover with nothing else to
+            // show. Ranked BELOW the error and reply arms, not above them:
+            // readiness governs whether a NEW capture can start, and nothing else.
+            // The popover is also a reply viewer, and the reply it retains was
+            // delivered by a gateway that worked; discarding it because the next
+            // capture has no destination would throw away an answer the user asked
+            // for. A refusal that needs to outrank them raises the notice above.
+            //
+            // `isQuickCaptureKnownUnavailable`, not `!isQuickCaptureReady`: both
+            // flags start false, so before the first refresh the raw flag would
+            // render the beginner "bring your own AI" pitch on a device with five
+            // verified gateways — the exact false statement this whole change
+            // exists to remove, just transient.
+            unconfiguredEmptyState
         } else if coordinator.menuBarInputMode == .text {
             // TEXT mode start state: the compose surface (rendered below the
             // content slot) IS the affordance — no "press ⌘⇧1" hint, no tip
@@ -432,8 +460,11 @@ struct DictationPopoverView: View {
         // different thread, so typing here would send to the wrong conversation.
         // Continue the shown thread via "Read full reply in window".
         guard coordinator.popoverOverrideViewModel == nil else { return false }
+        // `isQuickCaptureReady`, not "any gateway works": this box sends into the
+        // quick lane, which mints on the default. Mounting it because SOME other
+        // gateway is configured would invite a message that cannot be delivered.
         guard coordinator.menuBarInputMode == .text,
-              coordinator.isRemoteAgentConfigured,
+              coordinator.isQuickCaptureReady,
               !isWorking else { return false }
         switch service.state {
         case .recording, .processing: return false
@@ -706,22 +737,34 @@ struct DictationPopoverView: View {
     /// Compact sibling of `UnconfiguredEmptyState` — same strings (`UnconfiguredCopy`),
     /// own shape. The popover has no room for the mascot, and it is the only surface
     /// driven by a global shortcut, so it alone appends the shortcut hint.
+    ///
+    /// TWO wordings. Nothing configured → the beginner pitch. Something configured
+    /// but not the default → the `DefaultNeedsSetup` wording, which is the only one
+    /// that is true there: the user has AI, this lane just has no destination.
+    ///
+    /// The condition is spelled out rather than resting on the caller's guard —
+    /// `hasAnyConfiguredGateway` alone means "the default is the missing piece"
+    /// only underneath `!isQuickCaptureReady`, and a second call site would not
+    /// carry that. The shortcut hint is dropped in that arm: it reads "after
+    /// setup, press ⌘⇧1", and here setup is not what is missing.
     private var unconfiguredEmptyState: some View {
-        VStack(spacing: 12) {
+        let needsDefault = coordinator.hasAnyConfiguredGateway && !coordinator.isQuickCaptureReady
+        return VStack(spacing: 12) {
             Image(systemName: "gearshape.2")
                 .font(.system(size: 40))
                 .foregroundStyle(AppColors.brandAmber.opacity(0.7))
-            Text(UnconfiguredCopy.headline)
+                .accessibilityHidden(true)   // decorative — the headline is the label
+            Text(needsDefault ? UnconfiguredCopy.DefaultNeedsSetup.headline : UnconfiguredCopy.headline)
                 .font(.headline)  // compact surface — no .title2 promotion here
                 .foregroundStyle(AppColors.textPrimary)
                 .accessibilityAddTraits(.isHeader)
-            Text(UnconfiguredCopy.body)
+            Text(needsDefault ? UnconfiguredCopy.DefaultNeedsSetup.body : UnconfiguredCopy.body)
                 .font(.callout)
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 24)
-            if let shortcut = KeyboardShortcuts.getShortcut(for: .toggleVoiceCapture) {
+            if !needsDefault, let shortcut = KeyboardShortcuts.getShortcut(for: .toggleVoiceCapture) {
                 Text(UnconfiguredCopy.menuBarShortcutHint(shortcut.description))
                     .font(.callout)
                     .foregroundStyle(AppColors.textSecondary)
@@ -742,7 +785,7 @@ struct DictationPopoverView: View {
                 NotificationCenter.default.post(name: .openConversationsWindow, object: nil)
                 NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
             } label: {
-                Text(UnconfiguredCopy.button)
+                Text(needsDefault ? UnconfiguredCopy.DefaultNeedsSetup.button : UnconfiguredCopy.button)
                     .fontWeight(.semibold)
             }
             .buttonStyle(.borderedProminent)
@@ -914,6 +957,12 @@ struct DictationPopoverView: View {
     /// (`sendError` → Retry/Dismiss), and on a settled reply (Copy + Speak).
     private var hasFooterControls: Bool {
         if service.state == .recording || isWorking { return false }
+        // The refusal notice replaces the content slot, so the reply's Copy /
+        // Speak and the error's Retry / Dismiss would be operating on something
+        // that is no longer on screen — and that Retry re-fires the same
+        // undeliverable route. The passive arm needs no such term: it renders only
+        // when there is no reply and no error to control.
+        if coordinator.showsQuickCaptureUnavailableNotice { return false }
         switch service.state {
         case .error: return true
         case .idle: return lastAgentReply != nil || activeSendError != nil
@@ -1098,7 +1147,19 @@ struct DictationPopoverView: View {
             HStack(spacing: 10) {
                 // Retry Voice — re-record; the staged screenshot stays and rides
                 // the next successful transcript.
-                Button(action: { service.toggleRecording() }) {
+                // The FOURTH door into the quick lane, and the only one not in
+                // `MenuBarController`. Gated like the other three: the default can
+                // go unready between the original capture and this retry (a peer's
+                // Forget landing, a Settings edit mid-recording), and re-recording
+                // into a lane that cannot deliver spends another paid
+                // transcription for nothing.
+                Button(action: {
+                    guard !coordinator.isQuickCaptureKnownUnavailable else {
+                        coordinator.noteQuickCaptureRefused()
+                        return
+                    }
+                    service.toggleRecording()
+                }) {
                     Text(String(localized: LocalizedStringResource(
                         "popover.capture.retryVoice",
                         defaultValue: "Retry Voice"

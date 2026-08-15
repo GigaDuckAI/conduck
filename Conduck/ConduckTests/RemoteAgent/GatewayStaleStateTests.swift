@@ -392,4 +392,207 @@ final class GatewayStaleStateTests: XCTestCase {
         }
     }
 
+    // MARK: - 6. A peer's Forget retires the DEFAULT pointer too
+
+    // The gap the local paths leave: `clearRemoteAgent` re-points the default when
+    // the user forgets a gateway HERE, and `deleteCustomGateway` does the same for
+    // a custom — but a peer's Forget arrives as bare key removals, so the pointer
+    // stayed on a built-in with nothing behind it, which `defaultRemoteAgentRef()`
+    // honours forever by design.
+
+    private let openclawAuthKey = "remoteAgent.authScheme.openclaw"
+    private let hermesAuthKey = "remoteAgent.authScheme.hermes"
+    private let openclawCertKey = "remoteAgent.certFingerprint.openclaw"
+    private let activeConversationIDKey = "remoteAgent.activeConversationID"
+
+    /// Keyless (`.none` + URL) so the gateway is send-able without a Keychain
+    /// write — the suite runs unsigned, and the point here is the pointer, not
+    /// token storage.
+    private func seedKeylessGateway(_ defaults: InMemoryDefaultsStore, urlKey: String, authKey: String) {
+        defaults.set("https://gateway.example.test", forKey: urlKey)
+        defaults.set(RemoteAgentAuthScheme.none.rawValue, forKey: authKey)
+    }
+
+    func testPeerForgetOfTheDefaultBuiltInDropsThePointer() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        seedKeylessGateway(defaults, urlKey: openclawURLKey, authKey: openclawAuthKey)
+        seedKeylessGateway(defaults, urlKey: hermesURLKey, authKey: hermesAuthKey)
+        defaults.set("openclaw", forKey: defaultBackendKey)
+        // The LEGACY synced copy, from before the default went device-local.
+        // Nothing ever removes it, and the one-time migration seeds an absent
+        // local pointer from it — so a drop that leaves that migration pending
+        // hands the dead gateway straight back and can never be re-detected.
+        kvs.set("openclaw", forKey: defaultBackendKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        // The peer's Forget: OpenClaw's sync-owned slots are gone from KVS, and
+        // their removal is what arrives here.
+        await manager.handleICloudChange(
+            KVSChange(reason: .serverChange, changedKeys: [openclawURLKey, openclawAuthKey])
+        )
+
+        XCTAssertNil(defaults.string(forKey: defaultBackendKey),
+                     "The pointer names a gateway that no longer exists — dropped, exactly as a dangling CUSTOM pointer is.")
+
+        let resolved = await manager.defaultRemoteAgentRef()
+        XCTAssertEqual(resolved, .builtin(.hermes),
+                       "…and the existing config-sync bootstrap adopts a gateway that can actually take a turn — "
+                       + "the legacy KVS copy must NOT be seeded back in ahead of it.")
+    }
+
+    /// The shape the built-ins-only version of this fix got wrong: a user whose
+    /// surviving gateways are all CUSTOM. A local Forget of a built-in promotes any
+    /// survivor, customs included (`SettingsViewModel.clearRemoteAgent`, Decision
+    /// B) — a peer's Forget of the same built-in must land in the same place, or
+    /// the outcome depends on which device the user happened to tap Forget on.
+    func testPeerForgetHealsWhenOnlyCustomGatewaysSurvive() async throws {
+        let survivor = UUID()
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        seedKeylessGateway(defaults, urlKey: openclawURLKey, authKey: openclawAuthKey)
+        defaults.set("openclaw", forKey: defaultBackendKey)
+
+        let ref = RemoteAgentRef.custom(survivor)
+        defaults.set(try JSONEncoder().encode([CustomGateway(id: survivor, name: "Work")]),
+                     forKey: gatewayRosterKey)
+        seedKeylessGateway(defaults,
+                           urlKey: Constants.remoteAgentURLKey(for: ref),
+                           authKey: Constants.remoteAgentAuthSchemeKey(for: ref))
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        await manager.handleICloudChange(
+            KVSChange(reason: .serverChange, changedKeys: [openclawURLKey, openclawAuthKey])
+        )
+
+        let resolved = await manager.defaultRemoteAgentRef()
+        XCTAssertEqual(resolved, ref,
+                       "With no built-in left to take over, the surviving custom must — otherwise every "
+                       + "headless capture on this device mints onto a gateway that cannot answer, forever.")
+    }
+
+    func testInitialSyncDoesNotRepointTheDefault() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        seedKeylessGateway(defaults, urlKey: openclawURLKey, authKey: openclawAuthKey)
+        seedKeylessGateway(defaults, urlKey: hermesURLKey, authKey: hermesAuthKey)
+        defaults.set("openclaw", forKey: defaultBackendKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        await manager.handleICloudChange(
+            KVSChange(reason: .initialSyncChange, changedKeys: [openclawURLKey, openclawAuthKey])
+        )
+
+        XCTAssertEqual(defaults.string(forKey: defaultBackendKey), "openclaw",
+                       "An initial sync can deliver state OLDER than this device's own setup — "
+                       + "indistinguishable from a deletion, and re-pointing has no undo.")
+    }
+
+    /// Regression guard for the predicate choice. A certificate pin is DEVICE-LOCAL
+    /// and never syncs away, so testing the transition with the broad
+    /// `hasStoredRemoteAgentEvidence` would leave anyone who ever pinned a cert for
+    /// that gateway permanently un-healable — the evidence can never disappear.
+    func testLingeringLocalCertDoesNotMaskThePeerForget() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        seedKeylessGateway(defaults, urlKey: openclawURLKey, authKey: openclawAuthKey)
+        defaults.set("AA:BB:CC", forKey: openclawCertKey)
+        seedKeylessGateway(defaults, urlKey: hermesURLKey, authKey: hermesAuthKey)
+        defaults.set("openclaw", forKey: defaultBackendKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        await manager.handleICloudChange(
+            KVSChange(reason: .serverChange, changedKeys: [openclawURLKey, openclawAuthKey])
+        )
+
+        XCTAssertNil(defaults.string(forKey: defaultBackendKey),
+                     "The pin is local residue, not proof the gateway still exists.")
+    }
+
+    /// Choosing a replacement AT THIS INSTANT would key on the send-ability
+    /// predicate, which fails closed on an unreadable Keychain — one locked-device
+    /// moment would consume the one-shot transition and strand the pointer for
+    /// good. Dropping the key instead defers the choice to the lazy bootstrap,
+    /// which re-runs on every read and therefore settles once secrets unlock.
+    func testHealSurvivesAKeychainThatIsUnreadableAtChangeTime() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        seedKeylessGateway(defaults, urlKey: openclawURLKey, authKey: openclawAuthKey)
+        // Hermes is `.bearer` with no readable token — a locked device reads it as
+        // unconfigured, so it is NOT an eligible replacement at this instant.
+        defaults.set("https://hermes.example.test:8642", forKey: hermesURLKey)
+        defaults.set(RemoteAgentAuthScheme.bearer.rawValue, forKey: hermesAuthKey)
+        defaults.set("openclaw", forKey: defaultBackendKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        let configured = await manager.configuredRemoteAgentRefs()
+        XCTAssertFalse(configured.contains(.builtin(.hermes)),
+                       "Precondition: the only survivor is fail-closed unconfigured right now.")
+
+        await manager.handleICloudChange(
+            KVSChange(reason: .serverChange, changedKeys: [openclawURLKey, openclawAuthKey])
+        )
+
+        XCTAssertNil(defaults.string(forKey: defaultBackendKey),
+                     "The pointer is dropped regardless — the deletion is proven, and nothing re-detects it later.")
+    }
+
+    /// The active-conversation pointer goes with the default: the thread it names
+    /// is bound to a gateway that no longer exists, and a survivor could silently
+    /// continue that thread if the built-in is later set up against a DIFFERENT
+    /// server.
+    func testPeerForgetOfTheDefaultClearsTheSessionPointer() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        seedKeylessGateway(defaults, urlKey: openclawURLKey, authKey: openclawAuthKey)
+        defaults.set("openclaw", forKey: defaultBackendKey)
+        defaults.set(UUID().uuidString, forKey: activeConversationIDKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        await manager.handleICloudChange(
+            KVSChange(reason: .serverChange, changedKeys: [openclawURLKey, openclawAuthKey])
+        )
+
+        XCTAssertNil(defaults.string(forKey: activeConversationIDKey),
+                     "A live pointer into a deleted gateway's thread must not outlive it.")
+    }
+
+    /// A pointer that is undefined the whole way through is a restore still
+    /// downloading, not a deletion. Only a present-before/absent-after TRANSITION
+    /// counts — the same rule the last-used retire already follows.
+    func testPointerWithNoDefinitionEitherSideIsLeftAlone() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        seedKeylessGateway(defaults, urlKey: hermesURLKey, authKey: hermesAuthKey)
+        defaults.set("openclaw", forKey: defaultBackendKey)   // never configured here
+        let activeID = UUID().uuidString
+        defaults.set(activeID, forKey: activeConversationIDKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        await manager.handleICloudChange(
+            KVSChange(reason: .serverChange, changedKeys: [openclawURLKey])
+        )
+
+        XCTAssertEqual(defaults.string(forKey: defaultBackendKey), "openclaw",
+                       "Nothing was deleted — this is the deliberate 'set this up' pointer.")
+        XCTAssertEqual(defaults.string(forKey: activeConversationIDKey), activeID,
+                       "…so nothing may be cleared either.")
+    }
+
+    /// Forgetting a NON-default gateway must not move the pointer.
+    func testPeerForgetOfANonDefaultBuiltInLeavesTheDefaultAlone() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        seedKeylessGateway(defaults, urlKey: openclawURLKey, authKey: openclawAuthKey)
+        seedKeylessGateway(defaults, urlKey: hermesURLKey, authKey: hermesAuthKey)
+        defaults.set("openclaw", forKey: defaultBackendKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        await manager.handleICloudChange(
+            KVSChange(reason: .serverChange, changedKeys: [hermesURLKey, hermesAuthKey])
+        )
+
+        XCTAssertEqual(defaults.string(forKey: defaultBackendKey), "openclaw",
+                       "The default still works; a sibling's deletion is not its business.")
+    }
 }

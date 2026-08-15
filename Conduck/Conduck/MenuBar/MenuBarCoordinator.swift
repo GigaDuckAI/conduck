@@ -181,10 +181,82 @@ final class MenuBarCoordinator {
     /// render as `state=.idle`; cleared by `handleTranscript`'s `defer`.
     private(set) var turnStarting = false
 
-    /// True iff a configured Personal AI gateway exists (backend + URL). The
-    /// popover shows the agent-only empty state → Settings when false. Refreshed
-    /// on launch + on `.settingsDidChangeRemotely`.
-    private(set) var isRemoteAgentConfigured: Bool = false
+    /// True when ANY gateway on this device can send — what the WINDOW gates on,
+    /// and the twin of iOS `ContentView.isRemoteAgentConfigured`. The window
+    /// mounts a gateway picker that seeds itself to a configured gateway, so it
+    /// never depends on the stored default being one of them.
+    ///
+    /// Refreshed on launch + on `.settingsDidChangeRemotely`, alongside
+    /// `isQuickCaptureReady`, from one snapshot — see `refreshConfiguredFlag`.
+    private(set) var hasAnyConfiguredGateway: Bool = false
+
+    /// True when the DEFAULT gateway can send — what the menu-bar POPOVER gates
+    /// on, because the quick lane has no picker: a hotkey capture always mints on
+    /// the persisted default (Decision F).
+    ///
+    /// Strictly stronger than `hasAnyConfiguredGateway`, and the gap between them
+    /// is a legitimate state rather than a glitch (`GatewayGate` carries the three
+    /// ways to reach it). While that gap is open the popover says which one is
+    /// missing instead of claiming no AI is set up — the beginner empty state
+    /// belongs to `!hasAnyConfiguredGateway` alone.
+    private(set) var isQuickCaptureReady: Bool = false
+
+    /// Whether the flags above describe a real read rather than their initial
+    /// values. Both start false, which is indistinguishable from "nothing is set
+    /// up" until the first refresh lands.
+    private(set) var hasLoadedGatewayState = false
+
+    /// Whether a quick capture is KNOWN to have nowhere to land — the press-time
+    /// question, and deliberately not `!isQuickCaptureReady`.
+    ///
+    /// A hotkey pressed in the window between process start and the first refresh
+    /// would otherwise be refused on a device that is perfectly well configured,
+    /// turning a launch-race into a lost thought. Unknown resolves to "let it
+    /// through": the send path validates before it delivers, so the cost of being
+    /// wrong here is a visible error, while the cost of refusing is silence.
+    var isQuickCaptureKnownUnavailable: Bool {
+        hasLoadedGatewayState && !isQuickCaptureReady
+    }
+
+    /// Raised when a capture press was REFUSED for want of a destination, and
+    /// consumed by the popover's content router ABOVE the retained reply and the
+    /// send error.
+    ///
+    /// Without it the refusal is invisible: `lastPopoverReply` survives popover
+    /// close for the whole session, so after any successful capture the refused
+    /// press would open the popover onto the PREVIOUS answer — no recording, no
+    /// error, nothing naming the problem. Press it again and again: identical.
+    /// The passive arm cannot cover this, because ranking the panel above a
+    /// retained reply would throw away an answer the user asked for every time
+    /// they merely glance at the popover.
+    ///
+    /// Cleared when the popover closes (the notice belongs to the press that
+    /// raised it) and the moment readiness returns.
+    private(set) var showsQuickCaptureUnavailableNotice = false
+
+    /// Called by the press handlers when a capture is refused.
+    func noteQuickCaptureRefused() {
+        showsQuickCaptureUnavailableNotice = true
+    }
+
+    /// Called when the popover closes — the next summon starts clean.
+    func clearQuickCaptureRefusalNotice() {
+        showsQuickCaptureUnavailableNotice = false
+    }
+
+    /// The gateway a NEW window chat should open on, resolved from the same
+    /// snapshot as the two flags above.
+    ///
+    /// Published so the window has a usable answer AT MOUNT. `MainWindowView`
+    /// owns the live selection and re-resolves it itself, but its `@State` starts
+    /// at the compiled-in built-in default and only corrects one actor hop later,
+    /// while `hasAnyConfiguredGateway` — refreshed here at launch, before any
+    /// window exists — can mount the composer immediately. On a device whose
+    /// stored default cannot send, a turn committed inside that hop would seal to
+    /// exactly the gateway this whole gate exists to keep users off, and a sealed
+    /// ref never re-routes. Narrow, but the failure is permanent, so the window
+    /// starts from an answer that is already correct.
+    private(set) var newChatSeedRef: RemoteAgentRef = .builtin(Constants.remoteAgentDefaultBackendDefault)
 
     // MARK: - Reply-arrived menu-bar cue
 
@@ -706,13 +778,22 @@ final class MenuBarCoordinator {
             }
         }
 
-        // Refresh configured-flag + resolve the launch conversation. Header
-        // memo warms FIRST so the launch-resolved thread (and every later
-        // first-open) draws its gateway pill on frame one instead of
-        // flickering the "Personal AI" placeholder.
+        // Refresh the configured flags + resolve the launch conversation.
+        //
+        // The flags go FIRST, matching iOS `ContentView.initialLoad()`: both start
+        // false, and the window renders the unconfigured empty state while they
+        // are, so warming ahead of them holds a configured user on a beginner
+        // setup screen for the length of a full store load + conversation fetch on
+        // every cold launch.
+        //
+        // The header memo still warms BEFORE `resolveActiveConversationOnLaunch()`
+        // binds the first VM, which is the property it actually needs — the
+        // launch-resolved thread draws its gateway pill on frame one rather than
+        // flickering the "Personal AI" placeholder. Keep that order; the flags may
+        // move ahead of the warm, never the warm behind the bind.
         Task { [weak self] in
-            await ConversationDetailViewModel.warmHeaderMemo()
             await self?.refreshConfiguredFlag()
+            await ConversationDetailViewModel.warmHeaderMemo()
             await self?.resolveActiveConversationOnLaunch()
         }
 
@@ -853,16 +934,49 @@ final class MenuBarCoordinator {
 
     // MARK: - Configured flag
 
+    /// Re-decide what the window and the popover may show.
+    ///
+    /// Both answers come from ONE `newChatPickerSnapshot()` turn and from
+    /// `GatewayGate`. One turn because read separately the roster and the default
+    /// can describe different moments (a Settings re-point landing between the two
+    /// awaits), and the popover would then invite a capture the window had already
+    /// ruled out. `GatewayGate` because this file is `#if os(macOS)` and never
+    /// compiles into the iOS-Simulator suite, so a predicate written inline here
+    /// is untestable — which is how the window came to gate on the wrong one.
+    ///
+    /// The strict `configuredRemoteAgentRefs()` predicate is what both answers
+    /// rest on: `remoteAgentSnapshot()` returns non-nil on a URL-ONLY gateway (no
+    /// token for `.bearer`, no model for OpenRouter), a false positive that would
+    /// let the user dictate into a half-configured gateway.
     private func refreshConfiguredFlag() async {
-        // Mirror the main app's "configured" predicate: `remoteAgentSnapshot()`
-        // returns non-nil on a URL-ONLY default (no token for `.bearer`, no model
-        // for OpenRouter) — a false positive that would skip the unconfigured
-        // empty state and let the user dictate into a half-configured gateway.
-        // `configuredRemoteAgentRefs()` applies the full validation; the menu bar
-        // dictates to the DEFAULT gateway, so gate on the default being in it.
-        let mgr = SettingsManager.shared
-        let defaultRef = await mgr.defaultRemoteAgentRef()
-        isRemoteAgentConfigured = await mgr.configuredRemoteAgentRefs().contains(defaultRef)
+        let snapshot = await SettingsManager.shared.newChatPickerSnapshot()
+        hasAnyConfiguredGateway = GatewayGate.canSendAnywhere(configured: snapshot.configuredRefs)
+        isQuickCaptureReady = GatewayGate.isQuickCaptureReady(
+            configured: snapshot.configuredRefs,
+            defaultRef: snapshot.defaultRef
+        )
+        newChatSeedRef = NewChatGatewaySeed.resolve(
+            configured: snapshot.configuredRefs,
+            lastUsed: snapshot.lastUsedRef,
+            persistedDefault: snapshot.defaultRef
+        )
+        hasLoadedGatewayState = true
+        // The notice describes a state that no longer holds.
+        if isQuickCaptureReady { showsQuickCaptureUnavailableNotice = false }
+    }
+
+    /// Re-read gateway readiness on demand.
+    ///
+    /// The flags are otherwise refreshed only at launch and on
+    /// `.settingsDidChangeRemotely`, and neither fires when the thing that
+    /// changed is the KEYCHAIN becoming readable. A refresh that ran before first
+    /// unlock reads every `.bearer` gateway as unconfigured and caches that, and
+    /// because the press guards then refuse every capture, nothing else would ever
+    /// trigger the read that corrects it. Called when the popover is summoned and
+    /// when the app is activated — both are moments the user is present and the
+    /// device is necessarily unlocked.
+    func refreshGatewayReadiness() async {
+        await refreshConfiguredFlag()
     }
 
     // MARK: - Active conversation resolution
@@ -1442,11 +1556,28 @@ final class MenuBarCoordinator {
         if let targetID {
             resolvedID = targetID
         } else {
-            let ref: RemoteAgentRef
-            if let mintRef {
-                ref = mintRef
-            } else {
-                ref = await SettingsManager.shared.defaultRemoteAgentRef()
+            let snapshot = await SettingsManager.shared.newChatPickerSnapshot()
+            let ref: RemoteAgentRef = mintRef ?? snapshot.defaultRef
+            // VALIDATE BEFORE MINTING, the rule `SharedInboxRouting.mintOnRef`
+            // already applies to every headless lane and this one did not. A
+            // conversation seals its gateway at creation and never re-routes, so
+            // minting on a ref that cannot send leaves a permanently dead thread
+            // in the sidebar — one per attempt — and the user's words then fail
+            // one layer deeper, where the stash machinery below cannot keep them.
+            //
+            // The press-time guards in `MenuBarController` stop the common case
+            // before a recording even starts; this is what covers the rest: a
+            // configuration change landing between the press and the send, a door
+            // that forgets to check, and the launch window where readiness is
+            // still unknown. Refusing here costs a visible error with the words
+            // kept; not refusing costs a thread that can never answer.
+            guard snapshot.configuredRefs.contains(ref) else {
+                if dictationService.presentHandoffError(message: destinationUnavailableMessage),
+                   !trimmed.isEmpty {
+                    pendingFailedTurn = quickStash(trimmed, modality: modality)
+                    keepSnapshot = true
+                }
+                return
             }
             guard let fresh = try? await conversationStore.createConversation(backend: ref.rawString) else {
                 // Mint failed (rare Core Data create failure) — never swallow
@@ -1664,6 +1795,16 @@ final class MenuBarCoordinator {
             "popover.error.destinationBusy",
             defaultValue: "Your personal AI is still answering. Your words are kept — press Retry when it finishes."
         ))  // xcstrings: session-continuation
+    }
+
+    /// The gateway this capture would have started on cannot send. Names the
+    /// remedy (choose a default) rather than the symptom, because on a device with
+    /// other working gateways "not configured" reads as false.
+    private var destinationUnavailableMessage: String {
+        String(localized: LocalizedStringResource(
+            "popover.error.destinationUnavailable",
+            defaultValue: "This Mac's default AI isn't set up. Your words are kept — choose a default in Settings, then press Retry."
+        ))  // xcstrings: gateway-gate
     }
 
     /// Replay a turn stranded by a hand-off failure (popover error-footer Retry).

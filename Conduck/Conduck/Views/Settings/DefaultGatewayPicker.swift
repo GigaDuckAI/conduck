@@ -38,6 +38,13 @@ struct DefaultGatewaySelectorRow: View {
     /// The default gateway's display name (e.g. "OpenClaw").
     let defaultName: String
 
+    /// Whether the named gateway cannot currently send. Rendered as a SECOND
+    /// line under the name rather than appended to it: the trailing slot on an
+    /// iPhone row has roughly 70-100pt once the leading label is laid out, which
+    /// the name alone fills. Defaults false so the Watch-override row, which
+    /// carries no such state, is unaffected.
+    var needsSetup: Bool = false
+
     var body: some View {
         HStack(spacing: 12) {
             Label {
@@ -51,9 +58,22 @@ struct DefaultGatewaySelectorRow: View {
                     .foregroundStyle(AppColors.brandAmber)
             }
             Spacer()
-            Text(defaultName)
-                .font(.body)
-                .foregroundStyle(AppColors.brandAmber)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(defaultName)
+                    .font(.body)
+                    .foregroundStyle(AppColors.brandAmber)
+                if needsSetup {
+                    // Same key + wording as `SettingsStatusMark`'s incomplete row,
+                    // so the selector and the gateway list below it say the same
+                    // thing about the same gateway.
+                    Text(LocalizedStringResource(
+                        "settings.status.incomplete",
+                        defaultValue: "Needs setup"
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+                }
+            }
             Image(systemName: "chevron.right")
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
