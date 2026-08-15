@@ -351,6 +351,14 @@ struct MainWindowView: View {
             cancelDropWork()
         }
         .onAppear { onAppear() }
+        // The coordinator's seed can land AFTER this view appears — its first
+        // refresh is an actor hop, and nothing orders it against window mount. The
+        // `onAppear` adoption alone would then copy the compiled-in default to
+        // itself and the composer could still be live holding it. Adopting on
+        // change too closes that structurally rather than by timing.
+        .onChange(of: coordinator.newChatSeedRef) { _, _ in
+            adoptCoordinatorNewChatSeed()
+        }
         .onDisappear {
             // Window closing — stop any in-flight capture so it can't outlive the
             // UI that owns it.
@@ -498,13 +506,17 @@ struct MainWindowView: View {
     }
 
     /// Centered principal-toolbar content showing the gateway identity. Always
-    /// present once a gateway is configured. INTERACTIVE picker only on a NEW
+    /// present once ANY gateway is configured. INTERACTIVE picker only on a NEW
     /// chat with ≥2 configured backends (a conversation is permanently bound to
     /// its gateway once it has a turn); a READ-ONLY label everywhere else —
     /// existing chat (its bound backend) or a single-gateway setup.
+    ///
+    /// `hasAnyConfiguredGateway`, never the quick lane's default-scoped flag: the
+    /// picker below seeds itself to a gateway that can actually send, so the
+    /// stored default not being one of them is no reason to blank the title bar.
     @ViewBuilder
     private var gatewayToolbarContent: some View {
-        if coordinator.isRemoteAgentConfigured {
+        if coordinator.hasAnyConfiguredGateway {
             if let vm = coordinator.windowViewModel {
                 // Clone is now FOLDED into the centered gateway pill: when the
                 // thread is clone-eligible (bound, has turns, gateway available,
@@ -631,6 +643,27 @@ struct MainWindowView: View {
         userPickedRefForNewChat = false
         coordinator.pendingNewConversationRef = selectedRef
         Task { await refreshConfiguredBackends() }
+    }
+
+    /// Take the coordinator's already-resolved new-chat seed, synchronously.
+    ///
+    /// `selectedRef`'s `@State` initialiser is the compiled-in built-in default,
+    /// and on a device whose stored default cannot send that is the one ref a new
+    /// chat must never seal to — a conversation binds its gateway at creation and
+    /// never re-routes. The detail column mounts on the COORDINATOR's flag, which
+    /// can be true before this view's own `refreshConfiguredBackends()` resumes,
+    /// so the composer can be live for one actor hop holding whatever `selectedRef`
+    /// happens to say. The refresh remains authoritative and overwrites this; this
+    /// only ensures the interim value is already a considered one.
+    ///
+    /// Guarded exactly like the refresh: a hand-pick and a staging lock outrank
+    /// the seed, and an existing conversation owns its own bound gateway.
+    private func adoptCoordinatorNewChatSeed() {
+        guard !newChatGatewaySelectionLocked,
+              !userPickedRefForNewChat,
+              coordinator.windowViewModel == nil else { return }
+        selectedRef = coordinator.newChatSeedRef
+        coordinator.pendingNewConversationRef = selectedRef
     }
 
     /// Re-read the configured roster and re-seed the new-chat picker selection.
@@ -776,7 +809,11 @@ struct MainWindowView: View {
     @ViewBuilder
     private var detailColumn: some View {
         Group {
-            if !coordinator.isRemoteAgentConfigured {
+            // `hasAnyConfiguredGateway` — the beginner empty state is for a device
+            // with NO usable gateway, not for one whose stored default happens not
+            // to be usable. `refreshConfiguredBackends()` seeds `selectedRef` from
+            // the configured roster, so this column can always send.
+            if !coordinator.hasAnyConfiguredGateway {
                 // No composer mounts here, so a "Type Instead" screenshot parked on
                 // the bridge has nowhere to drain — discard it rather than let it
                 // strand and surface in a future unrelated composer. For the same
@@ -1129,6 +1166,7 @@ struct MainWindowView: View {
             coordinator.pendingShowSettings = false
             showingSettings = true
         }
+        adoptCoordinatorNewChatSeed()
         // Seed the gateway-picker list + selection.
         Task { await refreshConfiguredBackends() }
         // Warm the Apple on-device model state so the pre-mic gate has a

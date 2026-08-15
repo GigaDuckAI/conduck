@@ -1994,15 +1994,48 @@ final class SettingsViewModel {
 
     /// Display name for the "Default for new chats" SELECTOR row. Unlike
     /// `defaultRemoteAgentDisplayName` (which always resolves the ever-present
-    /// builtin `defaultRemoteAgentRef`), this returns "Not configured" when NOTHING
-    /// is configured — so the selector never advertises a phantom default (e.g.
-    /// "OpenClaw") before any gateway is set up. Mirrors the empty-set guard in
-    /// `personalAISummaryShort`. Gates the STRING only; `defaultRemoteAgentRef`
-    /// itself is untouched (bootstrap tests assert on the ref).
+    /// builtin `defaultRemoteAgentRef`), this tells the truth about a default that
+    /// cannot send, in the two ways it can happen:
+    ///
+    ///   - NOTHING configured → "Not configured", so the selector never advertises
+    ///     a phantom default (e.g. "OpenClaw") before any gateway is set up.
+    ///     Mirrors the empty-set guard in `personalAISummaryShort`.
+    ///   - Something configured, but not the default → the name PLUS the state.
+    ///     That combination is legitimate and durable — `defaultRemoteAgentRef()`
+    ///     honours an unconfigured built-in on purpose, `deleteCustomGateway`
+    ///     parks the pointer on one, and a peer's Forget that arrives while this
+    ///     device is offline (the retire in `handleICloudChange` only fires on a
+    ///     live `.serverChange`) leaves one behind — and it is precisely when a
+    ///     bare name lies: the row read
+    ///     "New chats use → OpenClaw" while OpenClaw had nothing behind it and
+    ///     five other gateways were doing the work. This screen is where that gets
+    ///     fixed, so it is the one place that must not hide it.
+    ///
+    /// Gates the STRING only; `defaultRemoteAgentRef` itself is untouched
+    /// (bootstrap tests assert on the ref).
+    ///
+    /// The second case keeps the NAME and reports the state through the separate
+    /// `defaultSelectorNeedsSetup` flag rather than appending to this string: the
+    /// row renders its value in a trailing slot roughly 70-100pt wide on iPhone,
+    /// where "OpenClaw" fits and "OpenClaw — needs setup" (195pt) wraps the row
+    /// to three lines at larger Dynamic Type.
     var defaultSelectorDisplayName: String {
         configuredRemoteAgentRefSet.isEmpty
             ? String(localized: "settings.personalAI.default.notConfigured", defaultValue: "Not configured")
             : defaultRemoteAgentDisplayName
+    }
+
+    /// Whether the "Default for new chats" row names a gateway that cannot send —
+    /// the state the row must not present as ordinary. Reachable and durable:
+    /// `defaultRemoteAgentRef()` honours an unconfigured built-in on purpose,
+    /// `deleteCustomGateway` parks the pointer on one, and a peer's Forget that
+    /// this device was offline for is never retired (that retire fires only on a
+    /// live `.serverChange`). False when NOTHING is configured, because
+    /// `defaultSelectorDisplayName` already says "Not configured" there and a
+    /// first-run device is not broken.
+    var defaultSelectorNeedsSetup: Bool {
+        let configured = configuredRemoteAgentRefSet
+        return !configured.isEmpty && !configured.contains(defaultRemoteAgentRef)
     }
 
     /// Compact "Personal AI" summary for a Settings summary row — the SINGLE
@@ -2014,6 +2047,22 @@ final class SettingsViewModel {
         let configured = configuredRemoteAgentRefSet
         guard !configured.isEmpty else {
             return String(localized: "settings.root.personalAI.setupNeeded", defaultValue: "Setup needed")
+        }
+        // A default outside the configured set breaks BOTH halves of the summary
+        // below: it names a gateway that cannot send, and `count - 1` then
+        // subtracts a gateway that was never in the set, hiding a working one. The
+        // honest one-line answer for that state is the state itself — the same
+        // wording the selector and the gateway rows use, one tap away.
+        guard configured.contains(defaultRemoteAgentRef) else {
+            // Its OWN wording, not the row-level "Needs setup": on this row the
+            // subject is the whole Personal AI section, and a bare "Needs setup"
+            // there would read as "nothing works" on a device where four other
+            // gateways do. Distinct from "Setup needed" above, which is the
+            // genuinely-nothing-configured state.
+            return String(localized: LocalizedStringResource(
+                "settings.root.personalAI.defaultNeedsSetup",
+                defaultValue: "Default needs setup"
+            ))
         }
         let defaultName = defaultRemoteAgentDisplayName
         let others = configured.count - 1
@@ -2966,8 +3015,16 @@ final class SettingsViewModel {
         remoteAgentLiveValidated.remove(ref)
         remoteAgentProbeReportedNoModels.remove(ref)
         customGateways = await SettingsManager.shared.customGateways()
-        await refreshRemoteAgentReadinessSnapshots()
 
+        // BEFORE the snapshot refresh below, not after. `defaultSelectorNeedsSetup`
+        // and `personalAISummaryShort` both compare the default against the
+        // configured set, so publishing the set first leaves a window — one actor
+        // hop, and the MainActor is free to render inside it — where the very first
+        // gateway a user saves is on the list while the pointer still says
+        // `.openclaw`. That reads as "Default needs setup" on the happy path,
+        // moments after a successful save. `loadRemoteAgentState` already reads the
+        // default before the snapshots for the same reason.
+        //
         // First gateway ever configured becomes the default (parity with the
         // pairing-import bootstrap). Without it the default pointer stays unset
         // and resolves to the `.openclaw` fallback — so a Hermes-first / custom-
@@ -2982,6 +3039,7 @@ final class SettingsViewModel {
             await SettingsManager.shared.setDefaultRemoteAgentRef(ref)
             defaultRemoteAgentRef = ref
         }
+        await refreshRemoteAgentReadinessSnapshots()
         return true
     }
 
@@ -3489,8 +3547,12 @@ final class SettingsViewModel {
         // disown any probe still in flight against the wiped config.
         invalidateLiveValidation(for: ref)
         customGateways = await SettingsManager.shared.customGateways()
-        await refreshRemoteAgentReadinessSnapshots()
+        // Default first, snapshots second — same ordering rule as
+        // `validateAndSaveRemoteAgent` above: the two are compared against each
+        // other, so publishing the set while the pointer is still the gateway the
+        // user just forgot flashes "Needs setup" against its name.
         defaultRemoteAgentRef = await SettingsManager.shared.defaultRemoteAgentRef()
+        await refreshRemoteAgentReadinessSnapshots()
     }
 
     // MARK: - File Transfer (Agent File Transfer / file-server) — lifecycle

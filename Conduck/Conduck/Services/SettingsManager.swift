@@ -4290,6 +4290,49 @@ actor SettingsManager {
         return classifyRemoteAgent(ref, rosterMember: rosterMember).readiness != .untouched
     }
 
+    /// Whether the SYNC-OWNED half of a gateway's definition is present — the
+    /// only part a peer device's Forget can take away from here.
+    ///
+    /// Narrower than `hasStoredRemoteAgentEvidence` on purpose, and the two are
+    /// not interchangeable. Evidence deliberately counts a locally pinned
+    /// certificate, which NEVER syncs: use it to detect a peer's deletion and a
+    /// user who once pinned a cert for that gateway is stuck with evidence that
+    /// can never go away, so the deletion is never detected and the pointer sits
+    /// dangling forever. The URL / auth-scheme / model slots are exactly the ones
+    /// the inbound mirror in `handleICloudChange` clears, so a
+    /// present-before/absent-after test over them means "the peer removed it"
+    /// and nothing else.
+    ///
+    /// Not the send-ability predicate either: that one fails CLOSED on an
+    /// unreadable Keychain, which before first unlock reads every gateway as gone
+    /// and would turn a locked device into a mass deletion signal.
+    private func hasSyncedRemoteAgentDefinition(_ ref: RemoteAgentRef) -> Bool {
+        rawStoredString(Constants.remoteAgentURLKey(for: ref)) != nil
+            || rawStoredString(Constants.remoteAgentAuthSchemeKey(for: ref)) != nil
+            || (getRemoteAgentModel(for: ref)?.isEmpty == false)
+    }
+
+    /// The stored DEFAULT pointer when it names a BUILT-IN that is defined here —
+    /// the shape the peer-Forget check in `handleICloudChange` has to capture
+    /// BEFORE the mirrors run.
+    ///
+    /// Reads the raw stored string rather than calling `defaultRemoteAgentRef()`:
+    /// that getter WRITES (its config-sync bootstrap persists an adopted pointer)
+    /// and runs the device-local migration, and neither belongs in a detection
+    /// step that fires on every unrelated language or voice push. Built-ins only —
+    /// a dangling CUSTOM pointer is already dropped by `defaultRemoteAgentRef()`
+    /// itself; the built-in exemption there is precisely what leaves this case
+    /// unhandled.
+    private func storedDefaultBuiltInIfDefined() -> RemoteAgentRef? {
+        guard let raw = defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey),
+              let ref = RemoteAgentRef(rawString: raw),
+              ref.isBuiltin,
+              hasSyncedRemoteAgentDefinition(ref) else {
+            return nil
+        }
+        return ref
+    }
+
     /// Built-in-only view of configured refs (forwards). Kept for callers not
     /// yet ported to refs; delete once every consumer uses `configuredRemoteAgentRefs()`.
     func configuredRemoteAgentBackends() -> [RemoteAgentBackend] {
@@ -5671,8 +5714,13 @@ actor SettingsManager {
         // language or voice push would both waste the work and pull those migrations
         // ahead of the seeding step below, whose ordering is pinned by its own doc.
         var lastUsedBuiltInHadEvidence: RemoteAgentRef?
+        var defaultBuiltInWasDefined: RemoteAgentRef?
         if case .serverChange = change.reason {
             lastUsedBuiltInHadEvidence = storedLastUsedRefIfEvidenced().flatMap { $0.isBuiltin ? $0 : nil }
+            // Same capture, for the DEFAULT pointer — see the consumption site
+            // near the end of this method for why the default needs its own and
+            // why it uses the narrower definition test.
+            defaultBuiltInWasDefined = storedDefaultBuiltInIfDefined()
         }
 
         // The `testedLocally` seed must land BEFORE the fileServer mirror below
@@ -6033,6 +6081,67 @@ actor SettingsManager {
            let ref = lastUsedBuiltInHadEvidence,
            !hasStoredRemoteAgentEvidence(ref) {
             clearLastUsedRemoteAgentRef()
+        }
+
+        // The DEFAULT pointer's version of the same event, and the one gap the
+        // local Forget paths do not cover: `clearRemoteAgent` re-points the
+        // default when the user forgets a gateway HERE, and `deleteCustomGateway`
+        // does the same for a custom — but a peer's Forget arrives as bare key
+        // removals, so the pointer was left naming a built-in with nothing behind
+        // it. `defaultRemoteAgentRef()` then honours it forever (built-ins are
+        // exempt from its self-heal by design), and every headless capture minted
+        // onto a gateway that could not take the turn.
+        //
+        // The remedy is to DROP the pointer, which is exactly what this method's
+        // own resolver already does to a dangling CUSTOM pointer
+        // (`defaultRemoteAgentRef()`, the `removeObject` beside the built-in
+        // exemption) — the exemption is the only reason a built-in never got the
+        // same treatment. With the key gone, the config-sync bootstrap there
+        // adopts the first gateway that can actually send, on the next read.
+        //
+        // Dropping rather than re-pointing HERE is what makes this safe to run
+        // unattended:
+        //
+        //   - It never has to choose a replacement, so it never consults the
+        //     send-ability predicate, which fails CLOSED on an unreadable
+        //     Keychain. Picking a replacement at this instant would let one
+        //     locked-device moment consume the transition and leave the pointer
+        //     dangling permanently, since nothing re-detects it afterwards.
+        //   - The bootstrap is lazy and idempotent: while secrets are unreadable
+        //     it adopts nothing and persists nothing, so the very next read after
+        //     unlock settles it. Self-healing instead of one-shot.
+        //   - It inherits the bootstrap's answer rather than inventing a second
+        //     one, so a peer's Forget lands on the same gateway a LOCAL Forget of
+        //     the same built-in would have picked (`SettingsViewModel
+        //     .clearRemoteAgent` promotes any surviving configured gateway,
+        //     customs included — Decision B). Same action, same outcome, whichever
+        //     device it happened on.
+        //
+        // This does NOT fight `deleteCustomGateway`'s park-on-a-built-in rule: the
+        // park leaves a pointer with no definition to lose, so it can never
+        // produce the present-before/absent-after transition below. Only a real
+        // deletion can.
+        //
+        // The active-conversation pointer goes with it: the thread it names is
+        // bound to a gateway that no longer exists, and if that built-in is later
+        // set up against a DIFFERENT server, a surviving pointer could silently
+        // continue the old thread there.
+        if case .serverChange = change.reason,
+           let ref = defaultBuiltInWasDefined,
+           !hasSyncedRemoteAgentDefinition(ref) {
+            // Settle the legacy device-local migration FIRST, while the pointer it
+            // reads is still here. That migration seeds an absent local pointer
+            // from the legacy SYNCED copy in KVS — which nothing ever removes — so
+            // dropping the key while it is still pending would hand the dead
+            // built-in straight back on the next read, and the transition that
+            // detected the deletion can never recur. Worse than a no-op: the
+            // session below would have been cleared for nothing. Running it now
+            // takes its local-wins arm and marks it done. Placed here rather than
+            // in the capture above so it stays behind the file-server seeding
+            // step, whose ordering is pinned by its own doc.
+            ensureDefaultBackendDeviceLocalMigrated()
+            defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+            clearActiveConversation()
         }
 
         if didChange {

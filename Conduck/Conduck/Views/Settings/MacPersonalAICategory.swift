@@ -9,8 +9,10 @@
 // place to pick which gateway new conversations start on) + a gateway LIST whose
 // rows are configure-only (tap → a roomy per-gateway config detail via a
 // `NavigationStack` inside the full-window Settings mode swap). Status is
-// discrete — a quiet green check (+ a "Default" caption) via
-// `SettingsStatusMark`, no colored pills, no in-row set-default.
+// discrete — a quiet green check, or the words "Needs setup", via
+// `SettingsStatusMark`; no colored pills, no in-row set-default. The "Default"
+// caption rides any of those states (so a default that cannot send stays
+// identifiable), suppressed only while nothing at all is configured.
 //
 // Content sits on the shared settings rail (720pt max width, centered, 28pt
 // horizontal padding) as a stack of hand-drawn `SettingsCard` sections rather
@@ -134,9 +136,17 @@ struct MacPersonalAICategory: View {
             Button {
                 route = .defaultChooser
             } label: {
-                DefaultGatewaySelectorRow(defaultName: viewModel.defaultSelectorDisplayName)
+                DefaultGatewaySelectorRow(
+                    defaultName: viewModel.defaultSelectorDisplayName,
+                    needsSetup: viewModel.defaultSelectorNeedsSetup
+                )
             }
-            .settingsCardRowButton()
+            // 64 when the value is two lines, matching the allowance
+            // `PersonalAIConnectSection` documents for a 31pt two-line block
+            // (31 + 16 + 16). The 48pt default would leave it ~8.5pt of air.
+            .settingsCardRowButton(
+                minHeight: viewModel.defaultSelectorNeedsSetup ? 64 : SettingsCardMetrics.rowMinHeight
+            )
         } header: {
             // Header, not row — see the iOS twin in `PersonalAISettingsView`. On
             // macOS the tip also carries `.help(…)`, so hovering surfaces the same
@@ -233,8 +243,20 @@ struct MacPersonalAICategory: View {
                 Spacer()
                 SettingsStatusMark(
                     configured: configured,
-                    incomplete: row.incomplete,
-                    caption: row.isDefault
+                    // A default that cannot send counts as incomplete HERE even
+                    // when it holds no stored evidence at all — the state
+                    // `deleteCustomGateway`'s park and a clean peer Forget both
+                    // produce. Without this the selector above says "Needs setup"
+                    // and the very row it sends the user to says nothing.
+                    incomplete: row.incomplete
+                        || (row.isDefault && !configured && viewModel.hasAnyConfiguredRemoteAgent),
+                    // The "Default" caption renders on unconfigured rows too —
+                    // a default that cannot send is exactly the row a user has to
+                    // find. Suppressed only when NOTHING is configured: the
+                    // pointer is then the never-chosen built-in fallback, and
+                    // labelling it would advertise the same phantom default the
+                    // selector's empty-set guard exists to kill.
+                    caption: row.isDefault && viewModel.hasAnyConfiguredRemoteAgent
                         ? LocalizedStringResource("settings.remoteAgent.list.pill.default", defaultValue: "Default")
                         : nil
                 )

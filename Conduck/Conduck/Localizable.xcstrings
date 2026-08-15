@@ -1,6 +1,61 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "popover.error.destinationUnavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Mac's default AI isn't set up. Your words are kept — choose a default in Settings, then press Retry."
+          }
+        }
+      }
+    },
+    "settings.root.personalAI.defaultNeedsSetup" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default needs setup"
+          }
+        }
+      }
+    },
+    "unconfigured.defaultNeedsSetup.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From the menu bar, Conduck sends to this Mac's default AI — and that one isn't set up. Your other AIs still work; pick one of them as the default."
+          }
+        }
+      }
+    },
+    "unconfigured.defaultNeedsSetup.button" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Default AI"
+          }
+        }
+      }
+    },
+    "unconfigured.defaultNeedsSetup.headline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your default AI isn't set up"
+          }
+        }
+      }
+    },
     "" : {
 
     },

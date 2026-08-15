@@ -68,6 +68,56 @@ enum UnconfiguredCopy {
             defaultValue: "After setup, press \(shortcut) to talk."
         )
     }
+
+    /// The OTHER unconfigured state, and the reason this type has two: gateways
+    /// work here, but the one the menu-bar quick lane sends to does not. Only the
+    /// popover can reach it — every other surface offers a gateway picker and so
+    /// asks `GatewayGate.canSendAnywhere` instead.
+    ///
+    /// Kept beside the beginner copy rather than hidden in the popover, because
+    /// the two are read as alternatives and the failure mode is showing the wrong
+    /// one: the pitch above tells a user with five verified gateways that they
+    /// have no AI, which is both false and unactionable — nothing on that screen
+    /// mentions the default.
+    enum DefaultNeedsSetup {
+        /// Names the SITUATION and leaves the act to the button — the shape the
+        /// beginner arm above already uses ("Bring your own AI" → "Connect Your
+        /// AI"). It states no fault, because there is none: the default goes stale
+        /// when a gateway is forgotten on another device.
+        static let headline = LocalizedStringResource(
+            "unconfigured.defaultNeedsSetup.headline",
+            defaultValue: "Your default AI isn't set up"
+        )
+
+        /// Answers the question the user is actually asking — "but I set these
+        /// up?" — before asking them to do anything. Scoped to the menu bar
+        /// because that is the only surface affected; the window keeps working,
+        /// and claiming otherwise sends them hunting a bug that isn't there.
+        ///
+        /// "From the menu bar", never "quick captures": the lane's internal name
+        /// (Decision F's "quick lane") appears nowhere in the shipped product, and
+        /// this is the one sentence whose whole job is to explain why THIS window
+        /// can't send when the app plainly works. It also stays true for all four
+        /// doors — ⌘⇧1, ⌘⇧2, the context-menu start, and the compose box — which
+        /// "captures" does not cover.
+        ///
+        /// "AI" throughout, never "gateway": the prohibition at the top of this
+        /// file applies here too, and one object should not pick up three names
+        /// inside one paragraph. "This Mac's" is literal, not hedging — the
+        /// default pointer is device-local and does not sync.
+        static let body = LocalizedStringResource(
+            "unconfigured.defaultNeedsSetup.body",
+            defaultValue: "From the menu bar, Conduck sends to this Mac's default AI — and that one isn't set up. Your other AIs still work; pick one of them as the default."
+        )
+
+        /// Names the OUTCOME, like every other button on these surfaces
+        /// ("Connect Your AI"), rather than the door it opens. The destination is
+        /// the same Personal AI screen; the act there is choosing, not connecting.
+        static let button = LocalizedStringResource(
+            "unconfigured.defaultNeedsSetup.button",
+            defaultValue: "Choose Default AI"
+        )
+    }
 }
 
 /// Hero unconfigured empty state — iPhone, iPad, and the Mac window.

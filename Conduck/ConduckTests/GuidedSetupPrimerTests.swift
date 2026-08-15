@@ -184,12 +184,62 @@ final class DefaultSelectorDisplayNameTests: XCTestCase {
 
     /// With at least one configured gateway the selector shows the default ref's
     /// real display name (i.e. it defers to `defaultRemoteAgentDisplayName`).
+    ///
+    /// The seeded ref is load-bearing: `.openclaw` is also the VM's initial
+    /// `defaultRemoteAgentRef`, so this case is "the default IS configured". The
+    /// case where it is not is the test below.
     func testShowsDefaultNameWhenConfigured() {
         let vm = SettingsViewModel()
         vm.configuredRemoteAgentRefSet = [.builtin(.openclaw)]
 
         XCTAssertEqual(vm.defaultSelectorDisplayName, vm.defaultRemoteAgentDisplayName)
+        XCTAssertFalse(vm.defaultSelectorNeedsSetup, "The default is in the configured set here.")
         let notConfigured = String(localized: "settings.personalAI.default.notConfigured", defaultValue: "Not configured")
         XCTAssertNotEqual(vm.defaultSelectorDisplayName, notConfigured)
+    }
+
+    /// The state the founder hit: gateways work, the DEFAULT is not one of them.
+    /// The row keeps naming it — the user has to know WHICH one to fix — and
+    /// reports the state on its own line instead of appending to the name, which
+    /// would wrap the iPhone row.
+    func testFlagsNeedsSetupWhenTheDefaultIsNotConfigured() {
+        let vm = SettingsViewModel()
+        vm.configuredRemoteAgentRefSet = [.builtin(.hermes)]   // default is still .openclaw
+
+        XCTAssertTrue(vm.defaultSelectorNeedsSetup,
+                      "A default that cannot send must not read as an ordinary selection.")
+        XCTAssertEqual(vm.defaultSelectorDisplayName, vm.defaultRemoteAgentDisplayName,
+                       "The name still identifies which gateway needs the attention.")
+    }
+
+    /// A first-run device is not broken — "Not configured" already says everything
+    /// true about it, and flagging setup on the never-chosen fallback pointer would
+    /// advertise the phantom default the empty-set guard exists to kill.
+    func testNothingConfiguredIsNotFlaggedAsNeedingSetup() {
+        let vm = SettingsViewModel()
+        vm.configuredRemoteAgentRefSet = []
+
+        XCTAssertFalse(vm.defaultSelectorNeedsSetup)
+    }
+
+    /// The Settings ROOT summary reads before this screen is ever opened, and it
+    /// assumed the default was inside the configured set — so it named a gateway
+    /// that could not send AND subtracted it from the count, hiding a working one
+    /// ("OpenClaw +4" on a five-gateway device, or a bare "OpenClaw" on a
+    /// one-gateway device).
+    func testRootSummaryReportsNeedsSetupRatherThanNamingADeadDefault() {
+        let vm = SettingsViewModel()
+        vm.configuredRemoteAgentRefSet = [.builtin(.hermes)]   // default is still .openclaw
+
+        let defaultNeedsSetup = String(localized: LocalizedStringResource(
+            "settings.root.personalAI.defaultNeedsSetup",
+            defaultValue: "Default needs setup"
+        ))
+        XCTAssertEqual(vm.personalAISummaryShort, defaultNeedsSetup)
+        let nothingConfigured = String(localized: "settings.root.personalAI.setupNeeded", defaultValue: "Setup needed")
+        XCTAssertNotEqual(vm.personalAISummaryShort, nothingConfigured,
+                          "Distinct from the nothing-configured state — four gateways still work here.")
+        XCTAssertNotEqual(vm.personalAISummaryShort, vm.defaultRemoteAgentDisplayName,
+                          "Naming the dead default here is the lie this guard removes.")
     }
 }

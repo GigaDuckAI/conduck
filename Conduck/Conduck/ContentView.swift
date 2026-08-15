@@ -906,7 +906,11 @@ struct ContentView: View {
         // URL-gated and could read "ready" with no key, showing the composer when
         // a send would fail closed. Align with the strict predicate used
         // everywhere else (`configuredRemoteAgentRefs()`).
-        isRemoteAgentConfigured = !refs.isEmpty
+        //
+        // Through `GatewayGate` rather than inline, so this and the macOS window
+        // are provably the same question — they drifted once, and the macOS half
+        // is in a file the suite never compiles.
+        isRemoteAgentConfigured = GatewayGate.canSendAnywhere(configured: refs)
 
         // Cross-device "set up later, then it synced" path: a gateway just
         // appeared where there was none. Gate on the FIRST load (an
