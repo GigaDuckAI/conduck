@@ -12,6 +12,15 @@
 // `message: nil`. That keeps one source of truth AND is privacy-safe: with no
 // message, the opaque provider-message cases collapse to generic copy, so a
 // live provider error string can never reach the screen or the clipboard.
+//
+// Delegating the copy means delegating the CAPABILITY DISPATCH with it. A code
+// carries no lane, so an `explain` that took only an `Int` could resolve nothing
+// but the neutral (self-hosted) wording — and a Diagnostics gateway row is the
+// worst place for that, because its output is what users paste into support
+// tickets and GitHub issues. The `context` parameter is how a caller holding the
+// failing gateway's ref says which AI the row is about. It DEFAULTS to
+// `.neutral`, so the STT, TTS and file-lane rows — where a gateway ref would be
+// meaningless — keep their present behaviour without threading anything.
 
 import Foundation
 
@@ -25,7 +34,16 @@ enum DiagnosticsExplainer {
 
     /// Plain-English cause + fix for an `AppError` numeric code. Safe to show on
     /// screen and to place (as `slug`) in the copyable report.
-    static func explain(code: Int) -> (cause: String, fix: String) {
+    ///
+    /// `context` is the CAPABILITY snapshot of the AI the row is about. Pass one
+    /// wherever a gateway ref genuinely exists (`RemoteAgentFailureContext.resolve(ref)`);
+    /// leave it defaulted on the STT / TTS / file-lane rows, where a gateway ref
+    /// would name the wrong machine. The default reproduces the wording every row
+    /// rendered before capability dispatch existed.
+    static func explain(
+        code: Int,
+        context: RemoteAgentFailureContext = .neutral
+    ) -> (cause: String, fix: String) {
         let error = AppError.from(errorCode: code, message: nil)
         let genericCause = String(
             localized: "diagnostics.cause.generic",
@@ -39,10 +57,13 @@ enum DiagnosticsExplainer {
         if opaqueCodes.contains(code) {
             cause = genericCause
         } else {
-            let described = error.errorDescription ?? ""
+            // BOTH halves read the same context — resolving one of them from the
+            // parameterless property is how a row ends up naming a gateway in its
+            // cause and a provider in its fix.
+            let described = error.errorDescription(in: context) ?? ""
             cause = described.isEmpty ? genericCause : described
         }
-        let suggested = error.recoverySuggestion ?? ""
+        let suggested = error.recoverySuggestion(in: context) ?? ""
         let fix = suggested.isEmpty ? genericFix : suggested
         return (cause, fix)
     }

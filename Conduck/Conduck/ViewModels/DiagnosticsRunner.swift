@@ -571,7 +571,11 @@ final class DiagnosticsRunner {
     /// `buildGatewayRows` for why appending a common noun here is a claim the
     /// runner cannot make.
     private static func makeFocusedExplanation(ref: RemoteAgentRef?, code: Int) -> (title: String, cause: String, fix: String) {
-        let explained = DiagnosticsExplainer.explain(code: code)
+        // The focused card names ONE gateway in its title, so its cause and fix
+        // must answer for that same gateway. A nil ref (the generic "Last
+        // request" card) resolves to the neutral context — the wording this card
+        // rendered before capability dispatch existed.
+        let explained = DiagnosticsExplainer.explain(code: code, context: .resolve(ref))
         let title: String
         if let ref {
             switch ref {
@@ -1856,6 +1860,7 @@ final class DiagnosticsRunner {
         let hostClass = HostReachabilityClass.classify(snapshot.url.host, transportHint: transportHint)
         let input = GatewayProbeInput(
             checkID: Self.connectionCheckID(for: ref),
+            ref: ref,
             backend: carrierBackend,
             url: snapshot.url,
             token: snapshot.token ?? "",
@@ -2885,6 +2890,12 @@ final class DiagnosticsRunner {
 
     private struct GatewayProbeInput: Sendable {
         let checkID: String
+        /// The REAL ref this row is about — the only field a failure's copy may
+        /// be resolved from. `backend` below is a CARRIER (`.openclaw` stands in
+        /// for every custom), so resolving a capability snapshot from it would
+        /// hand every custom gateway OpenClaw's `model == .unsupported` and
+        /// suppress the model remedy the user actually has.
+        let ref: RemoteAgentRef
         let backend: RemoteAgentBackend
         let url: URL
         let token: String
@@ -2900,6 +2911,10 @@ final class DiagnosticsRunner {
         /// Locality BOOL (never the host) — gates the Local-Network hint on a
         /// failed probe of a private/`.local`/tailnet host while online.
         let isLocalHost: Bool
+
+        /// The capability snapshot this row's failure copy dispatches on —
+        /// resolved from `ref`, NEVER from `backend` (see the note there).
+        var failureContext: RemoteAgentFailureContext { .resolve(ref) }
     }
 
     /// Input for the per-gateway NON-mutating file-server reach+auth probe.
@@ -3045,15 +3060,20 @@ final class DiagnosticsRunner {
                 return ProbeOutcome(
                     checkID: input.checkID,
                     status: .failed(code: code),
-                    detail: DiagnosticsExplainer.explain(code: code).fix
+                    detail: DiagnosticsExplainer.explain(code: code, context: input.failureContext).fix
                 )
             }
         } catch {
+            // The row is ABOUT a specific gateway, and this method holds its ref,
+            // so the remedy answers for that lane. Dropping it here is what put
+            // "check the gateway logs" and "check the Gateway URL is your
+            // server's base address" on a hosted-lane row — in the one output
+            // users paste into support tickets and GitHub issues.
             let code = (error as? AppError)?.errorCode ?? AppError.unknown(error).errorCode
             return ProbeOutcome(
                 checkID: input.checkID,
                 status: .failed(code: code),
-                detail: DiagnosticsExplainer.explain(code: code).fix
+                detail: DiagnosticsExplainer.explain(code: code, context: input.failureContext).fix
             )
         }
     }

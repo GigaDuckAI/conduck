@@ -518,6 +518,28 @@
         }
       }
     },
+    "carplay.error.modelRequired.speak.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your server needs a default model."
+          }
+        }
+      }
+    },
+    "carplay.error.modelUnavailable.speak.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The model your server chose isn't available."
+          }
+        }
+      }
+    },
     "carplay.error.imageTooLarge.speak" : {
       "extractionState" : "manual",
       "localizations" : {

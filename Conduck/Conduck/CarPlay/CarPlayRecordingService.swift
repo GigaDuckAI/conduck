@@ -224,6 +224,16 @@ final class CarPlayRecordingService {
     /// ignores it. In-memory only; cleared on every `endSession` / `teardown`.
     @ObservationIgnored private(set) var sessionDefaultRef: RemoteAgentRef?
 
+    /// The ref this session's turns ACTUALLY dispatch over — the conversation's
+    /// bound gateway, which is `sessionDefaultRef` only on a fresh mint and is
+    /// whatever `Conversation.backend` says when the picker resumed an existing
+    /// thread. Recorded by `startConverseHop` the moment routing resolves, and
+    /// read ONLY by `speakErrorAndEnd`, whose model arms must dispatch on the
+    /// capabilities of the AI that failed rather than on the drive's default.
+    /// Nil until the first turn routes → `.neutral` copy, which is the wording
+    /// those arms already spoke. In-memory; cleared on `endSession` / `teardown`.
+    @ObservationIgnored private var sessionBoundRef: RemoteAgentRef?
+
     /// Live "is the voice modal still presented?" query, injected by the scene
     /// delegate (reads `interfaceController.presentedTemplate`). The re-arm loop
     /// consults it before re-listening so it self-heals if the voice modal was
@@ -333,6 +343,7 @@ final class CarPlayRecordingService {
         // was live; this covers a disconnect with no live session (idempotent).
         sessionConversationID = nil
         sessionDefaultRef = nil
+        sessionBoundRef = nil
     }
 
     // MARK: - Permission
@@ -968,6 +979,10 @@ final class CarPlayRecordingService {
             await startConverseHop(transcript: transcript)
 
         } catch let error as AppError {
+            // NO ref on purpose, both arms: only the STT hop throws into here
+            // (`startConverseHop` above owns its own catch and never rethrows),
+            // so the machine that failed is the speech provider and no gateway
+            // capability is in play. `nil` → `.neutral`, today's wording.
             endBackgroundTask()
             speakErrorAndEnd(error)
         } catch {
@@ -1003,6 +1018,9 @@ final class CarPlayRecordingService {
                 conversationID = existing
                 let rawBackend = try? await ConversationStore.shared.fetchConversation(id: existing)?.backend
                 boundRef = RemoteAgentRef(rawString: rawBackend ?? "")
+                // Record it BEFORE anything below can throw, so this turn's
+                // spoken failure answers for the AI it actually routed to.
+                sessionBoundRef = boundRef
                 guard let resolved = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "") else {
                     // Unknown raw OR unconfigured bound backend (Decision B — no
                     // silent reroute). Speak the not-configured error + end.
@@ -1037,6 +1055,8 @@ final class CarPlayRecordingService {
                     defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
                 }
                 boundRef = defaultRef
+                // Same reason as the resumed-thread fork above.
+                sessionBoundRef = defaultRef
                 guard let resolved = await SettingsManager.shared.remoteAgentSnapshot(for: defaultRef) else {
                     // xcstrings
                     endSession(
@@ -1154,7 +1174,10 @@ final class CarPlayRecordingService {
             )
         } catch {
             let mapped = (error as? AppError) ?? .remoteAgentUnreachable
-            speakErrorAndEnd(mapped)
+            // The routing forks above set `sessionBoundRef` before anything in
+            // this `do` can throw, so the spoken line dispatches on the failing
+            // AI's capabilities rather than on the drive's default ref.
+            speakErrorAndEnd(mapped, ref: sessionBoundRef)
         }
     }
 
@@ -1205,7 +1228,9 @@ final class CarPlayRecordingService {
             return
         }
 
-        speakErrorAndEnd(error)
+        // The converse hop failed, so the ref this turn dispatched over is the
+        // one the phrase must answer for — see `sessionBoundRef`.
+        speakErrorAndEnd(error, ref: sessionBoundRef)
     }
 
     /// Speak the sanitized agent reply, then (on finish) wait for the HFP route
@@ -1291,7 +1316,16 @@ final class CarPlayRecordingService {
     /// runs no gateway, and the adjective in "your personal AI" claims a
     /// privacy posture a third-party routing service cannot honour. These lines
     /// name the CLASS — "your AI" — which is true on all four lanes.
-    private func speakErrorAndEnd(_ error: AppError) {
+    ///
+    /// `ref` is the AI this turn actually dispatched over, and the arms that need
+    /// it dispatch on CAPABILITY through `RemoteAgentFailureContext` — never on
+    /// hosted-vs-self-hosted, which gets the model arms exactly backwards
+    /// (OpenClaw and Hermes are self-hosted AND hide the model field). It is
+    /// OPTIONAL because two call sites genuinely have no gateway in hand — the
+    /// STT hop's catch, where the failing machine is the speech provider — and
+    /// `nil` resolves to `.neutral`, i.e. the wording this switch already spoke.
+    private func speakErrorAndEnd(_ error: AppError, ref: RemoteAgentRef? = nil) {
+        let context = RemoteAgentFailureContext.resolve(ref)
         let phrase: String
         switch error {
         case .noSpeechDetected:
@@ -1408,12 +1442,37 @@ final class CarPlayRecordingService {
             // xcstrings: carplay-terminal
             phrase = String(localized: "Your AI provider is rate-limiting you. Free models often have a daily limit.")
         case .remoteAgentModelUnavailable:
+            // Branches on the MODEL POLICY, never on the lane. Where Conduck
+            // hides the model field (OpenClaw / Hermes — self-hosted AND
+            // `model == .unsupported`), "pick another in Conduck" sends a driver
+            // after a control that is on no screen, spoken aloud with nothing to
+            // glance back at. There is no lever at the wheel on that lane, so
+            // the line states what is true and stops rather than inventing one.
+            // "Your server" is accurate for everyone who can reach this branch:
+            // customs are `.optional` and take the arm below.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "That AI model isn't available. Pick another in Conduck on your iPhone.")
+            if context.userCanChooseModel {
+                phrase = String(localized: "That AI model isn't available. Pick another in Conduck on your iPhone.")
+            } else {
+                phrase = String(localized: "carplay.error.modelUnavailable.speak.serverChosen", defaultValue: "The model your server chose isn't available.")
+            }
         case .remoteAgentModelRequired:
+            // Same inversion, same dispatch. Reached from
+            // `RemoteAgentClient.classifyBodyError`'s body heuristics on
+            // 400/404/413/422, which are NOT gated by lane — a self-hosted
+            // gateway whose upstream demands a model raises it — so the
+            // model-hidden lane really does hear this one.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "carplay.error.modelRequired.speak", defaultValue: "Your AI needs a model name. Set one in Conduck on your iPhone.")
+            if context.userCanChooseModel {
+                phrase = String(localized: "carplay.error.modelRequired.speak", defaultValue: "Your AI needs a model name. Set one in Conduck on your iPhone.")
+            } else {
+                phrase = String(localized: "carplay.error.modelRequired.speak.serverChosen", defaultValue: "Your server needs a default model.")
+            }
         case .remoteAgentContextTooLong:
+            // Deliberately UNBRANCHED, unlike 55 and 60 above: "the model" here
+            // is the cause, not a control, and the remedy it names — start a new
+            // voice chat — is one tap away on every lane (ending the session
+            // lands on the picker whose first row is "New voice chat").
             // xcstrings: carplay-terminal
             phrase = String(localized: "This chat got too long for the model. Start a new voice chat.")
         case .remoteAgentImageTooLarge:
@@ -1529,8 +1588,11 @@ final class CarPlayRecordingService {
         isMicMuted = false
         // Session over → its conversation binding + effective-ref capture die
         // with it (the next session re-seeds via `beginSession(conversationID:defaultRef:)`).
+        // `sessionBoundRef` clears here too: `speakErrorAndEnd` resolves its
+        // phrase BEFORE calling this, so nothing downstream still needs it.
         sessionConversationID = nil
         sessionDefaultRef = nil
+        sessionBoundRef = nil
 
         // Cancel the in-flight converse so a late reply never lands on a dead
         // session (the delegate sees `.cancelled` and drops it silently).
