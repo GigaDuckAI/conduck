@@ -151,7 +151,17 @@ struct ContentView: View {
 
     var body: some View {
         #if os(iOS)
-        if horizontalSizeClass == .regular {
+        // BOTH conditions, because `.regular` alone is not the same question. A
+        // large iPhone (Plus/Max) reports a REGULAR horizontal size class in
+        // landscape, and `ConversationLibraryView` is built for a genuine
+        // two-column canvas: it opens a ~320pt conversation sidebar and hosts
+        // compose in whichever COLUMN's bar is on screen. On a 956x440 phone
+        // canvas the sidebar takes a third of the width, and the compose item
+        // becomes conditional on the split view's column state — where
+        // `phoneLayout` carries an unconditional one in its own nav bar. So the
+        // split view is gated to the iPad idiom and every phone geometry,
+        // portrait and landscape, stays on `phoneLayout`.
+        if horizontalSizeClass == .regular && DeviceCapabilities.isiPad {
             // iPad — split layout as the root content.
             ConversationLibraryView(
                 selectedConversationID: $currentConversationID,

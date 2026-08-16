@@ -24,8 +24,8 @@
 // General pane (`GeneralSettingsView(showSetupCard:)`).
 //
 // Compact-width iPad (Slide Over / narrow split) is NOT handled here — the
-// `horizontalSizeClass == .regular` gate in `ContentView` routes it to the
-// iPhone push-Form `SettingsView`, sidestepping `NavigationSplitView` collapse.
+// regular-width iPad gate in `ContentView` routes it to the iPhone push-Form
+// `SettingsView`, sidestepping `NavigationSplitView` collapse.
 //
 // Width discipline: the reused grouped `Form`s already center to a readable
 // column at regular width — DON'T cap them; the detail column's only job is to
