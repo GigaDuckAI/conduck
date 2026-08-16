@@ -1792,8 +1792,8 @@ final class MenuBarCoordinator {
     /// The snapshot stays latched, so Retry replays into the SAME thread.
     private var destinationBusyMessage: String {
         String(localized: LocalizedStringResource(
-            "popover.error.destinationBusy",
-            defaultValue: "Your personal AI is still answering. Your words are kept — press Retry when it finishes."
+            "popover.error.destinationBusy.v2",
+            defaultValue: "Your AI is still answering. Your words are kept — press Retry when it finishes."
         ))  // xcstrings: session-continuation
     }
 

@@ -133,8 +133,8 @@ enum GatewayFieldTips {
             defaultValue: "Model"
         ),
         message: LocalizedStringResource(
-            "settings.remoteAgent.tip.model.message.v2",
-            defaultValue: "Which AI answers you — the exact name your gateway or provider knows it by, such as “llama3”. Test Connection fills in the choices it can see."
+            "settings.remoteAgent.tip.model.message.v3",
+            defaultValue: "Which AI answers you — the exact name your gateway or provider knows it by, such as “llama3”. The connection test fills in the choices it can see."
         )
     )
 

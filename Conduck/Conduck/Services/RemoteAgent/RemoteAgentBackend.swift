@@ -77,6 +77,18 @@ enum RemoteAgentBackend: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// The name a NARROW or SPOKEN surface uses — the wrist, the wheel, a
+    /// notification title. All three built-in names already fit
+    /// `RemoteAgentRefMetadata.shortDisplayNameLimit`, so this is `displayName`
+    /// in practice; the `shortCode` arm is the last-resort floor that keeps the
+    /// guarantee true by construction if a fourth built-in ever arrives with a
+    /// longer name. Never abbreviate a name that fits — "OC" read aloud at the
+    /// wheel is worse than "OpenClaw", and the point of the budget is to bound
+    /// the line, not to shorten what is already short.
+    var shortDisplayName: String {
+        displayName.count <= RemoteAgentRefMetadata.shortDisplayNameLimit ? displayName : shortCode
+    }
+
     /// HTTP status → `AppError` map. Both cases return the SINGLE unified
     /// map — there is no per-backend difference under client-owned history
     /// (no 423/session-lock path). The seam is retained as the

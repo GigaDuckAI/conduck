@@ -26,7 +26,13 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
     let lastActivityAt: Date
     /// Local conversation identity (UUID string). NOT sent on the wire.
     let sessionID: String
-    /// `openclaw` / `hermes` — a conversation is bound to one backend.
+    /// The `RemoteAgentRef` raw string this conversation is bound to:
+    /// `openclaw` / `hermes` / `openrouter` / `custom_<uuid>`. One binding for
+    /// the life of the thread — Clone to switch, never rebind. LOCKED value
+    /// set: it is a Core Data attribute carried through every model version,
+    /// so a renamed case orphans conversations already on people's devices.
+    /// Note the two senses of "backend" — this is the gateway KIND, never the
+    /// "no backend" privacy claim, which is about servers WE operate.
     let backend: String
     /// Denormalized first-user-line snippet, written once on the first user
     /// turn (`ConversationStore.snippet(from:)`). Lets the Watch list show a

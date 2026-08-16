@@ -327,7 +327,10 @@ struct ConversationLibraryView: View {
                     .foregroundStyle(AppColors.textSecondary)
             }
         }
-        .accessibilityLabel("Choose gateway")  // xcstrings: chat-ui
+.accessibilityLabel(Text(LocalizedStringResource(
+            "chat.chooseAI.label",
+            defaultValue: "Choose AI"
+        )))  // VoiceOver reads the taxonomy no visual review ever sees.
     }
 
     /// The centered principal-toolbar control. Three-way: the gateway picker

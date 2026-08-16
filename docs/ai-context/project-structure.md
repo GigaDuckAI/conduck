@@ -10,7 +10,7 @@ If you want to know what a particular file does, open it. Every source file carr
 
 | Path | What it is |
 |---|---|
-| `README.md` | What Conduck is, how data flows, how to build it. Read this first. |
+| `README.md` | What Conduck is, how data flows, how to build it, and the glossary settling the words this project uses in a narrower sense than the industry does. Read this first. |
 | `CONTRIBUTING.md` | Building under your own Apple identity, coding conventions, DCO sign-off. |
 | `SECURITY.md` | How to report a vulnerability privately. |
 | `LICENSE` · `NOTICE` · `THIRD_PARTY_NOTICES.md` | Apache-2.0 and the licences of bundled dependencies. |
@@ -44,7 +44,7 @@ One target covers iPhone, iPad and Mac. The Mac build is a full Dock application
 | `Models/` | The plain data types the whole app agrees on — conversation and message records, the error type, the user-preference enumerations, request and reply shapes. No behaviour, only structure. Many of these are compiled into the Watch app as well. |
 | `Models/Diagnostics/` | The data behind the in-app diagnostics screen, including the plain-English explanations shown for each check. |
 | `Services/` | Everything that does work rather than draws: audio recording, the conversation store, settings, the share-sheet inbox and its drainer, permissions, iCloud sync monitoring, retry bookkeeping. |
-| `Services/RemoteAgent/` | The gateway. One network client serves every backend; what differs between backends is a capability descriptor, not a code path. Also holds pairing-payload import and export, certificate-trust evaluation, background upload and download, and the file-server client. |
+| `Services/RemoteAgent/` | Everything that talks to the user's AI. One network client serves every gateway kind; what differs between kinds is a capability descriptor, not a code path. Also holds pairing-payload import and export, certificate-trust evaluation, background upload and download, and the file-server client. |
 | `Services/STT/` | Speech to text: the provider protocol, the shared request-building and response-decoding machinery, connection testing, and the on-device Apple engine. |
 | `Services/STT/Providers/` | A file here only when a vendor cannot use the shared request and decode machinery — a bespoke probe or body factory for the ones that deviate. Vendors that fit the standard shape have no file at all. Adding a vendor means registering it in `Services/STT/STTProvider.swift` and the metadata lists beside it; a file here is the exception, not the step. |
 | `Services/TTS/` | Read-aloud: sentence segmentation, chunk queueing, playback, exclusivity between surfaces, and the speak engine every spoken reply on this target passes through. The Watch has its own engine behind the same protocol. |
@@ -113,7 +113,7 @@ Two things in the project file fail silently if you touch them. The macOS share 
 
 | If you are changing… | Start in |
 |---|---|
-| How a turn reaches the gateway, or adding a backend | `Conduck/Conduck/Services/RemoteAgent/` |
+| How a turn reaches the user's AI, or adding a gateway kind | `Conduck/Conduck/Services/RemoteAgent/` |
 | Speech recognition, or adding a speech vendor | `Conduck/Conduck/Services/STT/` |
 | Spoken replies | `Conduck/Conduck/Services/TTS/` |
 | Conversation storage or iCloud sync | `Conduck/Conduck/Services/ConversationStore.swift` and `Services/Storage/` |

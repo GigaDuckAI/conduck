@@ -120,10 +120,10 @@ struct FileTransferStageChecklist: View {
             let lead = String(localized: LocalizedStringResource(
                 "fileTransfer.test.stage.listing.unchecked",
                 defaultValue: "Sending files works. Conduck couldn't check whether files can come back — try this test again."))
-            return lead + " " + unverified.descriptionWithRecovery
+            return lead + " " + unverified.descriptionWithRecovery()
         }
         guard !result.success, let failure = result.failure else { return nil }
-        return failure.descriptionWithRecovery
+        return failure.descriptionWithRecovery()
     }
 
     private func detailTint(_ stage: FileTransferTestStage) -> Color {

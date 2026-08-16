@@ -566,12 +566,16 @@ final class DiagnosticsRunner {
     /// and `setFocus`. The title is a KIND label only (built-in display name or
     /// the generic "Custom gateway"), never a user's name; it needs no roster, so
     /// it's correct even before `runAutoReads()` completes.
+    ///
+    /// A built-in title is its display name and NOTHING ELSE — see
+    /// `buildGatewayRows` for why appending a common noun here is a claim the
+    /// runner cannot make.
     private static func makeFocusedExplanation(ref: RemoteAgentRef?, code: Int) -> (title: String, cause: String, fix: String) {
         let explained = DiagnosticsExplainer.explain(code: code)
         let title: String
         if let ref {
             switch ref {
-            case .builtin(let backend): title = "\(backend.displayName) \(Self.gatewayWord)"
+            case .builtin(let backend): title = backend.displayName
             case .custom: title = Self.customGatewayTitle
             }
         } else {
@@ -1130,7 +1134,7 @@ final class DiagnosticsRunner {
             // them. Name the KIND only, never a user name.
             let kindTitle: String
             switch focusedRef {
-            case .builtin(let backend): kindTitle = "\(backend.displayName) \(Self.gatewayWord)"
+            case .builtin(let backend): kindTitle = backend.displayName
             case .custom: kindTitle = Self.customGatewayTitle
             }
             built.append(DiagnosticCheck(
@@ -1151,11 +1155,11 @@ final class DiagnosticsRunner {
             // causes as several findings.
             built.append(DiagnosticCheck(
                 id: "connection.gateway.none",
-                title: String(localized: "diagnostics.connection.gateway.none", defaultValue: "No Personal AI configured"),
+                title: String(localized: "diagnostics.connection.gateway.none.v2", defaultValue: "No AI configured"),
                 category: .connection,
                 tier: .autoRead,
                 status: .failed(code: AppError.remoteAgentNotConfigured.errorCode),
-                detail: String(localized: "diagnostics.connection.gateway.none.detail", defaultValue: "Add your Personal AI gateway in Settings — every request needs one on this device."),
+                detail: String(localized: "diagnostics.connection.gateway.none.detail.v2", defaultValue: "Set up your AI in Settings → Personal AI — every request needs one on this device."),
                 role: nil, reportLabel: nil
             ))
         }
@@ -2654,7 +2658,7 @@ final class DiagnosticsRunner {
             let title: String
             switch ref {
             case .builtin(let backend):
-                title = "\(backend.displayName) \(Self.gatewayWord)"
+                title = backend.displayName
             case .custom:
                 title = Self.customGatewayTitle
             }
@@ -2688,6 +2692,15 @@ final class DiagnosticsRunner {
     /// lives only in `gatewayDisplayOrder`, so `copyBlock()` (which reads
     /// `check.title`) never sees it. `reportLabel` carries the anonymous
     /// `custom-gateway#N` ordinal (the same `N` used everywhere else).
+    ///
+    /// A built-in row is titled with its DISPLAY NAME ALONE — "OpenClaw", not
+    /// "OpenClaw gateway". Appending a common noun made the phrase exist only at
+    /// runtime, so it appeared in no string file and no copy sweep could see it;
+    /// and on the hosted lane it manufactured "OpenRouter gateway", naming a
+    /// machine the reader does not operate. This block is pasted verbatim into
+    /// support tickets and issues, so a title that names the instance and stops
+    /// is both the shortest true thing and the only one that survives all four
+    /// lanes without a branch.
     private func buildGatewayRows(sorted: [(ref: RemoteAgentRef, role: DiagnosticRole?)], customOrdinals: [RemoteAgentRef: Int]) -> [DiagnosticCheck] {
         sorted.map { item in
             let reportLabel: String? = item.ref.customID != nil
@@ -2696,7 +2709,7 @@ final class DiagnosticsRunner {
             let title: String
             switch item.ref {
             case .builtin(let backend):
-                title = "\(backend.displayName) \(Self.gatewayWord)"
+                title = backend.displayName
             case .custom:
                 title = Self.customGatewayTitle
             }
@@ -2835,10 +2848,15 @@ final class DiagnosticsRunner {
     /// UI-only friendly name for a file lane (built-in display name or the user's
     /// custom gateway label). NEVER reaches `copyBlock()` — `FileLaneState` lives
     /// outside `checks`.
+    ///
+    /// A built-in is its display name alone, for the reason `buildGatewayRows`
+    /// gives: a name is an instance, and the noun that used to follow it was a
+    /// claim about the machine behind it that only three of the four lanes could
+    /// honour.
     static func gatewayDisplayName(_ ref: RemoteAgentRef, customGateways: [CustomGateway], ordinal: Int?) -> String {
         switch ref {
         case .builtin(let backend):
-            return "\(backend.displayName) \(gatewayWord)"
+            return backend.displayName
         case .custom(let id):
             if let name = customGateways.first(where: { $0.id == id })?.name,
                !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -3108,7 +3126,11 @@ final class DiagnosticsRunner {
 
     // MARK: - Static copy / status helpers
 
-    private static let gatewayWord = String(localized: "diagnostics.gatewayWord", defaultValue: "gateway")
+    // A built-in row's title is `RemoteAgentBackend.displayName` and nothing
+    // else. There is deliberately NO common-noun constant to append to it: a
+    // phrase assembled here would exist only at runtime, so it would appear in
+    // no string catalog and no copy sweep could find it — and Diagnostics is the
+    // screen users paste into support tickets and issues.
     private static let customGatewayTitle = String(localized: "diagnostics.gateway.custom", defaultValue: "Custom gateway")
 
     /// The setup-row status for a voice provider. When the TYPED `keyState` is

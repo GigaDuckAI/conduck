@@ -3582,7 +3582,7 @@ final class ConversationDetailViewModel {
     /// drops the generic "Try again." rather than appending it, so a terminal
     /// refusal never gains a retry invitation here.
     func setSendError(_ error: AppError, messageID: UUID? = nil) {
-        sendError = error.descriptionWithRecovery
+        sendError = error.descriptionWithRecovery(for: boundRef)
         sendErrorCode = error.errorCode
         sendErrorMessageID = messageID
     }

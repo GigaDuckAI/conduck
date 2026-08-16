@@ -401,7 +401,14 @@ struct RemoteAgentConfigBody: View {
         // see `rehydratingAfterGuidedReturn`.
         .disabled(rehydratingAfterGuidedReturn)
         .alert(
-            LocalizedStringResource("settings.remoteAgent.forgetAlert.title", defaultValue: "Forget gateway?"),
+            // Names the INSTANCE. "Forget gateway?" was the only title in the
+            // app for a destructive action, and it described a machine an
+            // OpenRouter user does not operate — while a user with five customs
+            // could not tell WHICH one the sheet was about to erase.
+            LocalizedStringResource(
+                "settings.remoteAgent.forgetAlert.title.v2",
+                defaultValue: "Forget \(viewModel.displayName(for: ref))?"
+            ),
             isPresented: $showingForgetConfirm
         ) {
             Button(
@@ -489,7 +496,8 @@ struct RemoteAgentConfigBody: View {
         )
     }
 
-    /// Forget copy must enumerate EVERY slot the action wipes — and say WHERE.
+    /// Forget copy must enumerate EVERY slot the action wipes — and say WHERE,
+    /// and ONLY the slots this lane actually has.
     /// `clearRemoteAgent` is the terminal per-ref wipe and takes the file-transfer
     /// lane with it (server address + generated password + pin), so the alert
     /// names it; an alert that lists only URL/token/pin would understate a
@@ -507,18 +515,32 @@ struct RemoteAgentConfigBody: View {
     /// created stay tellable apart; an alert that lists only destruction would
     /// misdescribe that, in the one direction a user cannot check afterwards.
     private var forgetAlertMessage: Text {
+        // Branch on the SAME capability snapshot the error layer dispatches on,
+        // so the one dialog that destroys state cannot enumerate slots the lane
+        // has never had. On the hosted lane three of the four nouns the
+        // self-hosted body lists are false — `hidesURLField` means there is no
+        // URL of the user's, `.systemTrustOnly` means there is no pin, and
+        // `fileTransferSupported == false` means there is no file lane — and a
+        // destructive confirmation is the last place to overstate.
+        let capability = ref.failureContext
         if isCustom {
             // A NEW key, not an edit of an existing one. Rewording an existing
             // `defaultValue:` is inert — the string catalog's stored value wins
             // and extraction never overwrites it.
             return Text(LocalizedStringResource(
-                "settings.remoteAgent.forgetAlert.message.custom.retained",
-                defaultValue: "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). The URL and token are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns. They keep this gateway's colour tag so you can still tell them apart; its name is not kept."
+                "settings.remoteAgent.forgetAlert.message.custom.retained.v2",
+                defaultValue: "Conduck will delete this gateway and its saved URL, key, and pin, plus any file-transfer setup for it (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns. They keep this gateway's colour tag so you can still tell them apart; its name is not kept."
+            ))
+        }
+        if capability.hidesURLField {
+            return Text(LocalizedStringResource(
+                "settings.remoteAgent.forgetAlert.message.hosted",
+                defaultValue: "Conduck will erase the saved API key. It's removed from all your devices signed in to iCloud, not just this one. You'll re-enter it next time."
             ))
         }
         return Text(LocalizedStringResource(
-            "settings.remoteAgent.forgetAlert.message",
-            defaultValue: "Conduck will erase the saved URL, token, and pin, plus any file-transfer setup for this gateway (server address and generated password). The URL and token are removed from all your devices signed in to iCloud; the pin is only on this one. You'll re-enter them next time."
+            "settings.remoteAgent.forgetAlert.message.v2",
+            defaultValue: "Conduck will erase the saved URL, key, and pin, plus any file-transfer setup for this gateway (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. You'll re-enter them next time."
         ))
     }
 
@@ -1188,8 +1210,8 @@ struct RemoteAgentConfigBody: View {
                 .padding(.top, 2)
             } else {
                 Text(LocalizedStringResource(
-                    "settings.remoteAgent.model.suggestions.empty",
-                    defaultValue: "No models yet — run Test Connection to load them."
+                    "settings.remoteAgent.model.suggestions.empty.v2",
+                    defaultValue: "No models yet — run the connection test to load them."
                 ))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
@@ -1605,8 +1627,15 @@ struct RemoteAgentConfigBody: View {
         Button {
             runTestConnection()
         } label: {
+            // One label was bound to three different probes on three different
+            // machines — this gateway, the file server, and a voice endpoint —
+            // so a PASS never said which machine answered. This one names the
+            // instance it actually reached.
             Label(
-                LocalizedStringResource("settings.remoteAgent.testConnection.button", defaultValue: "Test Connection"),
+                LocalizedStringResource(
+                    "settings.remoteAgent.testConnection.button.instance",
+                    defaultValue: "Test \(viewModel.displayName(for: ref))"
+                ),
                 systemImage: "checkmark.shield"
             )
             .font(.subheadline.weight(.semibold))

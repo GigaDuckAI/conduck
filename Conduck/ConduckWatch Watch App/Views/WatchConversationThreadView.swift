@@ -176,6 +176,12 @@ struct WatchConversationThreadView: View {
     /// already-loaded list cache (no extra fetch) + the Watch custom roster;
     /// empty when the ref is unknown OR a custom missing from the roster (deleted
     /// / not-yet-synced) → a clean back+clock bar (no generic word).
+    ///
+    /// The SHORT form (`shortDisplayName`): this bar shares its row with the back
+    /// chevron and the system clock, so it is the narrowest naming site in the
+    /// app, and a custom name may be up to 40 characters. Truncating here to a
+    /// known budget beats letting the bar decide — the bar's own truncation
+    /// competes with the clock for space and moves with Dynamic Type.
     private var threadBackendName: String {
         guard let id = conversationID,
               let raw = viewModel.conversations.first(where: { $0.id == id })?.backend,
@@ -188,7 +194,7 @@ struct WatchConversationThreadView: View {
         if case .custom(let id) = ref, !customs.contains(where: { $0.id == id }) {
             return ""
         }
-        return RemoteAgentRefMetadata.displayName(for: ref, customs: customs)
+        return RemoteAgentRefMetadata.shortDisplayName(for: ref, customs: customs)
     }
 
     /// Drives the WhatsApp-style scroll-to-hide composer. Starts visible (a fresh

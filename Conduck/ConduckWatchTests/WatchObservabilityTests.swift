@@ -133,7 +133,7 @@ final class WatchNetworkFailureCopyTests: XCTestCase {
     /// The UNPINNED lane's only certificate path: with no pin the evaluator
     /// answers `.performDefaultHandling`, ATS refuses, and the completion carries
     /// one of the codes where the trust layer named the certificate. Without this
-    /// arm the wrist said "Couldn't reach your personal AI. Try again." for a
+    /// arm the wrist said "Couldn't reach your AI. Try again." for a
     /// terminal condition no retry can clear.
     func testNamedCertificateCodesReturnTheSharedUntrustedCopy() {
         for code in [URLError.Code.serverCertificateUntrusted, .serverCertificateHasUnknownRoot,

@@ -108,12 +108,27 @@ enum CertificateTrustCopy {
 
     /// The wrist-and-wheel form: the warning stays (it is the load-bearing part
     /// of this verdict and must survive the trim), the check-it-yourself half
-    /// moves to the phone, where the user can act on it. Gateway-specific
-    /// wording because the gateway is the only pinned lane either surface can
-    /// reach. Terminal, so it never invites a retry.
+    /// moves to the phone, where the user can act on it. Terminal, so it never
+    /// invites a retry.
+    ///
+    /// NEUTRAL about which machine it is talking about — "this server", the same
+    /// noun `pinMismatchRefusal` uses, never "your gateway". Three reasons, and
+    /// the third is why this had to change rather than stay:
+    ///   1. Both surfaces reach the VOICE lanes too. A pinned custom STT/TTS
+    ///      endpoint raises `sttCustomCertMismatch` / `ttsCustomCertMismatch`,
+    ///      and both arms speak this line — so "your gateway" sent a user to
+    ///      inspect a machine that was never in the conversation.
+    ///   2. On the hosted lane there is no gateway to name at all: the user runs
+    ///      no server, and a corporate middlebox is a live route to this verdict.
+    ///   3. It is SPOKEN at the wheel and read on the wrist, the two surfaces
+    ///      with no way to ask a follow-up question. Naming the wrong machine
+    ///      aloud to a driver is the failure mode this wording exists to remove.
+    /// The neutral noun costs nothing: the sentence's job is to say a pinned
+    /// fingerprint did not match and that the connection may be intercepted, and
+    /// neither half needs the machine's role to land.
     static var pinMismatchRefusalCompact: String {
-        String(localized: "settings.certTrust.pinMismatch.refusal.compact",
-                defaultValue: "Your gateway's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone.")
+        String(localized: "settings.certTrust.pinMismatch.refusal.compact.v2",
+                defaultValue: "This server's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone.")
     }
 
     // MARK: - Pin could not be COMPUTED on a chain the system TRUSTED
@@ -152,8 +167,11 @@ enum CertificateTrustCopy {
     /// The wrist-and-wheel form: cause plus "this is not an attack" in one line,
     /// remedy DELEGATED to the phone — neither remedy is actionable from a watch
     /// face or a car screen, and both name settings that only exist on iPhone.
-    /// Gateway-specific wording because the gateway is the only pinned lane
-    /// either surface can reach. Terminal, so it never invites a retry.
+    /// Terminal, so it never invites a retry.
+    ///
+    /// Neutral about the machine, like `pinMismatchRefusalCompact` and for the
+    /// same reasons: "your server" is whichever server this handshake was with,
+    /// and the voice lanes reach this verdict as readily as the gateway does.
     ///
     /// Kept SHORT — the wrist renders it two lines at a time with the rest a tap
     /// away, and the car SPEAKS it, where every extra clause is time the driver

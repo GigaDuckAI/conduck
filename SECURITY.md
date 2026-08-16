@@ -42,6 +42,12 @@ anonymous, you can report indirectly through CERT-EE, Estonia's national CSIRT
 
 ## Scope
 
+One vocabulary note before the boundaries, because it moves them: Conduck uses
+*gateway* to mean a machine the user runs an agent on, **not** a routing proxy
+in front of model providers (LiteLLM, Portkey, Cloudflare AI Gateway). The
+[glossary](README.md#the-words-this-project-uses) settles that word and the
+rest, and it is worth two minutes before deciding whether something is ours.
+
 In scope:
 
 - **This repository** — the Conduck app for iPhone, iPad, Mac, Apple Watch, and
@@ -52,8 +58,9 @@ In scope:
 
 Out of scope (not operated by us — report to the respective project or vendor):
 
-- Your own AI gateway or server (OpenClaw, Hermes, a custom endpoint) and any
-  machine you run it on
+- The AI you point Conduck at — a gateway you run (OpenClaw, Hermes), any
+  custom OpenAI-compatible endpoint you configure, and whatever machine or
+  service stands behind it
 - Hosted AI and speech providers you bring your own key for (such as OpenRouter)
 - Apple and Google platform infrastructure
 
@@ -63,9 +70,9 @@ scope — when in doubt, send it in and it will be routed.
 ## A note on setup codes
 
 A Conduck setup code (`conduck-setup:v1:…`) is a **bearer credential**. It carries
-your gateway token and, when file transfer is configured, the file-server
-credential — so anyone holding the code gets every capability that gateway
-permits, until you rotate those secrets.
+the key for the AI it names and, when file transfer is configured, the file
+server's password — so anyone holding the code gets every capability those
+grant, until you rotate them.
 
 Because the entire payload is chosen by whoever produced the code, nothing inside
 it can prove where it came from. Conduck therefore treats importing one as a

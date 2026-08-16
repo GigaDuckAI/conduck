@@ -166,12 +166,16 @@ couple of weeks.
 
 ## Logging and privacy
 
-Conduck talks to a gateway that **you** run, so the things it handles are about
-as private as software gets: your gateway's address, your API keys, and every
-word you say to it. One rule follows from that, and it is not negotiable:
+Conduck talks to an AI that is **yours** — a gateway on a machine you keep
+online, or a hosted model under your own key — so the things it handles are
+about as private as software gets: the address it connects to, your API keys,
+and every word you say to it. One rule follows from that, and it is not
+negotiable:
 
-> **Never log a gateway URL or hostname, an API key or bearer token, a
-> transcript, a reply, or a file name — not even at debug level.**
+> **Never log an endpoint URL or hostname, an API key or token, a transcript,
+> a reply, or a file name — not even at debug level.** That covers every
+> address the app is given, not only a gateway's: a hosted model endpoint, a
+> custom voice endpoint and a file server are all equally the user's business.
 
 Hostnames count as private data here. A self-hosted gateway is usually named
 after the machine it runs on (`box.example.com`, `mini.tail9f2c.ts.net`), so
@@ -194,7 +198,7 @@ What that means in practice:
   something that could be identifying, annotate it `privacy: .private`.
 - **Don't log an error's `localizedDescription` on a network path.** A
   certificate error embeds the server's hostname in its message text, so that
-  one string is enough to leak the gateway address.
+  one string is enough to leak the address.
 - **User-visible error text follows the same rule.** Notifications and alerts
   use fixed copy for network failures rather than passing an underlying error
   through — a lock-screen notification is readable by anyone standing nearby.
@@ -232,6 +236,11 @@ Two documents under `docs/ai-context/` describe the project as a whole:
 architecture, and [`project-structure.md`](docs/ai-context/project-structure.md)
 maps the folders and build targets. Both are written to be read by people and by
 AI coding agents, and both are deliberately small.
+
+Read the [glossary](README.md#the-words-this-project-uses) before either of
+them. Several words here are narrower than their industry sense and *gateway*
+is nearly the opposite one, so a contributor who skips it will consistently
+misread which layer a decision is about.
 
 Keeping them small is the point, so there are two rules about adding to them:
 

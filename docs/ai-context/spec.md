@@ -33,13 +33,15 @@ Three parties exist, and keeping them straight explains almost every decision be
 
 We — the people who publish Conduck — are in none of those. There is no fourth party. That is not a promise about how we behave; it is a statement about what exists, and it is the reason most of the design looks the way it does.
 
+Several words in this document carry a narrower sense here than they do elsewhere in the industry, and *gateway* carries nearly the opposite one — it names the user's own always-on machine, not a routing proxy in front of model providers. The glossary in [`README.md`](../../README.md#the-words-this-project-uses) settles each of them, and a reader who has not read it will misplace which layer of their own stack this document is about.
+
 ---
 
 ## The decisions
 
 ### There is no server of ours, and there never will be in this app
 
-No backend, no analytics, no telemetry, no crash reporting, no rate-limiting service, no health endpoint, no account system. **The app never makes a network request to anything we operate** — every request in the tree goes to the user's gateway, their speech provider, or their file server. The only publisher-operated destinations that exist at all are website links the user has to tap, and a Send Feedback item that composes a mail message with the app and OS version in it. Both require a deliberate action and neither happens on its own.
+No backend, no analytics, no telemetry, no crash reporting, no rate-limiting service, no health endpoint, no account system. **The app never makes a network request to anything we operate** — every request in the tree goes to the AI the user configured, their speech provider, or their file server. The only publisher-operated destinations that exist at all are website links the user has to tap, and a Send Feedback item that composes a mail message with the app and OS version in it. Both require a deliberate action and neither happens on its own.
 
 It also never registers for remote notifications and holds no push token; every notification it posts is local. The push entitlement and the remote-notification background mode are present, on both the phone and the watch, only because iCloud sync uses a silent push under the hood.
 
@@ -71,7 +73,7 @@ Nothing is paid for by us. Where a credential is needed it is the user's own, en
 
 ### The client owns the conversation, and sends it whole every turn
 
-The conversation store on the device is the authority. Each turn sends the messages the client decides to send, statelessly. There is no session identifier, no server-side conversation handle, and no concept of a session being busy. The request body is the same shape for every backend.
+The conversation store on the device is the authority. Each turn sends the messages the client decides to send, statelessly. There is no session identifier, no server-side conversation handle, and no concept of a session being busy. The request body is the same shape on every lane.
 
 **Why, and this is not obvious:** server-side sessions look like they would save tokens, and they do not. The gateway re-sends the full history to the model regardless of whether the client sent it, so the tokens are spent either way. What server state actually changes is *who can trim the history* — and only the client is in a position to do that, because only the client knows what the user is looking at. Server state costs a synchronisation problem and buys nothing.
 
@@ -81,13 +83,13 @@ The conversation store on the device is the authority. Each turn sends the messa
 
 Two separate things trim what is sent, and both are caps on the wire rather than retention policies. Turn-count trimming happens in one function, bounded by `Constants.contextMaxTurns`, and all four request builders — in-app, background, CarPlay, Watch — go through it. Independently, a per-gateway image-history policy decides how far back image bytes are re-sent, because re-uploading every past picture on every turn is the single most expensive thing a long thread can do. Nothing is ever deleted from history for being old; conversations persist until the user deletes them.
 
-### One network client serves every backend
+### One network client serves every gateway kind
 
-**There is no per-backend branching in request building, response parsing, or error handling** — one assembler, one decoder, one status map serve every backend, and the settings screens render themselves from a capability descriptor: a data record saying which endpoint, which authentication scheme, whether it supports pairing, whether it supports file transfer. A *custom* OpenAI-compatible gateway is therefore pure configuration and adds no code at all. A new *built-in* backend is not quite free — it also has to be added to a handful of exhaustive switches and a feature flag — but the networking, parsing and error surface are untouched either way.
+**There is no per-kind branching in request building, response parsing, or error handling** — one assembler, one decoder, one status map serve every kind, and the settings screens render themselves from a capability descriptor: a data record saying which endpoint, which authentication scheme, whether it supports pairing, whether it supports file transfer. A *custom* OpenAI-compatible endpoint is therefore pure configuration and adds no code at all. A new *built-in* kind is not quite free — it also has to be added to a handful of exhaustive switches and a feature flag — but the networking, parsing and error surface are untouched either way.
 
-**Why:** per-backend branches multiply. Five backends with four behaviours each is twenty places for a bug to hide, and every new gateway type reopens all of them. A descriptor is one row.
+**Why:** per-kind branches multiply. Every kind times every behaviour is another place for a bug to hide, and each new kind reopens all of them at once. A descriptor is one row.
 
-**Rejected:** per-backend request/parse/error dispatch, and per-backend settings screens.
+**Rejected:** per-kind request/parse/error dispatch, and per-kind settings screens.
 
 **No probe may decide anything from an HTTP status alone.** The servers Conduck talks to routinely answer 200 with something that is not the thing you asked for — a gateway with its chat endpoint switched off (the default state) serves its own control-panel HTML at 200 on the model-list path, and an SSO portal in front of a file server answers everything with a login page. A status-only check therefore reports a broken gateway as working, which is worse than reporting nothing. Every verdict reads the body.
 
@@ -388,7 +390,7 @@ Two smaller rules about audio on disk, both easy to undo by accident:
 - **Scratch files must carry a filename prefix the sweeper recognises.** A file written without one is not merely unswept, it is unreclaimable — no sweep rule broad enough to catch it could avoid deleting other frameworks' files from the same shared directory. That mistake has been made three separate times, which is why a test now scans for it.
 - **Capture filenames are random, not timestamped, and the sweeper logs nothing at all.** The names contain nothing sensitive, but a directory listing of timestamps would disclose when the user was recording. This is exactly the kind of rule a well-meant "let's add some logging here" removes.
 
-**Outbound traffic** goes to Apple — the private iCloud mirror, the key-value store, and Apple's own on-device speech-model download — and otherwise to exactly three destinations, all chosen and paid for by the user: their speech provider, their gateway, and, if configured, their gateway's file server. Attachments sent to a file server keep their original metadata; the copy sent inline to the model is downsized with metadata stripped.
+**Outbound traffic** goes to Apple — the private iCloud mirror, the key-value store, and Apple's own on-device speech-model download — and otherwise to exactly three destinations, all chosen and paid for by the user: their speech provider, the AI they configured, and, where a gateway has one, its file server. Attachments sent to a file server keep their original metadata; the copy sent inline to the model is downsized with metadata stripped.
 
 There is one non-obvious threat to that guarantee. The audio package brings in a model-hub client and a machine-learning runtime as transitive dependencies, so code capable of fetching a model from a third-party host **is compiled into the shipped binary**. Nothing calls it: the voice-activity model is loaded from the app bundle, and a missing bundle resource fails the CarPlay session closed rather than reaching out to fetch one. The guarantee here is a property of the call graph, not of the dependency list — which is why the avoidance is written down instead of assumed, and why "make it degrade gracefully" is the wrong instinct at that spot. Degrading gracefully would mean a silent third-party request originating from someone's car.
 

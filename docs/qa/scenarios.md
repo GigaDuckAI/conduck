@@ -83,18 +83,18 @@ Degraded path (gateway-reachability precheck failed):
 Launch args: same as Scenario 1.
 
 Because 2 gateways are configured, a new/empty conversation shows a title-bar
-gateway picker; once a conversation has turns its backend is locked.
+gateway picker; once a conversation has turns its gateway is locked.
 
 Test instruction:
 
 > Verify the QA MODE banner. Start a NEW conversation. Confirm a gateway
 > picker is present in the title bar (it appears only when ≥ 2 gateways are
-> configured). Pick a backend, send a short turn, and confirm the reply
+> configured). Pick a gateway, send a short turn, and confirm the reply
 > routes through the chosen gateway (correlate via the log stream — the
 > request goes to the chosen gateway's URL). Then start a second new
-> conversation, pick the OTHER backend, send a turn, confirm it routes to
+> conversation, pick the OTHER gateway, send a turn, confirm it routes to
 > that gateway. Reopen the first conversation and confirm its title bar now
-> shows the bound-gateway label (NOT the picker) matching the backend you
+> shows the bound-gateway label (NOT the picker) matching the gateway you
 > originally chose; with 2 gateways configured the label carries a `chevron.down`
 > and tapping it opens the Clone & continue sheet.
 
@@ -102,13 +102,13 @@ Pass criteria:
 - Title-bar gateway picker present on a new/empty conversation.
 - A turn routes to the selected gateway (log-stream evidence: request hits
   the chosen gateway URL).
-- Each of the 2 backends is exercisable from its own new conversation.
+- Each of the 2 gateways is exercisable from its own new conversation.
 - Reopening a conversation with turns shows the bound-gateway label (not the
-  picker), matching the originally chosen backend; clone-eligible threads show a
+  picker), matching the originally chosen gateway; clone-eligible threads show a
   `chevron.down` that opens the Clone & continue sheet.
 
 Degraded path (gateway-reachability precheck failed):
-- Routing UI (picker present, backend bound after first turn) is still
+- Routing UI (picker present, gateway bound after first turn) is still
   verifiable; only the actual reply degrades to an error surface.
 
 ---

@@ -845,7 +845,7 @@ struct OutputRefusalReviewSheet: View {
     /// Cause AND remedy, and a retry only where the taxonomy allows one.
     @MainActor
     private func present(_ error: AppError, for entry: OutputTypeRefusal) {
-        let message = error.descriptionWithRecovery
+        let message = error.descriptionWithRecovery(for: boundRef)
         saveStates[entry.id] = .failed(
             message: message.isEmpty
                 ? String(localized: LocalizedStringResource(

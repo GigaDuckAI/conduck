@@ -555,7 +555,7 @@ struct MessageComposerBar: View {
     @ViewBuilder
     private var errorBanner: some View {
         if case .error(let appError) = recorder.state {
-            let message = appError.descriptionWithRecovery
+            let message = appError.descriptionWithRecovery(for: selectedRef)
             Text(message.isEmpty ? String(localized: "Something went wrong.") : message)  // xcstrings
                 .font(.caption)
                 .foregroundStyle(AppColors.error)
@@ -610,8 +610,8 @@ struct MessageComposerBar: View {
         VStack(alignment: .leading, spacing: 10) {
             TextField(
                 String(localized: LocalizedStringResource(
-                    "composer.placeholder",
-                    defaultValue: "Message your personal AI"
+                    "composer.placeholder.v2",
+                    defaultValue: "Message your AI"
                 )),
                 text: $draft,
                 axis: .vertical

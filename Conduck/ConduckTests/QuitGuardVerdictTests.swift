@@ -88,17 +88,27 @@ final class QuitGuardVerdictTests: XCTestCase {
 
     func testSingleUnknownThreadFallsBackToTheGenericLine() throws {
         let noTitle = try XCTUnwrap(prompt(liveCount: 1, title: nil, gateway: "OpenClaw"))
-        XCTAssertEqual(noTitle.messageText, "Your personal AI is still answering")
+        XCTAssertEqual(noTitle.messageText, "Your AI is still answering")
 
         let noGateway = try XCTUnwrap(prompt(liveCount: 1, title: "Kitchen renovation", gateway: nil))
-        XCTAssertEqual(noGateway.messageText, "Your personal AI is still answering")
+        XCTAssertEqual(noGateway.messageText, "Your AI is still answering")
+    }
+
+    /// The generic line names the CLASS, never "personal AI": the adjective
+    /// asserts an ownership and privacy posture the hosted lane (a shared
+    /// third-party routing service) cannot back, and this fallback is exactly
+    /// the arm that renders when Conduck cannot name the instance.
+    func testTheGenericLineNeverClaimsThePersonalAdjective() throws {
+        let prompt = try XCTUnwrap(prompt(liveCount: 1, title: nil, gateway: nil))
+        XCTAssertFalse(prompt.messageText.contains("personal AI"),
+                       "Lane-agnostic running copy must not say \"personal AI\".")
     }
 
     func testBlankMetadataIsNotAName() throws {
         // A whitespace-only title would render as `… working on “  ”`.
         let prompt = try XCTUnwrap(prompt(liveCount: 1, title: "   ", gateway: "OpenClaw"))
         XCTAssertNil(prompt.threadTitle)
-        XCTAssertEqual(prompt.messageText, "Your personal AI is still answering")
+        XCTAssertEqual(prompt.messageText, "Your AI is still answering")
     }
 
     func testMultipleLiveTurnsDropThreadMetadata() throws {

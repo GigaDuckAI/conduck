@@ -219,7 +219,7 @@ struct MacPersonalAICategory: View {
             }
             addCustomGatewayCard
         } header: {
-            Text(LocalizedStringResource("settings.personalAI.section.customHeader", defaultValue: "Custom gateways"))
+            Text(GatewayGroupCopy.customHeader)
         } footer: {
             Text(GatewayGroupCopy.customFooter)
         }
@@ -237,9 +237,16 @@ struct MacPersonalAICategory: View {
             route = .configure(row.ref)
         } label: {
             HStack(spacing: 12) {
-                Text(row.displayName)
-                    .font(.body)
-                    .foregroundStyle(configured ? AppColors.textPrimary : AppColors.textSecondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.displayName)
+                        .font(.body)
+                        .foregroundStyle(configured ? AppColors.textPrimary : AppColors.textSecondary)
+                    // The capability line, so the row states what the lane can
+                    // do instead of leaving the section header to imply it.
+                    Text(GatewayGroupCopy.capabilitySubtitle(for: row.ref))
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textTertiary)
+                }
                 Spacer()
                 SettingsStatusMark(
                     configured: configured,
@@ -269,7 +276,7 @@ struct MacPersonalAICategory: View {
         .accessibilityIdentifier("settings.personalAI.row.\(row.ref.rawString)")
     }
 
-    /// "+ Add custom gateway" row — at the cap it's VISIBLE but disabled, with a
+    /// "+ Set up a custom server" row — at the cap it's VISIBLE but disabled, with a
     /// hint to delete/edit one above. Tap → mint a draft → push editor.
     @ViewBuilder
     private var addCustomGatewayCard: some View {
@@ -282,8 +289,8 @@ struct MacPersonalAICategory: View {
             } label: {
                 Label {
                     Text(canAdd
-                        ? LocalizedStringResource("settings.remoteAgent.customGateway.add", defaultValue: "Add custom gateway")
-                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap", defaultValue: "Add custom gateway (limit reached)"))
+                        ? LocalizedStringResource("settings.remoteAgent.customGateway.add.v2", defaultValue: "Set up a custom server")
+                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap.v2", defaultValue: "Set up a custom server (limit reached)"))
                 } icon: {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)
@@ -301,8 +308,8 @@ struct MacPersonalAICategory: View {
                 // supplies none, so without this the hint would sit flush
                 // against the card's left edge under an indented label.
                 Text(LocalizedStringResource(
-                    "settings.remoteAgent.customGateway.capHint",
-                    defaultValue: "Delete a custom gateway above to add another."
+                    "settings.remoteAgent.customGateway.capHint.v2",
+                    defaultValue: "Delete a custom server above to add another."
                 ))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)

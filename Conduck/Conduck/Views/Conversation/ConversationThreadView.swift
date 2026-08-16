@@ -682,7 +682,9 @@ struct ConversationThreadView: View {
                 defaultValue: "Read aloud in the built-in voice."))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppColors.textSecondary)
-            Text(verbatim: error.descriptionWithRecovery)
+            // No ref: this is a VOICE endpoint's refusal, not the gateway's,
+            // so a gateway lane's capability would pick the wrong remedy.
+            Text(verbatim: error.descriptionWithRecovery())
                 .font(.caption2)
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)
@@ -1462,7 +1464,10 @@ private struct MessageBubble: View, Equatable {
                 || message.attachments.contains { $0.isText || $0.isServerFile },
             // The rule itself lives on `WordlessTurn` so it can be tested; note
             // it counts EVERY attachment, unlike `turnHasOwnImages` above.
-            wordlessTurn: .of(text: message.text, attachmentCount: message.attachments.count)
+            wordlessTurn: .of(text: message.text, attachmentCount: message.attachments.count),
+            // The row's body is the failure's own remedy, so it has to know
+            // which AI refused — the same binding the retry would re-fire at.
+            ref: boundRef
         )
     }
 
@@ -3068,7 +3073,7 @@ private struct ServerFileDownloadChip: View {
     /// remedy half).
     @MainActor
     private func presentError(_ error: AppError) {
-        let message = error.descriptionWithRecovery
+        let message = error.descriptionWithRecovery(for: boundRef)
         state = .failed(
             message: message.isEmpty ? Self.genericFailureMessage : message,
             retryable: error.isRetryable

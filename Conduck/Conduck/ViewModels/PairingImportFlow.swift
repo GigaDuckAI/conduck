@@ -892,7 +892,7 @@ final class SettingsViewModelPairingEnvironment: PairingImportEnvironment {
             // derivation (`success && !returnCapable`), never re-derived locally.
             passed: result?.success == true,
             uploadsOnly: result?.isUploadOnly == true,
-            failureMessage: failure?.descriptionWithRecovery,
+            failureMessage: failure?.descriptionWithRecovery(for: target),
             retryable: failure?.isRetryable ?? true
         )
     }

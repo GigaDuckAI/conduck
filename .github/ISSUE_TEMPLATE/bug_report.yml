@@ -12,7 +12,7 @@ body:
     id: what-happened
     attributes:
       label: What happened?
-      description: What did you observe, and what did you expect instead? Include the affected gateway or voice provider if relevant.
+      description: What did you observe, and what did you expect instead? If it only happens with a particular AI or voice provider, say which.
     validations:
       required: true
   - type: textarea
@@ -67,7 +67,7 @@ body:
     id: logs
     attributes:
       label: Additional log output
-      description: "Optional console or log output beyond the diagnostics report. Before pasting, remove anything private: API keys, bearer tokens, gateway URLs, transcripts, prompts and replies, filenames, and account names. Conduck itself does not log these, but output from a modified build might."
+      description: "Optional console or log output beyond the diagnostics report. Before pasting, remove anything private: keys and tokens, the address of any AI or file server you connect to, transcripts, prompts and replies, filenames, and account names. Conduck itself does not log these, but output from a modified build might."
       render: shell
     validations:
       required: false

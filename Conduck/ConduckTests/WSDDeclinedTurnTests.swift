@@ -247,7 +247,7 @@ final class WSDDeclinedTurnTests: XCTestCase {
         XCTAssertEqual(known.kind, .generic)
         XCTAssertEqual(known.title, "No reply")
         // Cause AND remedy — the row is the whole story for the failed turn.
-        XCTAssertEqual(known.body, AppError.remoteAgentUnreachable.descriptionWithRecovery)
+        XCTAssertEqual(known.body, AppError.remoteAgentUnreachable.descriptionWithRecovery())
         XCTAssertEqual(known.troubleshootCode, AppError.remoteAgentUnreachable.errorCode)
         XCTAssertTrue(known.offersRetry, "an unreachable gateway can succeed on the next tap")
 
@@ -278,7 +278,7 @@ final class WSDDeclinedTurnTests: XCTestCase {
                 wordlessTurn: .absent
             )
             XCTAssertFalse(refused.offersRetry, "\(terminal) is terminal — no Try again")
-            XCTAssertEqual(refused.body, terminal.descriptionWithRecovery)
+            XCTAssertEqual(refused.body, terminal.descriptionWithRecovery())
         }
 
         // The counterweight to that loop, and the reason it names only
@@ -301,7 +301,7 @@ final class WSDDeclinedTurnTests: XCTestCase {
             )
             XCTAssertTrue(refused.offersRetry,
                           "\(recoverable) turns on state the row instructs the user to change — Try again is how they act on it")
-            XCTAssertEqual(refused.body, recoverable.descriptionWithRecovery)
+            XCTAssertEqual(refused.body, recoverable.descriptionWithRecovery())
         }
     }
 

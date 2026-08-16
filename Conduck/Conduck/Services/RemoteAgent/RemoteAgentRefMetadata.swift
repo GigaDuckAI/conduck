@@ -13,6 +13,12 @@
 // "should the list badge" and "can this ref render a badge" must never drift
 // apart on any of the five list surfaces.
 //
+// TWO name forms, and the choice belongs to the SURFACE, not the caller's
+// convenience. `displayName` is the full one — iPhone, iPad, Mac.
+// `shortDisplayName` is bounded by `shortDisplayNameLimit` and is what the
+// narrow and SPOKEN surfaces use: the wrist, the wheel, a notification title.
+// The budget's derivation sits on the constant.
+//
 // Shared by the app AND Watch targets (Approach A membership exception) — the
 // Watch list applies the identical rule, so a new file would be the wrong home
 // for it (it would silently miss the Watch target).
@@ -39,6 +45,71 @@ enum RemoteAgentRefMetadata {
         case .custom(let id):
             return customs.first(where: { $0.id == id })?.name ?? genericCustomName
         }
+    }
+
+    // MARK: - The short display form (narrow + spoken surfaces)
+
+    /// The character budget for a name a NARROW or SPOKEN surface renders.
+    ///
+    /// Derived from the two measurements that bound those surfaces, not chosen
+    /// for looks. A custom gateway's name is capped at 40 characters when it is
+    /// saved (`SettingsViewModel.saveRemoteAgentConfig`), and the Watch in-thread
+    /// error banner holds ROUGHLY 38 characters over its two lines — measured
+    /// on-device and recorded in `ErrorSurfaceDriftGuardTests`, where three
+    /// certificate verdicts at 101/124/129 characters are on record as having
+    /// clipped inside it. So a sentence that names its instance — "Couldn't
+    /// reach X." — is 18 characters of frame plus the name: at 40 it overflows
+    /// the banner outright, at 16 it fits. That is the whole derivation.
+    ///
+    /// The budget also protects the SPOKEN lane, where the failure is different
+    /// and worse: CarPlay reads error copy aloud through TTS at the wheel, and
+    /// every character is time a driver spends listening. A name is the one part
+    /// of that sentence Conduck does not write, so it is the one part that has to
+    /// be bounded.
+    static let shortDisplayNameLimit = 16
+
+    /// The user-facing gateway name, bounded by `shortDisplayNameLimit`.
+    ///
+    /// Use this on the wrist, at the wheel, and in a notification title. Use
+    /// `displayName` on iPhone, iPad and Mac, where the layout can hold a name in
+    /// full and truncating one would be a loss for nothing.
+    ///
+    /// Built-in → `RemoteAgentBackend.shortDisplayName` (its own name, with
+    /// `shortCode` as the floor). Custom → its roster name, truncated; a custom
+    /// with no usable name falls back to its monogram and then to the same
+    /// generic label the rest of the app uses, so this never returns "".
+    static func shortDisplayName(for ref: RemoteAgentRef, customs: [CustomGateway]) -> String {
+        switch ref {
+        case .builtin(let backend):
+            return backend.shortDisplayName
+        case .custom(let id):
+            let name = (customs.first(where: { $0.id == id })?.name ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else {
+                let monogram = monogram(for: ref, customs: customs)
+                return monogram.isEmpty ? genericCustomName : monogram
+            }
+            return truncatedToShortLimit(name)
+        }
+    }
+
+    /// Cut a name down to `shortDisplayNameLimit`, ellipsis included in the
+    /// budget so the RESULT is what fits, not the input.
+    ///
+    /// A hard cut, not a word-boundary one. Custom names are frequently
+    /// hostname-shaped (`hermes-vps-01-frankfurt`) with no word boundary to find,
+    /// and a rule that sometimes trims to a word and sometimes does not gives two
+    /// different answers for names that differ by one character — which on a
+    /// surface the user compares two gateways on is worse than a predictable cut.
+    /// Trailing separators are dropped so the result never reads "hermes-vps-…".
+    static func truncatedToShortLimit(_ name: String) -> String {
+        guard name.count > shortDisplayNameLimit else { return name }
+        let head = name.prefix(shortDisplayNameLimit - 1)
+        let trimmed = String(head).replacingOccurrences(
+            of: #"[\s\-_.,;:/]+$"#, with: "", options: .regularExpression)
+        // A name made ENTIRELY of separators past the cut would trim to nothing;
+        // fall back to the untrimmed head so the form always carries characters.
+        return (trimmed.isEmpty ? String(head) : trimmed) + "…"
     }
 
     /// The 1–2 char badge monogram. Built-in → its `shortCode` ("OC"/"H");

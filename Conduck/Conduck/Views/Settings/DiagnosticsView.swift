@@ -197,10 +197,10 @@ struct DiagnosticsContent: View {
     }
 
     /// Re-probe ONE gateway. Same house-standard bordered action as the file lane's
-    /// staged test directly beneath it, but deliberately a DIFFERENT verb: two
-    /// buttons one row apart both reading "Test Connection" would be worse than a
-    /// duller label, and this one tests the gateway while that one tests the file
-    /// server.
+    /// staged test directly beneath it, but deliberately a DIFFERENT verb: the
+    /// two buttons one row apart test DIFFERENT machines, and the labels now say
+    /// which — this one re-probes the gateway, the one beneath it says "Test file
+    /// server".
     @ViewBuilder
     private func recheckButton(for ref: RemoteAgentRef) -> some View {
         Button {
@@ -859,7 +859,7 @@ struct DiagnosticsContent: View {
                 // Same CTA name + glyph as every other surface's staged
                 // file-server test (editor, setup guide).
                 Label(
-                    LocalizedStringResource("diagnostics.action.testFileServerShort", defaultValue: "Test Connection"),
+                    LocalizedStringResource("settings.fileTransfer.testConnection.button", defaultValue: "Test file server"),
                     systemImage: "checkmark.shield"
                 )
                 .font(.subheadline.weight(.semibold))

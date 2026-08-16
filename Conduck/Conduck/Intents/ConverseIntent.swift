@@ -44,7 +44,10 @@ struct ConverseIntent: AppIntent {
     static var title: LocalizedStringResource = "GigaAction"   // xcstrings
 
     static var description: IntentDescription = IntentDescription(
-        LocalizedStringResource("Transcribe recorded audio and send it to your configured personal AI, returning the reply.")  // xcstrings
+        LocalizedStringResource(
+            "intent.converse.description",
+            defaultValue: "Transcribe recorded audio and send it to your configured AI, returning the reply."
+        )
     )
 
     // MARK: - Parameters

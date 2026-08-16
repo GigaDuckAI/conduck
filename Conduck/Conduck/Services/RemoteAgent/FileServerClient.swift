@@ -9,9 +9,9 @@
 // a thin CLIENT: it PUTs file bytes to the server ROOT as `<storedKey>`, GETs
 // them back, probes existence with a GET (NEVER a HEAD — see below), DELETEs
 // orphans, MKCOLs collections, and lists ONE exact collection with PROPFIND.
-// GigaDuck ships NO server binary; the app is a pure WebDAV client, and
-// standing up the server is the user's job (Quick connect via
-// `conduck-connect`, or the setup guide's manual steps).
+// Conduck ships NO server binary — we are a pure WebDAV client, and standing
+// up the server is the user's job (Quick connect via `conduck-connect`, or
+// the setup guide's manual steps).
 //
 // Mirrors the split in `RemoteAgentClient` / `RemoteAgentClient+TestConnection`:
 //   - The `build*Request(...)` helpers are pure URL/header assembly so the

@@ -1,6 +1,446 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "remoteAgent.error.unexpectedStatus.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI answered with HTTP %lld, which Conduck doesn't recognise."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unexpectedStatus.unknown.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI answered in a way Conduck doesn't recognise."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notEstablished.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck couldn't open a connection to your AI."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.imageTooLarge.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "An attached image was too large for your AI."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointUnexpectedResponse.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something answered, but not like an AI endpoint."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointWrongEnvelope.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something answered JSON, but not in the shape Conduck needs."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointNotFound.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI provider didn't recognise the route."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI needs you to name a model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.visionUnsupported.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI couldn't use the photo."
+          }
+        }
+      }
+    },
+    "watch.error.invalidResponse" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read the reply from your AI."
+          }
+        }
+      }
+    },
+    "watch.conversations.empty.hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ask your AI to start one."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No AI is configured."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unreachable.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your AI."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed.v3" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The request to your AI was refused."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.timeout.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI took too long to respond."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serverError.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI reported an error."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.invalidResponse.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI returned an unexpected response."
+          }
+        }
+      }
+    },
+    "setup.requiredOnPhone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up your AI on iPhone first."
+          }
+        }
+      }
+    },
+    "error.unreachable.retry" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your AI. Try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.reply.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reply from your AI"
+          }
+        }
+      }
+    },
+    "settings.certTrust.pinMismatch.refusal.compact.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This server's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured.recovery.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and add its address and key."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and add your key."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unreachable.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your internet connection, then try again. Conduck can't tell whether the request arrived."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed.recovery.v3" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your API key in your provider's dashboard, then paste it again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.timeout.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It may still be working on this one. Another attempt could repeat the work and the cost."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serverError.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again in a moment."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.invalidResponse.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again, or pick a different model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.visionUnsupported.recovery.modelChoice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Pick a model that accepts images, or keep chatting with text."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.imageTooLarge.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try a smaller image."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelUnavailable.recovery.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the model configured on your server."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.contextTooLong.recovery.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Start a new chat to shorten the history."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointUnexpectedResponse.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something other than the provider answered. Check the network you're on, then try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointNotFound.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The provider didn't recognise that route. Try again in a moment."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired.recovery.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set a default model on your server, then try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and pick a model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unexpectedStatus.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That came from the provider or the network between you. Try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serviceUnavailable.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The provider or something on the route is unavailable. Try again shortly."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notEstablished.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your internet connection. The request most likely never left this device."
+          }
+        }
+      }
+    },
     "" : {
 
     },
@@ -144,17 +584,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "A queued recording couldn't reach your iPhone and has expired."
-          }
-        }
-      }
-    },
-    "Agent" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Agent"
           }
         }
       }
@@ -1026,17 +1455,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Recording file not found."
-          }
-        }
-      }
-    },
-    "Relay" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Relay"
           }
         }
       }

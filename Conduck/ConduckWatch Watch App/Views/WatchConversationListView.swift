@@ -203,7 +203,10 @@ struct WatchConversationListView: View {
             Text("No conversations yet")  // xcstrings
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("Ask your personal AI to start one.")  // xcstrings
+            Text(LocalizedStringResource(
+                "watch.conversations.empty.hint",
+                defaultValue: "Ask your AI to start one."
+            ))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)

@@ -126,7 +126,9 @@ struct DiagnosticCheck: Identifiable, Sendable, Equatable {
     /// Stable key — `ForEach` id and the focus target for the banner deep-link
     /// (e.g. `"gateway.openclaw"`, `"gateway.custom.<uuid>"`, `"voice.stt.auth"`).
     let id: String
-    /// Plain-English, allowlisted label (e.g. "OpenClaw gateway", "Microphone").
+    /// Plain-English, allowlisted label (e.g. "OpenClaw", "Microphone"). A
+    /// gateway row is titled with the INSTANCE — its display name, no trailing
+    /// common noun; the runner assembles no naming phrase at runtime.
     let title: String
     let category: DiagnosticCategory
     let tier: DiagnosticTier

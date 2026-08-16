@@ -210,7 +210,7 @@ struct iOSMessageComposerBar: View {
             // act on (the interception warning, the server-side routes, the
             // "your certificate is fine") in the remedy half alone.
             if case .error(let error) = recorder.state {
-                let message = error.descriptionWithRecovery
+                let message = error.descriptionWithRecovery(for: viewModel?.boundRef)
                 Text(message.isEmpty ? String(localized: "Something went wrong.") : message)  // xcstrings
                     .font(.caption)
                     .foregroundStyle(AppColors.error)
@@ -653,8 +653,8 @@ struct iOSMessageComposerBar: View {
     private var composerField: some View {
         TextField(
             String(localized: LocalizedStringResource(
-                "composer.placeholder",
-                defaultValue: "Message your personal AI"
+                "composer.placeholder.v2",
+                defaultValue: "Message your AI"
             )),
             text: $draft,
             axis: .vertical
@@ -665,8 +665,8 @@ struct iOSMessageComposerBar: View {
         // Explicit VoiceOver label (reuses the placeholder string) so the field
         // is announced even when empty / when the placeholder isn't read.
         .accessibilityLabel(LocalizedStringResource(
-            "composer.placeholder",
-            defaultValue: "Message your personal AI"
+            "composer.placeholder.v2",
+            defaultValue: "Message your AI"
         ))
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

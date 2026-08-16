@@ -3,7 +3,12 @@
 // Conduck
 // VoiceVendor.swift
 //
-// Planned cloud Text-to-Speech — the merged "Voice" Settings display layer.
+// Cloud voice vendors — the merged "Voice" Settings display layer. Both
+// directions ship across the vendors listed below, with Apple's on-device
+// engine as the default and the fallback; `VoiceCapabilityStatus.coming`
+// marks the per-direction exceptions, so a vendor's presence here is not
+// evidence that both of its directions are live.
+//
 // A `VoiceVendor` GROUPS the two existing registries (STT + TTS) WITHOUT
 // duplicating them: one row per vendor, ONE API key per vendor serving BOTH
 // directions (speech-to-text AND text-to-speech), each direction with its own

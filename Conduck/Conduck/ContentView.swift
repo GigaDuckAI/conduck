@@ -334,7 +334,10 @@ struct ContentView: View {
                     .foregroundStyle(AppColors.textSecondary)
             }
         }
-        .accessibilityLabel("Choose gateway")  // xcstrings: chat-ui
+.accessibilityLabel(Text(LocalizedStringResource(
+            "chat.chooseAI.label",
+            defaultValue: "Choose AI"
+        )))  // VoiceOver reads the taxonomy no visual review ever sees.
         .accessibilityIdentifier("toolbar.gatewayPicker")  // stable QA target (non-localized)
     }
 
@@ -1319,7 +1322,7 @@ struct ContentView: View {
             // certificate verdicts keep their whole actionable half there.
             pendingRetryErrorCode = error.errorCode
             pendingRetryIsRetryable = error.isRetryable
-            let message = error.descriptionWithRecovery
+            let message = error.descriptionWithRecovery(for: detailVM?.boundRef ?? pickerSelectedRef)
             presentRetryError(
                 message.isEmpty ? String(localized: "Couldn't send — try again in a minute.") : message,  // xcstrings
                 sticky: !error.isRetryable

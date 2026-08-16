@@ -484,8 +484,8 @@ struct DictationPopoverView: View {
                 // Same key + defaultValue as the window composer — one
                 // catalog entry, one voice.
                 String(localized: LocalizedStringResource(
-                    "composer.placeholder",
-                    defaultValue: "Message your personal AI"
+                    "composer.placeholder.v2",
+                    defaultValue: "Message your AI"
                 )),
                 text: $coordinator.quickDraft,
                 axis: .vertical

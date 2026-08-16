@@ -11,7 +11,7 @@
 // carries no "set up later" link.
 //
 // TWO SECTIONS, mirroring the Personal AI list's grouping:
-//   "Your own AI" — the full personal AI server card (OpenClaw / Hermes → the
+//   "Your own AI" — the self-hosted server card (OpenClaw / Hermes → the
 //     full-agent guided lane, via `onFullAgent`) and the Custom Gateway
 //     card (any OpenAI-compatible endpoint, via `onCustom`).
 //   "Hosted" — the OpenRouter card (`HostedModelGatewayStepView`), de-emphasized
@@ -20,7 +20,7 @@
 // NEUTRAL by design: no card is badged or emphasized — we present a sensible
 // ORDER (self-host first, hosted last) but never label a "recommended" winner.
 // The full-agent card leads with the concrete product names (OpenClaw / Hermes),
-// with "Full personal AI server" as its subtitle. `onCustom` is optional — when
+// with "Runs on your own server" as its subtitle. `onCustom` is optional — when
 // the user is already at the custom-gateway cap the container passes `nil` and
 // the card is omitted (mirrors the list's disabled "Add custom gateway" row).
 // The container owns routing; this view only reports the choice.
@@ -31,7 +31,7 @@ import SwiftUI
 /// "own AI" cards plus the hosted card each hand the container one routing
 /// branch (full-agent step / custom editor / hosted step).
 struct GatewayChooserStepView: View {
-    /// Full personal AI server branch (OpenClaw / Hermes) → the full-agent
+    /// Self-hosted server branch (OpenClaw / Hermes) → the full-agent
     /// guided lane (readiness → helper → commands → scan/paste the
     /// `conduck-connect` setup code).
     let onFullAgent: () -> Void
@@ -81,7 +81,10 @@ struct GatewayChooserStepView: View {
                     OnboardingChoiceCard(
                         icon: "server.rack",
                         title: "OpenClaw or Hermes server", // xcstrings: gateway-chooser
-                        subtitle: "Full personal AI server — tools and file access.", // xcstrings: gateway-chooser
+                        subtitle: LocalizedStringResource(
+                            "onboarding.gatewayChooser.selfHosted.subtitle",
+                            defaultValue: "Runs on your own server — tools and file access."
+                        ),
                         action: onFullAgent
                     )
 

@@ -601,7 +601,10 @@ struct ConversationListView: View {
                 .font(.title3)
                 .fontWeight(.semibold)
                 .foregroundStyle(AppColors.textPrimary)
-            Text("Tap the mic on the home screen to start a conversation with your personal AI.")
+            Text(LocalizedStringResource(
+                "conversations.empty.micHint",
+                defaultValue: "Tap the mic on the home screen to start a conversation with your AI."
+            ))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)

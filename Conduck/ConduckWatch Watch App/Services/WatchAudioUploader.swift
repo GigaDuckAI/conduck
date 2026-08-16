@@ -1027,7 +1027,10 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
 
         case .failure(let kind, let conversationID):
             surfaceTurnFailure(
-                message: failureMessage(for: kind),
+                message: failureMessage(
+                    for: kind,
+                    ref: (metadata?.backendRawValue).flatMap(RemoteAgentRef.init(rawString:))
+                ),
                 conversationID: conversationID,
                 userMessageID: userMessageID,
                 classification: Self.failureClassification(for: kind)
@@ -1111,7 +1114,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                     // answered, so there is no gateway-side cause to record.
                     WatchLog.error(.converse, "converse.bg.appendFail")
                     surfaceTurnFailure(
-                        message: String(localized: "Couldn't read the reply from your personal AI."),
+                        message: String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI."),
                         conversationID: cid,
                         userMessageID: userMessageID
                     )
@@ -1144,13 +1147,19 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                 // Local reply notification (≤200 char body). In a multi-gateway
                 // setup (≥2 configured) the title names the bound gateway so the
                 // wrist banner says which agent answered; else the generic string.
+                //
+                // The SHORT form: a notification title on a watch face is a single
+                // line beside the app icon and the timestamp, and a custom name may
+                // be up to 40 characters. A title truncated by the system reads as
+                // an unfinished sentence; one truncated to a known budget reads as
+                // a name.
                 let replyTitle: String = {
                     guard WatchSettingsReader.shared.configuredBackendRefs().count >= 2,
                           let raw = metadata?.backendRawValue,
                           let ref = RemoteAgentRef(rawString: raw) else {
-                        return String(localized: "Reply from your personal AI")  // xcstrings
+                        return String(localized: "remoteAgent.notification.reply.title", defaultValue: "Reply from your AI")
                     }
-                    return RemoteAgentRefMetadata.displayName(
+                    return RemoteAgentRefMetadata.shortDisplayName(
                         for: ref,
                         customs: WatchSettingsReader.shared.customGateways
                     )
@@ -1168,7 +1177,13 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// Copy + forensics for a classified converse failure — the execution half
     /// of `WatchConverseCompletionVerdict.FailureKind`. The verdict stays pure;
     /// the localized strings and the per-branch log lines live here.
-    private func failureMessage(for kind: WatchConverseCompletionVerdict.FailureKind) -> String {
+    /// `ref` is the gateway this wrist turn was bound to, recovered from the
+    /// task metadata by the caller. It decides whether a remedy names a machine
+    /// the reader operates: this body mirrors to the paired iPhone's lock screen
+    /// and is frequently the only place the verdict is read, so "check the
+    /// gateway logs" reaching someone who runs no server costs them the turn.
+    private func failureMessage(for kind: WatchConverseCompletionVerdict.FailureKind,
+                                ref: RemoteAgentRef?) -> String {
         switch kind {
         case .transport(let error):
             WatchLog.error(.converse, "converse.bg.transport", ["domain": (error as NSError).domain, "code": (error as NSError).code])
@@ -1178,7 +1193,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // errors keep the generic fallback.
             return WatchNetworkFailureCopy.transportFailureMessage(
                 for: error,
-                fallback: String(localized: "Couldn't reach your personal AI. Try again.")
+                fallback: String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
             )
         case .responseOverCap:
             // A body past `Constants.maxBackgroundResponseBytes` — the reply is
@@ -1187,7 +1202,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // The point of the branch is that the turn FAILS VISIBLY, with the
             // ordinary Retry affordance, instead of vanishing as a cancel.
             WatchLog.error(.converse, "converse.bg.overcap")
-            return String(localized: "Couldn't read the reply from your personal AI.")
+            return String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI.")
         case .certificateUntrusted:
             // ONE cause, ONE wording: the shared text every other surface renders,
             // in its wrist form (the three server-side routes don't fit here, so it
@@ -1208,7 +1223,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             WatchLog.error(.converse, "converse.bg.certKeyUnpinnable")
             return WatchNetworkFailureCopy.certificateKeyUnpinnableMessage
         case .cancelledAcrossLaunch, .missingHTTPResponse:
-            return String(localized: "Couldn't reach your personal AI. Try again.")
+            return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
         case .classifiedBody(let classified):
             // Metadata only — the numeric code and the frozen wire code. The body
             // that produced this is never logged (it is an agent reply / server
@@ -1224,9 +1239,9 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // history that does not fit), so inviting a bare retry would loop the
             // wrist forever. Hostname-free: every arm returns fixed copy, which
             // matters because this text mirrors to the paired iPhone's lock screen.
-            let body = classified.appError.descriptionWithRecovery
+            let body = classified.appError.descriptionWithRecovery(for: ref)
             return body.isEmpty
-                ? String(localized: "Couldn't reach your personal AI. Try again.")
+                ? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
                 : body
         case .httpStatus(let status):
             WatchLog.error(.converse, "converse.bg.http", ["status": status])
@@ -1248,20 +1263,20 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             guard let error = RemoteAgentStatusMap.unified.map(status) else {
                 // 2xx cannot reach a failure verdict; keep the old line as the
                 // impossible-case fallback rather than inventing new copy.
-                return String(localized: "Couldn't reach your personal AI. Try again.")
+                return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
             }
-            let body = error.descriptionWithRecovery
+            let body = error.descriptionWithRecovery(for: ref)
             return body.isEmpty
-                ? String(localized: "Couldn't reach your personal AI. Try again.")
+                ? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
                 : body
         case .undecodableReply:
-            return String(localized: "Couldn't read the reply from your personal AI.")
+            return String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI.")
         case .noConversationID:
             // anti-phantom-reply: a decoded reply with no home (metadata
             // decode failed) surfaces a soft failure instead of a success
             // notification for a turn that isn't in any thread.
             WatchLog.error(.converse, "converse.bg.noConvID")
-            return String(localized: "Couldn't reach your personal AI. Try again.")
+            return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
         }
     }
 

@@ -372,13 +372,13 @@ final class DiagnosticsRunnerTests: XCTestCase {
     /// derives the amber `.unconfirmed` without registering as verified.
     func testFileLaneReachStatesDeriveHonestBadges() {
         let reachOK = FileLaneState(
-            ref: .builtin(.openclaw), displayName: "OpenClaw gateway", backendKind: "openclaw",
+            ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
             configured: true, reachAuth: .warning, writeVerified: false, detail: nil)
         XCTAssertEqual(reachOK.badge, .unconfirmed, "reach-OK is 'Unconfirmed' until the write test verifies")
         XCTAssertTrue(reachOK.needsAttention)
 
         let passed = FileLaneState(
-            ref: .builtin(.openclaw), displayName: "OpenClaw gateway", backendKind: "openclaw",
+            ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
             configured: true, reachAuth: .passed, writeVerified: false, detail: nil)
         XCTAssertEqual(passed.badge, .verified, "`.passed` exists only via the write test — folds to verified")
         XCTAssertFalse(passed.needsAttention)
@@ -390,13 +390,13 @@ final class DiagnosticsRunnerTests: XCTestCase {
     /// else the summary reads "Checks passed" over a broken file host.
     func testFileLaneFreshFailureOverridesStaleVerified() {
         let failed = FileLaneState(
-            ref: .builtin(.openclaw), displayName: "OpenClaw gateway", backendKind: "openclaw",
+            ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
             configured: true, reachAuth: .failed(code: 46), writeVerified: true, detail: nil)
         XCTAssertEqual(failed.badge, .failed, "a fresh reach failure overrides a stale writeVerified flag")
         XCTAssertTrue(failed.needsAttention, "the summary must count a now-broken previously-verified lane")
 
         let unconfirmed = FileLaneState(
-            ref: .builtin(.openclaw), displayName: "OpenClaw gateway", backendKind: "openclaw",
+            ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
             configured: true, reachAuth: .warning, writeVerified: true, detail: nil)
         XCTAssertEqual(unconfirmed.badge, .unconfirmed)
         XCTAssertTrue(unconfirmed.needsAttention)
@@ -435,13 +435,13 @@ final class DiagnosticsRunnerTests: XCTestCase {
         let hermes = RemoteAgentRef.builtin(.hermes)   // configured: false below
 
         let lanes = [
-            FileLaneState(ref: openclaw, displayName: "OpenClaw gateway", backendKind: "openclaw",
+            FileLaneState(ref: openclaw, displayName: "OpenClaw", backendKind: "openclaw",
                           configured: true, reachAuth: .passed, writeVerified: false, detail: nil),
             FileLaneState(ref: custom1, displayName: "LiteLLM", backendKind: "custom",
                           configured: true, reachAuth: .warning, writeVerified: false, detail: nil),
             FileLaneState(ref: custom2, displayName: "Other", backendKind: "custom",
                           configured: true, reachAuth: .failed(code: 46), writeVerified: false, detail: nil),
-            FileLaneState(ref: hermes, displayName: "Hermes gateway", backendKind: "hermes",
+            FileLaneState(ref: hermes, displayName: "Hermes", backendKind: "hermes",
                           configured: false, reachAuth: .notRun, writeVerified: false, detail: nil),
         ]
 
@@ -662,10 +662,17 @@ final class DiagnosticsRunnerTests: XCTestCase {
         XCTAssertEqual(
             DiagnosticsRunner.gatewayDisplayName(ref2, customGateways: [CustomGateway(id: id2, name: "   ")], ordinal: 2),
             "Custom gateway 2", "a whitespace-only name falls back to the numbered form")
-        // A built-in never uses the fallback.
+        // A built-in never uses the fallback — and it is its display name ALONE.
+        // The runner used to append a common noun at runtime ("OpenClaw
+        // gateway"), a phrase that existed in no string catalog and, on the
+        // hosted lane, named a machine the reader does not operate.
         XCTAssertEqual(
             DiagnosticsRunner.gatewayDisplayName(.builtin(.openclaw), customGateways: [], ordinal: nil),
-            "OpenClaw gateway")
+            "OpenClaw")
+        XCTAssertEqual(
+            DiagnosticsRunner.gatewayDisplayName(.builtin(.openrouter), customGateways: [], ordinal: nil),
+            "OpenRouter",
+            "the hosted lane names the service, never a gateway the user doesn't run")
     }
 
     /// Notifications is the standing OS capability row. Background App Refresh

@@ -21,6 +21,14 @@ import Foundation
 /// - `errorDescription` — banner copy shown in Shortcuts (iOS) / menu bar popover (macOS)
 /// - `recoverySuggestion` — secondary line on platforms that surface it
 /// - `isRetryable` — whether the STT retry loop should loop
+///
+/// BOTH halves of the copy dispatch on the same `RemoteAgentFailureContext`, and
+/// they are resolved TOGETHER. A cause that names a machine the reader does not
+/// operate ("your gateway answered with HTTP 418") beside a remedy that does not
+/// ("that came from the provider") is a banner arguing with itself, and it is the
+/// shape a half-applied sweep leaves behind: whichever half nobody thought to
+/// parameterise goes on answering for one lane. `descriptionWithRecovery(in:)` is
+/// the single place they are joined, and it passes ONE context to both.
 /// - `maxAttempts` — cap on how many times the retry loop runs for this error
 /// - `shouldPreserveForRetry` — whether the audio should be saved to
 ///   PendingRetryStore so the user can retry from inside the app later
@@ -82,9 +90,10 @@ enum AppError: LocalizedError {
 
     // Remote Agent multimodal (32-33) — V1.1 Core Attachments. Both
     // non-retryable (retrying the same image bytes against the same model
-    // won't change the verdict; the user must switch model or shrink the
-    // image via the Max-image-dimension setting). Surfaced via the body-aware
-    // `RemoteAgentClient.mapBodyError` in BOTH send paths.
+    // won't change the verdict; the user must switch model or start from a
+    // smaller source image — there is no user-facing image-dimension control,
+    // the inline copy is capped at `ImageProcessor.defaultMaxPixel`). Surfaced
+    // via the body-aware `RemoteAgentClient.mapBodyError` in BOTH send paths.
     case remoteAgentVisionUnsupported // 32 — model rejects image content
     case remoteAgentImageTooLarge     // 33 — gateway 413 / "image too large"
 
@@ -277,7 +286,37 @@ enum AppError: LocalizedError {
     // Catch-all (99)
     case unknown(Error)
 
-    var errorDescription: String? {
+    /// `LocalizedError`'s slot. Answers for the NEUTRAL context, exactly as
+    /// `recoverySuggestion` does and for the same reason: the protocol has no way
+    /// to pass one. Any caller that knows WHICH AI failed should reach for
+    /// `errorDescription(for:)` — or, better, `descriptionWithRecovery(for:)`,
+    /// which resolves both halves in one context so they cannot disagree.
+    var errorDescription: String? { errorDescription(in: .neutral) }
+
+    /// The cause, for the AI that actually failed.
+    func errorDescription(for ref: RemoteAgentRef?) -> String? {
+        errorDescription(in: .resolve(ref))
+    }
+
+    /// The cause, dispatched on CAPABILITY — the mirror of
+    /// `recoverySuggestion(in:)`, under the same two rules.
+    ///
+    /// The gateway-class causes below branch on `hidesURLField`, the narrowest
+    /// question that decides the one word at stake: whether there is a server of
+    /// the READER'S at the other end. Where there is not, the copy names the
+    /// CLASS ("your AI", possessive) instead — never "personal AI", an adjective
+    /// asserting ownership and privacy a shared third-party routing service
+    /// cannot back. Arms with no capability variance stay unbranched on purpose:
+    /// a paraphrase per lane would read as several different problems.
+    ///
+    /// Every hosted arm is SHORTER than the self-hosted string it mirrors. That
+    /// is a constraint, not a coincidence — these strings are notification titles
+    /// and Watch banners, and the wrist banner holds roughly 38 characters over
+    /// two lines (measured on-device, recorded in `ErrorSurfaceDriftGuardTests`).
+    /// Splitting one arm into several must never be a back door for longer copy;
+    /// `RemoteAgentRecoveryCopyLaneTests` holds every lane's cause at or under the
+    /// neutral wording's length.
+    func errorDescription(in context: RemoteAgentFailureContext) -> String? {
         switch self {
         // Network errors
         case .networkError(let error):
@@ -350,11 +389,16 @@ enum AppError: LocalizedError {
         case .sttDecodingFailure:
             return String(localized: "stt.error.decodingFailure", defaultValue: "STT provider returned an unexpected response format.")
 
-        // Remote Agent (Personal AI gateway — OpenClaw / Hermes)
+        // Remote Agent — every lane. These six CAUSES are lane-agnostic running
+        // copy: they reach an OpenRouter user who operates no server, so they
+        // name the CLASS ("your AI") and never "personal AI", an adjective that
+        // asserts ownership and privacy a shared third-party routing service
+        // cannot back. Every one is a NEW key — a reworded `defaultValue:` is
+        // inert against a catalogued English value.
         case .remoteAgentNotConfigured:
-            return String(localized: "remoteAgent.error.notConfigured", defaultValue: "No personal AI gateway is configured.")
+            return String(localized: "remoteAgent.error.notConfigured.v2", defaultValue: "No AI is configured.")
         case .remoteAgentUnreachable:
-            return String(localized: "remoteAgent.error.unreachable", defaultValue: "Could not reach your personal AI gateway.")
+            return String(localized: "remoteAgent.error.unreachable.v2", defaultValue: "Couldn't reach your AI.")
         case .remoteAgentAuthFailed:
             // `.v2`: 26 carries 401 AND 403, and a 403 is a refusal that can
             // happen before any credential is looked at — an origin that
@@ -366,21 +410,37 @@ enum AppError: LocalizedError {
             // no refuser, matching `unexpectedStatus`'s restraint.
             // Catalog-value-wins rule: a reworded existing key ships the OLD
             // string, so this is a new key.
-            return String(localized: "remoteAgent.error.authFailed.v2", defaultValue: "The request to your personal AI was refused.")
+            return String(localized: "remoteAgent.error.authFailed.v3", defaultValue: "The request to your AI was refused.")
         case .remoteAgentTimeout:
-            return String(localized: "remoteAgent.error.timeout", defaultValue: "Your personal AI took too long to respond.")
+            return String(localized: "remoteAgent.error.timeout.v2", defaultValue: "Your AI took too long to respond.")
         case .remoteAgentServerError:
-            return String(localized: "remoteAgent.error.serverError", defaultValue: "Your personal AI gateway reported an error.")
+            return String(localized: "remoteAgent.error.serverError.v2", defaultValue: "Your AI reported an error.")
         case .remoteAgentUnexpectedStatus(let status):
-            // Two keys, not one interpolation with a placeholder value: a
-            // reconstructed failure has no number, and "HTTP 0" would be a lie.
+            // Two keys per lane, not one interpolation with a placeholder value:
+            // a reconstructed failure has no number, and "HTTP 0" would be a lie.
+            //
+            // The `.hosted` pair exists because 71's remedy already tells a
+            // fixed-URL reader the status "came from the provider or the network
+            // between you". A cause that answers "your gateway" in front of it
+            // contradicts it in the same banner.
             if let status {
+                if context.hidesURLField {
+                    return String(localized: "remoteAgent.error.unexpectedStatus.hosted", defaultValue: "Your AI answered with HTTP \(status), which Conduck doesn't recognise.")
+                }
                 return String(localized: "remoteAgent.error.unexpectedStatus", defaultValue: "Your gateway answered with HTTP \(status), which Conduck doesn't recognise.")
+            }
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.unexpectedStatus.unknown.hosted", defaultValue: "Your AI answered in a way Conduck doesn't recognise.")
             }
             return String(localized: "remoteAgent.error.unexpectedStatus.unknown", defaultValue: "Your gateway answered in a way Conduck doesn't recognise.")
         case .remoteAgentServiceUnavailable:
             return String(localized: "remoteAgent.error.serviceUnavailable", defaultValue: "A server involved in this connection is temporarily unavailable.")
         case .remoteAgentNotEstablished:
+            // The delivery claim is the load-bearing half and is lane-independent;
+            // only the noun for the far end changes.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.notEstablished.hosted", defaultValue: "Conduck couldn't open a connection to your AI.")
+            }
             return String(localized: "remoteAgent.error.notEstablished", defaultValue: "Conduck couldn't open a connection to your gateway.")
         case .remoteAgentCertMismatch:
             // Each `*CertMismatch` line names the SERVER whose key disagreed;
@@ -390,15 +450,27 @@ enum AppError: LocalizedError {
             // nothing on the user's server changed at all.
             return String(localized: "remoteAgent.error.certMismatch", defaultValue: "Your gateway's certificate doesn't match the fingerprint you pinned.")
         case .remoteAgentInvalidResponse:
-            return String(localized: "remoteAgent.error.invalidResponse", defaultValue: "Your personal AI returned an unexpected response.")
+            return String(localized: "remoteAgent.error.invalidResponse.v2", defaultValue: "Your AI returned an unexpected response.")
         case .remoteAgentVisionUnsupported:
             // "gateway", never "model" (vocabulary rule): the client
             // can't attribute the decline to the adapter vs the engine — the
             // old "This model can't read images." was measurably wrong (a
             // vision-capable engine behind a text-only adapter). Hedged copy:
             // this string also fires on regex-heuristic classifications.
+            //
+            // The cause branches on `hidesURLField` while the REMEDY branches on
+            // the model policy, and that is correct rather than an oversight: the
+            // cause's only lane-sensitive word is the noun for the far end, and
+            // the remedy's is which lever the reader owns. Same hedge on both
+            // arms — still no claim about the adapter versus the engine.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.visionUnsupported.hosted", defaultValue: "Your AI couldn't use the photo.")
+            }
             return String(localized: "remoteAgent.error.visionUnsupported", defaultValue: "This gateway couldn't use the photo.")
         case .remoteAgentImageTooLarge:
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.imageTooLarge.hosted", defaultValue: "An attached image was too large for your AI.")
+            }
             return String(localized: "remoteAgent.error.imageTooLarge", defaultValue: "An attached image was too large for your gateway.")
         case .remoteAgentOutOfCredits:
             // Cause only, like its 429 sibling. The remedy is an account
@@ -414,12 +486,35 @@ enum AppError: LocalizedError {
         case .remoteAgentRateLimited:
             return String(localized: "remoteAgent.error.rateLimited", defaultValue: "Your AI provider is rate-limiting you.")
         case .remoteAgentEndpointUnexpectedResponse:
+            // "Something", not "your AI": on a fixed-URL lane 58's own remedy
+            // says the answer came from something OTHER than the provider — a
+            // captive portal, an intercepting proxy — so the cause must not
+            // attribute it to the AI in the sentence before.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.endpointUnexpectedResponse.hosted", defaultValue: "Something answered, but not like an AI endpoint.")
+            }
             return String(localized: "remoteAgent.error.endpointUnexpectedResponse", defaultValue: "Your gateway answered, but not like an AI endpoint.")
         case .remoteAgentEndpointWrongEnvelope:
+            // 62 is 58 wearing JSON, and the same restraint applies for the same
+            // reason — the answerer is unidentified on a lane whose URL the app
+            // owns.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.endpointWrongEnvelope.hosted", defaultValue: "Something answered JSON, but not in the shape Conduck needs.")
+            }
             return String(localized: "remoteAgent.error.endpointWrongEnvelope", defaultValue: "Your gateway answered JSON, but not in the shape Conduck needs.")
         case .remoteAgentEndpointNotFound:
+            // "the route", not "the AI endpoint": a fixed-URL 404 is the
+            // provider's own routing, and the endpoint is not the reader's to
+            // have got wrong. Matches the hosted remedy, which says the provider
+            // didn't recognise that route.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.endpointNotFound.hosted", defaultValue: "Your AI provider didn't recognise the route.")
+            }
             return String(localized: "remoteAgent.error.endpointNotFound", defaultValue: "Your gateway didn't recognise the AI endpoint.")
         case .remoteAgentModelRequired:
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.modelRequired.hosted", defaultValue: "Your AI needs you to name a model.")
+            }
             return String(localized: "remoteAgent.error.modelRequired", defaultValue: "Your gateway needs you to name a model.")
 
         // Custom OpenAI-compatible STT endpoint
@@ -499,7 +594,36 @@ enum AppError: LocalizedError {
         }
     }
 
-    var recoverySuggestion: String? {
+    /// `LocalizedError`'s slot. Answers for the NEUTRAL context — the wording
+    /// every surface shipped before capability dispatch existed — because the
+    /// protocol has no way to pass one. Any caller that knows WHICH AI failed
+    /// should call `recoverySuggestion(for:)` instead; this exists for Shortcuts,
+    /// `errorUserInfo`, and the handful of sites with genuinely no ref in hand.
+    var recoverySuggestion: String? { recoverySuggestion(in: .neutral) }
+
+    /// The remedy, for the AI that actually failed.
+    func recoverySuggestion(for ref: RemoteAgentRef?) -> String? {
+        recoverySuggestion(in: .resolve(ref))
+    }
+
+    /// The remedy, dispatched on CAPABILITY.
+    ///
+    /// Every arm below that branches does so on the narrowest capability that
+    /// makes its sentence true, never on a hosted-vs-self-hosted flag — see
+    /// `RemoteAgentFailureContext` for why a lane flag gets 55 and 56 backwards.
+    /// Two rules govern what may be written here:
+    ///
+    /// 1. An arm must be TRUE for every lane that can reach it. A remedy that
+    ///    names a machine the user does not operate is worse than no remedy: it
+    ///    sends them looking for logs, a config file and a restart command that
+    ///    do not exist.
+    /// 2. Where a lane has no true remedy, say what IS true rather than inventing
+    ///    an action. A 5xx on a hosted provider is the provider's, and "try again
+    ///    in a moment" is honest where "check the gateway logs" is not.
+    ///
+    /// Arms with no capability variance are left unbranched on purpose — a
+    /// paraphrase per lane would read as several different problems.
+    func recoverySuggestion(in context: RemoteAgentFailureContext) -> String? {
         switch self {
         case .noInternetConnection:
             return String(localized: "network.error.noConnection.recovery", defaultValue: "Check your connection and try again.")
@@ -540,7 +664,15 @@ enum AppError: LocalizedError {
         case .sttDecodingFailure:
             return String(localized: "stt.error.decodingFailure.recovery", defaultValue: "If this persists, the provider may have changed its API.")
         case .remoteAgentNotConfigured:
-            return String(localized: "remoteAgent.error.notConfigured.recovery", defaultValue: "Open Settings → Personal AI and add a URL and bearer token.")
+            // A lane with a fixed URL has nothing for the user to type but the
+            // key, so naming an address sends them hunting for a field that is
+            // not on the screen. Both arms are new keys: the old copy said
+            // "bearer token", and the secrets vocabulary is "key" (chat/API) or
+            // "password" (file lane) — the wire keys keep their own names.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.notConfigured.recovery.hosted", defaultValue: "Open Settings → Personal AI and add your key.")
+            }
+            return String(localized: "remoteAgent.error.notConfigured.recovery.v2", defaultValue: "Open Settings → Personal AI and add its address and key.")
         case .remoteAgentUnreachable:
             // `.v2`: 19 is now the UNCERTAIN bucket. The codes that prove a
             // connection never opened moved to 73, and a genuinely offline
@@ -550,6 +682,14 @@ enum AppError: LocalizedError {
             // landed. Saying so matters because these gateways run tools.
             // Catalog-value-wins rule: a reworded existing key ships the OLD
             // string, so this is a new key.
+            //
+            // The uncertainty survives on every lane; what changes is what the
+            // user can do about it. On a fixed-URL lane there is no gateway to
+            // check and no tool run to inspect — the only thing they own is the
+            // connection at this end.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.unreachable.recovery.hosted", defaultValue: "Check your internet connection, then try again. Conduck can't tell whether the request arrived.")
+            }
             return String(localized: "remoteAgent.error.unreachable.recovery.v2", defaultValue: "Check the gateway is reachable from this device. Conduck can't tell whether the request arrived, so if it could run tools, check the gateway before trying again.")
         case .remoteAgentAuthFailed:
             // `.v2`: 26 has two live causes and cannot tell them apart here — a
@@ -564,25 +704,88 @@ enum AppError: LocalizedError {
             // proxy remedy would be noise, and per-framework facts drift.
             // Catalog-value-wins rule: a reworded existing key ships the OLD
             // string, so this is a new key.
-            return String(localized: "remoteAgent.error.authFailed.recovery.v2", defaultValue: "Check this gateway's token if it has one, and check anything in front of it — a proxy or tunnel can forward the request in a form your server refuses.")
+            //
+            // On a fixed-URL lane neither half of that survives: there is no
+            // proxy of the user's in the path and no server of theirs to refuse
+            // the Host header, so the only thing 401/403 can mean is the key.
+            // This is `friendlyGatewayMessage`'s hosted verdict, lifted here so
+            // one condition ships one sentence.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.authFailed.recovery.hosted", defaultValue: "Check your API key in your provider's dashboard, then paste it again.")
+            }
+            // `.v3` rather than an edit of `.v2`: the sentence changes ("token"
+            // → "key", per the two-word secrets vocabulary), and a reworded key
+            // ships the catalogued value, which would make the edit inert.
+            return String(localized: "remoteAgent.error.authFailed.recovery.v3", defaultValue: "Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses.")
         case .remoteAgentTimeout:
             // `.v2`: a timeout is the other half of the uncertain bucket — the
             // gateway may still be working, and a second attempt can repeat
             // both the work and its cost on the user's own key.
+            //
+            // The repeat-cost warning is the part that holds on every lane; only
+            // the "go check it" half needs a server the user administers.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.timeout.recovery.hosted", defaultValue: "It may still be working on this one. Another attempt could repeat the work and the cost.")
+            }
             return String(localized: "remoteAgent.error.timeout.recovery.v2", defaultValue: "It may still be working on this one. Check the gateway before trying again, because another attempt could repeat the work and the cost.")
         case .remoteAgentServerError:
+            // A 5xx from a provider the user does not run is the provider's, and
+            // there is no honest instruction to give — so this says the true
+            // thing rather than inventing an action. Its self-hosted twin sends
+            // the user to the logs, which is a real and useful place to look.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.serverError.recovery.hosted", defaultValue: "Try again in a moment.")
+            }
             return String(localized: "remoteAgent.error.serverError.recovery", defaultValue: "Check the gateway logs, then try again.")
         case .remoteAgentUnexpectedStatus:
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.unexpectedStatus.recovery.hosted", defaultValue: "That came from the provider or the network between you. Try again.")
+            }
             return String(localized: "remoteAgent.error.unexpectedStatus.recovery", defaultValue: "That came from your server, or from something in front of it. Check both, then try again.")
         case .remoteAgentServiceUnavailable:
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.serviceUnavailable.recovery.hosted", defaultValue: "The provider or something on the route is unavailable. Try again shortly.")
+            }
             return String(localized: "remoteAgent.error.serviceUnavailable.recovery", defaultValue: "Check your gateway, anything in front of it such as a tunnel or proxy, and the model provider it uses.")
         case .remoteAgentNotEstablished:
+            // "Check the address is still current" needs an address the user
+            // typed. On a fixed-URL lane the app owns it, so the only thing left
+            // at this end is the connection — and the delivery claim, which is
+            // the sentence that actually matters, is lane-independent.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.notEstablished.recovery.hosted", defaultValue: "Check your internet connection. The request most likely never left this device.")
+            }
             return String(localized: "remoteAgent.error.notEstablished.recovery", defaultValue: "Check the address is still current and the gateway is running. The request most likely never reached it.")
         case .remoteAgentInvalidResponse:
+            // The self-hosted remedy names the endpoint contract the user has to
+            // stand up. On a fixed-URL lane that endpoint is the provider's and
+            // already exists, so the levers are a retry and — since that lane
+            // always has a model field — a different model.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.invalidResponse.recovery.hosted", defaultValue: "Try again, or pick a different model.")
+            }
             return String(localized: "remoteAgent.error.invalidResponse.recovery", defaultValue: "Check the gateway is running an OpenAI-compatible /v1/chat/completions endpoint.")
         case .remoteAgentVisionUnsupported:
+            // Dispatches on the MODEL policy, not the lane: wherever Conduck
+            // shows a model field, changing the model is the direct fix, and
+            // where it hides one (OpenClaw / Hermes pick server-side) the only
+            // lever is the server's own photo support.
+            if context.userCanChooseModel {
+                return String(localized: "remoteAgent.error.visionUnsupported.recovery.modelChoice", defaultValue: "Pick a model that accepts images, or keep chatting with text.")
+            }
             return String(localized: "remoteAgent.error.visionUnsupported.recovery", defaultValue: "Enable photo support on your gateway, or keep chatting with text.")
         case .remoteAgentImageTooLarge:
+            // "Raise your gateway's image-size limit" is a setting on a machine
+            // a fixed-URL user does not have — and neither is there a Conduck
+            // control to offer instead: the user-configurable max-image-dimension
+            // setting was removed, the inline copy is capped at
+            // `ImageProcessor.defaultMaxPixel`, and this lane carries no file
+            // route (`fileTransferSupported == false`). So the only lever left is
+            // the source image, and the arm says that and stops rather than
+            // naming a screen the reader would go looking for.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.imageTooLarge.recovery.hosted", defaultValue: "Try a smaller image.")
+            }
             return String(localized: "remoteAgent.error.imageTooLarge.recovery", defaultValue: "Your gateway rejected the image as too large. Try a smaller image, or raise your gateway's image-size limit.")
         case .remoteAgentOutOfCredits:
             // BYO-key: the balance is on the user's OWN provider account, so the
@@ -591,9 +794,22 @@ enum AppError: LocalizedError {
             // WHOLE message, telling a user with no credit to keep retrying.
             return String(localized: "remoteAgent.error.outOfCredits.recovery", defaultValue: "Add credits with your provider, then try again.")
         case .remoteAgentModelUnavailable:
-            return String(localized: "remoteAgent.error.modelUnavailable.recovery", defaultValue: "Check the model name in Settings, or pick a different one.")
+            // THE arm a hosted-vs-self-hosted flag gets backwards. 55 is correct
+            // as written for OpenRouter and for customs, and a dead end on
+            // OpenClaw / Hermes: both declare `model == .unsupported`, Conduck
+            // hides the field, and there is no model name in Settings to check.
+            if context.userCanChooseModel {
+                return String(localized: "remoteAgent.error.modelUnavailable.recovery", defaultValue: "Check the model name in Settings, or pick a different one.")
+            }
+            return String(localized: "remoteAgent.error.modelUnavailable.recovery.serverChosen", defaultValue: "Check the model configured on your server.")
         case .remoteAgentContextTooLong:
-            return String(localized: "remoteAgent.error.contextTooLong.recovery", defaultValue: "Start a new chat, or switch to a model with a bigger context window.")
+            // Same inversion as 55. "Switch to a model with a bigger context
+            // window" is an instruction the user cannot follow where the model
+            // field is hidden — a new chat is the whole remedy there.
+            if context.userCanChooseModel {
+                return String(localized: "remoteAgent.error.contextTooLong.recovery", defaultValue: "Start a new chat, or switch to a model with a bigger context window.")
+            }
+            return String(localized: "remoteAgent.error.contextTooLong.recovery.serverChosen", defaultValue: "Start a new chat to shorten the history.")
         case .remoteAgentRateLimited:
             return String(localized: "remoteAgent.error.rateLimited.recovery", defaultValue: "Wait a moment, then try again — free models often have daily limits.")
         case .remoteAgentEndpointUnexpectedResponse:
@@ -601,6 +817,14 @@ enum AppError: LocalizedError {
             // lands here too. The editor pairs this with the per-backend
             // `endpointDisabledRemedy` (OpenClaw's chat-endpoint flag, Hermes's
             // API_SERVER_ENABLED), which names the LIKELY cause without asserting it.
+            //
+            // Neither likely cause exists on a fixed-URL lane: the app owns the
+            // URL and the endpoint is not the user's to switch off. What is left
+            // is something answering in the provider's place — a captive portal,
+            // an intercepting proxy on the network they are on.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.endpointUnexpectedResponse.recovery.hosted", defaultValue: "Something other than the provider answered. Check the network you're on, then try again.")
+            }
             return String(localized: "remoteAgent.error.endpointUnexpectedResponse.recovery", defaultValue: "It answered with something other than an AI endpoint's data. The endpoint may be switched off on your server, or the URL may point at a web page.")
         case .remoteAgentEndpointWrongEnvelope:
             // Names the exact rule — this is the likeliest failure of a
@@ -608,8 +832,25 @@ enum AppError: LocalizedError {
             // builder's time. The contract URL is the one place the rule lives.
             return String(localized: "remoteAgent.error.endpointWrongEnvelope.recovery", defaultValue: "The /v1/models reply must be an object with a top-level \"data\" array. Contract: conduck.com/setup/adapter/v1")
         case .remoteAgentEndpointNotFound:
+            // THE leak this rework exists for: "Check the Gateway URL" rendered
+            // inside an editor that has no URL field at all. A fixed-URL lane's
+            // 404 is the provider's route, not the user's typo.
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.endpointNotFound.recovery.hosted", defaultValue: "The provider didn't recognise that route. Try again in a moment.")
+            }
             return String(localized: "remoteAgent.error.endpointNotFound.recovery", defaultValue: "Check the Gateway URL is your server's base address, not a full /v1/… path.")
         case .remoteAgentModelRequired:
+            // Three arms, because 60 asks for the one thing each lane handles
+            // differently. Where Conduck hides the model field entirely
+            // (OpenClaw / Hermes), "set a Model" names a control that is not on
+            // any screen — the default belongs on the server. Where the app owns
+            // the URL, the model lives in Settings and nothing else does.
+            if !context.userCanChooseModel {
+                return String(localized: "remoteAgent.error.modelRequired.recovery.serverChosen", defaultValue: "Set a default model on your server, then try again.")
+            }
+            if context.hidesURLField {
+                return String(localized: "remoteAgent.error.modelRequired.recovery.hosted", defaultValue: "Open Settings → Personal AI and pick a model.")
+            }
             return String(localized: "remoteAgent.error.modelRequired.recovery", defaultValue: "Open this gateway's settings and set a Model, for example llama3.")
         case .sttCustomEndpointNotConfigured:
             return String(localized: "stt.error.customEndpointNotConfigured.recovery", defaultValue: "Open Settings → STT and add your custom endpoint's URL.")
@@ -671,9 +912,35 @@ enum AppError: LocalizedError {
     /// chat thread, no Troubleshoot chip that could reach one. Drops the generic
     /// fallback rather than appending it, so a terminal refusal never picks up a
     /// "Try again." it cannot honour.
-    var descriptionWithRecovery: String {
-        let what = errorDescription ?? ""
-        guard let recovery = recoverySuggestion, recovery != Self.genericRecovery else { return what }
+    ///
+    /// `ref` is the AI that FAILED, and passing it is what makes the remedy half
+    /// true — see `recoverySuggestion(in:)`. It is optional so a call site with
+    /// genuinely no ref in hand still compiles and gets the neutral wording, but
+    /// "no ref in hand" means the failure is not a gateway failure (the STT lane,
+    /// a file-server verdict), not "the ref was inconvenient to thread". A
+    /// gateway failure rendered without one is how a user who runs no server is
+    /// told to read their server's logs.
+    ///
+    /// A METHOD rather than a property on purpose: the property form let a new
+    /// call site inherit the wrong lane's copy silently, which is exactly the
+    /// defect this parameter exists to close.
+    func descriptionWithRecovery(for ref: RemoteAgentRef? = nil) -> String {
+        descriptionWithRecovery(in: .resolve(ref))
+    }
+
+    /// `descriptionWithRecovery(for:)` when the caller already holds a resolved
+    /// context (the gateway editor, which knows the descriptor and not the ref).
+    ///
+    /// ONE context, both halves. Reading the cause off the parameterless property
+    /// while the remedy took the context is how a banner ends up arguing with
+    /// itself — cause naming a gateway, remedy naming a provider — and it is
+    /// invisible in a diff, because each line reads as ordinary error plumbing.
+    /// Threading the same value through both is the structural fix;
+    /// `RemoteAgentRecoveryCopyLaneTests` asserts the join stays exact.
+    func descriptionWithRecovery(in context: RemoteAgentFailureContext) -> String {
+        let what = errorDescription(in: context) ?? ""
+        guard let recovery = recoverySuggestion(in: context),
+              recovery != Self.genericRecovery else { return what }
         return what.isEmpty ? recovery : "\(what) \(recovery)"
     }
 

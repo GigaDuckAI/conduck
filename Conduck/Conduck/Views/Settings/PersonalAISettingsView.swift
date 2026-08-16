@@ -193,7 +193,7 @@ struct PersonalAISettingsView: View {
 
     /// Custom gateways under their own divider — mirrors the Voice list's
     /// "Custom endpoints" section. The header shows even with zero customs so the
-    /// "Add custom gateway" row always has context. (The setup-code row moved to
+    /// "Set up a custom server" row always has context. (The setup-code row moved to
     /// the permanent "Connect" section.)
     private var customGatewaySection: some View {
         Section {
@@ -202,10 +202,7 @@ struct PersonalAISettingsView: View {
             }
             addCustomGatewayRow
         } header: {
-            Text(LocalizedStringResource(
-                "settings.personalAI.section.customHeader",
-                defaultValue: "Custom gateways"
-            ))
+            Text(GatewayGroupCopy.customHeader)
         } footer: {
             Text(GatewayGroupCopy.customFooter)
         }
@@ -224,10 +221,18 @@ struct PersonalAISettingsView: View {
             route = .configure(row.ref)
         } label: {
             HStack(spacing: 12) {
-                Text(row.displayName)
-                    .font(.body)
-                    .foregroundStyle(configured ? AppColors.textPrimary : AppColors.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.displayName)
+                        .font(.body)
+                        .foregroundStyle(configured ? AppColors.textPrimary : AppColors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // The capability line, so the row states what the lane can
+                    // do instead of leaving the section header to imply it.
+                    Text(GatewayGroupCopy.capabilitySubtitle(for: row.ref))
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Spacer()
 
@@ -262,7 +267,7 @@ struct PersonalAISettingsView: View {
         .accessibilityIdentifier("settings.personalAI.row.\(row.ref.rawString)")
     }
 
-    /// "+ Add custom gateway" — at the cap it's VISIBLE but disabled (never
+    /// "+ Set up a custom server" — at the cap it's VISIBLE but disabled (never
     /// silently vanish, never error-after-filling). Tap → mint a draft → push
     /// the editor bound to `.custom(id)`.
     @ViewBuilder
@@ -276,8 +281,8 @@ struct PersonalAISettingsView: View {
             } label: {
                 Label {
                     Text(canAdd
-                        ? LocalizedStringResource("settings.remoteAgent.customGateway.add", defaultValue: "Add custom gateway")
-                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap", defaultValue: "Add custom gateway (limit reached)"))
+                        ? LocalizedStringResource("settings.remoteAgent.customGateway.add.v2", defaultValue: "Set up a custom server")
+                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap.v2", defaultValue: "Set up a custom server (limit reached)"))
                 } icon: {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)
@@ -290,8 +295,8 @@ struct PersonalAISettingsView: View {
             .accessibilityIdentifier("settings.personalAI.addCustomGateway")
             if !canAdd {
                 Text(LocalizedStringResource(
-                    "settings.remoteAgent.customGateway.capHint",
-                    defaultValue: "Delete a custom gateway above to add another."
+                    "settings.remoteAgent.customGateway.capHint.v2",
+                    defaultValue: "Delete a custom server above to add another."
                 ))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)

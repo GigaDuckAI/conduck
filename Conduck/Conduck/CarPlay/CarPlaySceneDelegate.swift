@@ -12,7 +12,7 @@
 // session. On session end the voice modal is DISMISSED — the persistent picker
 // root is already there, so the app never falls to the CarPlay dashboard. The
 // list refreshes on `.conversationsDidChange` and is disabled while a session
-// is active. No-gateway state = a single "Set up your personal AI on iPhone
+// is active. No-gateway state = a single "Set up your AI on iPhone
 // first." row.
 //
 // NAV MODEL: the list picker is the permanent root (set ONCE in `didConnect`,
@@ -434,7 +434,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             guard !configuredRefs.isEmpty else {
                 // xcstrings
                 let item = CPListItem(
-                    text: String(localized: "Set up your personal AI on iPhone first."),
+                    text: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first."),
                     detailText: nil
                 )
                 item.setImage(UIImage(systemName: "iphone"))
@@ -457,7 +457,11 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 // the iPhone's device-local default. NEVER reads the global
                 // default directly so a CarPlay switch can't leak to the phone.
                 let current = await self.effectiveCarPlayRef()
-                let title = RemoteAgentRefMetadata.displayName(for: current, customs: customs)
+                // The SHORT form: this is a nav-bar button on a head unit, read
+                // at a glance from the driver's seat, and a custom gateway's name
+                // may be up to 40 characters. The car's own truncation is opaque
+                // and varies by head unit; a known budget does not.
+                let title = RemoteAgentRefMetadata.shortDisplayName(for: current, customs: customs)
                 let switcher = CPBarButton(title: title) { [weak self] _ in
                     self?.presentGatewayChooser(configured: configuredRefs, current: current, customs: customs)
                 }
@@ -557,7 +561,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     ) {
         let items: [CPListItem] = configured.map { ref in
             let item = CPListItem(
-                text: RemoteAgentRefMetadata.displayName(for: ref, customs: customs),
+                // Short form, same reason as the switcher button that opens this
+                // list: a row the driver cannot read to the end is a row they
+                // cannot tell from the one above it.
+                text: RemoteAgentRefMetadata.shortDisplayName(for: ref, customs: customs),
                 detailText: nil
             )
             if ref == current {
@@ -577,7 +584,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             return item
         }
         let chooser = CPListTemplate(
-            title: String(localized: "Choose gateway"),  // xcstrings
+            title: String(localized: "chat.chooseAI.label", defaultValue: "Choose AI"),
             sections: [CPListSection(items: items)]
         )
         interfaceController?.pushTemplate(chooser, animated: true, completion: nil)

@@ -389,13 +389,13 @@ final class AppErrorCodeContractTests: XCTestCase {
         // guide's inline status, the pairing sheet's file stage) render this. It
         // must carry a real remedy and must NOT bolt "Try again." onto a verdict
         // that cannot be retried.
-        XCTAssertEqual(AppError.fileTransferCertUntrusted.descriptionWithRecovery,
+        XCTAssertEqual(AppError.fileTransferCertUntrusted.descriptionWithRecovery(),
                        "\(AppError.fileTransferCertUntrusted.errorDescription ?? "") \(CertificateTrustCopy.untrustedRemedy)")
         // `.audioMissingData` carries no recovery arm, so it lands on the
         // generic fallback — which this property drops rather than appends.
         // (If it ever earns a real remedy, this fails and wants a case that
         // still falls through; it must not be relaxed into a tautology.)
-        XCTAssertEqual(AppError.audioMissingData.descriptionWithRecovery,
+        XCTAssertEqual(AppError.audioMissingData.descriptionWithRecovery(),
                        AppError.audioMissingData.errorDescription)
     }
 
@@ -419,7 +419,7 @@ final class AppErrorCodeContractTests: XCTestCase {
                        "The cause line must not carry the remedy's call to action. Got: \(cause)")
         // The single-line surfaces rejoin the halves, so they read exactly as
         // they did when the description carried both sentences itself.
-        XCTAssertEqual(AppError.remoteAgentOutOfCredits.descriptionWithRecovery,
+        XCTAssertEqual(AppError.remoteAgentOutOfCredits.descriptionWithRecovery(),
                        "\(cause) \(remedy)")
     }
 

@@ -28,16 +28,13 @@ import Foundation
 
 // MARK: - Capability policies
 
-/// Whether a backend is the user's OWN self-hosted agent server or a
-/// third-party hosted-model service. Drives the Settings list section
-/// ("Your AI gateways" vs "Hosted models") + the never-auto-default posture.
-enum RemoteAgentCategory: Sendable, Equatable {
-    /// OpenClaw / Hermes / custom gateways — the user's own always-on server.
-    case selfHostedAgent
-    /// OpenRouter — a third-party cloud aggregator. Data goes direct to the
-    /// provider; surfaced under a distinct "Hosted models" section.
-    case hostedModel
-}
+// `RemoteAgentCategory` and `RemoteAgentModelPolicy` live in
+// `Models/RemoteAgentFailureContext.swift`. Both are read by `AppError`'s
+// capability-dispatched recovery copy, which compiles into the Watch target
+// where this descriptor file does not — so the vocabulary has to sit in a file
+// both targets build. The descriptors below remain the source of truth for what
+// each built-in's policy IS; `RemoteAgentRecoveryCopyLaneTests` locks the
+// Watch-side mapping against them.
 
 /// Where the gateway URL comes from.
 enum RemoteAgentEndpointPolicy: Sendable, Equatable {
@@ -58,17 +55,6 @@ enum RemoteAgentAuthPolicy: Sendable, Equatable {
     /// Toggle hidden, scheme forced — OpenRouter is always bearer, never
     /// keyless, so the keyless toggle is noise.
     case locked(RemoteAgentAuthScheme)
-}
-
-/// Whether the backend takes an explicit `model` field on the wire.
-enum RemoteAgentModelPolicy: Sendable, Equatable {
-    /// Built-in agents pick their own model server-side (OpenClaw / Hermes) —
-    /// the model field is hidden and `model` is omitted from the request.
-    case unsupported
-    /// User may set one (custom gateways like Ollama/vLLM).
-    case optional
-    /// Must be set (OpenRouter requires a `model` in every request).
-    case required
 }
 
 /// TLS trust posture. Both cases REQUIRE system trust — a certificate this

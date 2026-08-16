@@ -498,12 +498,12 @@ private struct MacVoiceVendorDetail: View {
             Section {
                 OpenRouterKeyReuseCallout(
                     title: LocalizedStringResource(
-                        "settings.voice.openRouter.reuse.title",
-                        defaultValue: "You've already set up OpenRouter as a personal-AI gateway. Reuse that API key for voice?"
+                        "settings.voice.openRouter.reuse.title.v2",
+                        defaultValue: "You've already set up OpenRouter for chat. Reuse that API key for voice?"
                     ),
                     buttonTitle: LocalizedStringResource(
-                        "settings.voice.openRouter.reuse.button",
-                        defaultValue: "Use my gateway key"
+                        "settings.voice.openRouter.reuse.button.v2",
+                        defaultValue: "Use my OpenRouter key"
                     ),
                     action: { await viewModel.reuseGatewayKeyForOpenRouterVoice() }
                 )

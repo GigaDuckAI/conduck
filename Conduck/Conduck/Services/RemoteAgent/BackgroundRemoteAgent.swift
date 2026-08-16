@@ -1160,13 +1160,20 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     /// it names the bound gateway so the user knows which agent answered before
     /// opening the app; otherwise the generic string. Falls back to generic on
     /// any unresolved ref (single-gateway, missing/unknown raw value).
+    ///
+    /// The SHORT form (`shortDisplayName`), even though this poster runs on the
+    /// phone: a local notification is not a phone surface. It mirrors to the
+    /// paired Watch and lands on a lock screen, where the title is one line
+    /// beside the icon and the timestamp — and a custom gateway's name may be up
+    /// to 40 characters. The narrow-surface rule is applied by DESTINATION, not
+    /// by which process posts.
     private static func replyNotificationTitle(backendRawValue: String?) async -> String {
-        let generic = String(localized: "Reply from your personal AI")  // xcstrings
+        let generic = String(localized: "remoteAgent.notification.reply.title", defaultValue: "Reply from your AI")
         guard await SettingsManager.shared.configuredRemoteAgentRefs().count >= 2,
               let raw = backendRawValue,
               let ref = RemoteAgentRef(rawString: raw) else { return generic }
         let customs = await SettingsManager.shared.customGateways()
-        return RemoteAgentRefMetadata.displayName(for: ref, customs: customs)
+        return RemoteAgentRefMetadata.shortDisplayName(for: ref, customs: customs)
     }
 
     /// Post the reply notification (≤200-char body) whose tap deep-links to
@@ -1229,7 +1236,21 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     /// load-bearing: `ReplyAutoSpeakDecider` excludes it from auto-speak (only
     /// `remoteAgent.reply.` taps speak), so a failure tap deep-links to the
     /// thread without speaking a stale prior reply.
-    static func postFailureNotification(conversationID: UUID, error: AppError?) async {
+    ///
+    /// `ref` is the gateway the turn was bound to, and it decides whether the
+    /// remedy half of a certificate verdict — the only class that carries one
+    /// into this body — describes a machine the reader owns. It defaults to nil
+    /// and is RESOLVED from the conversation's own binding when omitted, because
+    /// every caller here is headless: a push is often the only place the verdict
+    /// is ever read, and no one is standing at a screen to reinterpret it.
+    static func postFailureNotification(conversationID: UUID,
+                                        error: AppError?,
+                                        ref: RemoteAgentRef? = nil) async {
+        var resolvedRef = ref
+        if resolvedRef == nil {
+            let raw = (try? await ConversationStore.shared.fetchConversation(id: conversationID))?.backend
+            resolvedRef = raw.flatMap(RemoteAgentRef.init(rawString:))
+        }
         let content = UNMutableNotificationContent()
         content.title = failureNotificationTitle(for: error)
         // PRIVACY (never reveal gateway URLs — see the spec's Privacy & Security section): cases that
@@ -1254,9 +1275,15 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // and this device trusts it"), so the cause alone reads as a server
         // fault the user would go hunting at whatever hour the push arrives.
         case .some(let appError) where Self.isCertificateVerdict(appError):
-            content.body = appError.descriptionWithRecovery
+            content.body = appError.descriptionWithRecovery(for: resolvedRef)
         case .some(let appError):
-            content.body = appError.errorDescription ?? fallback
+            // The CAUSE dispatches on the same ref the certificate arm above
+            // uses. Nine gateway-class causes name "your gateway", which is a
+            // machine a hosted-lane reader does not run — and this push may be
+            // the only place the verdict is ever read. `resolvedRef` is already
+            // in hand, so there is no reason for this line to answer for a lane
+            // the turn was not on.
+            content.body = appError.errorDescription(for: resolvedRef) ?? fallback
         case nil:
             content.body = fallback
         }
@@ -1279,7 +1306,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     }
 
     /// The failure notification's TITLE, derived from the error rather than
-    /// fixed. A constant "Couldn't reach your personal AI" asserts a cause —
+    /// fixed. A constant "Couldn't reach your AI" asserts a cause —
     /// the gateway was never reached — for every failure alike, and a
     /// certificate refusal is the case where that assertion does real damage:
     /// the connection DID reach the server, this device rejected what it
@@ -1315,12 +1342,12 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
              .some(.networkError), .some(.decodingError), .some(.unknown),
              .some(.noInternetConnection), .some(.requestTimeout),
              .some(.persistentNetworkFailure):
-            return String(localized: "Couldn't reach your personal AI")  // xcstrings
+            return String(localized: "remoteAgent.notification.unreachable.title", defaultValue: "Couldn't reach your AI")
         default:
             // Everything the gateway ANSWERED — and the nil case, where the
             // cause is unknown and must not be guessed at.
-            return String(localized: "remoteAgent.notification.failure.title",
-                          defaultValue: "No reply from your personal AI")
+            return String(localized: "remoteAgent.notification.failure.title.v2",
+                          defaultValue: "No reply from your AI")
         }
     }
 

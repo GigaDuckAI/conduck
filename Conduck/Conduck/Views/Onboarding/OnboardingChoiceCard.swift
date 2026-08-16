@@ -25,11 +25,15 @@ import SwiftUI
 /// chevron, on a glass card. Set `emphasis` for the prominent primary pick.
 struct OnboardingChoiceCard: View {
     let icon: String
-    let title: LocalizedStringKey
-    let subtitle: LocalizedStringKey
+    // `LocalizedStringResource`, not `LocalizedStringKey`: a bare literal still
+    // works at every call site, and a caller that needs a DOTTED catalog key
+    // can pass one with its `defaultValue:` — which `LocalizedStringKey` cannot
+    // express, so a self-keyed English sentence was the only option available.
+    let title: LocalizedStringResource
+    let subtitle: LocalizedStringResource
     var emphasis: Bool = false
     /// Optional short capsule tag shown trailing the title (nil hides it).
-    var badge: LocalizedStringKey? = nil
+    var badge: LocalizedStringResource? = nil
     let action: () -> Void
 
     var body: some View {

@@ -1008,7 +1008,7 @@ final class CarPlayRecordingService {
                     // silent reroute). Speak the not-configured error + end.
                     // xcstrings
                     endSession(
-                        speak: String(localized: "Set up your personal AI on iPhone first.")
+                        speak: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first.")
                     )
                     return
                 }
@@ -1018,7 +1018,7 @@ final class CarPlayRecordingService {
                 if snapshot.authScheme.requiresToken, (snapshot.token?.isEmpty ?? true) {
                     // xcstrings
                     endSession(
-                        speak: String(localized: "Set up your personal AI on iPhone first.")
+                        speak: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first.")
                     )
                     return
                 }
@@ -1040,7 +1040,7 @@ final class CarPlayRecordingService {
                 guard let resolved = await SettingsManager.shared.remoteAgentSnapshot(for: defaultRef) else {
                     // xcstrings
                     endSession(
-                        speak: String(localized: "Set up your personal AI on iPhone first.")
+                        speak: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first.")
                     )
                     return
                 }
@@ -1052,7 +1052,7 @@ final class CarPlayRecordingService {
                 if snapshot.authScheme.requiresToken, (snapshot.token?.isEmpty ?? true) {
                     // xcstrings
                     endSession(
-                        speak: String(localized: "Set up your personal AI on iPhone first.")
+                        speak: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first.")
                     )
                     return
                 }
@@ -1283,6 +1283,14 @@ final class CarPlayRecordingService {
 
     /// Map an `AppError` to a driver-safe spoken phrase, speak it, then end the
     /// session (no re-arm — an error ends the conversation).
+    ///
+    /// VOCABULARY, because everything here is SPOKEN: no line may say "gateway"
+    /// and none may say "personal AI". "Gateway" is retained only on the
+    /// self-hosted setup and troubleshooting screens, where it matches the
+    /// `openclaw.json` keys the user hand-edits; a driver on the hosted lane
+    /// runs no gateway, and the adjective in "your personal AI" claims a
+    /// privacy posture a third-party routing service cannot honour. These lines
+    /// name the CLASS — "your AI" — which is true on all four lanes.
     private func speakErrorAndEnd(_ error: AppError) {
         let phrase: String
         switch error {
@@ -1312,10 +1320,10 @@ final class CarPlayRecordingService {
             phrase = String(localized: "Too many requests — try again in a moment.")
         case .remoteAgentNotConfigured:
             // xcstrings
-            phrase = String(localized: "Set up your personal AI on iPhone first.")
+            phrase = String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first.")
         case .remoteAgentAuthFailed:
             // xcstrings
-            phrase = String(localized: "Your personal AI rejected the token. Update it in Conduck on your iPhone.")
+            phrase = String(localized: "carplay.error.authFailed.speak", defaultValue: "Your AI refused the key. Update it in Conduck on your iPhone.")
         case .remoteAgentCertMismatch, .sttCustomCertMismatch, .ttsCustomCertMismatch:
             // Driver-safe brevity argues for a SHORT line, not a vague one. The
             // shared compact form names the risk and points at the phone — the
@@ -1325,9 +1333,10 @@ final class CarPlayRecordingService {
             // alternative is `default:` — "Something went wrong. Try again." —
             // which invites a retry on a terminal refusal AND drops the one
             // thing the driver must hear, that the connection may be
-            // intercepted. The shared line says "your gateway" while a custom
-            // voice endpoint is a different server; naming the wrong server is
-            // the cheaper error by a wide margin.
+            // intercepted. The shared line is NEUTRAL about which machine it
+            // means ("this server"), which is what makes one wording correct on
+            // all three lanes — a custom voice endpoint is a different server
+            // from the gateway, and this arm cannot tell the driver which.
             phrase = CertificateTrustCopy.pinMismatchRefusalCompact
         case .remoteAgentCertUntrusted, .sttCustomCertUntrusted, .ttsCustomCertUntrusted:
             // Spoken, so the full remedy would be unusable at the wheel — the
@@ -1346,10 +1355,10 @@ final class CarPlayRecordingService {
             phrase = CertificateTrustCopy.keyUnpinnableRefusalCompact
         case .remoteAgentTimeout, .remoteAgentUnreachable:
             // xcstrings
-            phrase = String(localized: "Couldn't reach your personal AI. Try again.")
+            phrase = String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
         case .remoteAgentServerError, .remoteAgentInvalidResponse:
             // xcstrings
-            phrase = String(localized: "Your personal AI had trouble replying. Try again.")
+            phrase = String(localized: "carplay.error.serverError.speak", defaultValue: "Your AI had trouble replying. Try again.")
         case .sttProviderUnreachable, .noInternetConnection, .requestTimeout, .persistentNetworkFailure, .networkError:
             // xcstrings
             phrase = String(localized: "Couldn't reach the server. Try again.")
@@ -1403,7 +1412,7 @@ final class CarPlayRecordingService {
             phrase = String(localized: "That AI model isn't available. Pick another in Conduck on your iPhone.")
         case .remoteAgentModelRequired:
             // xcstrings: carplay-terminal
-            phrase = String(localized: "Your gateway needs a model name. Set one in Conduck on your iPhone.")
+            phrase = String(localized: "carplay.error.modelRequired.speak", defaultValue: "Your AI needs a model name. Set one in Conduck on your iPhone.")
         case .remoteAgentContextTooLong:
             // xcstrings: carplay-terminal
             phrase = String(localized: "This chat got too long for the model. Start a new voice chat.")
@@ -1413,19 +1422,19 @@ final class CarPlayRecordingService {
             // whole fix and it is one tap away on the screen the driver is about
             // to land on.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "A photo in this chat was too large for your gateway. Start a new voice chat.")
+            phrase = String(localized: "carplay.error.imageTooLarge.speak", defaultValue: "A photo in this chat was too large for your AI. Start a new voice chat.")
         case .remoteAgentVisionUnsupported:
             // Same history shape as the arm above. "Couldn't use a photo" rather
             // than "can't read images": the client cannot tell the adapter from
             // the engine, so it never attributes the decline.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "Your gateway couldn't use a photo in this chat. Start a new voice chat.")
+            phrase = String(localized: "carplay.error.visionUnsupported.speak", defaultValue: "Your AI couldn't use a photo in this chat. Start a new voice chat.")
         case .fileTransferNotConfigured:
             // Thrown by this file's own pre-enqueue lane revalidation when the
             // ready file lane was removed or repointed mid-turn. Terminal for
             // this session; the lane is rebuilt on the phone.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "This gateway's file transfer isn't set up. Check it in Conduck on your iPhone.")
+            phrase = String(localized: "carplay.error.fileTransferNotConfigured.speak", defaultValue: "File transfer isn't set up. Check it in Conduck on your iPhone.")
         default:
             // The catch-all stays, and it asks the taxonomy instead of assuming.
             //

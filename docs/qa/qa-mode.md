@@ -15,7 +15,7 @@ from the machine under test.
 ## What QA mode does at boot
 
 1. **Seeds the gateway config into an in-memory override** for both built-in
-   backends (OpenClaw + Hermes) AND — when the custom flags are supplied — a
+   gateways (OpenClaw + Hermes) AND — when the custom flags are supplied — a
    **user-defined custom gateway** (a roster record `{name, model?}` + url +
    token, all in-memory; never written to the real registry/Keychain),
    bypassing the sim Keychain that the unsigned build can't write. After
@@ -29,7 +29,7 @@ from the machine under test.
    from the first frame.
 3. **Skips onboarding** — the app lands directly in the populated
    conversation UI rather than the Welcome → STT-chooser flow.
-4. **Sets the default backend to OpenClaw.** Because 2 gateways are
+4. **Sets the default gateway to OpenClaw.** Because 2 gateways are
    configured, the title-bar gateway picker appears on a new/empty
    conversation.
 5. **Renders a red `QA MODE` banner** above all content. If it's missing, the
@@ -70,7 +70,7 @@ xcrun simctl launch <UDID> com.example.Conduck \
 | `-ConduckQAOpenClawToken <token>` | OpenClaw bearer token seeded into the override. |
 | `-ConduckQAHermesURL <url>` | Hermes gateway HTTPS URL seeded into the Hermes config override. |
 | `-ConduckQAHermesToken <token>` | Hermes bearer token seeded into the override. |
-| `-ConduckQADefaultBackend <backend>` | Which backend is the default pointer — `openclaw` or `hermes`. Drives the title-bar picker default. |
+| `-ConduckQADefaultBackend <backend>` | Which gateway is the default pointer — `openclaw` or `hermes`. Drives the title-bar picker default. |
 | `-ConduckQACustomURL <url>` + `-ConduckQACustomToken <token>` | **Optional.** Both required to seed a custom gateway (a fixed-UUID in-memory roster record). Omit the pair to test built-ins-only. |
 | `-ConduckQACustomName <name>` | Optional custom-gateway display name (default "QA Custom Gateway") — the picker label + badge monogram source. |
 | `-ConduckQACustomModel <model>` | Optional model string sent in the request `model` field (e.g. `llama3`) — exercises the model-on-wire path for a model-requiring server. Omit → model omitted (gateway default). |

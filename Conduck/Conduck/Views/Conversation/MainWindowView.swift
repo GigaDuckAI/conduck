@@ -542,8 +542,8 @@ struct MainWindowView: View {
             )
         }
         .help(String(localized: LocalizedStringResource(
-            "conversations.chooseGateway",
-            defaultValue: "Choose gateway"
+            "chat.chooseAI.label",
+            defaultValue: "Choose AI"
         )))
     }
 

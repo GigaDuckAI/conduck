@@ -76,6 +76,17 @@
 //     asserts that somewhere-else is still there, statement-scoped, so the trade
 //     cannot be silently cancelled by deleting the half keeping it honest.
 //
+//   Rule 6 — the wrist and the wheel never render a FULL display name.
+//     Rule 5 asks whether truncated copy has a way to the full text; this asks
+//     whether the string was ever the right SIZE for its surface. Any
+//     `.displayName` read in the Watch or CarPlay trees (or in a file that
+//     composes a local-notification string) must be `.shortDisplayName`
+//     instead, which is bounded by `RemoteAgentRefMetadata.shortDisplayNameLimit`.
+//     A custom gateway's name is capped at 40 characters when saved and the
+//     Watch error banner holds roughly 38, so an unbounded name overruns the
+//     banner on its own — and CarPlay SPEAKS its copy. `fullNameExemptions` is
+//     the escape, and a stale entry fails.
+//
 //   Rule 0 — the NEGATIVE CONTROL. A guard nobody has seen fail reads as
 //     coverage. Rule 0 drives each MATCHER the four rules decide on — the
 //     cause-half read, arm scoping and catch-all classification, the retry label
@@ -507,7 +518,7 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
     /// Rule 1 asks whether a remedy was RENDERED. This asks whether it can be
     /// READ — a distinction the suite previously assumed away. Its own note on
     /// `remedyBearingSources` said the wrist forms were "sized for the surface";
-    /// nobody measured, and all three certificate verdicts (101, 124 and 130
+    /// nobody measured, and all three certificate verdicts (101, 124 and 129
     /// characters) clipped inside a two-line banner holding roughly 38. The tail
     /// is where the actionable half lives — the pointer to the phone, and on a
     /// pin mismatch "the connection may be intercepted" — so truncation removed
@@ -578,6 +589,59 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
                     tokens: ["ScrollView", "Text(message)"]
                 ),
             ]
+        ),
+    ]
+
+    // MARK: - Rule 6's registry
+
+    /// Directories whose user-facing strings land on a NARROW or SPOKEN surface.
+    ///
+    /// The wrist and the wheel are the two places a name cannot simply be made
+    /// to fit. Rule 5 records the measurement that makes this a rule rather than
+    /// a preference: the Watch in-thread error banner holds ROUGHLY 38
+    /// CHARACTERS over two lines, and three certificate verdicts at 101/124/129
+    /// characters clipped inside it. A custom gateway's name is capped at 40
+    /// characters when it is saved, so one name can overrun that banner on its
+    /// own — before the sentence around it is counted.
+    ///
+    /// CarPlay is here for a different failure. It reads error copy ALOUD through
+    /// TTS at the wheel, and a name is the one part of that sentence Conduck did
+    /// not write. Length there is time a driver spends listening to something
+    /// they cannot act on.
+    private static let narrowSurfaceDirectories = ["ConduckWatch Watch App", "CarPlay"]
+
+    /// Files OUTSIDE those directories that still compose a string for one.
+    ///
+    /// A local notification is not a phone surface: it mirrors to the paired
+    /// Watch and lands on a lock screen, one line beside the icon and the
+    /// timestamp. The rule follows the DESTINATION, not the process that posts —
+    /// which is why this list exists at all rather than the directory scan being
+    /// the whole rule.
+    private static let narrowSurfaceFiles: Set<String> = [
+        "Conduck/Services/RemoteAgent/BackgroundRemoteAgent.swift",
+    ]
+
+    /// A narrow-surface site allowed to render a FULL display name.
+    private struct FullNameExemption {
+        let path: String
+        let declaration: String
+        let reason: String
+    }
+
+    /// Keep this SHORT. The bar is "this text has no width to run out of",
+    /// never "it looked fine on the founder's watch".
+    private static let fullNameExemptions: [FullNameExemption] = [
+        FullNameExemption(
+            path: "ConduckWatch Watch App/Views/WatchGatewayBadge.swift",
+            declaration: "resolved",
+            reason: """
+            Both reads feed the badge's ACCESSIBILITY LABEL, which is spoken by \
+            VoiceOver on demand and occupies no layout at all — the visible badge \
+            is a 1–2 character monogram. Truncating here would shorten the one \
+            form of this name that has room for it, and leave a blind user with \
+            "hermes-vps-01-f…" where a sighted user gets a colour and a monogram \
+            they can tap. The rule is about width; this text has none.
+            """
         ),
     ]
 
@@ -1935,6 +1999,118 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
 
             Do NOT just raise the number: the Watch banner still clipped at ten \
             lines, because its real limit is the space on screen, not the count.
+            """
+        )
+    }
+
+    // MARK: - Scanner: the full-name read
+
+    /// Does this line read a FULL display name?
+    ///
+    /// `.shortDisplayName` does not match — the capital `D` means it does not
+    /// contain `.displayName` — so the fixed form is invisible to this scanner
+    /// by construction rather than by an exclusion someone has to maintain. A
+    /// DECLARATION of a property or function called `displayName` is not a read
+    /// of one, the same escape (a) Rule 1 draws.
+    private func readsFullDisplayName(_ line: String) -> Bool {
+        guard line.contains(".displayName") else { return false }
+        return !line.contains("func displayName") && !line.contains("var displayName")
+    }
+
+    /// Is this file's output bound for a narrow or spoken surface?
+    private func isNarrowSurface(path: String, url: URL) -> Bool {
+        if Self.narrowSurfaceFiles.contains(path) { return true }
+        return !Set(url.pathComponents).isDisjoint(with: Set(Self.narrowSurfaceDirectories))
+    }
+
+    // MARK: - Rule 6: the wrist and the wheel never render a full name
+
+    /// Rule 5 asks whether truncated copy has a way to the full text. This asks
+    /// the question one step earlier: whether the string was ever the right SIZE
+    /// for the surface it was built for.
+    ///
+    /// The two halves are the same defect seen from opposite ends. Rule 5 caught
+    /// three certificate verdicts clipping inside a 38-character banner because
+    /// the SENTENCES were too long. Naming the instance — "Couldn't reach X." —
+    /// hands the same banner a variable nobody wrote: a custom gateway's name,
+    /// which the save path allows up to 40 characters. 18 characters of frame
+    /// plus 40 of name is 58 on a surface measured at 38, so instance-naming
+    /// without a bound would REGRESS precisely the surfaces it exists to improve
+    /// (a banner reading "Couldn't reach hermes-vps-01-fran" says less than the
+    /// generic line it replaced). `RemoteAgentRefMetadata.shortDisplayName` is
+    /// the bound; this rule is what keeps call sites on it.
+    ///
+    /// Deliberately BROAD: it flags any `.displayName` read in these files, not
+    /// only a gateway's. A voice provider's name on a watch face has the same
+    /// width, and a rule that enumerated types would go quiet on the first one
+    /// nobody listed. The escape is `fullNameExemptions`, which forces the next
+    /// surface to be classified rather than assumed.
+    func testNarrowAndSpokenSurfacesUseTheShortNameForm() throws {
+        var violations: [String] = []
+        var exercisedExemptions: Set<String> = []
+        var scannedFiles = 0
+        var shortFormSites = 0
+
+        for url in try shippingSwiftFiles() {
+            let path = relativePath(url)
+            guard isNarrowSurface(path: path, url: url) else { continue }
+            guard let source = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            scannedFiles += 1
+
+            let lines = releaseCodeLines(in: source)
+            let declarationList = declarations(in: lines)
+            for entry in lines {
+                if entry.text.contains(".shortDisplayName") { shortFormSites += 1 }
+                guard readsFullDisplayName(entry.text) else { continue }
+                let owner = enclosingDeclaration(ofLine: entry.number,
+                                                 indent: indent(of: entry.text),
+                                                 in: declarationList)?.name ?? "<file scope>"
+                if Self.fullNameExemptions.contains(where: { $0.path == path && $0.declaration == owner }) {
+                    exercisedExemptions.insert("\(path)#\(owner)")
+                    continue
+                }
+                violations.append("\(path):\(entry.number) — `.displayName` in `\(owner)`")
+            }
+        }
+
+        // Non-vacuity, both directions. A path derivation that stopped matching
+        // the Watch and CarPlay trees would report a clean run forever, and a
+        // scanner that found no SHORT-form site either would mean the call sites
+        // this rule was written to hold are no longer there.
+        XCTAssertGreaterThan(scannedFiles, 20,
+                             "Only \(scannedFiles) narrow-surface files scanned; fix `narrowSurfaceDirectories` / the path derivation before trusting a clean result.")
+        XCTAssertGreaterThan(shortFormSites, 3,
+                             "Only \(shortFormSites) `.shortDisplayName` sites on the narrow surfaces; the wrist, the wheel and the notification title should each have one.")
+
+        // A registry that cannot rot: an exemption matching nothing is stale and
+        // has to go, exactly as Rule 2 treats its own registry.
+        let stale = Self.fullNameExemptions
+            .map { "\($0.path)#\($0.declaration)" }
+            .filter { !exercisedExemptions.contains($0) }
+        XCTAssertTrue(stale.isEmpty,
+                      "`fullNameExemptions` entries match no site any more — delete them: \(stale)")
+
+        XCTAssertTrue(
+            violations.isEmpty,
+            """
+            A narrow or spoken surface renders a FULL display name:
+            \(violations.joined(separator: "\n"))
+
+            Use `RemoteAgentRefMetadata.shortDisplayName(for:customs:)` (or \
+            `RemoteAgentBackend.shortDisplayName`), which is bounded by \
+            `shortDisplayNameLimit`. Keep `displayName` for iPhone, iPad and Mac, \
+            where the layout can hold a name in full.
+
+            This is not a tidiness rule. A custom gateway's name is capped at 40 \
+            characters when it is saved; the Watch in-thread error banner holds \
+            roughly 38 over two lines, and CarPlay SPEAKS its copy at the wheel. \
+            An unbounded name is the one part of those strings nobody wrote, so \
+            it is the one part that has to be bounded before a sentence is \
+            allowed to contain it.
+
+            If the text genuinely has no width to run out of — an accessibility \
+            label, a log line — add it to `fullNameExemptions` with the enclosing \
+            declaration and the argument for it.
             """
         )
     }

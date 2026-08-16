@@ -145,8 +145,8 @@ struct CustomGatewayHelpSheet: View {
             ))
 
             Text(LocalizedStringResource(
-                "settings.remoteAgent.customHelp.api.test",
-                defaultValue: "Test Connection checks that Conduck can reach this address, authenticate, and read its model list. To exercise the chat wire too, download the script on that machine with \(Constants.conduckConnectDownloadCommand) and run bash conduck-connect.sh --check-server. After a PASS, the interactive script can continue into setup."
+                "settings.remoteAgent.customHelp.api.test.v2",
+                defaultValue: "The connection test checks that Conduck can reach this address, authenticate, and read its model list. To exercise the chat wire too, download the script on that machine with \(Constants.conduckConnectDownloadCommand) and run bash conduck-connect.sh --check-server. After a PASS, the interactive script can continue into setup."
             ))
             .font(.footnote)
             .foregroundStyle(AppColors.textTertiary)

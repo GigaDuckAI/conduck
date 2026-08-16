@@ -736,7 +736,7 @@ struct CustomSTTConfigBody: View {
             runTest()
         } label: {
             Label(
-                LocalizedStringResource("settings.remoteAgent.testConnection.button", defaultValue: "Test Connection"),
+                LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice"),
                 systemImage: "checkmark.shield"
             )
             .font(.subheadline.weight(.semibold))

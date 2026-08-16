@@ -94,7 +94,7 @@ struct StagedAttachment: Identifiable, Equatable {
             guard let appError = error as? AppError,
                   !appError.isRetryable,
                   let reason = appError.errorDescription else { return .failed }
-            return .refused(reason: reason, detail: appError.descriptionWithRecovery)
+            return .refused(reason: reason, detail: appError.descriptionWithRecovery())
         }
 
         /// Progress quantization, in buckets per unit. Whole percent: the only

@@ -280,7 +280,9 @@ final class DictationService: RecordingExclusivityAuthority {
                 // reads exactly as before and the Retry affordance keeps its own
                 // gate (`isRetryable`).
                 state = .error(
-                    message: error.descriptionWithRecovery,
+                    // STT lane — this service never sends a gateway turn, so
+                    // there is no ref and the neutral wording is the true one.
+                    message: error.descriptionWithRecovery(),
                     isRetryable: error.isRetryable
                 )
             } catch {
@@ -518,7 +520,7 @@ final class DictationService: RecordingExclusivityAuthority {
             // this is the FIRST-attempt twin of that sink and the two must not
             // render one failure two ways.
             state = .error(
-                message: error.descriptionWithRecovery,
+                message: error.descriptionWithRecovery(),
                 isRetryable: error.isRetryable
             )
         } catch {

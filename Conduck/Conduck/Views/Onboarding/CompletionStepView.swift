@@ -44,7 +44,10 @@ struct CompletionStepView: View {
             // the AI gateway (it's reached at point-of-need from the app's
             // unconfigured empty state), so the completion screen foreshadows it
             // rather than claiming global readiness.
-            Text("Just connect your personal AI and you can start talking.") // xcstrings: onboarding-cleanup
+            Text(LocalizedStringResource(
+                "onboarding.completion.subtitle",
+                defaultValue: "Just connect your AI and you can start talking."
+            ))
                 .onboardingScaledFont(.callout)
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)

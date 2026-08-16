@@ -1244,7 +1244,7 @@ final class WatchRecordingService {
             // retry wording because a nil `AppError` is an unclassified failure,
             // where re-recording genuinely can succeed.
             // xcstrings
-            return error?.descriptionWithRecovery
+            return error?.descriptionWithRecovery()
                 ?? String(localized: "Could not send recording. Please try again.")
         }
     }
@@ -1484,7 +1484,7 @@ final class WatchRecordingService {
             guard let config = WatchSettingsReader.shared.remoteAgentConfig(for: ref) else {
                 WatchLog.error(.converse, "gateway.notConfigured", ["turn": turnTag])
                 // xcstrings
-                state = .error(message: String(localized: "Set up your personal AI on iPhone first."))
+                state = .error(message: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first."))
                 return
             }
             let url = config.url
@@ -1597,7 +1597,7 @@ final class WatchRecordingService {
             }
             clearInFlight()
             let message = (error as? AppError)?.errorDescription
-                ?? String(localized: "Couldn't reach your personal AI. Try again.")  // xcstrings
+                ?? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
             state = .error(message: message)
         }
     }

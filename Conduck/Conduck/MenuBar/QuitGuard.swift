@@ -50,8 +50,8 @@ enum QuitGuard {
             }
             if liveCount == 1 {
                 return String(
-                    localized: "quitGuard.single.title",
-                    defaultValue: "Your personal AI is still answering"
+                    localized: "quitGuard.single.title.v2",
+                    defaultValue: "Your AI is still answering"
                 )  // xcstrings: session-continuation
             }
             return String(

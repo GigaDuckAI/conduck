@@ -264,11 +264,16 @@ struct WatchNoteView: View {
     }
 
     /// Display name for a ref string in the Ask chooser. Built-in →
-    /// `RemoteAgentBackend.displayName`; custom → its roster name (via
-    /// `RemoteAgentRefMetadata`).
+    /// `RemoteAgentBackend.shortDisplayName`; custom → its roster name, truncated
+    /// (via `RemoteAgentRefMetadata`).
+    ///
+    /// The SHORT form: this is a confirmation-dialog button on a watch face, and
+    /// a 40-character custom name is what the save cap allows. A row the user
+    /// cannot read to the end is a row they cannot tell from the one above it,
+    /// which is the entire job of this chooser.
     private func displayName(forRef ref: String) -> String {
         guard let parsed = RemoteAgentRef(rawString: ref) else { return ref }
-        return RemoteAgentRefMetadata.displayName(for: parsed, customs: settingsReader.customGateways)
+        return RemoteAgentRefMetadata.shortDisplayName(for: parsed, customs: settingsReader.customGateways)
     }
 
     // MARK: - Launchpad

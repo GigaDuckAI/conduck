@@ -654,7 +654,7 @@ final class AppleRelayPendingQueue {
              .ttsCustomCertMismatch, .fileTransferCertMismatch,
              .remoteAgentCertKeyUnpinnable, .sttCustomCertKeyUnpinnable,
              .ttsCustomCertKeyUnpinnable, .fileTransferCertKeyUnpinnable:
-            return error.descriptionWithRecovery
+            return error.descriptionWithRecovery()
         default:
             // Cause-only ON PURPOSE, and NOT an instance of the cause-without-
             // remedy defect: this queue's reachable payloads

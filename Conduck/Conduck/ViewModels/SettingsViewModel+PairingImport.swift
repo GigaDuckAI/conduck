@@ -534,8 +534,21 @@ extension SettingsViewModel {
         } catch let error as AppError {
             // Shared mapping with the editor's Test Connection
             // (`SettingsViewModel.friendlyGatewayMessage`) — a private copy here
-            // would drift and re-swallow every failure added after it.
-            return .failed(message: SettingsViewModel.friendlyGatewayMessage(for: error),
+            // would drift and re-swallow every failure added after it. This stage
+            // is the same kind of probe (a read-only GET whose verdict is
+            // definitive), against a named target the sheet is importing, so both
+            // of that mapper's inputs are in hand.
+            // The context is RESOLVED from the target rather than left to the
+            // category default: a pairing import lands on OpenClaw or Hermes,
+            // whose model field Conduck hides, and the derived fallback would
+            // claim they have one — which is how the delegated model arms end up
+            // telling this reader to pick a different model in a screen that
+            // shows no model.
+            return .failed(message: SettingsViewModel.friendlyGatewayMessage(
+                               for: error,
+                               named: displayName(for: target),
+                               context: RemoteAgentFailureContext.resolve(target)
+                           ),
                            error: error)
         } catch {
             // No typed error behind this copy, so no terminality claim either —

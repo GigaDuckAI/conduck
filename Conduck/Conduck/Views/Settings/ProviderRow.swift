@@ -629,7 +629,7 @@ struct ProviderConfigBody: View {
             Button {
                 onTest()
             } label: {
-                Label(LocalizedStringResource("settings.remoteAgent.testConnection.button", defaultValue: "Test Connection"),
+                Label(LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice"),
                       systemImage: "checkmark.shield")
                     .font(.subheadline.weight(.semibold))
             }
@@ -789,7 +789,7 @@ struct ProviderConfigBody: View {
                     Button {
                         onTest?()
                     } label: {
-                        Label(LocalizedStringResource("settings.remoteAgent.testConnection.button", defaultValue: "Test Connection"),
+                        Label(LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice"),
                               systemImage: "checkmark.shield")
                             .font(.subheadline)
                     }
@@ -864,7 +864,7 @@ struct ProviderConfigBody: View {
                 Button {
                     onTest?()
                 } label: {
-                    Label(LocalizedStringResource("settings.remoteAgent.testConnection.button", defaultValue: "Test Connection"),
+                    Label(LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice"),
                           systemImage: "checkmark.shield")
                         .font(.subheadline.weight(.semibold))
                 }

@@ -214,6 +214,7 @@
 				Models/ImageHistoryPolicy.swift,
 				Models/MessageRecord.swift,
 				Models/OnLaunchMode.swift,
+				Models/RemoteAgentFailureContext.swift,
 				Models/SessionContinuationPolicy.swift,
 				Services/ActiveViewTracker.swift,
 				Services/AgentDownloadScratch.swift,

@@ -1,6 +1,996 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "remoteAgent.error.unexpectedStatus.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI answered with HTTP %lld, which Conduck doesn't recognise."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unexpectedStatus.unknown.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI answered in a way Conduck doesn't recognise."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notEstablished.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck couldn't open a connection to your AI."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.imageTooLarge.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "An attached image was too large for your AI."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointUnexpectedResponse.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something answered, but not like an AI endpoint."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointWrongEnvelope.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something answered JSON, but not in the shape Conduck needs."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointNotFound.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI provider didn't recognise the route."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI needs you to name a model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.visionUnsupported.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI couldn't use the photo."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.instance.fallback" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "this AI"
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.authFailed.hosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That API key was rejected. Check it in the dashboard for %@, then paste it again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.authFailed.selfHosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The request to %@ was refused. Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.unreachable.hosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach %@. Check your internet connection, then test again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.unreachable.selfHosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach %@. Check the gateway is running and reachable from this device, then test again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.timeout.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The test timed out waiting for %@. Test again in a moment."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.timeout.selfHosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The test timed out waiting for %@. Check the gateway is running, then test again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.serverError.hosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't finish the test — %@ had a server error. Test again in a moment."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.serverError.selfHosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't finish the test — %@ returned a server error. Check the gateway logs, then test again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.invalidResponse.hosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reached %@, but its reply wasn't in the shape Conduck needs. Test again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.invalidResponse.selfHosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reached %@, but its reply wasn't in the shape Conduck needs. Check it serves an OpenAI-compatible model list, then test again."
+          }
+        }
+      }
+    },
+    "settings.voice.openRouter.reuse.title.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You've already set up OpenRouter for chat. Reuse that API key for voice?"
+          }
+        }
+      }
+    },
+    "settings.voice.openRouter.reuse.button.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Use my OpenRouter key"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.forgetAlert.title.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Forget %@?"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.forgetAlert.message.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck will erase the saved URL, key, and pin, plus any file-transfer setup for this gateway (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. You'll re-enter them next time."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.forgetAlert.message.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck will erase the saved API key. It's removed from all your devices signed in to iCloud, not just this one. You'll re-enter it next time."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.forgetAlert.message.custom.retained.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck will delete this gateway and its saved URL, key, and pin, plus any file-transfer setup for it (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns. They keep this gateway's colour tag so you can still tell them apart; its name is not kept."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.customGateway.add.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up a custom server"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.customGateway.addAtCap.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up a custom server (limit reached)"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.customGateway.capHint.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Delete a custom server above to add another."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.testConnection.button.instance" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Test %@"
+          }
+        }
+      }
+    },
+    "settings.fileTransfer.testConnection.button" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Test file server"
+          }
+        }
+      }
+    },
+    "settings.voice.testConnection.button" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Test voice"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.tip.model.message.v3" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Which AI answers you — the exact name your gateway or provider knows it by, such as “llama3”. The connection test fills in the choices it can see."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.model.suggestions.empty.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No models yet — run the connection test to load them."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.customHelp.api.test.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The connection test checks that Conduck can reach this address, authenticate, and read its model list. To exercise the chat wire too, download the script on that machine with %@ and run bash conduck-connect.sh --check-server. After a PASS, the interactive script can continue into setup."
+          }
+        }
+      }
+    },
+    "settings.personalAI.fullAgent.header.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Runs on your own server"
+          }
+        }
+      }
+    },
+    "settings.personalAI.hostedModel.header.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No server needed"
+          }
+        }
+      }
+    },
+    "settings.personalAI.hostedModel.footer.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck talks straight to the provider. No tools, no file transfer."
+          }
+        }
+      }
+    },
+    "settings.personalAI.section.customHeader.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You supply the address"
+          }
+        }
+      }
+    },
+    "settings.personalAI.row.capability.selfHostedAgent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your server · tools and files"
+          }
+        }
+      }
+    },
+    "settings.personalAI.row.capability.hostedModel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No server · chat only"
+          }
+        }
+      }
+    },
+    "settings.personalAI.row.capability.custom" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your address · your model"
+          }
+        }
+      }
+    },
+    "chat.chooseAI.label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Choose AI"
+          }
+        }
+      }
+    },
+    "Ask Conduck" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ask Conduck"
+          }
+        }
+      }
+    },
+    "carplay.error.authFailed.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI refused the key. Update it in Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "carplay.error.serverError.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI had trouble replying. Try again."
+          }
+        }
+      }
+    },
+    "carplay.error.modelRequired.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI needs a model name. Set one in Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "carplay.error.imageTooLarge.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A photo in this chat was too large for your AI. Start a new voice chat."
+          }
+        }
+      }
+    },
+    "carplay.error.visionUnsupported.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI couldn't use a photo in this chat. Start a new voice chat."
+          }
+        }
+      }
+    },
+    "carplay.error.fileTransferNotConfigured.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File transfer isn't set up. Check it in Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.unreachable.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your AI"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.failure.title.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No reply from your AI"
+          }
+        }
+      }
+    },
+    "onboarding.gatewayChooser.selfHosted.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Runs on your own server — tools and file access."
+          }
+        }
+      }
+    },
+    "onboarding.completion.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Just connect your AI and you can start talking."
+          }
+        }
+      }
+    },
+    "conversations.empty.micHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap the mic on the home screen to start a conversation with your AI."
+          }
+        }
+      }
+    },
+    "intent.converse.description" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcribe recorded audio and send it to your configured AI, returning the reply."
+          }
+        }
+      }
+    },
+    "composer.placeholder.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Message your AI"
+          }
+        }
+      }
+    },
+    "quitGuard.single.title.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI is still answering"
+          }
+        }
+      }
+    },
+    "popover.error.destinationBusy.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI is still answering. Your words are kept — press Retry when it finishes."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.none.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No AI configured"
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.none.detail.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up your AI in Settings → Personal AI — every request needs one on this device."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No AI is configured."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unreachable.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your AI."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed.v3" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The request to your AI was refused."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.timeout.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI took too long to respond."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serverError.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI reported an error."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.invalidResponse.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI returned an unexpected response."
+          }
+        }
+      }
+    },
+    "setup.requiredOnPhone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up your AI on iPhone first."
+          }
+        }
+      }
+    },
+    "error.unreachable.retry" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your AI. Try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.reply.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reply from your AI"
+          }
+        }
+      }
+    },
+    "settings.certTrust.pinMismatch.refusal.compact.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This server's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured.recovery.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and add its address and key."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and add your key."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unreachable.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your internet connection, then try again. Conduck can't tell whether the request arrived."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed.recovery.v3" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your API key in your provider's dashboard, then paste it again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.timeout.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It may still be working on this one. Another attempt could repeat the work and the cost."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serverError.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again in a moment."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.invalidResponse.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again, or pick a different model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.visionUnsupported.recovery.modelChoice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Pick a model that accepts images, or keep chatting with text."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.imageTooLarge.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try a smaller image."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelUnavailable.recovery.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the model configured on your server."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.contextTooLong.recovery.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Start a new chat to shorten the history."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointUnexpectedResponse.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something other than the provider answered. Check the network you're on, then try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointNotFound.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The provider didn't recognise that route. Try again in a moment."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired.recovery.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set a default model on your server, then try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and pick a model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unexpectedStatus.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That came from the provider or the network between you. Try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serviceUnavailable.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The provider or something on the route is unavailable. Try again shortly."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notEstablished.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your internet connection. The request most likely never left this device."
+          }
+        }
+      }
+    },
     "popover.error.destinationUnavailable" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -258,17 +1248,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Add your STT key in Conduck on your iPhone."
-          }
-        }
-      }
-    },
-    "Agent" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Agent"
           }
         }
       }
@@ -2349,17 +3328,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Reachable and signed in. This checks the model list — sending a message is the only thing that proves chat works."
-          }
-        }
-      }
-    },
-    "diagnostics.gatewayWord" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "gateway"
           }
         }
       }
@@ -7132,17 +8100,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Conduck needs Screen Recording access"
-          }
-        }
-      }
-    },
-    "Relay" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Relay"
           }
         }
       }

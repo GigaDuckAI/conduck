@@ -799,7 +799,7 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
     /// DELEGATES to `BackgroundRemoteAgent.postFailureNotification` rather than
     /// re-deriving the same content: this was a byte-identical transcription of
     /// it, which is exactly how the two drifted into asserting the same wrong
-    /// cause ("Couldn't reach your personal AI" on a certificate the server
+    /// cause ("Couldn't reach your AI" on a certificate the server
     /// answered with). One copy, one title derivation, one privacy mapping — a
     /// wheel-lane failure and a phone-lane failure cannot say different things
     /// about the same error. The identifier is part of that shared contract

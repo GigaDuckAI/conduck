@@ -1043,8 +1043,8 @@ struct FileTransferSetupContent: View {
             )
         }
         return LocalizedStringResource(
-            "settings.remoteAgent.testConnection.button",
-            defaultValue: "Test Connection"
+            "settings.fileTransfer.testConnection.button",
+            defaultValue: "Test file server"
         )
     }
 
@@ -1123,7 +1123,7 @@ struct FileTransferSetupContent: View {
     /// refusal (a certificate this device won't accept) with no next step.
     private func failureMessage(test: FileTransferTestResult?) -> Text {
         if let failure = test?.failure {
-            return Text(verbatim: failure.descriptionWithRecovery)
+            return Text(verbatim: failure.descriptionWithRecovery(for: ref))
         }
         return Text(LocalizedStringResource("fileTransfer.inline.failed", defaultValue: "Test failed"))
     }

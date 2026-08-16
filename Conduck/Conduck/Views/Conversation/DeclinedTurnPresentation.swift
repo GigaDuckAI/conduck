@@ -138,13 +138,18 @@ struct DeclinedTurnPresentation: Equatable {
     ///     exist, so "Resend without photo" would send something.
     ///   - wordlessTurn: the turn carried attachments and no user text — the
     ///     `hint` precondition.
+    ///   - ref: the gateway this turn was bound to. Optional and trailing so a
+    ///     caller with no binding still compiles, but the generic arm's body IS
+    ///     the reconstructed error's remedy, so without it a user who runs no
+    ///     server is told to read their server's logs.
     static func classify(
         failureCode: Int?,
         failureWireCode: String?,
         turnHasOwnImages: Bool,
         hadHistoryImages: Bool?,
         hasResendableNonPhotoContent: Bool,
-        wordlessTurn: WordlessTurn
+        wordlessTurn: WordlessTurn,
+        ref: RemoteAgentRef? = nil
     ) -> DeclinedTurnPresentation {
         let wireCode = failureWireCode.flatMap(AdapterWireCode.init(rawValue:))
         let isVisionClass = failureCode == AppError.remoteAgentVisionUnsupported.errorCode
@@ -219,7 +224,7 @@ struct DeclinedTurnPresentation: Equatable {
         // picks up a retry invitation the row deliberately no longer offers.
         // Troubleshoot rides along when Diagnostics can actually reason about
         // the class.
-        let body = reconstructed?.descriptionWithRecovery
+        let body = reconstructed?.descriptionWithRecovery(for: ref)
             ?? String(localized: "declinedTurn.generic.body", defaultValue: "This message wasn't delivered.")
         let hint: String? = (wordlessTurn == .present && Self.gatewayAnsweredAndFailed(reconstructed))
             ? String(localized: "declinedTurn.wordless.hint",

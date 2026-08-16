@@ -18,7 +18,13 @@ struct ConduckShortcuts: AppShortcutsProvider {
                 "Ask \(.applicationName)",                   // xcstrings
                 "Talk to \(.applicationName)"                // xcstrings
             ],
-            shortTitle: "GigaAction",                         // xcstrings
+            // Conduck-branded, not mascot-branded: this tile is user-visible in
+            // the Shortcuts app, and the duck's name belongs to the character,
+            // never to a product string. (The BUNDLED `GigaAction.shortcut`
+            // file keeps its name — `shortcuts://run-shortcut?name=GigaAction`
+            // addresses it by that name, so renaming the file is a separate,
+            // contract-breaking change.)
+            shortTitle: "Ask Conduck",                        // xcstrings
             systemImageName: "mic.fill"
         )
 

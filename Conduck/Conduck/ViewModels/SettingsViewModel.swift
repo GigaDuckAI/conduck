@@ -2644,7 +2644,17 @@ final class SettingsViewModel {
             remoteAgentValidationStates[ref] = .invalid(
                 message: Self.friendlyGatewayMessage(
                     for: error,
-                    category: descriptor.category,
+                    // The editor is always editing ONE named AI, so the copy
+                    // names it. `backendName` is the same string the picker and
+                    // the badge render.
+                    named: backendName,
+                    // Resolved from the REF, never synthesized from the
+                    // category and never taken off `descriptor`, which is a
+                    // status-map CARRIER for a custom (it is `.openclaw`, whose
+                    // model policy is `.unsupported` while a custom's is
+                    // `.optional`). `resolve` is the one mapping that answers
+                    // for THIS ref.
+                    context: RemoteAgentFailureContext.resolve(ref),
                     keyShapeLooksWrong: keyShapeLooksWrong
                 )
             )
@@ -3283,54 +3293,167 @@ final class SettingsViewModel {
     /// string per case and never echoes an associated payload (`.apiFailure`'s
     /// server text included; `AppErrorTests` locks that).
     ///
-    /// Static + secret-free: no backend name, token, or URL can be interpolated in.
-    /// `keyShapeLooksWrong` is a `Bool`, NEVER the key — that is what makes the
-    /// secret-free property hold by construction rather than by care.
+    /// Static, and free of the two things that must never reach a screen: no
+    /// token and no URL is interpolated in. `keyShapeLooksWrong` is a `Bool`,
+    /// NEVER the key — that is what makes the property hold by construction
+    /// rather than by care. `instanceName` DOES cross, and is the only user-owned
+    /// string that does: it is the same display name the gateway picker, the
+    /// conversation badge and the Settings list already render, so naming it here
+    /// exposes nothing a screenshot of this screen does not already show.
     ///
-    /// Copy is selected by `category`, not by backend identity: a hosted provider
-    /// (OpenRouter) is a service the user does NOT operate, so self-hosted remedies
-    /// ("check the gateway is running", "check the gateway logs") are not merely
-    /// unhelpful — they describe a machine that does not exist. Dispatching on the
-    /// descriptor's category keeps a future hosted preset (Groq / Together) a
-    /// one-row addition, per `RemoteAgentBackendMetadata`'s stated design.
+    /// Copy is selected by CAPABILITY, never by backend identity: a hosted
+    /// provider (OpenRouter) is a service the user does NOT operate, so
+    /// self-hosted remedies ("check the gateway is running", "check the gateway
+    /// logs") are not merely unhelpful — they describe a machine that does not
+    /// exist. The editor-scoped arms below turn on `context.category`, which
+    /// keeps a future hosted preset (Groq / Together) a one-row addition per
+    /// `RemoteAgentBackendMetadata`'s stated design; the DELEGATED arms turn on
+    /// the narrower fields, because the category alone gets the model arms
+    /// backwards — see the `context` parameter note.
     ///
-    /// These keys live under `remoteAgent.editor.*`, deliberately SEPARATE from the
-    /// `remoteAgent.error.*` keys behind `AppError.recoverySuggestion`. The latter
-    /// are correct in their own surfaces (Diagnostics, CarPlay) where "Open Settings"
-    /// IS the remedy, and are versioned rather than frozen — a rewording moves to a
-    /// new `.v2` key, because a catalogued value wins over `defaultValue:`. Here the
-    /// user is already standing in the editor with the field on screen, so the remedy
-    /// is to fix the value in front of them.
+    /// ─────────────────────────────────────────────────────────────────────────
+    /// THE CONNECTION TEST IS ITS OWN CONTEXT — this is the rule that decides
+    /// which arms may delegate to the shared layer and which may not.
+    ///
+    /// `AppError.recoverySuggestion(in:)` is written for a CONVERSE TURN: a
+    /// request that carries the user's prompt to an agent which may run tools,
+    /// spend tokens on their key, and change state at the other end. That is why
+    /// its copy warns about repeated work and cost, and why it says Conduck cannot
+    /// tell whether the request arrived.
+    ///
+    /// NONE of that is true here. `validateRemoteAgent`'s probe is a READ-ONLY GET
+    /// on the model list (`/v1/key` on the hosted lane) — idempotent, free, and
+    /// running no tools — and its verdict is definitive about arrival, because
+    /// finding out whether the request arrives is the entire point of pressing
+    /// the button. So this screen must never tell the reader that another attempt
+    /// "could repeat the work and the cost", or that they should go inspect a tool
+    /// run before retrying: both sentences are false on a model-list read, and a
+    /// false warning on a test button is worse than none — it stops the one action
+    /// the screen exists to invite.
+    ///
+    /// Hence two kinds of arm, and the split is not stylistic:
+    ///
+    ///   • EDITOR-SCOPED (`remoteAgent.editor.*`) — the five conditions whose
+    ///     shared wording carries converse-turn assumptions: unreachable, timeout,
+    ///     server error, unexpected response, refused credential. Each names the
+    ///     INSTANCE being edited and ends in "test again", because a test is what
+    ///     the reader is standing in front of.
+    ///   • DELEGATED (`remedy(_:)`) — every condition whose shared remedy is a
+    ///     CONFIGURATION instruction (a wrong route, a missing model, an
+    ///     unmapped status, an exhausted balance). Those are equally true mid-turn
+    ///     and mid-test, and duplicating them here is how one condition ends up
+    ///     with two sentences depending on which screen you are standing on.
+    ///
+    /// The other facts that stay local, and why:
+    ///   • the key-SHAPE hint — it rides a `Bool` computed where the token
+    ///     lives, and no other surface has one;
+    ///   • the three `CertificateTrustCopy` refusal+remedy forms — this is the
+    ///     one screen holding the saved fingerprint;
+    ///   • the `default:` arm's description fallback, which is what keeps an
+    ///     uncurated failure from rendering as a shrug. It resolves in the SAME
+    ///     `context` as every remedy above it, so the fallback cannot name a
+    ///     gateway on a lane that has none.
+    ///
+    /// The retired `remoteAgent.editor.*` keys without a `.v2` are deliberately
+    /// left in the catalog and deliberately not referenced: they said "bearer
+    /// token", which the two-word secrets vocabulary retired, and they hard-coded
+    /// the provider's name where an interpolated instance belongs.
+    /// - Parameter context: the capability snapshot of the AI being edited,
+    ///   RESOLVED FROM ITS REF (`RemoteAgentFailureContext.resolve`). Required,
+    ///   and required for the same structural reason `descriptionWithRecovery`
+    ///   is a method rather than a property: a defaulted or derived one lets a
+    ///   call site inherit the wrong lane's copy silently. Deriving these fields
+    ///   from the category alone reads "self-hosted" as "has a model field",
+    ///   which is true of a custom and FALSE of OpenClaw and Hermes — both
+    ///   declare `model == .unsupported` and Conduck hides the field — so the
+    ///   delegated arms then offer "pick a different model" in an editor that
+    ///   shows no model. There is deliberately no default: the compiler asking
+    ///   the question at every call site is the only guard that cannot rot.
     static func friendlyGatewayMessage(
         for error: AppError,
-        category: RemoteAgentCategory = .selfHostedAgent,
+        named instanceName: String,
+        context: RemoteAgentFailureContext,
         keyShapeLooksWrong: Bool = false
     ) -> String {
-        let hosted = category == .hostedModel
+        // Every lane fact is read off the CONTEXT, so the editor-scoped arms and
+        // the delegated ones can never answer for different lanes.
+        let hosted = context.category == .hostedModel
+        let generic = String(localized: "Unexpected error. Try again.")
+        // Every template below places the name MID-SENTENCE, so the fallback can
+        // be an ordinary noun phrase rather than a proper noun. It is a floor, not
+        // a path anybody walks: a built-in's name is a registry literal, and a
+        // custom's is refused as empty before the probe runs.
+        let trimmedName = instanceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmedName.isEmpty
+            ? String(localized: "remoteAgent.editor.instance.fallback", defaultValue: "this AI")
+            : trimmedName
+        func remedy(_ error: AppError) -> String {
+            error.recoverySuggestion(in: context) ?? error.errorDescription(in: context) ?? generic
+        }
         switch error {
         case .remoteAgentAuthFailed:
-            if hosted {
-                // A truncated paste is the commonest cause of a 401 on a hosted
-                // lane. Say so, rather than sending the user to a dashboard to
-                // re-copy a key that was already correct.
-                return keyShapeLooksWrong
-                    ? String(localized: "remoteAgent.editor.authFailed.hosted.badShape",
-                             defaultValue: "That API key was rejected — and it doesn't look like a complete OpenRouter key (they start with sk-or-). Check the paste and try again.")
-                    : String(localized: "remoteAgent.editor.authFailed.hosted",
-                             defaultValue: "That API key was rejected. Check it in your OpenRouter dashboard, then paste it again.")
+            // The ONE fact this screen owns: the pasted key's shape. It is
+            // computed where the token lives and crosses as a `Bool`, so no
+            // other surface could reproduce it.
+            if hosted, keyShapeLooksWrong {
+                return String(localized: "remoteAgent.editor.authFailed.hosted.badShape",
+                              defaultValue: "That API key was rejected — and it doesn't look like a complete OpenRouter key (they start with sk-or-). Check the paste and try again.")
             }
-            return String(localized: "remoteAgent.editor.authFailed.selfHosted",
-                          defaultValue: "That bearer token was rejected. Check your gateway's token, then paste it again.")
+            if hosted {
+                // Both halves the shared hosted arm cannot carry: WHAT the
+                // verdict was (a rejected key, not an unspecified refusal) and
+                // WHOSE dashboard to open. On a fixed-URL lane 401/403 has one
+                // meaning, so the cause can be stated outright.
+                return String(localized: "remoteAgent.editor.authFailed.hosted.v2",
+                              defaultValue: "That API key was rejected. Check it in the dashboard for \(name), then paste it again.")
+            }
+            // Self-hosted keeps BOTH live causes — a rejected credential and an
+            // origin refusing the request as it arrives (Ollama 403s any `Host`
+            // that isn't local, and a tunnel forwards the original one). Neither
+            // is asserted, because 26 cannot tell them apart.
+            return String(localized: "remoteAgent.editor.authFailed.selfHosted.v2",
+                          defaultValue: "The request to \(name) was refused. Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses.")
         case .remoteAgentUnreachable, .noInternetConnection, .networkError:
+            // One condition, one sentence: 3 and 1 have their own generic
+            // transport copy, so the whole group renders the test's own
+            // unreachable wording. NO delivery-uncertainty clause — a GET that
+            // did not connect changed nothing at the far end, so there is nothing
+            // for the reader to go and check before pressing the button again.
             if hosted {
-                return String(localized: "remoteAgent.editor.unreachable.hosted",
-                              defaultValue: "Couldn't reach OpenRouter. Check your internet connection and try again.")
+                return String(localized: "remoteAgent.editor.unreachable.hosted.v2",
+                              defaultValue: "Couldn't reach \(name). Check your internet connection, then test again.")
             }
-            return String(localized: "remoteAgent.error.unreachable.recovery",
-                          defaultValue: "Check the gateway is running and accessible from this device.")
+            return String(localized: "remoteAgent.editor.unreachable.selfHosted",
+                          defaultValue: "Couldn't reach \(name). Check the gateway is running and reachable from this device, then test again.")
         case .remoteAgentTimeout, .requestTimeout:
-            return String(localized: "remoteAgent.error.timeout.recovery",
-                          defaultValue: "Try again — the gateway may be processing a long reply.")
+            // NO repeat-work-and-cost warning. The shared arm earns that sentence
+            // because a converse turn may be mid-flight on the user's own key; a
+            // model-list read repeats no work and costs nothing, so the warning
+            // would be false and would discourage the retry that is correct here.
+            if hosted {
+                return String(localized: "remoteAgent.editor.timeout.hosted",
+                              defaultValue: "The test timed out waiting for \(name). Test again in a moment.")
+            }
+            return String(localized: "remoteAgent.editor.timeout.selfHosted",
+                          defaultValue: "The test timed out waiting for \(name). Check the gateway is running, then test again.")
+        case .remoteAgentServerError:
+            if hosted {
+                return String(localized: "remoteAgent.editor.serverError.hosted.v2",
+                              defaultValue: "Couldn't finish the test — \(name) had a server error. Test again in a moment.")
+            }
+            return String(localized: "remoteAgent.editor.serverError.selfHosted",
+                          defaultValue: "Couldn't finish the test — \(name) returned a server error. Check the gateway logs, then test again.")
+        case .remoteAgentInvalidResponse:
+            // The shared self-hosted remedy names `/v1/chat/completions`, which
+            // is not the route this probe called. Naming the wrong endpoint on
+            // the one screen whose job is to diagnose the endpoint sends the
+            // reader to inspect something the test never touched.
+            if hosted {
+                return String(localized: "remoteAgent.editor.invalidResponse.hosted.v2",
+                              defaultValue: "Reached \(name), but its reply wasn't in the shape Conduck needs. Test again.")
+            }
+            return String(localized: "remoteAgent.editor.invalidResponse.selfHosted",
+                          defaultValue: "Reached \(name), but its reply wasn't in the shape Conduck needs. Check it serves an OpenAI-compatible model list, then test again.")
         case .remoteAgentCertMismatch:
             // Unreachable for a hosted backend (`.systemTrustOnly` never pins).
             // The shared refusal + remedy, verbatim: the editor is the surface
@@ -3350,36 +3473,37 @@ final class SettingsViewModel {
             // here alone: system trust passed, so clearing the pin returns the
             // connection to the evaluation that is already succeeding.
             return CertificateTrustCopy.keyUnpinnableRefusalWithRemedy
-        case .remoteAgentServerError:
-            if hosted {
-                return String(localized: "remoteAgent.editor.serverError.hosted",
-                              defaultValue: "OpenRouter had a server error. Try again in a moment.")
-            }
-            return String(localized: "remoteAgent.error.serverError.recovery",
-                          defaultValue: "Check the gateway logs, then try again.")
-        case .remoteAgentInvalidResponse:
-            if hosted {
-                return String(localized: "remoteAgent.editor.invalidResponse.hosted",
-                              defaultValue: "OpenRouter returned an unexpected response. Try again.")
-            }
-            return String(localized: "remoteAgent.error.invalidResponse.recovery",
-                          defaultValue: "Check the gateway is running an OpenAI-compatible /v1/chat/completions endpoint.")
         case .remoteAgentEndpointUnexpectedResponse, .remoteAgentEndpointWrongEnvelope,
              .remoteAgentEndpointNotFound, .remoteAgentModelRequired,
+             .remoteAgentModelUnavailable, .remoteAgentContextTooLong,
+             .remoteAgentUnexpectedStatus, .remoteAgentServiceUnavailable,
+             .remoteAgentNotEstablished,
              .remoteAgentOutOfCredits, .remoteAgentRateLimited:
             // These describe a MISCONFIGURED-but-reachable gateway, or a reachable
             // provider refusing THIS request (no credits / rate-limited), so the
-            // remedy (`recoverySuggestion`) is the whole message — the editor pairs
-            // it with the per-backend fix-it callout. Out-of-credits and
-            // rate-limited belong here and not in `default:`: their bare
-            // `errorDescription` ("Your AI provider is rate-limiting you.") states
-            // the symptom and withholds the fix, and 429 is routine on a hosted
-            // lane's free models.
-            return error.recoverySuggestion
-                ?? error.errorDescription
-                ?? String(localized: "Unexpected error. Try again.")
+            // remedy is the whole message — the editor pairs it with the
+            // per-backend fix-it callout. Out-of-credits and rate-limited belong
+            // here and not in `default:`: their bare `errorDescription` ("Your AI
+            // provider is rate-limiting you.") states the symptom and withholds
+            // the fix, and 429 is routine on a hosted lane's free models.
+            //
+            // DELEGATED on purpose: every remedy in this set is a CONFIGURATION
+            // instruction — fix the route, name a model, top up a balance — and a
+            // configuration instruction is equally true mid-turn and mid-test. It
+            // is only the converse-turn ASSUMPTIONS (repeated work, spent tokens,
+            // tool side effects, uncertain delivery) that the arms above had to
+            // leave behind, and none of those appears here.
+            //
+            // `remedy` passes the context. The parameterless `recoverySuggestion`
+            // answers for the self-hosted lane unconditionally, which is how
+            // "Check the Gateway URL is your server's base address" once rendered
+            // inside the OpenRouter editor, a screen with no URL field at all.
+            return remedy(error)
         default:
-            return error.errorDescription ?? String(localized: "Unexpected error. Try again.")
+            // Context-resolved, like every arm above: the cause half dispatches
+            // on the same capabilities the remedy half does, so an uncurated
+            // failure cannot name a gateway on a lane that has none.
+            return error.errorDescription(in: context) ?? generic
         }
     }
 
