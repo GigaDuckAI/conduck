@@ -67,13 +67,19 @@ enum DeviceCapabilities {
 
     // MARK: - iPad Detection
 
-    /// Determines if the device is an iPad
+    /// Determines if the device is an iPad.
+    ///
+    /// Asks UIKit for the idiom rather than pattern-matching `modelIdentifier`,
+    /// because the idiom is correct on the simulator too while the identifier is
+    /// not guaranteed to be: `modelIdentifier` falls back to the literal
+    /// "Simulator" whenever `SIMULATOR_MODEL_IDENTIFIER` is missing from the
+    /// environment, and `"Simulator".hasPrefix("iPad")` is false — which would
+    /// answer "iPhone" for an iPad. That answer is load-bearing: `ContentView`
+    /// routes the whole two-column iPad layout on it, so a false negative
+    /// silently demotes an iPad to the phone layout.
     static var isiPad: Bool {
         #if os(macOS)
         return false
-        #elseif targetEnvironment(simulator)
-        // In simulator, check if simulated device is an iPad
-        return modelIdentifier.hasPrefix("iPad")
         #else
         return UIDevice.current.userInterfaceIdiom == .pad
         #endif

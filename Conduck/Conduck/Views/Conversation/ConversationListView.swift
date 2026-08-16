@@ -54,14 +54,30 @@ struct ConversationListView: View {
     /// native iOS 26 search capsule. iPad/macOS sidebars keep the footer (default false).
     var settingsInToolbar: Bool = false
     /// Additive: render the New `square.and.pencil` toolbar item. iPhone keeps
-    /// the default `true`; the iPad sidebar passes `false` because the DETAIL
-    /// toolbar owns New there (`LeadingToolbarChrome`), and a second one here
-    /// would duplicate it whenever the sidebar is showing.
+    /// the default `true`; the iPad sidebar passes `false` because
+    /// `LeadingToolbarChrome` owns New on whichever COLUMN's bar is on screen —
+    /// the sidebar's own bar while the sidebar is up, which is exactly when this
+    /// list renders, so a second item here would sit beside the first.
     var newConversationInToolbar: Bool = true
     /// Additive: collapse Delete-All into an `ellipsis.circle` overflow menu
     /// instead of a bare destructive trash button. Every current host keeps the
     /// default `false` (bare trash button verbatim).
     var deleteAllInMenu: Bool = false
+    /// Additive: dock Delete-All at the bar's LEADING edge instead of the
+    /// trailing slot `.primaryAction` resolves to on iOS. Where exactly the
+    /// system puts it there, and why no lever offsets it by a chosen amount, is
+    /// measured on `deleteAllPlacement`.
+    ///
+    /// The iPad split sidebar (`ConversationLibraryView`) is the only host that
+    /// passes `true`: its trailing slot belongs to compose, which sits
+    /// immediately left of the system toggle to match the macOS window, so the
+    /// destructive action goes to the opposite end of the bar. Every other host
+    /// keeps the default `false` — the iPhone conversation sheet has no sidebar
+    /// toggle and gives its leading slot to Settings (`settingsInToolbar: true`),
+    /// and macOS never renders this item at all (`showsToolbarActions: false`).
+    /// Those two facts are independent of this flag, which is why the sheet is
+    /// safe at the default rather than by exclusion.
+    var deleteAllLeading: Bool = false
     /// Optional active-conversation highlight. The persistent-sidebar hosts (iPad
     /// split + macOS window) pass the currently-selected id so its row reads as
     /// "selected" (subtle amber row fill + the `.isSelected` VoiceOver trait); the
@@ -92,6 +108,46 @@ struct ConversationListView: View {
     /// flashes while a content-only match is still being resolved — identical to
     /// the Watch surface.
     @State private var isSearchingContent = false
+
+    /// Where Delete-All docks. `.topBarLeading` is iOS-only and this file
+    /// compiles for macOS too, so the leading case is spelled inside the fence.
+    /// macOS never renders this item at all — its host passes
+    /// `showsToolbarActions: false` — so its branch is the inert one.
+    ///
+    /// WHERE THE LEADING TRASH LANDS, and why nothing here sets it. MEASURED
+    /// (iPadOS 26.5, iPad Pro 12.9-inch (6th gen) simulator, 1024x1366pt
+    /// portrait, sidebar column x 10–330): the bar pins a `.topBarLeading` item
+    /// at x=14 — 4pt inside the column — and holds it there. Five levers, each
+    /// built, installed and re-probed on that device; artifacts under
+    /// `final-probe/` (one `ax-*.json` sweep + one screenshot per experiment,
+    /// distinct md5s):
+    ///
+    ///   `.padding(.leading, 8)` on the Button              14.0  INERT   (E1)
+    ///   `ToolbarSpacer(.fixed, placement: .topBarLeading)`
+    ///     declared ahead of the item                       14.0  INERT   (E4)
+    ///   `.padding(.leading, 8)` inside the Button's Label  14.0  INERT   (E5)
+    ///   `ToolbarItemGroup` + a leading flexible `Spacer()`  56.0  MOVES  (E2)
+    ///   `ToolbarItemGroup` + `Spacer().frame(width: 8)`     56.0  MOVES  (E3)
+    ///
+    /// So a lever DOES exist, and it is unusable: the group gives the spacer a
+    /// whole toolbar slot, +42pt, identical whether the spacer is flexible or
+    /// pinned to 8pt. There is no lever that offsets the item by a chosen amount,
+    /// which is why this file declares a bare `ToolbarItem` and takes the 14.
+    ///
+    /// The 14 is also SYMMETRIC with the system's own sidebar toggle at the other
+    /// end of the same bar (326.0, 4pt inside the column's trailing edge at 330).
+    /// The `SidebarSearchField` capsule stacked underneath is what has to match
+    /// it, and it can, because ITS inset belongs to its host — see
+    /// `ConversationLibraryView`'s `.safeAreaInset`, which insets 4 so the
+    /// capsule's leading edge lands on this button's frame and its magnifier
+    /// glyph on this button's trash glyph.
+    private var deleteAllPlacement: ToolbarItemPlacement {
+        #if os(iOS)
+        deleteAllLeading ? .topBarLeading : .primaryAction
+        #else
+        .primaryAction
+        #endif
+    }
 
     var body: some View {
         Group {
@@ -154,7 +210,7 @@ struct ConversationListView: View {
                     }
                 }
                 if !viewModel.conversations.isEmpty {
-                    ToolbarItem(placement: .primaryAction) {
+                    ToolbarItem(placement: deleteAllPlacement) {
                         if deleteAllInMenu {
                             // Opt-in: fold Delete-All into an overflow menu when
                             // a host's bar is too crowded for a bare button.

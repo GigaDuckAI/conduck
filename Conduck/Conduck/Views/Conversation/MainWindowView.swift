@@ -262,11 +262,14 @@ struct MainWindowView: View {
                 // keeps it alive when the column collapses, where the two merge
                 // into one glass capsule. `LeadingToolbarChrome` owns the
                 // placement (it differs by platform) and is shared with the
-                // iPad split view, which attaches it to its DETAIL column for
-                // the opposite reason. Moving this call site breaks one of the
-                // two — the measurements are in that file's header.
+                // iPad split view, which attaches it to BOTH of its columns —
+                // one per sidebar state — because an iPadOS sidebar bar does not
+                // outlive its column the way this one does. Three call sites in
+                // all, each correct only where it stands; moving any of them
+                // breaks the surface it serves. The measurements are in that
+                // file's header.
                 .toolbar {
-                    LeadingToolbarChrome { startNewConversation() }
+                    LeadingToolbarChrome(column: .sidebar) { startNewConversation() }
                 }
         } detail: {
             detailColumn

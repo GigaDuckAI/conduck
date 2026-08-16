@@ -105,6 +105,83 @@ struct ConversationLibraryView: View {
     /// creation (NOT in `.onAppear`, which SwiftUI re-fires) so it stays stable
     /// across re-render. This host state has no conversation VM of its own.
     @State private var hostMascot = MascotShuffleBag.next()
+    /// Whether the user wants the sidebar column up in THIS window.
+    ///
+    /// Scene-scoped rather than view-scoped, for two reasons. A collapse outlives
+    /// this view being rebuilt — a narrow multitasking window flips the
+    /// horizontal size class, which tears the view down and puts it back, and a
+    /// `@State` default would re-impose "sidebar up" every time and throw the
+    /// user's answer away. And each iPad window keeps its OWN answer
+    /// (`UIApplicationSupportsMultipleScenes` is true), the way each macOS window
+    /// keeps its own sidebar, which a shared app-wide preference could not do.
+    ///
+    /// Defaults to `true`, so a window that has never been told otherwise opens
+    /// with the history up, matching the macOS window. That is a product choice,
+    /// not a measurement.
+    ///
+    /// MEASURED on an iPad Pro 12.9-inch (6th gen), iPadOS 26.5 simulator: a
+    /// collapse survives backgrounding and re-foregrounding the process, and
+    /// survives a rotation round-trip. A COLD launch (process terminated, then
+    /// relaunched) opens with the sidebar up again — scene restoration does not
+    /// carry the value across a kill, which is iOS's own policy for a scene the
+    /// user or the tooling ended, and lands on the same sidebar-up default. The
+    /// multitasking rebuild is NOT exercised: iPadOS Split View and Stage
+    /// Manager cannot be driven from the probe harness.
+    @SceneStorage("conversationLibrary.sidebarUp") private var sidebarUp: Bool = true
+    /// Whether the sidebar column's own view tree is currently mounted, reported
+    /// by that column's `.onAppear`/`.onDisappear`. A SECOND, independent signal
+    /// from `sidebarUp`: the stored flag is a statement of INTENT, this one is a
+    /// statement about the view tree. See `sidebarBarOnScreen` for why both are
+    /// needed. Starts `true` because the column is mounted at first render
+    /// whenever `sidebarUp` is.
+    @State private var sidebarColumnMounted = true
+    /// The binding `NavigationSplitView` reads and writes. Derived from
+    /// `sidebarUp` rather than held as `@State` so the value the split view sees
+    /// and the value that persists can never disagree.
+    ///
+    /// The getter emits only `.all` or `.detailOnly` — never `.automatic` — so
+    /// the split view is never handed a value whose meaning depends on the
+    /// device. The setter treats ONLY `.all` and `.doubleColumn` as "sidebar up";
+    /// `.detailOnly`, `.automatic`, and anything a future OS adds record as down,
+    /// which routes compose to the detail bar. That asymmetry is the fail-safe
+    /// direction — see `sidebarBarOnScreen`.
+    private var columnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { sidebarUp ? .all : .detailOnly },
+            set: { newValue in
+                let up = (newValue == .all || newValue == .doubleColumn)
+                sidebarUp = up
+                // Trust the intent immediately on the way UP, so the detail copy
+                // of compose is gone before the sidebar column's bar animates in
+                // rather than overlapping it for the length of the transition.
+                // The way DOWN needs no equivalent: the column unmounting is what
+                // removes the sidebar copy, and `.onDisappear` reports it.
+                if up { sidebarColumnMounted = true }
+            }
+        )
+    }
+    /// True exactly while the SIDEBAR column's own nav bar can host compose.
+    /// Both signals must agree, and disagreement resolves toward "not on screen".
+    ///
+    /// The failure that matters here is ZERO compose buttons — a user with no way
+    /// to start a chat. The detail bar is on screen in every column state, so
+    /// ambiguity must send compose there; believing an `.all` binding while the
+    /// column is actually gone is the one outcome that strands the user, and a
+    /// transient duplicate is a far better failure than that.
+    ///
+    /// `sidebarUp` alone is not sufficient, because it is what the SYSTEM writes
+    /// back through the binding. That write-back is reliable on the probed
+    /// device (see `LeadingToolbarChrome`'s header), but it presents this sidebar
+    /// as a DISPLACING column, so it cannot exercise an overlay-style dismissal —
+    /// a route by which the column could leave the screen without the binding
+    /// being written. `.onDisappear` is what covers that route.
+    ///
+    /// THE RESIDUAL, stated plainly: if such a route exists AND SwiftUI keeps the
+    /// column mounted through it, both signals read "up" while no sidebar bar is
+    /// on screen, and compose goes with the bar that is not there — zero reachable
+    /// compose, the one failure this pair exists to prevent. Nothing measured here
+    /// produces that route, and nothing measured here rules it out either.
+    private var sidebarBarOnScreen: Bool { sidebarUp && sidebarColumnMounted }
     /// True while the in-app mic is capturing or transcribing (Part 1f). Gates
     /// the host `⌘Return` shortcut so a keyboard send can't race the
     /// voice-populates-the-field flow.
@@ -116,19 +193,29 @@ struct ConversationLibraryView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: columnVisibility) {
             ConversationListView(
                 onSelect: { id in
                     selectedConversationID = id
                 },
                 // The pinned header (safeAreaInset below) owns the custom search
-                // field, so suppress the toolbar New item and drive the
-                // list's filter via `externalSearchText` (no native `.searchable`).
-                // New lives in the DETAIL toolbar (`LeadingToolbarChrome`), where
-                // collapsing the sidebar cannot hide it — which is also why no
-                // `onNewConversation` is passed: nothing here would call it.
-                // Delete-All renders as a bare trash button like iPhone
-                // (`deleteAllInMenu: false`). (Args in declaration order.)
+                // field, so suppress the toolbar New item and drive the list's
+                // filter via `externalSearchText` (no native `.searchable`). New
+                // is toolbar chrome on whichever column's bar is on screen
+                // (`LeadingToolbarChrome`, attached to BOTH columns below, one
+                // per sidebar state) — which is why no `onNewConversation` is
+                // passed: nothing here would call it, and
+                // `newConversationInToolbar: false` keeps this list's own New
+                // from ever doubling it. Delete-All renders as a bare trash
+                // button like iPhone (`deleteAllInMenu: false`), docked at this
+                // bar's LEADING edge (`deleteAllLeading: true`) — the far end
+                // from the compose/toggle pair at the trailing edge, so the
+                // destructive action is not adjacent to the controls the user
+                // reaches for constantly. Its 4pt inset from the column is the
+                // system's; the pinned header above matches it rather than the
+                // reverse (see `ConversationListView.deleteAllPlacement` for the
+                // levers probed, and the `.safeAreaInset` below for the match).
+                // (Args in declaration order.)
                 showsToolbarActions: true,
                 externalSearchText: $sidebarSearch,
                 customGateways: customGateways,
@@ -139,21 +226,73 @@ struct ConversationLibraryView: View {
                 onOpenSettings: { onOpenSettings(nil) },
                 newConversationInToolbar: false,
                 deleteAllInMenu: false,
+                deleteAllLeading: true,
                 // Persistent split-view sidebar: highlight the active thread's row.
                 selectedConversationID: selectedConversationID
             )
-            // Mac-mirroring pinned header: the custom search field, same styling
-            // as `MainWindowView.sidebar`. The list's native `.searchable` is
-            // suppressed (we pass `externalSearchText`), so this band — not the
-            // nav bar — owns search, sitting tight under the slim Delete-All bar
-            // with no wasted large-title band. The card background is what makes
-            // it read as pinned against the scrolling list below.
+            // Pinned header: the same `SidebarSearchField` component the macOS
+            // window uses. The list's native `.searchable` is suppressed (we
+            // pass `externalSearchText`), so this band — not the nav bar — owns
+            // search, sitting tight under the slim Delete-All bar with no wasted
+            // large-title band. The card background is what makes it read as
+            // pinned against the scrolling list below.
+            //
+            // THE 4pt INSET IS THE SIDEBAR'S ONE LEADING EDGE, and it is 4 here
+            // where the macOS window keeps 12, because only this column carries
+            // a control at the leading edge of the bar directly above it —
+            // Delete-All, which macOS suppresses entirely
+            // (`showsToolbarActions: false`), so there is nothing there to align
+            // to on that surface. iPadOS pins a `.topBarLeading` item 4pt inside
+            // the column and holds it there; nothing this app declares insets it
+            // further (`ConversationListView.deleteAllPlacement` carries the
+            // levers built and probed). So the only edge under this file's
+            // control is the capsule's, and matching it to the bar is what
+            // removes the step. MEASURED on an iPad Pro 12.9-inch (6th gen),
+            // iPadOS 26.5, portrait, sidebar column x 10–330 (`final-probe/`):
+            //
+            //   inset 12 (`E0-baseline`)   capsule edge 22.0   magnifier x 36.0
+            //   inset  4 (`E6-capsule-inset4`)          14.0             28.0
+            //
+            // against a Delete-All button frame that stays at x=14.0 and a trash
+            // GLYPH whose leftmost lit pixel column is 27.5 in both. At 4 the
+            // capsule's edge lands on the button's, the magnifier lands on the
+            // trash, and the column reads as one aligned edge instead of two.
             .safeAreaInset(edge: .top) {
                 SidebarSearchField(text: $sidebarSearch)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 4)
                     .padding(.vertical, 8)
                     .background(AppColors.cardBackground)
             }
+            // Compose, immediately LEFT of the system toggle at the sidebar's
+            // trailing edge, flush against the divider — the macOS window's
+            // arrangement, and the reason Delete-All takes the leading edge
+            // instead. This bar dies with its column, so the detail column
+            // carries the same action while the sidebar is down; the two are
+            // mutually exclusive by `sidebarBarOnScreen`, never both.
+            // Deliberately UNCONDITIONAL here: the column's unmount is what
+            // removes it, so this copy cannot outlive the bar it lives in — and
+            // gating it on the same flag that gates the detail copy would make
+            // both answers come from one signal, which is precisely what
+            // `sidebarBarOnScreen` refuses to do. `LeadingToolbarChrome`'s
+            // header carries the measurements behind both halves.
+            .toolbar {
+                LeadingToolbarChrome(column: .sidebar) { startNewConversation() }
+            }
+            // The view-tree half of `sidebarBarOnScreen`. Reports what is
+            // actually mounted, so a sidebar that leaves the screen by a route
+            // that does not write the binding still hands compose to the detail
+            // bar instead of taking it off screen with the column.
+            //
+            // A COVER IS NOT A COLLAPSE, and iPadOS agrees: with an NSLog on
+            // each callback, presenting AND dismissing the Settings
+            // `.fullScreenCover` over this split view fired NEITHER callback,
+            // while collapsing the sidebar in the same session fired
+            // `.onDisappear` and re-expanding fired `.onAppear`
+            // (`final-probe/F4-cover-vs-collapse.txt`). So the cover cannot flip
+            // this flag under a sidebar that is genuinely up, and cannot mount a
+            // second compose item across its present/dismiss animation.
+            .onAppear { sidebarColumnMounted = true }
+            .onDisappear { sidebarColumnMounted = false }
         } detail: {
             detailColumn
         }
@@ -250,17 +389,17 @@ struct ConversationLibraryView: View {
         // into that control — no separate trailing button.
         .navigationTitle(Text(""))
         .toolbar {
-            // Compose, at the leading edge, beside the sidebar toggle — present
-            // in BOTH column states, so a hidden sidebar cannot strand the user.
-            // Declared on the DETAIL column, not the sidebar: an iPadOS
-            // sidebar-column nav bar is gone the moment the sidebar is, so the
-            // detail bar is the only one always on screen. macOS is the mirror
-            // image — there the SIDEBAR column is the correct host, because a
-            // macOS toolbar item outlives its column and only that column
-            // reaches the toolbar's sidebar region. Same component, and it picks
-            // the placement each platform needs; `LeadingToolbarChrome`'s header
-            // carries the measurements behind both halves of that split.
-            LeadingToolbarChrome { startNewConversation() }
+            // Compose, immediately right of the sidebar-reveal control that
+            // iPadOS pins leading-most in this bar. THIS is the copy that
+            // survives ambiguity: the detail bar is on screen in every column
+            // state, so it carries compose whenever `sidebarBarOnScreen` is not
+            // certain the sidebar's own bar does — including the values that
+            // merely fail to say so. `.topBarLeading` rather than `.navigation`
+            // is what keeps a conditionally-mounted item leading in a bar that
+            // is already up; `LeadingToolbarChrome`'s header carries the frames.
+            if !sidebarBarOnScreen {
+                LeadingToolbarChrome(column: .detail) { startNewConversation() }
+            }
             ToolbarItem(placement: .principal) {
                 gatewayTitleControl
             }

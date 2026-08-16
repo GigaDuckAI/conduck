@@ -7,12 +7,14 @@
 // TEXT chat composer for iOS / iPadOS — the type-or-talk bar that replaces the
 // voice-only `micFooter` on iPhone (`ContentView`) and iPad
 // (`ConversationLibraryView`). Mirrors the macOS `MessageComposerBar` reference
-// design but adapts the layout to the horizontal size class:
+// design but adapts the layout to `usesRegularLayout` — idiom AND size class,
+// the same predicate `ContentView` routes on:
 //
-//   - compact (iPhone, iPad Stage-Manager-narrow): [growing TextField]
-//     [morphing trailing button]. The trailing button is MIC when the draft is
-//     empty (idle/recording/processing, behaviour lifted from ContentView's mic
-//     logic) and morphs into SEND the moment the draft is non-empty.
+//   - compact (every iPhone geometry, iPad Stage-Manager-narrow): [growing
+//     TextField][morphing trailing button]. The trailing button is MIC when the
+//     draft is empty (idle/recording/processing, behaviour lifted from
+//     ContentView's mic logic) and morphs into SEND the moment the draft is
+//     non-empty.
 //   - regular (iPad full width): [mic icon][TextField][send arrow] — the
 //     persistent-controls layout from the macOS composer.
 //
@@ -97,6 +99,22 @@ struct iOSMessageComposerBar: View {
     /// inescapable spinner. Reset whenever the capture phase changes.
     @State private var showSlowTranscribeHint = false
     @State private var sendSubmissionInProgress = false
+
+    /// Which of the two layouts this bar draws — and the ONLY place that decides
+    /// it, so the card, its background suppression and the field's own fill can
+    /// never disagree about which surface they are on.
+    ///
+    /// Idiom AND size class, the identical predicate `ContentView` routes the
+    /// split view on. A large iPhone (Plus/Max) reports a REGULAR horizontal size
+    /// class in landscape while staying on `phoneLayout`, so size class alone
+    /// would dock the iPad's two-row card in a 440pt-tall phone canvas: a
+    /// full-width field row plus a separate control row, where that canvas has
+    /// room for one row and the compact bar carries every control inline. Keeping
+    /// the two predicates identical is what makes the composer belong to the
+    /// layout that hosts it.
+    private var usesRegularLayout: Bool {
+        horizontalSizeClass == .regular && DeviceCapabilities.isiPad
+    }
 
     private var trimmedDraft: String {
         draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -228,7 +246,7 @@ struct iOSMessageComposerBar: View {
             // animation below).
             captureStatusBanner
 
-            if horizontalSizeClass == .regular {
+            if usesRegularLayout {
                 regularLayout
             } else {
                 compactLayout
@@ -236,9 +254,11 @@ struct iOSMessageComposerBar: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        // Compact (iPhone) keeps the docked-bar material chrome; regular (iPad)
-        // has no full-width material — the composer CARD is the container there.
-        .background(horizontalSizeClass == .compact ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color.clear))
+        // Compact keeps the docked-bar material chrome; regular (iPad) has no
+        // full-width material — the composer CARD is the container there. Keyed
+        // off the same `usesRegularLayout` as the layout above, so the chrome and
+        // the arrangement inside it can never disagree.
+        .background(usesRegularLayout ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.ultraThinMaterial))
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: attachments)
         // The composer never grabs focus on appear: the keyboard opens only when
         // the user taps the field (`.onTapGesture` below) — no auto-open on launch.
@@ -673,7 +693,7 @@ struct iOSMessageComposerBar: View {
         // Regular (iPad card) mode wraps the field in the elevated card already,
         // so the field's own fill is suppressed to avoid a card-in-card; compact
         // keeps the inner elevated fill verbatim.
-        .background(horizontalSizeClass == .regular ? Color.clear : AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(usesRegularLayout ? Color.clear : AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         // Part 2d: a one-shot amber stroke flashes when a transcript lands.
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)

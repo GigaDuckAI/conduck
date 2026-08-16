@@ -16,9 +16,11 @@
 // a single-column layout.
 //
 // ── WHERE THIS MUST BE ATTACHED ────────────────────────────────────────────
-// macOS: on the SIDEBAR COLUMN.  iPad: on the DETAIL COLUMN.
-// Neither is interchangeable, and the type cannot enforce it, so read the two
-// measured reasons below before moving either call site.
+// macOS: on the SIDEBAR COLUMN, in both sidebar states.  iPad: on the SIDEBAR
+// COLUMN while its bar is on screen, the DETAIL COLUMN otherwise.
+// That is THREE call sites (`MainWindowView` once, `ConversationLibraryView`
+// twice), none interchangeable with another, and the type cannot enforce it —
+// so read the measured reasons below before moving any of them.
 //
 // macOS splits a unified toolbar in two at the column divider with an
 // `NSTrackingSeparatorToolbarItem`. Items before it in `toolbar.items` draw over
@@ -89,34 +91,91 @@
 //   Sidebar column, NO spacer — COLLAPSED                         <- rejected
 //     PLATTER 106–179.5  w 73.5  glass=YES        <- ONE capsule over BOTH
 //
-//   `.navigation` on the SIDEBAR column — sidebar SHOWING          <- rejected
-//     toggle     241–288
-//     compose    292–337   glass=YES     (past the divider, content region)
-//     Array position alone does not decide the region: this item still lands at
-//     index 1, yet renders in the CONTENT half. The PLACEMENT decides it, so
-//     `.navigation` cannot be shared with iPad here.
+// ── iPad: TWO ATTACHMENTS, ONE PER SIDEBAR STATE ───────────────────────────
+// iPadOS gives each column its OWN navigation bar, and the sidebar column's bar
+// dies with its column — measured, everything declared there (Delete-All
+// included) leaves the accessibility tree the instant the sidebar collapses. So
+// iPad has neither macOS property: no unified toolbar, and no item that outlives
+// its column. No single attachment point reaches both states, and two do — the
+// sidebar column carries compose while that column's bar is on screen, the
+// detail column carries it otherwise. `ConversationLibraryView.sidebarBarOnScreen`
+// picks between them, and its doc comment carries the fail-safe reasoning: the
+// detail bar is on screen in EVERY column state, so any ambiguity about where
+// the sidebar column is must resolve toward the detail copy. Zero compose
+// buttons strands the user; a transient duplicate does not.
 //
-//   `.navigation` on the SPLIT VIEW — sidebar SHOWING              <- rejected
-//     compose    292–337   glass=YES     (index 4, content region)
-//     Declaring on the split view can only ever reach the content region.
+// ── MEASURED, iPad Pro 12.9-inch (6th gen), iPadOS 26.5 simulator ──────────
+// The founder's own geometry. Artifacts under `final-probe/`, taken on the
+// arrangement in this file. Frames are absolute window x from `idb ui
+// describe-point` sweeps across the whole bar row (a flat `describe-all` does
+// not reach either column's bar); the toolbar row is y 36 h 36.
 //
-//   `.toolbar(removing: .sidebarToggle)` + `DefaultToolbarItem(kind:
-//   .sidebarToggle)` on the sidebar column, to put the toggle FIRST <- rejected
-//     Suppressing the system toggle does not let `DefaultToolbarItem` supply a
-//     replacement: it emits the same empty 10x10 phantom described below and no
-//     working toggle, in both sidebar states. The system toggle cannot be
-//     re-ordered, only removed and lost.
+//   PORTRAIT 1024x1366pt, sidebar column x 10–330
 //
-// WHY iPad keeps `.navigation` on the DETAIL column: iPadOS gives each column
-// its own navigation bar, and the sidebar column's bar genuinely goes away with
-// the sidebar — the macOS "toolbar item outlives the column" property does not
-// exist there. The detail column's bar is the only one that is always on screen,
-// and the system toggle already sits at its leading edge, so compose declared
-// `.navigation` lands beside it in both column states. `.automatic` is NOT
-// substitutable: `.topBarLeading` is macOS-unavailable and `.primaryAction`
-// docks TRAILING on iOS. (The documented iOS degradation of `.navigation` to
-// `.primaryAction` needs a system back button AND a compact size class; iPad
-// mounts this split view only at `.regular` — compact falls through to phone.)
+//   — sidebar SHOWING — everything in the SIDEBAR bar, drawn flat in its one
+//     rounded panel, no per-item capsule (`ax-V1-final-portrait-expanded.json`)
+//     Delete-All   14.0–62.0
+//     compose     214.5–265.5
+//     toggle      271.5–326.0
+//     6pt compose→toggle, 4pt toggle→column edge. Item for item the macOS
+//     arrangement, which is why parity is reachable. Delete-All's own inset is
+//     the system's; `ConversationListView.deleteAllPlacement` carries the
+//     levers built and probed against it.
+//
+//   — sidebar HIDDEN — the sidebar bar is gone, the detail bar is all there is
+//     (`ax-V2-final-portrait-collapsed.json`)
+//     toggle      14.0–50.0   CAPSULE
+//     compose     72.5–103.5  CAPSULE      22.5pt apart
+//
+//   LANDSCAPE 1366x1024pt — SCREENSHOT evidence only
+//     `V3-final-landscape-expanded.png` (sidebar up) and
+//     `V4-final-landscape-collapsed.png` (sidebar down) show the same
+//     arrangement and, collapsed, exactly one compose glyph beside the toggle
+//     at the leading edge with nothing at the trailing edge. No AX frames are
+//     quoted for landscape: `describe-point` takes UNROTATED coordinates there
+//     and a mis-mapped sweep silently returns bottom-of-screen elements, so a
+//     sweep result would need its own cross-check to mean anything.
+//
+// WHY the detail host takes `.topBarLeading`: it names the leading slot
+// outright rather than leaving it to a placement that has to resolve, and it
+// measures there in every collapsed state probed. NO CLAIM is made about
+// `.navigation` on this attachment — no experiment in this corpus swapped it,
+// so nothing here rules it in or out.
+//
+// WHY the detail item is CONDITIONAL rather than mounted-but-hidden: `.opacity`
+// holds the leading slot, but it also leaves an empty 36pt glass capsule
+// floating in the detail bar the whole time the sidebar is open, and
+// `.sharedBackgroundVisibility(.hidden)` is a property of the ITEM — it would
+// strip the capsule from the VISIBLE collapsed button too.
+//
+//   ORDER collapsed is toggle → compose, the mirror of macOS, and it is the
+//   system's choice: iPadOS pins its reveal control leading-most in the detail
+//   bar. This file records no iPadOS reorder experiment, so it claims neither
+//   that a lever exists nor that one is inert — only the measured order.
+//
+// WHY no `ToolbarSpacer` on iPad in EITHER host: its bars do not fuse adjacent
+// items. The sidebar bar draws them flat inside one panel with a 6pt system gap,
+// and the collapsed detail bar's two capsules already sit 22.5pt apart.
+//
+// WHY the iPad cluster is not hand-drawn: an iPadOS nav bar is all-or-nothing,
+// so hand-placing ONE control beside the system toggle is not an available
+// option — an overlay draws ON TOP of the toggle, not beside it. The reachable
+// hand-draw hides both columns' bars and rebuilds the whole top band (the
+// centred gateway control, Delete-All, the safe-area/scroll-inset contract,
+// Dynamic Type metrics, pointer hover, keyboard focus order, and the toggle's
+// localized VoiceOver name plus its expanded/collapsed state) for one gain a
+// system bar cannot give.
+//
+// ── THE TRAILING-COMPOSE OBSERVATION: UNREPRODUCED ─────────────────────────
+// The founder observed a `square.and.pencil` at the TRAILING edge of the
+// collapsed bar, with nothing at the leading edge, on a 12.9-inch iPad Pro, in
+// the empty-thread mascot state. That observation is what set this rework
+// going, and it is UNREPRODUCED: it has been hunted on that exact geometry, in
+// portrait and landscape, and every probe puts compose at the LEADING edge with
+// nothing at the trailing one. NO MECHANISM IS CLAIMED — do not write a comment
+// in this file that asserts one. Probing settled states also cannot rule out a
+// sub-frame window, and it says nothing about the presentations the simulator
+// cannot reach (see `sidebarBarOnScreen`).
 //
 // WHY never `DefaultToolbarItem(kind: .sidebarToggle, placement:)`: on macOS it
 // does NOT represent, move, or reorder the toggle. It adds a SEPARATE, EMPTY
@@ -131,7 +190,7 @@
 // The glyph carries no `.frame`, `.font`, `.imageScale` or `.padding` at all —
 // see the container-parity note above for why sizing it by hand backfires.
 //
-// WHY no `MacPointerTargets` primitive: `.pointerIconButton()` REPLACES the
+// WHY no `MacPointerTargets` primitive: `.pointerIconButton()` OVERRIDES the
 // button style, which strips the macOS 26 toolbar treatment and stops this
 // matching the system toggle beside it — the opposite of the goal. That
 // primitive is scoped to CUSTOM-DRAWN controls; this is a system-styled one.
@@ -148,6 +207,14 @@
 import SwiftUI
 
 struct LeadingToolbarChrome: ToolbarContent {
+    /// Which split-view column this instance is attached to. macOS has exactly
+    /// one call site (`.sidebar`) and resolves the same placement either way;
+    /// iPad has two, mutually exclusive, picked by
+    /// `ConversationLibraryView.sidebarBarOnScreen`.
+    enum Column { case sidebar, detail }
+
+    let column: Column
+
     /// Start a fresh conversation. Each host means something different by it
     /// (macOS clears the WINDOW lane and re-seeds the pending gateway ref; iPad
     /// clears the selection so the next send mints a thread), so the action
@@ -161,13 +228,19 @@ struct LeadingToolbarChrome: ToolbarContent {
     /// geometry in both sidebar states), so it costs nothing and stops the
     /// arrangement resting on how `.automatic` happens to resolve.
     ///
-    /// iOS: `.primaryAction` docks TRAILING, so iPad keeps `.navigation` — the
-    /// only placement that is both available and leading there.
+    /// iOS: `.primaryAction` docks TRAILING — which inside the sidebar column's
+    /// own bar means immediately LEFT of the trailing-pinned system toggle, the
+    /// macOS relationship. The detail host takes `.topBarLeading`, which names
+    /// the leading slot outright rather than leaving it to a placement that has
+    /// to resolve; the header carries the frames for both.
     private var placement: ToolbarItemPlacement {
         #if os(macOS)
         .primaryAction
         #else
-        .navigation
+        switch column {
+        case .sidebar: .primaryAction
+        case .detail:  .topBarLeading
+        }
         #endif
     }
 
@@ -191,10 +264,11 @@ struct LeadingToolbarChrome: ToolbarContent {
 
         #if os(macOS)
         // Keeps compose and the sidebar toggle two separate capsules instead of
-        // one fused pill. macOS only: on iPad this content sits on the detail
-        // column ahead of the principal gateway control, where a spacer would
-        // push that control off centre for no gain — the two are already in
-        // different groups there.
+        // one fused pill. macOS only: iPad needs no spacer in either host —
+        // measured, its bars never fuse adjacent items (6pt flat gap in the
+        // sidebar bar; 22.5pt between separate capsules in the detail bar), and
+        // a spacer ahead of the principal gateway control would push it off
+        // centre for no gain.
         ToolbarSpacer(.fixed, placement: .primaryAction)
         #endif
     }
