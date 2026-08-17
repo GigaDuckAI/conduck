@@ -957,13 +957,22 @@ final class CarPlayRecordingService {
             // and names the device — CarPlay runs on the iPhone, so the phone in
             // the dock or the pocket is what has to be unlocked.
             //
+            // The unlock is HEDGED, exactly as code 75's shared copy hedges it,
+            // because a locked Keychain is only the common reading of
+            // `.unreadable`: `APIKeyReadResult.classify` also lands an auth
+            // failure, an IPC error and an `errSecDecode` payload here. An
+            // unconditional "unlock your iPhone" would send a driver whose phone
+            // is already unlocked to do the one thing that cannot help, once per
+            // capture, for the rest of the drive. Kept to one short conditional
+            // because this line is HEARD — a driver cannot re-read it.
+            //
             // The capture itself is lost either way: CarPlay has no preservation
             // mechanism at all — no `PendingRetryStore` write, no queue — so
             // "try again" means speak again, which is exactly what the driver
             // can do once the phone is unlocked.
             // xcstrings
             endSession(
-                speak: String(localized: "Couldn't read your STT key. Unlock your iPhone and try again.")
+                speak: String(localized: "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again.")
             )
             return
         }

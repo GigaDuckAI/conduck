@@ -21,6 +21,10 @@
 //   • CONVERGENCE: re-fires reuse the entry's PERSISTED requestID, so the
 //     iPhone's dedup ledger answers a retry from its reply cache instead of
 //     re-transcribing.
+//   • RETRYABLE ≠ TERMINAL: a failed attempt claims the entry — which DELETES
+//     the user's audio — only when the verdict is terminal. Retryable verdicts
+//     leave it queued for a later re-fire (`leavesEntryQueued(after:)`), and
+//     `enforceCaps` is what stops that from being unbounded.
 //
 // **DESIGN CHOICE — separate queue, not an extension of WatchAudioUploader.**
 //   `WatchAudioUploader` is tightly coupled to background URLSession,
@@ -216,8 +220,10 @@ final class AppleRelayPendingQueue {
     /// (the relay timed out, or the process restarted since the request
     /// left). Claim-token semantics decide what happens:
     ///
-    ///   • `.failure(.sttProviderUnreachable)` → the iPhone itself signalled
-    ///     "can't run this now" — leave the entry queued for a later drain.
+    ///   • `.failure(retryable)` → what refused can still clear (the iPhone
+    ///     signalled "can't run this now", its Keychain has not been unlocked,
+    ///     the provider is down) — leave the entry queued for a later drain
+    ///     (`leavesEntryQueued(after:)`).
     ///   • Live turn in progress (`canAcceptDeferredDispatch == false`) → do
     ///     NOT claim; leave the entry. The idle-edge drain re-fires with the
     ///     same requestID and the iPhone's reply cache answers instantly —
@@ -226,12 +232,16 @@ final class AppleRelayPendingQueue {
     ///   • Claim-nil → duplicate/evicted verdict → drop silently.
     ///   • `.success` → shared `completeEntry` (clears the deferral toast,
     ///     posts the transcript notification, dispatches the converse hop).
-    ///   • `.failure(permanent)` → clear the deferral toast (its promise just
+    ///   • `.failure(terminal)` → clear the deferral toast (its promise just
     ///     became false) + error notification (claim already removed the
     ///     entry + audio).
     func reconcile(requestID: String, outcome: RelayReplyOutcome) async {
         if case .failure(let error) = outcome,
-           case .sttProviderUnreachable = error {
+           Self.leavesEntryQueued(after: error) {
+            WatchLog.note(.queue, "queue.reconcile.requeued", [
+                "id": WatchLog.shortID(requestID),
+                "code": error.errorCode
+            ])
             return
         }
         guard WatchRecordingService.shared.canAcceptDeferredDispatch else {
@@ -361,17 +371,24 @@ final class AppleRelayPendingQueue {
                 guard let claimed = claimEntry(requestID: requestID) else { continue }
                 await completeEntry(claimed, text: text)
             } catch {
-                // `AppError` has associated values, so Equatable is not
-                // synthesized — `if case` is the canonical pattern match.
-                if let appError = error as? AppError,
-                   case .sttProviderUnreachable = appError {
-                    // Still unreachable — stop draining; the next trigger will
-                    // retry. Entry (and its outstanding transfer, if any)
-                    // stays queued.
-                    WatchLog.note(.queue, "queue.drain.unreachable", ["id": WatchLog.shortID(requestID)])
+                // A verdict the SAME bytes can still succeed against leaves the
+                // entry queued AND stops the drain: what refused is the iPhone's
+                // ability to serve any relay at all right now (out of range, a
+                // Keychain that has not been unlocked, a provider outage), not
+                // this one clip — so the entries behind it would buy the
+                // identical answer at the price of a file transfer and a reply
+                // timeout each. The next trigger retries; the persisted
+                // requestID is unchanged, so the iPhone's ledger converges the
+                // re-fire. The entry (and its outstanding transfer, if any)
+                // stays put.
+                if Self.leavesEntryQueued(after: error) {
+                    WatchLog.note(.queue, "queue.drain.requeued", [
+                        "id": WatchLog.shortID(requestID),
+                        "code": (error as? AppError)?.errorCode ?? -1
+                    ])
                     return
                 }
-                // Permanent failure for this entry (e.g. model not installed
+                // Terminal failure for this entry (e.g. model not installed
                 // on iPhone). Claim FIRST (claim-nil ⇒ a racing reconcile beat
                 // us to the verdict → skip), then notify. The claim already
                 // removed the entry + audio + outstanding transfer.
@@ -384,6 +401,42 @@ final class AppleRelayPendingQueue {
                 postErrorNotification(error: appErr)
             }
         }
+    }
+
+    // MARK: - Retryable vs terminal
+
+    /// Whether a failed delivery attempt LEAVES the entry queued for a later
+    /// re-fire, instead of claiming it — and a claim deletes the audio the user
+    /// already spoke into.
+    ///
+    /// The question is the taxonomy's own: `AppError.isRetryable`, the property
+    /// every retry affordance in the app gates on. A retryable verdict is one
+    /// the IDENTICAL bytes still succeed against once something OUTSIDE the
+    /// request changes — the iPhone comes back in range, its Keychain is
+    /// unlocked after a reboot, the provider's outage clears. Claiming on one of
+    /// those destroys a capture the next attempt would have delivered (I6).
+    /// A terminal verdict — an empty key slot, a model that isn't installed,
+    /// audio the provider can't process — returns the same answer on every
+    /// re-fire, so the entry is claimed and the user is told.
+    ///
+    /// A non-`AppError` throw is terminal: nothing in the taxonomy vouches for
+    /// a retry, and an unrecognised failure that kept its entry would re-fire on
+    /// a verdict no one can reason about.
+    ///
+    /// UNBOUNDED QUEUEING is prevented by `enforceCaps`, which runs at the head
+    /// of every drain that gets past `drain()`'s own guards — always before any
+    /// entry reaches this predicate, never after it returns true. A capture
+    /// stranded on a condition that never clears ages out at `maxEntryAge` and
+    /// the user hears about it through `postEvictionNotification`. There is
+    /// deliberately no attempt counter: a Keychain blackout can outlive dozens
+    /// of idle edges before the user next unlocks their phone, and a count would
+    /// give up on a capture that one unlock would have delivered.
+    ///
+    /// `static` for `notificationBody`'s reason — it makes the classification
+    /// reachable from `ConduckWatchTests` without the singleton's disk-touching
+    /// `init`.
+    static func leavesEntryQueued(after error: Error) -> Bool {
+        (error as? AppError)?.isRetryable ?? false
     }
 
     // MARK: - Shared success path
@@ -610,8 +663,9 @@ final class AppleRelayPendingQueue {
         UNUserNotificationCenter.current().add(req)
     }
 
-    /// Notification body for a failed relay, hostname-bearing cases collapsed to
-    /// fixed copy.
+    /// Notification body for a failed relay: hostname-bearing cases collapsed to
+    /// fixed copy, and the one case whose shared copy names the wrong device
+    /// given its own wrist-and-phone wording.
     ///
     /// PRIVACY (never reveal gateway URLs — see the spec's Privacy & Security
     /// section): `.networkError` / `.decodingError` / `.unknown` interpolate the
@@ -619,10 +673,11 @@ final class AppleRelayPendingQueue {
     /// the server hostname in that text. On the Watch that text renders on the
     /// wrist AND mirrors to the paired iPhone's lock screen — visible without an
     /// unlock — so those three map to the fixed `remoteAgentUnreachable` copy.
-    /// Every other case already carries fixed, hostname-free copy and passes
-    /// through UNCHANGED, which is what keeps this queue's real payloads
-    /// (`.appleSpeechModelNotInstalled`, `.audioProcessingFailed`) on their own
-    /// deliberate wording rather than a generic gateway message.
+    /// Every case that is not rewritten by an arm below already carries fixed,
+    /// hostname-free copy and passes through UNCHANGED, which is what keeps this
+    /// queue's real payloads (`.appleSpeechModelNotInstalled`,
+    /// `.audioProcessingFailed`) on their own deliberate wording rather than a
+    /// generic gateway message.
     ///
     /// Defensive: today's feeders cannot produce the three hazard cases — the
     /// relay wire carries an Int `errorCode` only, so `reconcile` rebuilds errors
@@ -655,6 +710,23 @@ final class AppleRelayPendingQueue {
              .remoteAgentCertKeyUnpinnable, .sttCustomCertKeyUnpinnable,
              .ttsCustomCertKeyUnpinnable, .fileTransferCertKeyUnpinnable:
             return error.descriptionWithRecovery
+        // 75's shared copy says "this device", and this body renders in TWO
+        // places where that phrase resolves to different hardware: the wrist,
+        // where it reads as the watch, and the paired iPhone's lock screen it
+        // mirrors to. The Keychain that could not answer for a RELAYED capture
+        // is always the iPhone's, so the sentence names it outright rather than
+        // leaning on a pronoun that has two candidates on either surface. It
+        // ends on "record again" — not on the deferral toast's "your transcript
+        // will arrive" — because a body only ever posts AFTER a claim, and a
+        // claim has already deleted the audio.
+        //
+        // Defensive, like the interpolating cases above: `leavesEntryQueued`
+        // keeps every retryable verdict (75 among them) off this poster
+        // entirely, so no feeder reaches this arm today. It is the choke point
+        // that stops the wrong-device sentence from arriving if one ever does.
+        case .sttKeyUnreadable:
+            // xcstrings
+            return String(localized: "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again.")
         default:
             // Cause-only ON PURPOSE, and NOT an instance of the cause-without-
             // remedy defect: this queue's reachable payloads
@@ -686,11 +758,19 @@ final class AppleRelayPendingQueue {
 
     /// Cap-eviction notice — the queued ask is being dropped (24 h age-out or
     /// 10-entry overflow), so tell the user rather than silently losing it.
+    ///
+    /// The sentence claims no CAUSE, because eviction has three and only one of
+    /// them is a delivery problem: the clip may never have reached the iPhone,
+    /// or it may have reached it every time and been refused by a Keychain that
+    /// stayed locked for a day (`leavesEntryQueued` keeps that entry alive right
+    /// up to the age cap), or it may have been pushed out by ten newer asks.
+    /// What is true of all three — and what the user actually lost — is that the
+    /// recording went untranscribed.
     private func postEvictionNotification() {
         let content = UNMutableNotificationContent()
         content.title = String(localized: "Conduck")
-        // xcstrings: relay-convergence fix
-        content.body = String(localized: "A queued recording couldn't reach your iPhone and has expired.")
+        // xcstrings
+        content.body = String(localized: "A queued recording expired before your iPhone could transcribe it.")
         content.sound = .default
         let req = UNNotificationRequest(
             identifier: UUID().uuidString,

@@ -314,10 +314,23 @@ struct PersonalAISettingsView: View {
                     // "Needs setup" and the very row it sends the user to says
                     // nothing.
                     //
-                    // Read off `defaultSelectorFlagsBroken` rather than re-asked
-                    // here, so this row cannot reach a different verdict than the
-                    // selector that sent the user to it — including the silence
-                    // that flag keeps under an untrustworthy Keychain reading.
+                    // Read off `defaultSelectorFlagsBroken` rather than spelling
+                    // the membership question a second time here. A CONSISTENCY
+                    // refactor, not a behaviour fix: the flag is strictly narrower
+                    // than the question, and the one state it withholds —
+                    // `.readingUnreliable` — is one where the pointer is
+                    // unconfigured AND carries stored evidence (the verdict's
+                    // hazard arm requires exactly that), so it is already in
+                    // `incompleteRemoteAgentRefSet` and `row.incomplete` draws
+                    // "Needs setup" on its own. Same mark everywhere; one fewer
+                    // place for the two to drift apart.
+                    //
+                    // That the ROW still speaks while the selector is silent is
+                    // the intended split: this mark says "this gateway's setup
+                    // cannot be read here", which is true, where suppressing it
+                    // would be a false clean bill of health. Argued in
+                    // `selectorMaySpeak(for:)`'s doc in `SettingsViewModel.swift`
+                    // ("It does NOT gate a gateway's own readiness mark").
                     // (`row.isDefault` is already false whenever the pointer is
                     // one the app parked, so this term speaks only about a gateway
                     // the user actually chose.)

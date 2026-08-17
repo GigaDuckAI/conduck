@@ -43,10 +43,13 @@
 // the check rather than decorate a gateway the user never picked, and the leading
 // callout is what says what the screen is about.
 //
-// A device with NOTHING configured is not that state and must not be read as it:
-// the verdict is `.nothingConfigured`, so the compiled-in built-in keeps the
-// check and no callout renders. There is nothing to choose between yet, and the
-// screen that owns that moment is the empty state, not this chooser.
+// A device with NOTHING configured is not that state and must not be read as it.
+// `zeroConfiguredVerdict` answers `.nothingConfigured`, `.setupUnfinished` or
+// `.readingUnreliable` depending on what residue it finds — but none of the three
+// is `.selectionRequired` and none parks the pointer, so `selectorNeedsChoice` is
+// false for all of them: the compiled-in built-in keeps the check and no callout
+// renders. There is nothing to choose between yet, and the screen that owns that
+// moment is the empty state, not this chooser.
 //
 // A leading callout names the trouble when there is any: the stored default
 // cannot send here (`brokenDefaultName`), or nothing has been chosen

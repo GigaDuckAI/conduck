@@ -1383,8 +1383,11 @@ final class WatchRecordingService {
                 // here: the Keychain that blacked out is the iPHONE's, and this
                 // watch is unlocked because the user just recorded on it. A
                 // wrist told to unlock the device it is wearing does the one
-                // thing that cannot help, and the queued entry re-fires at every
-                // idle edge saying it again.
+                // thing that cannot help. This toast is also the ONLY sentence
+                // this failure ever shows: the entry stays queued, and a re-fire
+                // that blacks out again leaves it queued SILENTLY
+                // (`AppleRelayPendingQueue.leavesEntryQueued`) — no second
+                // notification, so no second chance to name the right device.
                 state = .error(message: Self.relayKeyUnreadableMessage)
                 lastErrorIsRelayDeferral = true
                 compressedAudioData = nil
@@ -1488,7 +1491,12 @@ final class WatchRecordingService {
     /// Its `.sttKeyUnreadable` arm serves the UPLOAD leg only — a relay blackout
     /// returns earlier in `runRelay`, through `relayKeyUnreadableMessage`,
     /// because the Keychain that could not answer there belongs to the iPhone
-    /// while "this device" in the shared copy means this watch. Every other
+    /// while "this device" in the shared copy means this watch. That is a claim
+    /// about THIS funnel and not about every 75 sentence the relay leg can
+    /// produce: a queued relay's other channel is
+    /// `AppleRelayPendingQueue.notificationBody(for:fallback:)`, which carries
+    /// its own 75 arm for the same wrong-device reason — and doubly so, since
+    /// that body also mirrors to the paired iPhone's lock screen. Every other
     /// verdict still reaches this funnel from both legs.
     ///
     /// The two pinned forms say "your gateway" while a custom voice endpoint is a

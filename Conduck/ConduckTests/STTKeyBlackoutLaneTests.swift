@@ -256,7 +256,11 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
              function: "processRecording",
              typedRead: "STTKeyReadiness.resolve",
              absenceArm: "Add your STT key",
-             blackoutArm: "Unlock your iPhone and try again",
+             // The spoken blackout line HEDGES the unlock ("if your iPhone just
+             // restarted"), because a locked Keychain is only the most likely
+             // `.unreadable` — the token is the remedy clause that survives that
+             // hedge, not the whole sentence.
+             blackoutArm: "unlock it and try again",
              preservation: nil,
              note: "CarPlay in-car capture"),
     ]
@@ -331,7 +335,9 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         // and on the wrist that device is the watch, which the user has just
         // recorded on and which is therefore unlocked. The Keychain that blacked
         // out on this leg is the iPHONE's, so a wrist sent to unlock itself does
-        // the one thing that cannot help, once per idle-edge re-fire.
+        // the one thing that cannot help — and this toast is the ONLY sentence
+        // the failure shows, because a re-fire that blacks out again leaves the
+        // entry queued silently.
         let armEnd = try XCTUnwrap(
             body.range(of: "return", range: blackoutAt..<body.endIndex)?.upperBound,
             "The blackout arm no longer returns; re-scope this check.")
@@ -345,6 +351,37 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
                        "Exactly two deferral arms: the reply-wait timeout and the blackout. A blackout that "
                        + "stopped setting the flag has taken the claim shape instead — or its toast will "
                        + "outlive the transcript that eventually lands.")
+    }
+
+    /// CarPlay's blackout line is SPOKEN, and the driver cannot re-read it — so
+    /// what it asserts has to be true on the first hearing. `.unreadable` is not
+    /// only a locked Keychain: `APIKeyReadResult.classify` lands an auth
+    /// failure, an IPC error and an `errSecDecode` payload in the same state.
+    /// An unconditional "unlock your iPhone" therefore sends a driver whose
+    /// phone is already unlocked to do the one thing that cannot help, once per
+    /// capture for the rest of the drive. The remedy stays; the certainty goes.
+    func testTheSpokenCarPlayBlackoutLineHedgesItsRemedy() throws {
+        let path = "Conduck/CarPlay/CarPlayRecordingService.swift"
+        let source = try RefusalLaneSource.source(at: path)
+        let body = try RefusalLaneSource.body(ofFunction: "processRecording", in: source, path: path)
+
+        XCTAssertNotNil(body.range(of: "If your iPhone just restarted"),
+                        "The spoken blackout line no longer hedges. `.unreadable` covers more than a locked "
+                        + "Keychain, so an unconditional unlock instruction is false for every other reading "
+                        + "of it.")
+        // The shipped shape this replaced, pinned so the hedge cannot quietly
+        // revert to it. Deliberately the WHOLE sentence: "unlock it and try
+        // again" is the remedy clause the hedge keeps.
+        XCTAssertNil(body.range(of: "Couldn't read your STT key. Unlock your iPhone and try again."),
+                     "The unconditional form is back.")
+
+        // The shared 75 copy hedges. That asymmetry — one lane certain, the
+        // other not, about the identical verdict — is what this change removed,
+        // and this is the half that proves the asymmetry was real.
+        let shared = try XCTUnwrap(AppError.sttKeyUnreadable.errorDescription)
+        XCTAssertTrue(shared.contains("just restarted"),
+                      "The shared 75 copy stopped hedging, so the CarPlay line is now the odd one out in the "
+                      + "other direction. Re-decide both together.")
     }
 
     // MARK: - 4. The negative control

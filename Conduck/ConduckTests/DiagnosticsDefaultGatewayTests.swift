@@ -157,6 +157,17 @@ final class DiagnosticsDefaultGatewayTests: XCTestCase {
     /// send" — a sentence that blames the user for a pointer the app wrote one
     /// step after they forgot a different gateway. It takes the `.notChosen`
     /// standing instead: no name, same red, same Fix.
+    ///
+    /// STAGED ON `.shared`, so the contamination window described in the file
+    /// header reaches THIS case: a sibling suite's still-draining resolve can
+    /// delete the dangling-custom pointer before `repointDefaultAfterForget`
+    /// sees it, and the re-point then returns without parking. What is left —
+    /// no pointer, two keyless customs that can send — resolves
+    /// `.selectionRequired`, which the runner maps to the SAME `.notChosen`
+    /// kind, the same empty `defaultName`, the same `offersFix` and the same
+    /// failed row. Every assertion below still passes; it has simply stopped
+    /// proving a park. `testAParkedPointerStopsBeingParkedOnceItsGatewayCanSend`
+    /// is where that proof is held, on a store no other suite can reach.
     func testParkedDefaultReadsAsNotChosenAndNamesNobody() async {
         await parkThePointerOnTheBuiltInDefault(in: defaults, on: .shared)
 
@@ -190,7 +201,7 @@ final class DiagnosticsDefaultGatewayTests: XCTestCase {
         let manager = SettingsManager(dependencies: .inMemory(
             defaults: store,
             ubiquitous: InMemoryUbiquitousStore(),
-            cloudAvailable: true
+            cloudAvailable: false
         ))
         await parkThePointerOnTheBuiltInDefault(in: store, on: manager)
 
@@ -220,7 +231,10 @@ final class DiagnosticsDefaultGatewayTests: XCTestCase {
     ///
     /// Store and manager are passed in rather than reached for, so the runner
     /// case can stage it on the singleton the runner reads while the case above
-    /// stages the identical state somewhere no other suite can touch.
+    /// stages the identical state somewhere no other suite can touch. Identical
+    /// literally: the isolated bundle spells `cloudAvailable: false`, which is
+    /// what `.processDefault` resolves to under `CONDUCK_TESTING`, so the two
+    /// managers agree about the KVS read-fallback as well as about the slots.
     private func parkThePointerOnTheBuiltInDefault(
         in store: InMemoryDefaultsStore,
         on manager: SettingsManager

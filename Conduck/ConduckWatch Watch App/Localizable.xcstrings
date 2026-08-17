@@ -1,6 +1,28 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again."
+          }
+        }
+      }
+    },
+    "A queued recording expired before your iPhone could transcribe it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A queued recording expired before your iPhone could transcribe it."
+          }
+        }
+      }
+    },
     "stt.error.keyUnreadable.v2" : {
       "extractionState" : "manual",
       "localizations" : {

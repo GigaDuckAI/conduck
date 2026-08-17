@@ -1,6 +1,17 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again."
+          }
+        }
+      }
+    },
     "stt.error.keyUnreadable.v2" : {
       "extractionState" : "manual",
       "localizations" : {

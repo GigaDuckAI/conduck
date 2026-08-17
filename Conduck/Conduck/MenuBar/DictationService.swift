@@ -471,13 +471,15 @@ final class DictationService: RecordingExclusivityAuthority {
                 preferredLanguage: preferredLanguage
             )
             lastError = .sttKeyUnreadable
-            // The CAUSE LINE ONLY, not `descriptionWithRecovery`. 75 is the one
-            // code whose cause line already carries its own remedy ("unlock it
-            // and try again"), so appending `recoverySuggestion` would tell this
-            // user to unlock twice — and its second half ("open Conduck and
-            // retry") is addressed to someone who is NOT in the app, while this
-            // banner is the popover they are looking at, with a live Retry on
-            // it. The wrist and the iOS retry card make the same call.
+            // The CAUSE LINE ONLY, not `descriptionWithRecovery`. 75's cause
+            // line already carries its own remedy ("unlock it and try again") —
+            // written that way for the Shortcut lane, which renders
+            // `errorDescription` alone and has no second slot; `.sttMissingAPIKey`
+            // (23) reads the same way. So appending `recoverySuggestion` would
+            // tell this user to unlock twice — and its second half ("open Conduck
+            // and retry") is addressed to someone who is NOT in the app, while
+            // this banner is the popover they are looking at, with a live Retry
+            // on it. The wrist and the iOS retry card make the same call.
             state = .error(
                 message: AppError.sttKeyUnreadable.errorDescription ?? "",
                 isRetryable: AppError.sttKeyUnreadable.isRetryable

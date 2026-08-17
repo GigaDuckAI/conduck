@@ -11,6 +11,7 @@
 		069650C8AC0F675681F58C58 /* WatchRecordingLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5777E15559EA6B1951DE08 /* WatchRecordingLifecycleTests.swift */; };
 		0810000C9526DF4B5A80B517 /* WatchFileLaneReturnCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57D97EB749763DF8E3A5BC86 /* WatchFileLaneReturnCapabilityTests.swift */; };
 		63C0DE110000000000000032 /* WatchSTTKeyBlackoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */; };
+		63C0DE110000000000000042 /* WatchRelayQueueRetryabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */; };
 		1263D93A1706BD55172ED31F /* WatchSettingsApplyAndQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A801C634B327CE22742C2AB /* WatchSettingsApplyAndQueueTests.swift */; };
 		221BB6745DA7B0E378D997C5 /* ConduckWatchSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87595BE862314620EF226B1 /* ConduckWatchSmokeTests.swift */; };
 		3B3369FEAAD168D055C48147 /* TaskDeadlineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 346CBAB7BF95F11E04B690E2 /* TaskDeadlineTests.swift */; };
@@ -139,6 +140,7 @@
 		50484C38EFB50AF68146AA9B /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		57D97EB749763DF8E3A5BC86 /* WatchFileLaneReturnCapabilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchFileLaneReturnCapabilityTests.swift; sourceTree = "<group>"; };
 		63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchSTTKeyBlackoutTests.swift; sourceTree = "<group>"; };
+		63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchRelayQueueRetryabilityTests.swift; sourceTree = "<group>"; };
 		5A317365301218A5EE4D2D9B /* WatchArmActivationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchArmActivationTests.swift; sourceTree = "<group>"; };
 		5C2EE5C9F3DEA04EE0F93679 /* WatchHeadlessDrainDecisionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchHeadlessDrainDecisionTests.swift; sourceTree = "<group>"; };
 		630432BC2FB7593700994EC0 /* Conduck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Conduck.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -462,6 +464,7 @@
 				36E62931BCA561FF7562C5E2 /* StorageTestSupport.swift */,
 				57D97EB749763DF8E3A5BC86 /* WatchFileLaneReturnCapabilityTests.swift */,
 				63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */,
+				63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */,
 			);
 			path = ConduckWatchTests;
 			sourceTree = "<group>";
@@ -798,6 +801,7 @@
 				CA74F9FE545A829EE9461748 /* StorageTestSupport.swift in Sources */,
 				0810000C9526DF4B5A80B517 /* WatchFileLaneReturnCapabilityTests.swift in Sources */,
 				63C0DE110000000000000032 /* WatchSTTKeyBlackoutTests.swift in Sources */,
+				63C0DE110000000000000042 /* WatchRelayQueueRetryabilityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
