@@ -291,14 +291,30 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     ///     (`WatchRecordingService.captureGeneration` at enqueue) — lets the
     ///     completion drop a transcript whose capture was cancelled while the
     ///     daemon finished the upload.
+    ///   - secrets: Keychain seam, defaulted to the process store — present so
+    ///     the two key refusals below (both of which throw before a task is
+    ///     created) can be driven in a test without a signed Keychain.
     func uploadSTT(
         request: WatchSTTRequest,
         audioFileURL: URL,
         provider: STTProvider,
-        generation: Int
+        generation: Int,
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
     ) throws {
-        guard let apiKey = WatchIdentityResolver.getSTTAPIKey(forPresetID: provider.id) else {
+        // TYPED key read, for the reason `WatchNetworkClient.uploadSTT` states
+        // in full: the slot is written `kSecAttrAccessibleAfterFirstUnlock`, so
+        // a rebooted-but-locked watch answers exactly as an empty slot does, and
+        // only `errSecItemNotFound` proves absence. `.missing` keeps code 23,
+        // whose copy is then true; a blackout raises code 75, which says what
+        // actually happened and promises the recording is still there (I3).
+        let apiKey: String
+        switch WatchIdentityResolver.sttAPIKeyReadResult(forPresetID: provider.id, secrets: secrets) {
+        case .present(let key):
+            apiKey = key
+        case .missing:
             throw AppError.sttMissingAPIKey
+        case .unreadable:
+            throw AppError.sttKeyUnreadable
         }
 
         // Effective transcribe URL — a Gemini per-preset custom override

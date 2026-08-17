@@ -1168,14 +1168,75 @@ enum Constants {
     /// is kept (per-ref storage-suffix lineage); only its sync semantics changed.
     static let remoteAgentDefaultBackendKVSKey = "remoteAgent.defaultBackend"
 
-    /// App Groups flag set once after the one-time synced → device-local
-    /// migration of the default-backend pointer
-    /// (`SettingsManager.migrateDefaultBackendToDeviceLocal()`). Local-wins:
-    /// a valid App-Group value is kept; else the legacy iCloud-KVS value is
-    /// copied down once as a seed; else left absent for the config-sync
-    /// bootstrap / `.openclaw` fallback. NEVER clears the active pointer; NEVER
+    /// **WATCH-SIDE App Groups key** recording whether the couriered
+    /// `remoteAgent.defaultBackend` names a gateway the user actually CHOSE, or
+    /// merely the compatibility fallback the iPhone projects when no pointer is
+    /// stored. Written by `WatchSettingsReader` from the broadcast envelope's
+    /// `defaultBackendChosen` slot; ABSENT reads as CHOSEN, which is both the
+    /// ordinary answer and the behaviour of every build that predates the flag.
+    ///
+    /// Persisted rather than kept in memory because the reader that needs it most
+    /// runs on a cold-launched headless capture, before any envelope arrives.
+    static let remoteAgentDefaultBackendChosenKey = "remoteAgent.defaultBackendChosen"
+
+    /// App Groups flag set once the synced → device-local migration of the
+    /// default-backend pointer (`SettingsManager.migrateDefaultBackendToDeviceLocal()`)
+    /// reaches a CONCLUSIVE outcome. Local-wins: a valid App-Group value is
+    /// kept; else the legacy iCloud-KVS fossil is copied down once as a seed,
+    /// but only when the gateway it names can actually send. An inconclusive
+    /// read writes nothing and leaves this flag UNSET, so the seed is retried
+    /// once iCloud has delivered more. NEVER clears the active pointer; NEVER
     /// gates on `kvsSchemaVersion`.
     static let remoteAgentDefaultBackendDeviceLocalMigratedKey = "remoteAgentDefaultBackendDeviceLocalMigrated"
+
+    /// App-Group key holding the JSON-encoded `DefaultGatewayAdoptionNotice` —
+    /// the record that THIS device repaired its own "Default for new chats".
+    ///
+    /// **App Group ONLY, never iCloud KVS**, for the same reason
+    /// `remoteAgentDefaultBackendKVSKey` is device-local: the repair happened
+    /// here, and syncing it would have an iPad announce itself on a Mac that
+    /// never had the problem.
+    ///
+    /// Written by the adopt arms and by the Forget re-point; cleared by
+    /// `acknowledgeDefaultAdoptionNotice()` and by `applyUserChosenDefault` (a
+    /// user who has just picked a default does not need to be told the app
+    /// picked one). A second adoption overwrites an unread first — the newest
+    /// repair is the truth.
+    static let remoteAgentAdoptedDefaultNoticeKey = "remoteAgent.adoptedDefaultNotice"
+
+    /// App-Group key holding the `RemoteAgentRef.rawString` that the APP parked
+    /// in the default pointer on the user's behalf — the Forget re-point's
+    /// several-survivors arm, which parks on a built-in so the user CHOOSES
+    /// their next gateway instead of inheriting one.
+    ///
+    /// It exists because the pointer alone cannot say who put it there, and a
+    /// gateway the app parked must never be described to the user as "your
+    /// default AI" — the user did not pick it and may never have set it up.
+    /// A surface reads it through `NewChatPickerSnapshot.defaultPointerIsParked`
+    /// and drops the name from its sentence.
+    ///
+    /// SELF-CORRECTING BY VALUE, not by lifecycle: it is compared against the
+    /// stored pointer, so any later re-point — an adoption, a bootstrap, a
+    /// different park — leaves a value that no longer matches and reads as "not
+    /// parked". ABSENT reads as the user's own choice, which is both the
+    /// ordinary answer and the behaviour of every build that predates the key.
+    /// `applyUserChosenDefault` clears it outright, for the case where the user
+    /// picks the very gateway that was parked.
+    ///
+    /// AND IT CLEARS WHEN THE PARKED GATEWAY BECOMES SENDABLE. Every surface
+    /// that speaks about a parked pointer tells the user it is not set up here;
+    /// a user who takes that advice and finishes setting it up writes no
+    /// pointer, so a marker that only a re-point could retire would outlive the
+    /// problem it describes forever. Membership of the configured set is the
+    /// exit, read where the marker is read (`isDefaultPointerParked`), so a
+    /// Keychain that becomes readable and an iCloud token that finishes syncing
+    /// retire it just as a Settings edit does. An unreadable Keychain reports no
+    /// membership and therefore KEEPS the marker (I3): holding a placeholder is
+    /// the non-destructive answer under an ambiguous reading.
+    ///
+    /// **App Group ONLY, never iCloud KVS** — it describes this device's
+    /// pointer, which is itself device-local.
+    static let remoteAgentParkedDefaultRefKey = "remoteAgent.parkedDefaultRef"
 
     /// App Groups UserDefaults key for the optional **Apple Watch default
     /// override** — the gateway the WATCH's headless wrist captures default to.

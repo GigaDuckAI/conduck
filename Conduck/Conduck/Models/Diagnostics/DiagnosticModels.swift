@@ -275,6 +275,53 @@ struct GatewayDisplayEntry: Identifiable, Equatable, Sendable {
     let connectionCheckID: String
 }
 
+/// UI-only companion to the `connection.defaultGateway` row: the same verdict the
+/// row carries, plus the REAL gateway names the row's copy-safe title/detail are
+/// forbidden to hold. Same device as `GatewayDisplayEntry` / `FileLaneState` —
+/// held outside `checks` so `copyBlock()` can never paste a user's own label.
+struct DefaultGatewayStandingState: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        /// The stored pointer is a member of the configured set. Say nothing.
+        case ready
+        /// Ready, AND Conduck moved the pointer here itself because this was the
+        /// only gateway that could send. Informational, never a finding.
+        case autoAdopted
+        /// A pointer is stored, it cannot send, and the roster offers alternatives.
+        /// THE reported bug.
+        case broken
+        /// No pointer is stored and the device cannot honestly infer one. Not a
+        /// repair, not an accusation — a question only the user can answer.
+        case notChosen
+    }
+    let kind: Kind
+    /// The default gateway's display name. Empty under `.notChosen`, where there
+    /// is no gateway to name — the copy for that case names none.
+    let defaultName: String
+    /// The projected default ref. Under `.notChosen` this is the built-in
+    /// compatibility fallback and MUST NOT be treated as a user choice.
+    let defaultRef: RemoteAgentRef
+    /// Every gateway that CAN send, in Connection row order — the Fix sheet's menu.
+    let candidates: [GatewayDisplayEntry]
+    /// For `.autoAdopted`: the gateway that was replaced, named from the adoption
+    /// notice's captured name (the replaced gateway may be a custom that is gone).
+    let replacedName: String?
+    /// `.broken` and `.notChosen` are the two states whose only exit is the user
+    /// picking a gateway — the two that earn the "Choose Gateway" button.
+    var offersFix: Bool { kind == .broken || kind == .notChosen }
+}
+
+/// One DEMOTED gateway: a built-in holding half-finished setup that nothing points
+/// at, nothing is bound to, and nothing else relies on. Deliberately NOT a
+/// `DiagnosticCheck` — `attentionCount` sums `checks`, so the only honest way to
+/// keep leftovers out of "N items need attention" is for them not to be a check
+/// at all. The name lives here rather than in a row for the same reason it does
+/// in `GatewayDisplayEntry`.
+struct LeftoverGatewayEntry: Identifiable, Equatable, Sendable {
+    let ref: RemoteAgentRef
+    var id: RemoteAgentRef { ref }
+    let displayName: String
+}
+
 /// A privacy-safe pointer to a failure that a "Troubleshoot" affordance opens
 /// the Diagnostics screen focused on. Carries ONLY an `AppError` numeric code +
 /// the (internal, non-identifying) gateway ref — never a message, URL, model,

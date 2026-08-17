@@ -165,6 +165,19 @@ private final class NotificationDelegate: NSObject, UNUserNotificationCenterDele
         // notifications carry the `conversationIDKey` instead — handled by the
         // deep-link branch above: a real UUID opens the failed turn's thread, an
         // empty string no-ops to foreground for a no-turn failure.)
+        // A default-needs-setup notification carries no thread — the refusal
+        // happened before any conversation existed. Its only useful destination
+        // is the screen where the default is chosen, so arm the fix route and
+        // let the app roots consume it. `GatewayFixRoute` is in-memory and
+        // one-shot: a request that outlived the process and reopened Settings
+        // days later would be a surprise. `assumeIsolated` is sound for the same
+        // reason the auto-speak block above gives — the closure runs on the main
+        // queue and `GatewayFixRoute` is `@MainActor`.
+        if userInfo[NotificationDeepLink.openPersonalAIKey] != nil {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { GatewayFixRoute.request() }
+            }
+        }
         if let envelopeID = userInfo[SharedInboxDrainer.shareEnvelopeIDKey] as? String {
             Task {
                 let conversationID = await SharedInboxDrainer.shared.drainAndResolve(envelopeID: envelopeID)
@@ -268,6 +281,13 @@ struct ConduckApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .openConversationDeepLink)) { _ in
                     // Foreground the window when a reply-notification is tapped.
+                    openWindow(id: "main")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
+                    // The Mac launches quiet (`.accessory`), so the window may
+                    // not exist when the notification is tapped. Open it; the
+                    // view layer consumes the route and navigates to
+                    // Settings → Personal AI.
                     openWindow(id: "main")
                 }
         }

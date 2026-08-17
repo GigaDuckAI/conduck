@@ -554,7 +554,21 @@ final class SettingsViewModel {
 
     /// The default ref a freshly-minted conversation binds to. Mirrors
     /// STT `activePresetID`. Drives the "Default" pill + the picker.
+    ///
+    /// The COMPATIBILITY PROJECTION of `defaultGatewayResolution` — it can name a
+    /// gateway that cannot send (a broken default keeps its own name; with
+    /// nothing chosen it reads as the built-in fallback). Anything deciding
+    /// whether a capture may go out reads the resolution.
     var defaultRemoteAgentRef: RemoteAgentRef = .builtin(Constants.remoteAgentDefaultBackendDefault)
+
+    /// The full verdict behind `defaultRemoteAgentRef`, refreshed with it so the
+    /// two always describe one moment.
+    ///
+    /// A separate STORED value rather than a computed one because resolving is an
+    /// actor hop and can WRITE (an adoption, or the silent single-gateway
+    /// bootstrap) — neither of which belongs inside a SwiftUI `body`.
+    private(set) var defaultGatewayResolution: DefaultGatewayResolution =
+        .nothingConfigured(pointer: .builtin(Constants.remoteAgentDefaultBackendDefault))
 
     /// The Watch-specific default override, or `nil` = "Follow iPhone". Drives
     /// the iPhone-hosted Apple Watch default-gateway control (the Watch keeps no
@@ -1759,7 +1773,12 @@ final class SettingsViewModel {
         sessionContinuationPolicy = await SettingsManager.shared.getSessionContinuationPolicy()
         onLaunchMode = await SettingsManager.shared.getOnLaunchMode()
 
-        defaultRemoteAgentRef = await SettingsManager.shared.defaultRemoteAgentRef()
+        // ONE actor hop for both: the ref is the resolution's projection, so
+        // reading them separately would cost a second hop and could straddle a
+        // change.
+        let resolution = await SettingsManager.shared.resolveDefaultGateway()
+        defaultRemoteAgentRef = resolution.ref
+        defaultGatewayResolution = resolution
         watchDefaultOverrideRef = await SettingsManager.shared.watchDefaultOverrideRef()
         watchSessionPolicyOverride = await SettingsManager.shared.watchSessionContinuationPolicyOverride()
         await refreshRemoteAgentReadinessSnapshots()
@@ -2038,6 +2057,133 @@ final class SettingsViewModel {
         return !configured.isEmpty && !configured.contains(defaultRemoteAgentRef)
     }
 
+    /// Whether the selector may FLAG and NAME a broken default — the predicate
+    /// every DISPLAY site reads, as opposed to `defaultSelectorNeedsSetup`, which
+    /// is the raw membership question and is asserted verbatim elsewhere.
+    ///
+    /// TWO states are excluded, and the exclusions are the whole reason this
+    /// exists — the membership question alone accuses the user in both.
+    ///
+    /// NOTHING CHOSEN. With nothing stored, `defaultRemoteAgentRef` is the
+    /// compatibility projection — the built-in fallback — and when that fallback
+    /// is not itself configured the membership question answers "broken" about a
+    /// gateway the user never picked and may never have opened. "Not chosen yet"
+    /// is the honest reading there, and the row, footer and callout all say it.
+    ///
+    /// READING UNRELIABLE. The set the membership question is asked against is
+    /// fail-closed, so a Keychain that does not read back reports a perfectly
+    /// well-configured default as "not a member". `selectorMaySpeak(for:)` is
+    /// where that is refused.
+    var defaultSelectorFlagsBroken: Bool {
+        defaultSelectorNeedsSetup
+            && !defaultSelectorNeedsChoice
+            && Self.selectorMaySpeak(for: defaultGatewayResolution)
+    }
+
+    /// The broken default's display name, or nil when the default is fine,
+    /// nothing is configured, nothing has been chosen, or the reading cannot be
+    /// trusted.
+    ///
+    /// Derived FROM `defaultSelectorFlagsBroken` rather than computed beside it,
+    /// so the picker callout and the selector footer can never name a gateway the
+    /// row itself does not flag. A name here always describes a STORED pointer.
+    var defaultSelectorBrokenName: String? {
+        defaultSelectorFlagsBroken ? defaultRemoteAgentDisplayName : nil
+    }
+
+    /// Whether no default has been chosen yet and the device cannot honestly
+    /// infer one — gateways work, but two or more are candidates, or one is and
+    /// another is still waiting on a token.
+    ///
+    /// A SEPARATE flag precisely because `defaultSelectorNeedsSetup` must stay as
+    /// it is: with nothing chosen, `defaultRemoteAgentRef` is the built-in
+    /// fallback projection, which may itself be configured — so that predicate
+    /// reads "fine" on a device where nothing has been chosen at all.
+    ///
+    /// A PARKED pointer is the second way to have nothing chosen, and it lands on
+    /// this screen more often than the first: the app writes the placeholder one
+    /// step after a Forget, and both the chat banner and Diagnostics deep-link
+    /// the user straight here to fix it. Reading it off the verdict is what makes
+    /// the four surfaces on this screen — the selector row, its footer, the
+    /// picker callout and the gateway list's chosen check — collapse the same way
+    /// the banner that sent the user here already did.
+    var defaultSelectorNeedsChoice: Bool {
+        Self.selectorNeedsChoice(for: defaultGatewayResolution)
+    }
+
+    /// The rule behind `defaultSelectorNeedsChoice`, as a pure static.
+    ///
+    /// Split out for the reason `shouldPromptToSetDefault` is: `defaultGatewayResolution`
+    /// is `private(set)` and refreshed only through an actor hop, so the instance
+    /// property cannot be driven from a test without standing up a whole live
+    /// store. The rule is what matters and it is four lines — assert it directly.
+    static func selectorNeedsChoice(for resolution: DefaultGatewayResolution) -> Bool {
+        if case .selectionRequired = resolution { return true }
+        return resolution.pointerIsParked
+    }
+
+    /// Whether this screen may say anything ACCUSATORY about the default at all —
+    /// the `.readingUnreliable` silence rule, stated where the display predicate
+    /// can read it.
+    ///
+    /// `defaultSelectorNeedsSetup` asks membership of a fail-closed set, and a
+    /// Keychain that does not read back answers "not a member" about a gateway
+    /// that is perfectly well set up. That reading turns the ⚠ + "Needs setup"
+    /// line and the "<name> isn't set up on this iPhone" footer into an accusation
+    /// made by a locked device — and an invitation to re-enter a token that is
+    /// seconds from arriving.
+    ///
+    /// THE STATE THAT ACTUALLY REACHES THIS GATE, because only one can. The gate
+    /// changes nothing unless `defaultSelectorNeedsSetup` is already true, which
+    /// needs a NON-EMPTY configured set — so `resolveDefaultGateway`'s
+    /// zero-configured arm (`zeroConfiguredVerdict`, which can also answer
+    /// `.readingUnreliable`) never gets here: the membership question's own
+    /// empty-set guard has answered false long before. The one producer left is
+    /// the stored-pointer arm, and it fires only when EVERY gateway that can send
+    /// is keyless — `isKeychainProvenReadable` looks for a configured ref with an
+    /// auth scheme, so a keyless-only roster proves nothing about the Keychain —
+    /// while the stored default itself carries an auth scheme and stored evidence
+    /// but no token that reads back.
+    ///
+    /// Concretely: a self-hosted gateway on a trusted network with auth off is
+    /// working here, the default the user actually chose is a token-authenticated
+    /// one, and nothing on the device proves whether that token is gone or merely
+    /// unreadable this moment. Both readings are live, so the screen commits to
+    /// neither.
+    ///
+    /// Every other surface already refuses the same reading: the verdict's own
+    /// doc forbids a banner, a Diagnostics finding, a repair or a persist on it,
+    /// and the chat banner, Diagnostics, the headless lanes and CarPlay all fall
+    /// through silently. This screen is the one the user actually opens during the
+    /// window, so the same silence has to be stated here, beside the predicate
+    /// that would otherwise break it.
+    ///
+    /// DISPLAY ONLY, and EVERY accusatory display: reached through
+    /// `defaultSelectorFlagsBroken`, which is what the selector's ⚠, the footer,
+    /// the picker callout, the Personal AI list's default row and the Settings
+    /// root's "Default needs setup" summary all read. `defaultSelectorNeedsSetup`
+    /// stays byte-identical — it is the raw membership question and is asserted
+    /// verbatim elsewhere — and nothing here touches the stored pointer or
+    /// anything a send reads.
+    ///
+    /// It does NOT gate a gateway's own readiness mark. `RemoteAgentReadiness`
+    /// already names an unreadable Keychain as one of the things `.incomplete`
+    /// covers, and its copy claims no missing field — so a row that says "setup
+    /// incomplete on this device" is reporting what it can see, not accusing the
+    /// default. Suppressing it would replace an honest hedge with a false clean
+    /// bill of health, and would hide genuinely half-finished gateways too.
+    ///
+    /// A pure static for the reason `selectorNeedsChoice` is one: the resolution
+    /// is `private(set)` behind an actor hop, so the rule is the part a test can
+    /// hold.
+    static func selectorMaySpeak(for resolution: DefaultGatewayResolution) -> Bool {
+        switch resolution {
+        case .readingUnreliable: return false
+        case .usable, .adopted, .bootstrapped, .brokenDefault, .selectionRequired,
+             .nothingConfigured, .setupUnfinished: return true
+        }
+    }
+
     /// Compact "Personal AI" summary for a Settings summary row — the SINGLE
     /// source of truth shared by the iPhone root Form and the iPad Overview pane
     /// (so the two can't drift). "Setup needed" when nothing's configured, the
@@ -2048,12 +2194,29 @@ final class SettingsViewModel {
         guard !configured.isEmpty else {
             return String(localized: "settings.root.personalAI.setupNeeded", defaultValue: "Setup needed")
         }
-        // A default outside the configured set breaks BOTH halves of the summary
-        // below: it names a gateway that cannot send, and `count - 1` then
-        // subtracts a gateway that was never in the set, hiding a working one. The
-        // honest one-line answer for that state is the state itself — the same
-        // wording the selector and the gateway rows use, one tap away.
-        guard configured.contains(defaultRemoteAgentRef) else {
+        // Nothing chosen is its own answer, and it is asked FIRST: the membership
+        // guard below asks about the compatibility projection, which reads
+        // "broken" whenever the built-in fallback is not configured — on a device
+        // where the user has simply never picked. Naming that state "Default
+        // needs setup" would send them looking for a fault that is not there.
+        guard !defaultSelectorNeedsChoice else {
+            return String(localized: LocalizedStringResource(
+                "settings.root.personalAI.noDefaultYet",
+                defaultValue: "No default yet"
+            ))
+        }
+        // A STORED default outside the configured set names a gateway that cannot
+        // send, and the honest one-line answer for that state is the state itself
+        // — the same wording the selector and the gateway rows use, one tap away.
+        //
+        // Read through `defaultSelectorFlagsBroken`, NOT through a second spelling
+        // of the membership question: this row and the Personal AI screen it opens
+        // must reach the same verdict, and the flag is where the silence rule
+        // lives. Under `.readingUnreliable` it answers false, so this row falls
+        // through to the ordinary name+count while the screen below it is silent
+        // too — rather than announcing "Default needs setup" about a gateway a
+        // locked device merely cannot read.
+        guard !defaultSelectorFlagsBroken else {
             // Its OWN wording, not the row-level "Needs setup": on this row the
             // subject is the whole Personal AI section, and a bare "Needs setup"
             // there would read as "nothing works" on a device where four other
@@ -2065,7 +2228,11 @@ final class SettingsViewModel {
             ))
         }
         let defaultName = defaultRemoteAgentDisplayName
-        let others = configured.count - 1
+        // Subtract the default only when it IS in the set. On the silenced
+        // blackout path it is not, and `count - 1` would then discount a gateway
+        // that was never counted — hiding a working one behind the very name the
+        // silence just let this row keep.
+        let others = configured.count - (configured.contains(defaultRemoteAgentRef) ? 1 : 0)
         if others <= 0 {
             return defaultName
         }
@@ -2125,6 +2292,13 @@ final class SettingsViewModel {
     func setDefaultRemoteAgentRef(_ ref: RemoteAgentRef) async {
         await SettingsManager.shared.applyUserChosenDefault(ref)
         defaultRemoteAgentRef = ref
+        // `.usable` holds by construction: the picker only offers a gateway as a
+        // choice when it is configured. Asserting it rather than re-reading costs
+        // one fewer actor hop and cannot cross the ordering rule that publishes
+        // the default before the readiness snapshots. Any later
+        // `loadRemoteAgentState` corrects it if a caller ever passes an
+        // unconfigured ref.
+        defaultGatewayResolution = .usable(ref)
     }
 
     /// Display name for the WATCH's effective default — "Follow iPhone" when no
@@ -2161,6 +2335,11 @@ final class SettingsViewModel {
     /// then every custom in roster order. Precomputed so the View iterates a
     /// dumb array (no actor hop, no built-in-vs-custom branching in `body`).
     var personalAIRows: [PersonalAIRow] {
+        // No row carries the "chosen" check when nothing has been chosen. The
+        // projection would otherwise put it on the built-in fallback — a gateway
+        // the user never picked, and frequently one they have never set up — on
+        // the very screen that exists to ask them to choose.
+        let chosenRef: RemoteAgentRef? = defaultSelectorNeedsChoice ? nil : defaultRemoteAgentRef
         var rows: [PersonalAIRow] = []
         for metadata in RemoteAgentBackendRegistry.all {
             let ref = RemoteAgentRef.builtin(metadata.id)
@@ -2168,7 +2347,7 @@ final class SettingsViewModel {
                 ref: ref,
                 displayName: metadata.displayName,
                 configured: configuredRemoteAgentRefSet.contains(ref),
-                isDefault: defaultRemoteAgentRef == ref,
+                isDefault: chosenRef == ref,
                 incomplete: incompleteRemoteAgentRefSet.contains(ref)
             ))
         }
@@ -2180,7 +2359,7 @@ final class SettingsViewModel {
                     ? String(localized: "New gateway")
                     : gateway.name,
                 configured: configuredRemoteAgentRefSet.contains(ref),
-                isDefault: defaultRemoteAgentRef == ref,
+                isDefault: chosenRef == ref,
                 incomplete: incompleteRemoteAgentRefSet.contains(ref)
             ))
         }
@@ -3048,6 +3227,12 @@ final class SettingsViewModel {
         if !hadAnyConfiguredBefore {
             await SettingsManager.shared.setDefaultRemoteAgentRef(ref)
             defaultRemoteAgentRef = ref
+            // `.usable` by construction — this line runs only after the save
+            // persisted the first gateway this device has ever had, so the
+            // pointer is a member of the configured set. Asserting it rather
+            // than re-reading keeps this inside the ordering rule above: a
+            // re-read is an actor hop, and the MainActor is free to render in it.
+            defaultGatewayResolution = .usable(ref)
         }
         await refreshRemoteAgentReadinessSnapshots()
         return true
@@ -3526,130 +3711,31 @@ final class SettingsViewModel {
     /// only purge route, the file-transfer page, is gated on
     /// `isRemoteAgentConfigured(ref)`).
     ///
-    /// Default-pointer policy (Decision B, recommended path): if the cleared
-    /// backend was the default AND another backend remains configured, repoint
-    /// the default to that one (so the user keeps a working default). If no
-    /// other configured backend exists, leave the default pointer as-is — a
-    /// later send to an unconfigured default surfaces `remoteAgentNotConfigured`,
-    /// consistent with Decision B.
+    /// Default-pointer policy: `GatewayForget` routes the re-point through
+    /// `SettingsManager.repointDefaultAfterForget(of:)`, the one rule both Forget
+    /// paths share. A SINGLE surviving send-able gateway is adopted and recorded
+    /// so the user is told; two or more park the pointer on a built-in, so the
+    /// user chooses their next gateway rather than inheriting one. A picker-less
+    /// lane that later meets that parked pointer refuses with
+    /// `remoteAgentDefaultNeedsSetup` and NO name — the user never chose that
+    /// gateway, so it cannot be blamed by name. Never `remoteAgentNotConfigured`:
+    /// that code asserts nothing at all is configured, and a park happens only
+    /// when two or more survivors exist.
     ///
     /// Active-conversation pointer: same refined rule as
     /// `validateAndSaveRemoteAgent` — clear the GLOBAL pointer ONLY when the
     /// active conversation is bound to THIS (now-forgotten) backend.
+    ///
+    /// The whole STORAGE side lives in `GatewayForget`, because the Diagnostics
+    /// leftover list offers the same action with no view model to reach and two
+    /// independently written forget paths is how a gateway comes back from the
+    /// dead. What remains here is this view model's own mirror refresh.
     func clearRemoteAgent(for ref: RemoteAgentRef) async {
-        // Refined pointer-clear: drop the active-conversation pointer ONLY when
-        // it is bound to the ref being forgotten. Capture BEFORE the slot wipe.
-        let activeConvBackend = await activeConversationBackendRawValue()
-        let shouldClearPointer = Self.shouldClearActivePointer(
-            activeConvBackend: activeConvBackend,
-            changedRef: ref
-        )
+        await GatewayForget.perform(ref: ref)
 
-        // File lane FIRST (invalidate-first ordering, same doctrine as
-        // `clearFileTransferConfig` itself): `available=false` must reach iCloud
-        // KVS no later than the gateway teardown, so no peer can pair a
-        // reconfigured gateway with a Ready the forgotten server earned.
-        //
-        // Deliberately attached HERE — at the user-intent Forget site — and NOT
-        // inside `SettingsManager.deleteCustomGateway(id:)` or
-        // `clearRemoteAgentAuthScheme(for:)`. Both of those double as the
-        // token-write-FAILURE rollback for a brand-new save (see
-        // `validateAndSaveRemoteAgent`), and a 32-hex credential destroyed by a
-        // transient Keychain error is unrecoverable — the user would have to
-        // re-provision their server. A destructive credential wipe must hang off
-        // an explicit user intent, never off a shared rollback helper.
-        await clearFileTransferConfig(for: ref)
-
-        // Forgetting a gateway retires it as the new-chat pre-selection. Both
-        // kinds need this explicitly: the built-in branch below only re-points the
-        // default when the forgotten gateway WAS the default, so a forgotten
-        // non-default built-in would otherwise leave the pointer behind — and
-        // built-in refs are reused when the user sets that lane up again, so the
-        // stale pointer would come back to life naming a different server.
-        //
-        // HERE, not inside `deleteCustomGateway`, for the same reason the badge
-        // retire and the file-lane wipe above are: that method doubles as the
-        // failed-save rollback for a brand-new draft, and clearing there would
-        // discard a perfectly good pointer whenever an unrelated save failed.
-        await SettingsManager.shared.clearLastUsedRemoteAgentRefIfPointing(at: ref)
-
-        if case .custom(let id) = ref {
-            // Freeze the badge FIRST — the roster entry about to be deleted is
-            // the only place the monogram and colour exist, and the monogram is
-            // usually derived from the name. Conversations bound to this gateway
-            // keep their `custom_<uuid>` binding forever, so without this they
-            // would render a blank gap where their colour tag used to be, while
-            // a forgotten BUILT-IN keeps its badge for free.
-            //
-            // Attached HERE and not inside `deleteCustomGateway`, for the same
-            // reason the file-lane wipe above is: that method doubles as the
-            // failed-save rollback for a brand-new draft, and retiring there
-            // would leave a tombstone for a gateway that never existed.
-            await SettingsManager.shared.retireCustomGatewayBadge(id: id)
-            // `deleteCustomGateway` clears the per-ref url/token/cert slots +
-            // the roster entry + repoints the default to a built-in if it
-            // pointed here — the whole "forget a custom" operation. Don't
-            // double-wipe the per-ref slots here.
-            await SettingsManager.shared.deleteCustomGateway(id: id)
-        } else {
-            try? await SettingsManager.shared.clearRemoteAgentToken(for: ref)
-            await SettingsManager.shared.setRemoteAgentURL(nil, for: ref)
-            await SettingsManager.shared.setRemoteAgentCertFingerprint(nil, for: ref)
-            await SettingsManager.shared.clearRemoteAgentAuthScheme(for: ref)
-            // Wipe the per-ref model slot too (hosted built-ins like OpenRouter)
-            // so a reconfigured backend never inherits a stale model. No-op for
-            // self-hosted built-ins — they never write the slot.
-            await SettingsManager.shared.setRemoteAgentModel(nil, for: ref)
-            // Image-history policy, transport hint, last-success record, and the
-            // retired single-config slot. Without these, Forget leaves per-ref
-            // keys behind that read as evidence the gateway still exists.
-            await SettingsManager.shared.clearAuxiliaryRemoteAgentSlots(for: ref)
-            // Recompute the configured set, then re-point the default if needed
-            // (built-in branch — the custom branch's repoint is inside
-            // `deleteCustomGateway`).
-            let stillConfigured = await SettingsManager.shared.configuredRemoteAgentRefs()
-            let currentDefault = await SettingsManager.shared.defaultRemoteAgentRef()
-            if currentDefault == ref,
-               let replacement = stillConfigured.first(where: { $0 != ref }) {
-                await SettingsManager.shared.setDefaultRemoteAgentRef(replacement)
-            }
-        }
-
-        // Arm the Watch teardown latch when this Forget left the device with no
-        // gateway evidence at all. This is the ONLY place the intent exists:
-        // the broadcast composer sees an empty configured set, which is also
-        // what a pre-sync or locked-Keychain read looks like, so it can never
-        // distinguish "the user deleted everything" from "this process cannot
-        // see anything yet". Without the latch the wrist keeps a live route —
-        // URL, auth scheme and Keychain token — to a gateway the user believes
-        // they disconnected, across relaunches, because Forget is local to the
-        // phone and the token stays valid at the server.
-        //
-        // The test spans CONFIGURED plus PARTIALLY-configured, never
-        // `configuredRemoteAgentRefs()` alone: arming must not depend on the
-        // fail-closed bearer predicate, or a Forget performed while ANOTHER
-        // gateway's token is momentarily unreadable would courier a teardown
-        // that destroys it on the wrist.
-        //
-        // Nor `removableRemoteAgentRefs()`, which is deliberately WIDER — it
-        // counts auxiliary residue (a transport hint, an image-history policy)
-        // that a Forget can leave behind. Residue is not a gateway, and gating
-        // on it would leave the latch permanently unarmed on exactly the device
-        // that has some, so the wrist would never be told.
-        let stillConfigured = await SettingsManager.shared.configuredRemoteAgentRefs()
-        let stillPartial = await SettingsManager.shared.partiallyConfiguredRemoteAgentRefs()
-        if stillConfigured.isEmpty, stillPartial.isEmpty {
-            await SettingsManager.shared.setUserClearedAllGateways(true)
-        }
-
-        // The active SESSION pointer is global; a forgotten gateway invalidates
-        // any session that might have been minted against it. Clear globally
-        // (Decision A) — defensive, matches the prior single-config behavior.
-        await SettingsManager.shared.setRemoteAgentActiveSession(nil)
-
-        if shouldClearPointer {
-            await SettingsManager.shared.clearActiveConversation()
-        }
+        // The file-lane wipe happened inside `GatewayForget`; its VIEW-MODEL
+        // mirror is this object's own state and follows here.
+        resetFileTransferMirror(for: ref)
 
         // Refresh local per-ref view-model state. A fixed-endpoint built-in
         // (OpenRouter) re-seeds its app-fixed URL: the editor HIDES its URL
@@ -3674,8 +3760,11 @@ final class SettingsViewModel {
         // Default first, snapshots second — same ordering rule as
         // `validateAndSaveRemoteAgent` above: the two are compared against each
         // other, so publishing the set while the pointer is still the gateway the
-        // user just forgot flashes "Needs setup" against its name.
-        defaultRemoteAgentRef = await SettingsManager.shared.defaultRemoteAgentRef()
+        // user just forgot flashes "Needs setup" against its name. One actor hop
+        // carries both the ref and the verdict behind it.
+        let resolution = await SettingsManager.shared.resolveDefaultGateway()
+        defaultRemoteAgentRef = resolution.ref
+        defaultGatewayResolution = resolution
         await refreshRemoteAgentReadinessSnapshots()
     }
 
@@ -4356,30 +4445,26 @@ final class SettingsViewModel {
     /// destructive action. Mirrors `clearRemoteAgent(for:)` (scoped to the
     /// file-server slots — leaves the gateway token/url untouched).
     func clearFileTransferConfig(for ref: RemoteAgentRef) async {
-        // Readiness first (invalidate-first ordering, single actor choke
-        // point): available=false must reach KVS no later than the config
-        // teardown below, and Forget also forfeits local test proof + probe
-        // markers so a later re-add can't inherit stale provenance that would
-        // mis-arm the silent re-probe before the new config is re-tested.
-        await SettingsManager.shared.revokeFileTransferReadiness(for: ref)
-        try? await SettingsManager.shared.clearFileServerCredential(for: ref)
-        await SettingsManager.shared.setFileServerURL(nil, for: ref)
-        await SettingsManager.shared.setFileServerCertFingerprint(nil, for: ref)
-        // Reset capability to its default (folder-capable true, re-probed on
-        // the next Test Connection). The image-history policy is deliberately
-        // NOT touched: it is gateway-scoped (lives in the gateway editor's
-        // Advanced section, applies to server-less endpoints too), not part of
-        // the file-transfer config this action forgets.
-        await SettingsManager.shared.setFileServerFolderCapable(true, for: ref)
+        // The storage wipe is `GatewayForget`'s, so the standalone "Forget file
+        // transfer" action and the whole-gateway Forget cannot drift apart about
+        // what a file lane consists of.
+        await GatewayForget.wipeFileLane(for: ref)
+        resetFileTransferMirror(for: ref)
+    }
 
+    /// The VIEW-MODEL half of forgetting a ref's file lane — every published
+    /// mirror of state `GatewayForget.wipeFileLane(for:)` has just erased. Split
+    /// from the storage wipe so the whole-gateway Forget can perform the wipe
+    /// once and still leave this object consistent.
+    private func resetFileTransferMirror(for ref: RemoteAgentRef) {
         fileServerURLStrings[ref] = ""
         fileServerURLPresent[ref] = false
         fileServerCredentialPresent[ref] = false
         fileServerCertFingerprints.removeValue(forKey: ref)
         fileTransferAvailableRefSet.remove(ref)
-        // Forget resets the listing verdict in the store (via the revoke above);
-        // the mirror follows so a re-added lane starts unmeasured, not carrying
-        // the forgotten server's limitation.
+        // The storage wipe resets the listing verdict in the store; the mirror
+        // follows so a re-added lane starts unmeasured, not carrying the
+        // forgotten server's limitation.
         fileTransferUploadOnlyRefSet.remove(ref)
         fileServerValidationStates[ref] = .unset
         fileTransferTestResults.removeValue(forKey: ref)

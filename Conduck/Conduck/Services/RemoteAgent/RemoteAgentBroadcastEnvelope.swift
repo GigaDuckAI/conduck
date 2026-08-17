@@ -475,21 +475,41 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
     /// true, so a normal envelope carries no extra key.
     let clearAll: Bool?
 
-    /// Explicit memberwise init so `clearAll` can default to nil — every
-    /// existing construction site (and every test) predates the field and must
-    /// keep compiling as a normal, non-destructive envelope.
+    /// Whether `defaultBackendRef` is a gateway the USER actually chose, as
+    /// opposed to the compatibility fallback the iPhone projects when no pointer
+    /// is stored at all.
+    ///
+    /// The ref slot alone cannot express "nothing chosen" — it is required
+    /// non-empty, and the fallback it carries may itself be configured, in which
+    /// case the wrist would read a gateway the user never picked as the chosen
+    /// default and send every headless capture there, permanently binding each
+    /// conversation to it. This flag is the wrist's only way to tell the two
+    /// apart, and it is the reason the wrist refuses instead of guessing.
+    ///
+    /// Optional with the same omit-nil posture as `sessionPolicy` / `clearAll`,
+    /// and `nil` reads as CHOSEN: an old iPhone never sends the key, an old Watch
+    /// ignores it, and both keep behaving exactly as they do without it. Encoded
+    /// only when `false`, so an ordinary envelope carries no extra key.
+    let defaultBackendChosen: Bool?
+
+    /// Explicit memberwise init so the optional tail fields can default to nil —
+    /// every existing construction site (and every test) predates them and must
+    /// keep compiling as a normal, non-destructive envelope naming a chosen
+    /// default.
     init(
         backends: [RemoteAgentBroadcastEnvelope],
         defaultBackendRef: String,
         timestamp: TimeInterval,
         sessionPolicy: String?,
-        clearAll: Bool? = nil
+        clearAll: Bool? = nil,
+        defaultBackendChosen: Bool? = nil
     ) {
         self.backends = backends
         self.defaultBackendRef = defaultBackendRef
         self.timestamp = timestamp
         self.sessionPolicy = sessionPolicy
         self.clearAll = clearAll
+        self.defaultBackendChosen = defaultBackendChosen
     }
 
     /// Plist-compatible dict for `WCSession.transferUserInfo`. `backends` is
@@ -503,6 +523,10 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
         ]
         if let sessionPolicy { dict["sessionPolicy"] = sessionPolicy }
         if clearAll == true { dict["clearAll"] = true }
+        // Encoded only for the unusual answer. "Chosen" is both the default
+        // reading and what every older build assumes, so saying it costs a key
+        // on every envelope and changes nothing.
+        if defaultBackendChosen == false { dict["defaultBackendChosen"] = false }
         return dict
     }
 
@@ -540,12 +564,17 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
         // destroy credentials. Either contradiction resolves to the
         // non-destructive reading.
         let clearAll: Bool? = (dict["clearAll"] as? Bool) == true && rawBackends.isEmpty ? true : nil
+        // Only an explicit `false` means anything; a missing or wrong-typed value
+        // decodes to nil, which the receiver reads as "chosen" — the pre-existing
+        // behaviour, so an old iPhone's envelope is unaffected.
+        let defaultBackendChosen: Bool? = (dict["defaultBackendChosen"] as? Bool) == false ? false : nil
         return RemoteAgentMultiBroadcastEnvelope(
             backends: backends,
             defaultBackendRef: defaultBackendRef,
             timestamp: timestamp,
             sessionPolicy: sessionPolicy,
-            clearAll: clearAll
+            clearAll: clearAll,
+            defaultBackendChosen: defaultBackendChosen
         )
     }
 }

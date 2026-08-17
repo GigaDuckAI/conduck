@@ -28,15 +28,17 @@ struct ConduckShortcuts: AppShortcutsProvider {
             systemImageName: "mic.fill"
         )
 
-        // Network pre-check (first action in the bundled shortcut — must
-        // run before `Record Audio` to short-circuit on no-connectivity).
+        // Readiness pre-check — the default gateway AND the connection. It must
+        // stay the FIRST action in the bundled shortcut: a check that runs after
+        // `Record Audio` cannot save the recording it exists to protect, and the
+        // whole point is to refuse before the microphone rather than after.
         AppShortcut(
             intent: CheckNetworkIntent(),
             phrases: [
-                "Check network in \(.applicationName)"        // xcstrings
+                "Check \(.applicationName) is ready"          // xcstrings
             ],
-            shortTitle: "Check Network",                      // xcstrings
-            systemImageName: "wifi"
+            shortTitle: "Check Conduck",                      // xcstrings
+            systemImageName: "checkmark.shield"
         )
     }
 

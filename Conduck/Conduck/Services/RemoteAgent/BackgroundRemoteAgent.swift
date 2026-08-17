@@ -1276,6 +1276,13 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // fault the user would go hunting at whatever hour the push arrives.
         case .some(let appError) where Self.isCertificateVerdict(appError):
             content.body = appError.descriptionWithRecovery(for: resolvedRef)
+        // Defence in depth. 74 belongs on `postDefaultNeedsSetupNotification`
+        // below, which is keyed to no conversation; if it ever reaches the
+        // conversation-keyed poster anyway, the remedy still travels with it —
+        // the cause alone ("your default AI isn't set up") leaves a user who was
+        // not watching with nothing to act on.
+        case .some(.remoteAgentDefaultNeedsSetup):
+            content.body = error?.descriptionWithRecovery(for: resolvedRef) ?? fallback
         case .some(let appError):
             // The CAUSE dispatches on the same ref the certificate arm above
             // uses. Nine gateway-class causes name "your gateway", which is a
@@ -1299,6 +1306,53 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
 
         let request = UNNotificationRequest(
             identifier: NotificationDeepLink.failureIdentifierPrefix + conversationID.uuidString,
+            content: content,
+            trigger: nil
+        )
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    /// Post the USER notification for a headless turn refused because THIS
+    /// device's default gateway cannot take a new chat.
+    ///
+    /// Separate from `postFailureNotification` because that one is keyed to a
+    /// conversation and this refusal happens BEFORE the mint: there is no thread
+    /// to group under, no thread to deep-link to, and no per-conversation
+    /// identifier to build. The empty `conversationIDKey` is the established
+    /// no-navigation signal (`SharedInboxDrainer`'s no-turn poster uses the same
+    /// shape); `openPersonalAIKey` is what routes the tap to the fix instead.
+    static func postDefaultNeedsSetupNotification(error: AppError) async {
+        let content = UNMutableNotificationContent()
+        // Names what actually happened — nothing was sent because nowhere was
+        // chosen — and asserts no outage. The gateway may be running perfectly;
+        // "No reply from your personal AI" would send the user to check a
+        // machine that never saw the request.
+        content.title = String(localized: "remoteAgent.notification.defaultNeedsSetup.title",
+                               defaultValue: "Nothing to send to")
+        // The REMEDY travels with the cause, on the certificate arm's argument:
+        // this is a headless turn the user was not watching, the push may be the
+        // only place the verdict is read for hours, and "your default isn't set
+        // up" without the fix leaves nothing to act on.
+        content.body = error.descriptionWithRecovery()
+        // A refusal that swallowed a capture is worth hearing — same posture as
+        // the failure poster.
+        content.sound = .default
+        content.interruptionLevel = .active
+        // No `threadIdentifier`: there is no thread.
+        let userInfo: [AnyHashable: Any] = [
+            NotificationDeepLink.conversationIDKey: "",
+            NotificationDeepLink.openPersonalAIKey: true
+        ]
+        content.userInfo = userInfo
+
+        let request = UNNotificationRequest(
+            // FIXED identifier, for two reasons. Fixed at all, so a second
+            // refusal REPLACES the first rather than stacking a pile of
+            // identical banners. And outside the `remoteAgent.failure.` prefix,
+            // so `NotificationDeepLink.clearDelivered(for:)` and
+            // `ReplyAutoSpeakDecider` — both of which key on that prefix — are
+            // untouched by it.
+            identifier: "remoteAgent.defaultNeedsSetup",
             content: content,
             trigger: nil
         )
@@ -1511,6 +1565,15 @@ enum NotificationDeepLink {
     static let conversationIDKey = "conversationID"
     /// userInfo key carrying an `AppError.errorCode` Int (turn-failed bus).
     static let errorCodeKey = "errorCode"
+
+    /// userInfo flag asking the app to land on Settings → Personal AI rather
+    /// than on a thread. Carried by the default-needs-setup notification, which
+    /// is posted BEFORE any conversation exists — so there is no thread to open,
+    /// and the only useful destination is the screen where the default is
+    /// chosen. Read by the tap delegate in `ConduckApp`, which arms
+    /// `GatewayFixRoute`; a key added only at the posting site would be read by
+    /// nobody.
+    static let openPersonalAIKey = "openPersonalAI"
     /// Request-identifier prefix shared by every agent-REPLY notification
     /// (the iOS background delegate + the macOS in-app poster). Load-bearing
     /// contract: `ReplyAutoSpeakDecider` discriminates reply taps from

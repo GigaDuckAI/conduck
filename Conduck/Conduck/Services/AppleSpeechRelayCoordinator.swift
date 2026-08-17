@@ -450,17 +450,34 @@ final class AppleSpeechRelayCoordinator {
               let customConfig = snapshot.customConfig else {
             throw AppError.sttCustomEndpointNotConfigured
         }
-        // Effective key: the custom endpoint may be keyless (`.none` auth) for a
-        // local server — mirror the foreground snapshot-driven call sites
-        // (DictationService / ConverseIntent) by tolerating an empty key when the
-        // resolved scheme is `.none`; otherwise require the stored key.
+        // Effective key, through `STTKeyReadiness` for the reason every other
+        // snapshot-driven call site now uses it: `snapshot.apiKey` is a
+        // collapsed `String?`, and its nil means EITHER no key or a Keychain
+        // that could not answer. The keyless (`.none` auth) local-server case
+        // is already inside `requiresKey`, so this is one call, not a special
+        // case bolted onto one.
+        //
+        // Which reading matters MORE here than on any in-app lane: the words
+        // arriving on this path were spoken on a WATCH, and the refusal travels
+        // back as a bare error code the wrist rebuilds. Code 23 is terminal
+        // there, so it deletes the wrist's recording and says the user has no
+        // key; code 75 is retryable, so the wrist keeps the capture and the
+        // verdict is never cached (`shouldCacheVerdict` admits settled verdicts
+        // only), which is what lets a re-fire of the same requestID transcribe
+        // for real once the phone is unlocked (I3, I6).
         let apiKey: String
-        if customConfig.auth == STTAuthScheme.none {
-            apiKey = ""
-        } else if let key = snapshot.apiKey, !key.isEmpty {
+        switch await STTKeyReadiness.resolve(
+            presetID: snapshot.presetID,
+            snapshotKey: snapshot.apiKey,
+            provider: snapshot.provider,
+            customConfig: customConfig
+        ) {
+        case .ready(let key):
             apiKey = key
-        } else {
+        case .notConfigured:
             throw AppError.sttMissingAPIKey
+        case .unreadable:
+            throw AppError.sttKeyUnreadable
         }
         let response = try await STTClient.shared.transcribe(
             audioFileURL: audioFileURL,
@@ -503,7 +520,27 @@ final class AppleSpeechRelayCoordinator {
         case .customEndpoint(let presetID):
             return try await transcribeViaCustomEndpoint(audioFileURL: audioFileURL, language: language, relayProviderID: presetID)
         case .activeCloud:
-            guard let key = snapshot.apiKey, !key.isEmpty else { throw AppError.sttMissingAPIKey }
+            // Same two readings, same asymmetry as the custom-endpoint arm
+            // above — a nil key here is either an empty slot (23) or a Keychain
+            // that could not answer (75), and only the second one must leave the
+            // wrist's recording alive. `customConfig: nil` mirrors what this arm
+            // hands `STTClient`: `.activeCloud` is reached only for a FROZEN
+            // cloud provider, for which the snapshot resolves no custom config,
+            // so a key is unconditionally required.
+            let key: String
+            switch await STTKeyReadiness.resolve(
+                presetID: snapshot.presetID,
+                snapshotKey: snapshot.apiKey,
+                provider: snapshot.provider,
+                customConfig: nil
+            ) {
+            case .ready(let resolved):
+                key = resolved
+            case .notConfigured:
+                throw AppError.sttMissingAPIKey
+            case .unreadable:
+                throw AppError.sttKeyUnreadable
+            }
             let response = try await STTClient.shared.transcribe(
                 audioFileURL: audioFileURL,
                 apiKey: key,

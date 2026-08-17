@@ -87,6 +87,14 @@ struct DiagnosticsContent: View {
     @State private var runner: DiagnosticsRunner
     @State private var copied = false
     @State private var copyResetTask: Task<Void, Never>?
+    /// The Fix sheet behind "Choose Gateway" — the default-vs-reality row's only
+    /// action. A SHEET rather than a push because it works identically from all
+    /// four hosts (iOS push, iPad detail, macOS Settings category, banner sheet)
+    /// with no plumbing: `DiagnosticsContent` has no `SettingsViewModel`, and
+    /// `TroubleshootButton` has none to give it.
+    @State private var showingDefaultPicker = false
+    /// The leftover gateway awaiting its Forget confirmation.
+    @State private var pendingForget: LeftoverGatewayEntry?
     @Environment(\.scenePhase) private var scenePhase
     /// Drives the per-row action layout: inline-trailing at normal text sizes,
     /// stacked below at accessibility sizes (where a trailing button would crush
@@ -128,6 +136,44 @@ struct DiagnosticsContent: View {
             copySection
         }
         .scrollContentBackground(.hidden)
+        // Lifecycle + presentation modifiers hang off the CONTAINER, never off the
+        // section tree — on macOS `Group(sections:)` decomposes that tree section by
+        // section, so a sheet attached inside it would ride one card.
+        .sheet(isPresented: $showingDefaultPicker) { defaultPickerSheet }
+        .alert(
+            LocalizedStringResource("settings.remoteAgent.forgetAlert.title", defaultValue: "Forget gateway?"),
+            isPresented: Binding(
+                get: { pendingForget != nil },
+                set: { if !$0 { pendingForget = nil } }
+            ),
+            presenting: pendingForget
+        ) { entry in
+            Button(
+                LocalizedStringResource("settings.remoteAgent.forgetAlert.confirm", defaultValue: "Forget"),
+                role: .destructive
+            ) {
+                Task {
+                    // THE one Forget — never a second deletion path.
+                    await GatewayForget.perform(ref: entry.ref)
+                    pendingForget = nil
+                    await runner.refreshConfig()
+                }
+            }
+            Button(
+                LocalizedStringResource("settings.remoteAgent.forgetAlert.cancel", defaultValue: "Cancel"),
+                role: .cancel
+            ) { }
+        } message: { _ in
+            // A NEW message key: the shipped one ends with "You'll re-enter them
+            // next time", a promise that is wrong for residue the user is
+            // discarding. Title/confirm/cancel stay the SHIPPED keys — two Forget
+            // buttons wording their confirmation differently is how a user learns
+            // to distrust both.
+            Text(LocalizedStringResource(
+                "settings.remoteAgent.forgetAlert.message.leftover",
+                defaultValue: "Conduck will erase the saved URL, token, and pin for this gateway, plus any file-transfer setup. The URL and token are removed from every device signed in to your iCloud; the pin is only on this one."
+            ))
+        }
         .task { await runner.runAutoReads() }
         // Live re-derive on (re)appear + foreground: re-read the provider config +
         // permissions AND re-probe connectivity so a provider the user just
@@ -412,12 +458,20 @@ struct DiagnosticsContent: View {
 
     // MARK: Connection
 
-    /// Connection = one row per gateway (titled with its REAL name via
-    /// `gatewayDisplayOrder`, status read live from `checks`), each with its
-    /// file-server lane nested beneath it, then the non-gateway rows (no-gateway /
-    /// focused-missing / Internet).
+    /// Connection = the default-vs-reality row, then one row per gateway (titled
+    /// with its REAL name via `gatewayDisplayOrder`, status read live from
+    /// `checks`), each with its file-server lane nested beneath it, then the
+    /// non-gateway rows (no-gateway / focused-missing / Internet), and finally the
+    /// quiet leftover block.
     private var connectionSection: some View {
         Section {
+            // Which gateway a NEW chat gets — the lane every picker-less surface
+            // mints on. It leads the section because a dead lane outranks any one
+            // gateway's health.
+            if let standing = runner.defaultGatewayStanding,
+               let check = runner.checks.first(where: { $0.id == DiagnosticsRunner.defaultGatewayCheckID }) {
+                defaultGatewayRow(standing: standing, check: check)
+            }
             ForEach(runner.gatewayDisplayOrder) { entry in
                 if let check = runner.checks.first(where: { $0.id == entry.connectionCheckID }) {
                     // Row + its own re-probe, laid out like `fileServerSubRow`:
@@ -463,10 +517,20 @@ struct DiagnosticsContent: View {
                         .settingsCardPassiveRow()
                 }
             }
+            // Leftover setup — DEMOTED gateways: nothing points at them, nothing is
+            // bound to them, nothing is broken. Rendered under EVERY verdict,
+            // including `.readingUnreliable`: this is non-accusatory tidying with an
+            // inline Forget, not an attention item. (Diagnostics is user-initiated,
+            // so the device is unlocked when anyone reads it; the realistic
+            // `.readingUnreliable` producer here is a half-arrived iCloud sync.)
+            if !runner.leftoverGateways.isEmpty { leftoverGatewayBlock }
             ForEach(runner.checks.filter {
                 $0.category == .connection
                     && !$0.id.hasPrefix("gateway.")
                     && !$0.id.hasPrefix("connection.gateway.incomplete.")
+                    // The default-vs-reality row has its own slot at the top of the
+                    // section; without this it would render twice.
+                    && $0.id != DiagnosticsRunner.defaultGatewayCheckID
                     && ($0.id != "connection.network" || runner.showsNetworkConnectionIssue)
             }) {
                 DiagnosticCheckRow(check: $0)
@@ -486,6 +550,219 @@ struct DiagnosticsContent: View {
                 ))
             }
         }
+    }
+
+    // MARK: Default for new chats (the default-vs-reality row + its Fix action)
+
+    /// The row itself. The check supplies glyph, colour and the copy-safe generic
+    /// detail; `detailOverride` supplies the same sentence with the REAL gateway
+    /// names, which `check.detail` is forbidden to hold. Only `.broken` and
+    /// `.notChosen` earn the action — they are the two states whose only exit is
+    /// the user picking a gateway.
+    @ViewBuilder
+    private func defaultGatewayRow(standing: DefaultGatewayStandingState, check: DiagnosticCheck) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if dynamicTypeSize.isAccessibilitySize {
+                DiagnosticCheckRow(check: check, detailOverride: defaultGatewayDetail(standing))
+                if standing.offersFix {
+                    chooseGatewayButton.padding(.leading, 30)
+                }
+            } else {
+                HStack(alignment: .top, spacing: 10) {
+                    DiagnosticCheckRow(check: check, detailOverride: defaultGatewayDetail(standing))
+                    if standing.offersFix {
+                        Spacer(minLength: 8)
+                        chooseGatewayButton
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+            }
+        }
+        .settingsCardPassiveRow()
+        .disabled(runner.isBusy)
+    }
+
+    private var chooseGatewayButton: some View {
+        Button {
+            showingDefaultPicker = true
+        } label: {
+            Label(
+                LocalizedStringResource("diagnostics.action.chooseGateway", defaultValue: "Choose Gateway"),
+                systemImage: "brain.head.profile"
+            )
+            .font(.subheadline.weight(.semibold))
+            .labelStyle(AccentGlyphActionLabelStyle())
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel(Text(LocalizedStringResource(
+            "diagnostics.action.chooseGateway.a11y",
+            defaultValue: "Choose which gateway new chats use"
+        )))
+    }
+
+    /// The named form of the row's detail — view-only, so it may carry the user's
+    /// real gateway names. The one-candidate variants name the alternative outright
+    /// rather than counting to one.
+    private func defaultGatewayDetail(_ standing: DefaultGatewayStandingState) -> String {
+        let name = standing.defaultName
+        let count = standing.candidates.count
+        let only = standing.candidates.first?.displayName ?? ""
+        switch standing.kind {
+        case .ready:
+            return String(
+                localized: "diagnostics.connection.defaultGateway.ok.named",
+                defaultValue: "New chats and GigaAction start on \(name)."
+            )
+        case .autoAdopted:
+            guard let replaced = standing.replacedName else {
+                return String(
+                    localized: "diagnostics.connection.defaultGateway.adopted",
+                    defaultValue: "Conduck switched your default because the old one isn't set up here."
+                )
+            }
+            return String(
+                localized: "diagnostics.connection.defaultGateway.adopted.named",
+                defaultValue: "New chats and GigaAction start on \(name) — Conduck switched to it because \(replaced) isn't set up here."
+            )
+        case .broken:
+            if count == 1 {
+                return String(
+                    localized: "diagnostics.connection.defaultGateway.broken.named.one",
+                    defaultValue: "\(name) is your default for new chats, but it can't send — so new chats and GigaAction won't go anywhere. Choose \(only), or finish setting it up in Personal AI."
+                )
+            }
+            return String(
+                localized: "diagnostics.connection.defaultGateway.broken.named",
+                defaultValue: "\(name) is your default for new chats, but it can't send — so new chats and GigaAction won't go anywhere. Choose one of your \(count) working gateways, or finish setting it up in Personal AI."
+            )
+        case .notChosen:
+            if count == 1 {
+                return String(
+                    localized: "diagnostics.connection.defaultGateway.notChosen.named.one",
+                    defaultValue: "Conduck doesn't know which AI new chats should use, so new chats and GigaAction won't go anywhere. Pick \(only)."
+                )
+            }
+            return String(
+                localized: "diagnostics.connection.defaultGateway.notChosen.named",
+                defaultValue: "Conduck doesn't know which AI new chats should use, so new chats and GigaAction won't go anywhere. Pick one of your \(count) gateways."
+            )
+        }
+    }
+
+    /// The Fix sheet — the SHIPPING `DefaultGatewayPicker`, over the CANDIDATE set
+    /// only (every gateway that can send right now). Nothing else belongs here: a
+    /// row that cannot send would offer a choice that changes nothing.
+    @ViewBuilder
+    private var defaultPickerSheet: some View {
+        let standing = runner.defaultGatewayStanding
+        let rows: [PersonalAIRow] = (standing?.candidates ?? []).map { entry in
+            PersonalAIRow(
+                ref: entry.ref,
+                displayName: entry.displayName,
+                configured: true,               // a candidate can send by construction
+                isDefault: entry.ref == standing?.defaultRef,
+                incomplete: false
+            )
+        }
+        let picker = DefaultGatewayPicker(
+            rows: rows,
+            onActivate: { ref in
+                Task {
+                    // THE canonical user-choice writer — the same one the Personal AI
+                    // picker calls. It retires the sticky last-used pointer,
+                    // acknowledges any pending adoption notice, clears the
+                    // active-conversation pointer, and posts
+                    // `.settingsDidChangeRemotely`, which this screen already
+                    // observes. NEVER `setDefaultRemoteAgentRef`: that is the
+                    // programmatic re-point and deliberately leaves last-used alone,
+                    // so the next new chat would ignore the choice just made here.
+                    await SettingsManager.shared.applyUserChosenDefault(ref)
+                    showingDefaultPicker = false
+                    await runner.refreshConfig()
+                }
+            },
+            // Unreachable by construction: every row in this sheet is
+            // `configured: true`, so no row can take the "Set up…" branch. Kept as an
+            // empty closure because the initializer requires it.
+            onSetUp: { _ in }
+        )
+        #if os(macOS)
+        VStack(spacing: 0) {
+            picker
+            HStack {
+                Spacer()
+                Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) {
+                    showingDefaultPicker = false
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(16)
+        }
+        // A card stack scrolls, and a scroll surface has no intrinsic size for a
+        // sheet to adopt — the same fixed-frame idiom the Troubleshoot sheet uses.
+        .frame(width: 460, height: 420)
+        #else
+        NavigationStack {
+            picker
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) {
+                            showingDefaultPicker = false
+                        }
+                    }
+                }
+        }
+        #endif
+    }
+
+    // MARK: Leftover setup (demoted gateways — tidying, never a finding)
+
+    /// Deliberately GLYPH-FREE and quiet: a warning triangle is exactly what this
+    /// block must not have. Nothing points at these gateways and nothing is bound to
+    /// them, so they are outside `checks` and outside `attentionCount`. The Forget
+    /// pill is neutral-tinted — the destructive framing belongs in the alert, not in
+    /// a list the user is meant to skim past.
+    private var leftoverGatewayBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(LocalizedStringResource(
+                "diagnostics.connection.leftover.header",
+                defaultValue: "Leftover setup"
+            ))
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(AppColors.textSecondary)
+            Text(LocalizedStringResource(
+                "diagnostics.connection.leftover.caption",
+                defaultValue: "Nothing uses these, and nothing is broken. Forgetting one removes its saved details from every device signed in to your iCloud."
+            ))
+            .font(.caption)
+            .foregroundStyle(AppColors.textTertiary)
+            .fixedSize(horizontal: false, vertical: true)
+            ForEach(runner.leftoverGateways) { entry in
+                HStack(spacing: 8) {
+                    Text(entry.displayName)
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.textSecondary)
+                    Spacer(minLength: 8)
+                    Button {
+                        pendingForget = entry
+                    } label: {
+                        Text(LocalizedStringResource(
+                            "diagnostics.action.forgetGateway",
+                            defaultValue: "Forget"
+                        ))
+                        .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityLabel(Text(LocalizedStringResource(
+                        "diagnostics.action.forgetGateway.a11y",
+                        defaultValue: "Forget \(entry.displayName)"
+                    )))
+                }
+            }
+        }
+        .settingsCardPassiveRow()
+        .disabled(runner.isBusy)
     }
 
     // MARK: Voice

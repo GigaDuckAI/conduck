@@ -1013,6 +1013,523 @@
         }
       }
     },
+    "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again."
+          }
+        }
+      }
+    },
+    "Couldn't read your STT key. Unlock your iPhone and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read your STT key. Unlock your iPhone and try again."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again — your recording is saved."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unlock this device, then open Conduck and retry."
+          }
+        }
+      }
+    },
+    "settings.root.personalAI.noDefaultYet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No default yet"
+          }
+        }
+      }
+    },
+    "Check Conduck" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check Conduck"
+          }
+        }
+      }
+    },
+    "Check Conduck Is Ready" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check Conduck Is Ready"
+          }
+        }
+      }
+    },
+    "Checks your connection and your default AI before recording, so nothing you say is wasted." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checks your connection and your default AI before recording, so nothing you say is wasted."
+          }
+        }
+      }
+    },
+    "Conduck doesn't know which AI to use for new chats. Open Conduck to pick one?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck doesn't know which AI to use for new chats. Open Conduck to pick one?"
+          }
+        }
+      }
+    },
+    "Your default AI, %@, isn't set up on this device. Open Conduck to pick a different one?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default AI, %@, isn't set up on this device. Open Conduck to pick a different one?"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.body.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this iPad. Chats you've already started keep the gateway they started on."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.body.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this iPhone. Chats you've already started keep the gateway they started on."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.body.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this Mac. Chats you've already started keep the gateway they started on."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New chats now use %@"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a default"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It's your default for new chats, so anything that starts a chat from outside the app has nowhere to go. New chats you start here are fine."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.title.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this iPad."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.title.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this iPhone."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.title.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this Mac."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.dismiss.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dismiss"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pick a gateway"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anything that starts a chat from outside the app doesn't know which one to use. Pick one and new chats will start on it. New chats you start here are fine."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.title.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPad doesn't have a default gateway."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.title.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone doesn't have a default gateway."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.title.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Mac doesn't have a default gateway."
+          }
+        }
+      }
+    },
+    "common.cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "diagnostics.action.chooseGateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Gateway"
+          }
+        }
+      }
+    },
+    "diagnostics.action.chooseGateway.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose which gateway new chats use"
+          }
+        }
+      }
+    },
+    "diagnostics.action.forgetGateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forget"
+          }
+        }
+      }
+    },
+    "diagnostics.action.forgetGateway.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forget %@"
+          }
+        }
+      }
+    },
+    "diagnostics.connection.leftover.caption" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing uses these, and nothing is broken. Forgetting one removes its saved details from every device signed in to your iCloud."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.leftover.header" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leftover setup"
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.broken.footer.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ isn't set up on this iPad, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.broken.footer.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ isn't set up on this iPhone, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.broken.footer.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ isn't set up on this Mac, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.noChoice.footer.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing that starts a chat from outside this iPad knows which gateway to use. Pick one and new chats will start on it."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.noChoice.footer.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing that starts a chat from outside this iPhone knows which gateway to use. Pick one and new chats will start on it."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.noChoice.footer.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing that starts a chat from outside this Mac knows which gateway to use. Pick one and new chats will start on it."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.notChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not chosen yet"
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.broken.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pick a gateway below to use for new chats, or tap %@ to finish setting it up."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.broken.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up here"
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.noChoice.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pick a gateway below and new chats will start on it."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.noChoice.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No default yet"
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.selector.broken.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needs attention"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.forgetAlert.message.leftover" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck will erase the saved URL, token, and pin for this gateway, plus any file-transfer setup. The URL and token are removed from every device signed in to your iCloud; the pin is only on this one."
+          }
+        }
+      }
+    },
     "popover.error.destinationUnavailable" : {
       "extractionState" : "manual",
       "localizations" : {

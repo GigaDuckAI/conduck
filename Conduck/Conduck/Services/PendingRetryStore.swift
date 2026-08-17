@@ -95,10 +95,19 @@ actor PendingRetryStore {
         }
         let defaults = defaults
 
-        // `.complete` file protection: file is unreadable while device locked.
-        // Tighter than `.completeUntilFirstUserAuthentication` because
-        // pending retries are user-initiated foreground actions; the user is
-        // already past first unlock by the time we save.
+        // `.complete` file protection: the file is unreadable while the device
+        // is locked. Tighter than `.completeUntilFirstUserAuthentication`, and
+        // right for the lane this store was built for — a foreground retry the
+        // user initiated, long past first unlock.
+        //
+        // That premise does not hold for every caller. `ConverseIntent` saves
+        // from a headless Action-Button capture, which can run on a device that
+        // has rebooted and not yet been unlocked — the same window
+        // `AppError.sttKeyUnreadable` exists for. Whether the write itself fails
+        // there is OS behaviour this codebase has not measured; either way the
+        // throw propagates, and `PendingRetryGuard` records it on its token and
+        // withholds the "Recording Saved" notification rather than announcing
+        // bytes that may not be on disk.
         try audioData.write(to: url, options: [.atomic, .completeFileProtection])
 
         let encoded = try JSONEncoder().encode(metadata)

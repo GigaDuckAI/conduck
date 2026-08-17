@@ -332,20 +332,50 @@ final class InAppAudioRecorder {
         let frozenEngine: AppleOnDeviceEngineMode? = nil
         #endif
 
-        // In-process providers (Apple on-device) need no API key —
-        // the runner's TCC check is the moral equivalent. The BYO custom
-        // endpoint configured with `.none` auth (keyless local server) also
-        // needs no key. For every other network provider the missing-key guard
-        // still applies.
+        // In-process providers (Apple on-device) need no API key — the runner's
+        // TCC check is the moral equivalent — and neither does the BYO custom
+        // endpoint configured with `.none` auth (a keyless local server). Both
+        // live inside `STTKeyReadiness.requiresKey`, so this is one question.
+        //
+        // For every other provider the key must be there, and the TWO WAYS it
+        // can fail to be are not the same fact. `snapshot.apiKey` is a collapsed
+        // `String?`: nil means an empty slot OR a Keychain that could not answer
+        // (keys are stored `kSecAttrAccessibleAfterFirstUnlock`, and a
+        // protected-data read can also fail on a corrupted or empty item, which
+        // is the reachable shape on a device that is by definition unlocked —
+        // it is showing this composer). Code 23 asserts the slot is empty and is
+        // TERMINAL, so it neither preserves the recording nor offers a retry;
+        // code 75 says only that the key could not be READ, and its
+        // `shouldPreserveForRetry` is what puts the capture in
+        // `PendingRetryStore` on the way out (I3, I6).
         let apiKey: String
-        if isAppleInProcess || snapshot.customConfig?.auth == STTAuthScheme.none {
-            apiKey = ""
-        } else if let key = snapshot.apiKey, !key.isEmpty {
+        switch await STTKeyReadiness.resolve(
+            presetID: snapshot.presetID,
+            snapshotKey: snapshot.apiKey,
+            provider: snapshot.provider,
+            customConfig: snapshot.customConfig
+        ) {
+        case .ready(let key):
             apiKey = key
-        } else {
+        case .notConfigured:
             try? FileManager.default.removeItem(at: audioFileURL)
             state = .error(.sttMissingAPIKey)
             return .failure(.sttMissingAPIKey)
+        case .unreadable:
+            // The lane's OWN preservation mechanism — the same reactive
+            // `PendingRetryStore.save` the STT `catch` below performs, gated on
+            // the same `shouldPreserveForRetry`. The retry card then re-runs
+            // this method's caller on the saved bytes, by which time the key may
+            // read fine.
+            await preserveForRetry(
+                error: .sttKeyUnreadable,
+                uploadData: uploadData,
+                audioFileURL: audioFileURL,
+                preferredLanguage: preferredLanguage
+            )
+            try? FileManager.default.removeItem(at: audioFileURL)
+            state = .error(.sttKeyUnreadable)
+            return .failure(.sttKeyUnreadable)
         }
 
         // SELF-HEAL (Apple in-process only): the mic tap was the consent to set up
@@ -449,19 +479,12 @@ final class InAppAudioRecorder {
             // Reactive save on retryable failures — mirrors macOS DictationService
             // pattern: no preempt guard, but preserve audio if the user will
             // realistically want to retry from the in-app retry card.
-            if error.shouldPreserveForRetry {
-                let metadata = PendingRetryMetadata(
-                    id: UUID(),
-                    createdAt: Date(),
-                    audioFileURL: audioFileURL,
-                    preferredLanguage: preferredLanguage,
-                    attemptCount: 1,
-                    lastErrorCode: error.errorCode
-                )
-                // Best-effort — save failure is logged inside the store but
-                // we still surface the original STT error to the user.
-                try? await PendingRetryStore.shared.save(audioData: uploadData, metadata: metadata)
-            }
+            await preserveForRetry(
+                error: error,
+                uploadData: uploadData,
+                audioFileURL: audioFileURL,
+                preferredLanguage: preferredLanguage
+            )
             // STTClient.transcribe's `defer` already removed audioFileURL.
             state = .error(error)
             return .failure(error)
@@ -474,6 +497,34 @@ final class InAppAudioRecorder {
             state = .error(.unknown(error))
             return .failure(.unknown(error))
         }
+    }
+
+    /// The ONE place this recorder hands a capture to the retry lane, so the
+    /// pre-flight refusal and the STT failure cannot preserve on different terms.
+    /// No-ops unless the taxonomy says these bytes can succeed on a second
+    /// attempt (`shouldPreserveForRetry`), which is what keeps a bad-input
+    /// verdict from parking audio the user would only ever retry into the same
+    /// refusal.
+    ///
+    /// Best-effort: a save failure is logged inside the store and the caller
+    /// still surfaces the original error — a silent swap to a storage error
+    /// would tell the user the wrong thing about why their capture stopped.
+    private func preserveForRetry(
+        error: AppError,
+        uploadData: Data,
+        audioFileURL: URL,
+        preferredLanguage: String?
+    ) async {
+        guard error.shouldPreserveForRetry else { return }
+        let metadata = PendingRetryMetadata(
+            id: UUID(),
+            createdAt: Date(),
+            audioFileURL: audioFileURL,
+            preferredLanguage: preferredLanguage,
+            attemptCount: 1,
+            lastErrorCode: error.errorCode
+        )
+        try? await PendingRetryStore.shared.save(audioData: uploadData, metadata: metadata)
     }
 }
 

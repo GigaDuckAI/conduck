@@ -223,6 +223,31 @@ actor WatchIdentityResolver {
         readKeychainString(account: Constants.sttApiKeyKeychainAccount(for: presetID), secrets: secrets)
     }
 
+    /// TYPED read of a preset's STT API key — the same question
+    /// `getSTTAPIKey` asks, without collapsing the answer.
+    ///
+    /// WHY THE WATCH NEEDS THE DISTINCTION MOST. Keys land here
+    /// `kSecAttrAccessibleAfterFirstUnlock` precisely so a ControlWidget cold
+    /// launch can read one BEFORE the wrist is unlocked — which is the same
+    /// window in which the read FAILS, indistinguishably from an empty slot, if
+    /// the watch has rebooted and not yet been unlocked. A caller that treats
+    /// that nil as absence refuses a capture the user has already spoken, tells
+    /// them they have no key when they do, and (before this) deleted the
+    /// recording on the way out. `errSecItemNotFound` is the ONE status that
+    /// proves the slot is empty; everything else is a blackout.
+    ///
+    /// Classification is the shared pure `APIKeyReadResult.classify`, the same
+    /// one `SettingsManager.apiKeyReadResult` uses on iPhone, so the two
+    /// surfaces cannot reach different verdicts about the same slot.
+    /// Privacy invariant: the STATUS is not a secret, the key is — never log
+    /// the `.present` payload.
+    nonisolated static func sttAPIKeyReadResult(
+        forPresetID presetID: String,
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
+    ) -> APIKeyReadResult {
+        readKeychainResult(account: Constants.sttApiKeyKeychainAccount(for: presetID), secrets: secrets)
+    }
+
     /// Persist a preset's STT API key to the Watch Keychain. Called by the
     /// WCSession envelope dispatch when iPhone broadcasts the active preset's
     /// key (`WatchSessionManager.session(_:didReceiveUserInfo:)`).
@@ -316,10 +341,27 @@ actor WatchIdentityResolver {
     }
 
     /// Shared Keychain read; nonisolated so static accessors + the actor both use it.
+    /// Convenience over `readKeychainResult` for the callers that only need
+    /// present-or-not (identity, gateway tokens) — anything that must not
+    /// mistake a locked Keychain for an empty slot reads the typed result.
     nonisolated private static func readKeychainString(
         account: String,
         secrets: any SecretStore = SettingsDependencies.processDefault.secrets
     ) -> String? {
+        if case .present(let value) = readKeychainResult(account: account, secrets: secrets) {
+            return value
+        }
+        return nil
+    }
+
+    /// Shared TYPED Keychain read — the single query site for this target, so
+    /// the collapsed and typed readers can never look at different items.
+    /// Only the live `copyMatching` happens here; the status → verdict mapping
+    /// is the shared pure `APIKeyReadResult.classify`.
+    nonisolated private static func readKeychainResult(
+        account: String,
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
+    ) -> APIKeyReadResult {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Constants.keychainServiceName,
@@ -329,14 +371,7 @@ actor WatchIdentityResolver {
         ]
 
         let (status, result) = secrets.copyMatching(query)
-
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let value = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-
-        return value
+        return APIKeyReadResult.classify(status: status, data: result as? Data)
     }
 
     nonisolated private static func writeKeychainString(

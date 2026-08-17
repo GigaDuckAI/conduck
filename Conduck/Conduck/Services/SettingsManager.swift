@@ -3399,10 +3399,10 @@ actor SettingsManager {
     /// `Constants.remoteAgentDefaultBackendDefault` (`.openclaw`). An unknown
     /// stored raw value (forward-compat) falls through to the default. Runs the
     /// migrations first so a just-migrated single-slot install reports its prior
-    /// backend as default. NOTE: a back-compat forwarder, now only consulted by
-    /// `setDefaultRemoteAgentBackend`'s no-op guard — it deliberately omits the
-    /// config-sync bootstrap that the canonical `defaultRemoteAgentRef()` has
-    /// (which is the routing-authoritative reader). Prefer the ref reader.
+    /// backend as default. NOTE: a back-compat forwarder, only consulted by
+    /// `setDefaultRemoteAgentBackend`'s no-op guard — it is a plain stored read
+    /// and deliberately performs none of the repair `resolveDefaultGateway()`
+    /// does. Prefer the ref reader, and `resolveDefaultGateway()` above that.
     func defaultRemoteAgentBackend() -> RemoteAgentBackend {
         #if DEBUG
         if QAMode.isActive {
@@ -3422,84 +3422,352 @@ actor SettingsManager {
     }
 
     /// Set the default backend (DEVICE-LOCAL — App Groups only, no iCloud KVS).
-    /// Posts `.settingsDidChangeRemotely`. No-op when `newBackend` equals the
-    /// current value. Does NOT clear the active-conversation pointer (the
-    /// ref-typed `setDefaultRemoteAgentRef` is the user-facing re-point that
-    /// clears; this forwarder is used by the per-backend migration, which must
-    /// not sever capture continuity).
+    /// Posts `.settingsDidChangeRemotely`. Does NOT clear the
+    /// active-conversation pointer (the ref-typed `setDefaultRemoteAgentRef` is
+    /// the user-facing re-point that clears; this forwarder is used by the
+    /// per-backend migration, which must not sever capture continuity).
+    ///
+    /// The no-op guard compares the RAW STORED STRING, for the same reason
+    /// `setDefaultRemoteAgentRef`'s does: "no pointer stored" is a REAL state
+    /// (`.selectionRequired`), and `defaultRemoteAgentBackend()` cannot express
+    /// it — it answers `Constants.remoteAgentDefaultBackendDefault` when the slot
+    /// is empty. Guarding against that answer silently swallows the one write
+    /// that matters, promoting a legacy single-slot install whose backend IS the
+    /// fallback: the migration would report success while the slot stayed empty.
+    /// Runs no migrations of its own — deliberately, because its one production
+    /// caller IS a migration, and re-entering the migration ladder from inside it
+    /// would ask the device-local seed to judge send-ability against slots this
+    /// pass has not finished copying.
     func setDefaultRemoteAgentBackend(_ newBackend: RemoteAgentBackend) {
-        let current = defaultRemoteAgentBackend()
-        guard newBackend != current else { return }
-
+        guard newBackend.rawValue != defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey) else {
+            return
+        }
         defaults.set(newBackend.rawValue, forKey: Constants.remoteAgentDefaultBackendKVSKey)
         postSettingsDidChangeRemotely()
     }
 
-    /// Ref-based default pointer (built-in OR custom) — the routing-authoritative
-    /// reader. **DEVICE-LOCAL:** reads App Groups `defaults` ONLY (no iCloud-KVS
-    /// fallback — the default no longer syncs). Reuses the SAME
-    /// `remoteAgentDefaultBackendKVSKey` — a built-in ref's `rawString` == its
-    /// raw value, so legacy installs parse unchanged (migration-free). When no
-    /// local value exists, the **config-sync bootstrap** adopts the first
-    /// configured ref (so a device that received gateways via sync but never ran
-    /// `saveRemoteAgent` doesn't dead-end), persisting it App-Group-locally; an
-    /// unknown / garbage stored value or a no-gateway state falls back to the
-    /// built-in default.
-    func defaultRemoteAgentRef() -> RemoteAgentRef {
-        #if DEBUG
-        if QAMode.isActive {
-            return .builtin(QAMode.defaultBackend)
+    // MARK: - Default gateway resolution
+
+    /// The pointer AS STORED — parse, no repair, no writes.
+    ///
+    /// "What is stored" and "what should route" are different questions, and
+    /// answering the first with `defaultRemoteAgentRef()` is a bug generator:
+    /// that reader drops a dangling custom and can adopt a survivor, so any
+    /// guard consulting it mutates the value it is guarding.
+    /// `storedDefaultBuiltInIfDefined()` already reads raw for this exact reason.
+    private func storedDefaultRef() -> RemoteAgentRef? {
+        defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+            .flatMap(RemoteAgentRef.init(rawString:))
+    }
+
+    /// Whether the Keychain is PROVEN readable right now — the discriminator
+    /// that makes every repair in this file blackout-safe.
+    ///
+    /// WHY IT IS NEEDED AT ALL: `isRemoteAgentSendable` returns true for a
+    /// KEYLESS gateway on its URL alone, with no Keychain query, so a non-empty
+    /// `configuredRemoteAgentRefs()` is NOT proof the device is unlocked. Before
+    /// first unlock a user with five `.bearer` gateways and one keyless one reads
+    /// as "exactly one configured" — and adopting there is precisely the failure
+    /// `GatewayGate.swift` names.
+    ///
+    /// FREE PROOF ONLY: a ref that is already SEND-ABLE and is not keyless must
+    /// have returned a non-empty token inside `isRemoteAgentSendable`, and the
+    /// auth-scheme slot is a plain defaults/KVS read — so this costs nothing
+    /// beyond reads the caller already paid for. There is deliberately no
+    /// second-chance scan: that would be a `SecItem` query per ref on a warm
+    /// path, and `isPendingBearerCandidate` now carries the safety such a scan
+    /// was reaching for. `false` means "unproven", never "closed", and every
+    /// caller takes its non-destructive arm.
+    private func isKeychainProvenReadable(configured: [RemoteAgentRef]) -> Bool {
+        configured.contains { getRemoteAgentAuthScheme(for: $0) != .none }
+    }
+
+    /// Whether `ref` meets every non-Keychain requirement and is waiting only on
+    /// a token that does not read back — i.e. `isRemoteAgentSendable` minus its
+    /// final token step. A ref like this is one iCloud-Keychain delivery away
+    /// from being configured, so a roster that contains one is NOT yet a roster
+    /// we may count.
+    ///
+    /// Deliberately NARROWER than "no other gateway classifies `.incomplete`": it
+    /// reads only URL + required model + scheme + token, so a stray auth-scheme
+    /// slot from an abandoned save cannot satisfy it, and it never consults
+    /// evidence classes. (An `.incomplete` gate would also read account-wide
+    /// state through `rawStoredString`'s KVS fallback, so ONE abandoned setup on
+    /// ANY device would block adoption here forever. Do not re-propose it.)
+    ///
+    /// ACCEPTED COST: a user who really did delete their default's token keeps a
+    /// permanently pending candidate, so automatic adoption never fires for them
+    /// and they are asked to pick instead. That degrades to one tap, never to a
+    /// dead end.
+    private func isPendingBearerCandidate(_ ref: RemoteAgentRef) -> Bool {
+        guard getRemoteAgentURL(for: ref) != nil else { return false }
+        if case .builtin(let backend) = ref,
+           RemoteAgentBackendRegistry.lookup(id: backend).requiresModel,
+           (getRemoteAgentModel(for: ref) ?? "").isEmpty { return false }
+        guard getRemoteAgentAuthScheme(for: ref).requiresToken else { return false }
+        return (getRemoteAgentToken(for: ref) ?? "").isEmpty
+    }
+
+    /// Whether any ref OTHER than `survivor` is one token away from working.
+    /// Scanned over built-ins plus roster customs — INCLUDING a broken stored
+    /// pointer, which is exactly the ref most likely to be waiting on a token
+    /// that has not synced.
+    ///
+    /// Proving one token readable proves the Keychain is OPEN; it never proves
+    /// the Keychain has finished DELIVERING. On a reinstall where one gateway's
+    /// URL arrived over KVS but only another's token arrived over the iCloud
+    /// Keychain, the first is a pending bearer candidate, adoption is refused,
+    /// nothing is persisted, and the verdict is the loud one the user can fix in
+    /// one tap.
+    private func hasPendingBearerCandidate(excluding survivor: RemoteAgentRef) -> Bool {
+        allKnownRemoteAgentRefs().contains { $0 != survivor && isPendingBearerCandidate($0) }
+    }
+
+    /// Every ref this device could possibly hold state for, in the same stable
+    /// order the picker renders: built-ins in `allCases` order, then roster
+    /// customs.
+    private func allKnownRemoteAgentRefs() -> [RemoteAgentRef] {
+        RemoteAgentBackend.allCases.map(RemoteAgentRef.builtin)
+            + customGateways().map { .custom($0.id) }
+    }
+
+    /// Whether ANY half-finished setup residue exists — a pure defaults/KVS scan
+    /// for a stored URL, auth-scheme, model or cert-pin slot on any built-in or
+    /// roster custom. No Keychain read anywhere on this path.
+    ///
+    /// Reads the RAW URL SLOT, never `getRemoteAgentURL(for:)`: a fixed-endpoint
+    /// built-in (OpenRouter) is handed its app-fixed descriptor URL
+    /// unconditionally, so asking the typed getter would report residue on a
+    /// device that has never been touched, and every fresh install would read as
+    /// half-configured forever. The same trap is documented on
+    /// `partiallyConfiguredRemoteAgentRefs()`.
+    private func hasAnyRawSetupResidue() -> Bool {
+        allKnownRemoteAgentRefs().contains { ref in
+            rawStoredString(Constants.remoteAgentURLKey(for: ref)) != nil
+                || rawStoredString(Constants.remoteAgentAuthSchemeKey(for: ref)) != nil
+                || rawStoredString(Constants.remoteAgentModelKey(for: ref)) != nil
+                || rawStoredString(Constants.remoteAgentCertFingerprintKey(for: ref)) != nil
         }
+    }
+
+    /// Display name for a ref, resolved against the live badge roster (which
+    /// unions RETIRED customs, so a default parked on a forgotten custom still
+    /// resolves to its real name instead of a UUID). Never derived from a URL.
+    private func displayName(for ref: RemoteAgentRef) -> String {
+        RemoteAgentRefMetadata.displayName(for: ref, customs: gatewayBadgeRoster())
+    }
+
+    /// Ref-based default pointer (built-in OR custom). **DEVICE-LOCAL:** reads
+    /// App Groups `defaults` ONLY (no iCloud-KVS fallback — the default does not
+    /// sync). Reuses the SAME `remoteAgentDefaultBackendKVSKey` — a built-in
+    /// ref's `rawString` == its raw value, so legacy installs parse unchanged
+    /// (migration-free).
+    ///
+    /// **THIS IS A COMPATIBILITY PROJECTION**, for display and for the roughly
+    /// sixteen legacy holders (CarPlay, the menu bar, the Watch broadcast
+    /// composer, three view models, two conversation views, `SharedInboxRouting`)
+    /// that need a ref and nothing more. It CAN return a ref the resolution
+    /// FORBIDS sending on: `.brokenDefault` projects to the broken ref so nothing
+    /// is silently rerouted, and `.selectionRequired` projects to the built-in
+    /// fallback so those holders have a non-optional value.
+    ///
+    /// Any lane that MINTS must switch on `resolveDefaultGateway()` or
+    /// `newChatPickerSnapshot().resolution` instead — or, when switching is
+    /// awkward, read `defaultRemoteAgentRefIfSendable()`.
+    func defaultRemoteAgentRef() -> RemoteAgentRef { resolveDefaultGateway().ref }
+
+    /// The default ref ONLY when it can actually take a turn — the fail-closed
+    /// reader for anything that cannot conveniently switch on the whole
+    /// resolution.
+    func defaultRemoteAgentRefIfSendable() -> RemoteAgentRef? {
+        let resolution = resolveDefaultGateway()
+        return resolution.canSend ? resolution.ref : nil
+    }
+
+    /// Resolve the device-local "Default for new chats", repairing it only where
+    /// the repair is unambiguous, and REPORTING which of eight situations was
+    /// found. `DefaultGatewayResolution` documents what each verdict obliges a
+    /// surface to do.
+    ///
+    /// COST: the happy path is three defaults reads (the pointer, plus the park
+    /// marker's two-key comparison) plus one `configuredRemoteAgentRefs()` pass,
+    /// whose per-ref reads are ordered cheapest-first and short-circuit.
+    /// `remoteAgentInventory()` is never called
+    /// from this path — its own doc calls it the cold-path classifier that costs
+    /// a `SecItem` query per ref, and this function runs on window appear,
+    /// conversation open, menu-bar arm, CarPlay, share-target and every headless
+    /// mint.
+    ///
+    /// Adoption is IDEMPOTENT — a second call takes the fast path — so a repair
+    /// produces at most one `.settingsDidChangeRemotely` post. For that reason,
+    /// never call this from inside a handler for that same notification.
+    func resolveDefaultGateway() -> DefaultGatewayResolution {
+        resolveDefaultGateway(configured: nil)
+    }
+
+    /// The resolver core. `configured` is supplied by `newChatPickerSnapshot()`,
+    /// which needs the array it publishes and the array the verdict was
+    /// classified against to be literally the same value rather than two reads.
+    ///
+    /// ORDERING CONSTRAINT: on the no-argument path the dangling-custom drop must
+    /// still run BEFORE the configured pass, so the pass never classifies against
+    /// a pointer this call is about to delete. The pre-computed path accepts that
+    /// the array was sampled a few statements earlier in the SAME actor turn with
+    /// no suspension in between — which is the property that actually matters.
+    private func resolveDefaultGateway(configured precomputed: [RemoteAgentRef]?) -> DefaultGatewayResolution {
+        #if DEBUG
+        // A QA rig's gateways are synthetic and complete by construction, and
+        // `-ConduckQADefaultBackend` is authoritative — nothing below may
+        // second-guess it or write to the founder's real App Group.
+        if QAMode.isActive { return .usable(.builtin(QAMode.defaultBackend)) }
         #endif
         ensureKeychainMigrated()
         ensureRemoteAgentMigrated()
         ensureDefaultBackendDeviceLocalMigrated()
+
         // DEVICE-LOCAL: App-Group only. No iCloud-KVS read fallback (a late KVS
         // write from another device must NOT re-globalize this device's default).
+        var stored = storedDefaultRef()
+
+        // DANGLING CUSTOM DROP. Only a CUSTOM can dangle, because only a custom
+        // can stop existing; a built-in with nothing behind it is a legitimate
+        // "set this up" pointer, and `deleteCustomGateway` deliberately parks the
+        // pointer on one so the user CHOOSES their next gateway rather than
+        // inheriting one.
         //
-        // SELF-HEALS: a pointer at a gateway with NOTHING stored behind it (the
-        // user forgot it here, or a peer's Forget synced in) is dropped, and the
-        // bootstrap below picks a gateway that actually exists. Returning the
-        // dangling ref instead left every headless capture minting onto a
-        // gateway that throws `remoteAgentNotConfigured`, with nothing on screen
-        // explaining why.
-        //
-        // The test is `hasStoredRemoteAgentEvidence`, NOT
-        // `configuredRemoteAgentRefs().contains` — deliberately weaker. The
-        // configured predicate fails CLOSED on a nil token, and nil means "no
-        // token OR the Keychain read failed". Secrets are
-        // `kSecAttrAccessibleAfterFirstUnlock`, so a headless capture after a
-        // reboot and before the first unlock reads every gateway as
-        // unconfigured; healing on that verdict would DELETE the user's default
-        // pointer during a transient failure and silently re-point them at some
-        // other gateway once the device unlocks. Evidence is App-Group-backed
-        // (URL, or model for a fixed-endpoint built-in) and cannot be faked
-        // absent by a locked Keychain.
-        if let local = defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey),
-           let ref = RemoteAgentRef(rawString: local) {
-            // A BUILT-IN pointer is ALWAYS honoured, evidence or not. Built-ins
-            // cannot be deleted, so an unconfigured one is a legitimate "set this
-            // up" state, not a dangling reference — and healing it is actively
-            // harmful: `deleteCustomGateway` deliberately re-points at a built-in
-            // so the user CHOOSES their next gateway rather than inheriting one.
-            // Treating that fresh pointer as dangling sent the adopt-first
-            // bootstrap below straight to the surviving custom, silently moving
-            // every subsequent message to a different server. Only a CUSTOM ref
-            // can dangle, because only a custom can stop existing.
-            if ref.isBuiltin || hasStoredRemoteAgentEvidence(ref) { return ref }
+        // Keyed on EVIDENCE, never on send-ability: evidence is App-Group-backed
+        // and a locked Keychain cannot fake it absent, so a pre-first-unlock read
+        // can never delete a pointer that has no undo. The send-ability predicate
+        // fails CLOSED on a nil token, and nil means "no token OR the Keychain
+        // read failed".
+        if let ref = stored, !ref.isBuiltin, !hasStoredRemoteAgentEvidence(ref) {
             defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+            stored = nil
         }
-        // Config-sync bootstrap: gateway CONFIGS still sync, but the default does
-        // not. A device that received configs via sync (and never ran the
-        // first-gateway bootstrap in `saveRemoteAgent`) would otherwise dead-end
-        // on the unconfigured `.openclaw` fallback. So when no local default
-        // exists but a configured gateway does, adopt the first configured ref as
-        // THIS device's local default (App-Group write only — never KVS).
-        if let firstConfigured = configuredRemoteAgentRefs().first {
-            defaults.set(firstConfigured.rawString, forKey: Constants.remoteAgentDefaultBackendKVSKey)
-            return firstConfigured
+
+        // ONE computation, threaded through every branch below and out into
+        // `newChatPickerSnapshot()`. Two reads could classify against two
+        // different moments.
+        let configured = precomputed ?? configuredRemoteAgentRefs()
+
+        // Asked HERE, on every resolve, for two reasons. It rides out inside the
+        // `.brokenDefault` verdict, so no consumer can hold the verdict without
+        // the flag. And it is also where the marker RETIRES — the check clears
+        // it once the pointer joins `configured` — so keeping it on the common
+        // path means a placeholder that became a working gateway stops reading
+        // as a placeholder at the first resolve rather than at the first
+        // new-chat picker. Ordered after the dangling-custom drop, so it can
+        // never compare against a pointer this call is about to delete.
+        let pointerIsParked = isDefaultPointerParked(configured: configured)
+
+        // FAST PATH — membership of the CONFIGURED SET, not a bare
+        // `isRemoteAgentSendable` call: a custom the user retired from the roster
+        // can still be sendable by its surviving slots, and it must never be
+        // treated as a live default.
+        if let ref = stored, configured.contains(ref) { return .usable(ref) }
+
+        if configured.isEmpty {
+            return zeroConfiguredVerdict(
+                pointer: stored ?? .builtin(Constants.remoteAgentDefaultBackendDefault)
+            )
         }
-        return .builtin(Constants.remoteAgentDefaultBackendDefault)
+
+        let keychainReadable = isKeychainProvenReadable(configured: configured)
+
+        if let broken = stored {
+            // HAZARD — the pointer might not really be broken. With readability
+            // unproven we cannot tell a dead default from a locked one, and
+            // accusing a healthy default is a lie told by a locked device.
+            if !keychainReadable,
+               getRemoteAgentAuthScheme(for: broken) != .none,
+               hasStoredRemoteAgentEvidence(broken) {
+                return .readingUnreliable(pointer: broken)
+            }
+            if configured.count == 1, let only = configured.first, keychainReadable,
+               !hasPendingBearerCandidate(excluding: only) {
+                adoptDefault(only, replacing: broken)
+                return .adopted(ref: only, replacing: broken)
+            }
+            return .brokenDefault(broken: broken, candidates: configured,
+                                  pointerIsParked: pointerIsParked)
+        }
+
+        // NO STORED POINTER. Adopting a single working gateway overrides no user
+        // choice — there is none stored — so it is silent. Anything less certain
+        // is handed back to the user: a pointer the device invented is
+        // indistinguishable from one the user chose, and only the user can tell
+        // them apart. PERSIST NOTHING on the `.selectionRequired` arm.
+        if configured.count == 1, let only = configured.first, keychainReadable,
+           !hasPendingBearerCandidate(excluding: only) {
+            defaults.set(only.rawString, forKey: Constants.remoteAgentDefaultBackendKVSKey)
+            return .bootstrapped(only)
+        }
+        return .selectionRequired(candidates: configured)
+    }
+
+    /// Zero gateways can send. Split for REPORTING only — every arm leaves the
+    /// stored pointer exactly where it was, because zero-configured is the one
+    /// reading a Keychain blackout can manufacture out of a healthy device.
+    ///
+    /// FREE ALGEBRA: with `configured` empty, any ref that clears every
+    /// non-Keychain requirement necessarily has an unreadable or absent token — a
+    /// readable one would have made it sendable — so `isPendingBearerCandidate`
+    /// is settled here by its pure defaults/KVS half. A truly fresh install has
+    /// no such ref, its URL guard short-circuits before any Keychain query, and
+    /// the verdict is the honest `.nothingConfigured` at zero `SecItem` cost.
+    private func zeroConfiguredVerdict(pointer: RemoteAgentRef) -> DefaultGatewayResolution {
+        if allKnownRemoteAgentRefs().contains(where: isPendingBearerCandidate) {
+            return .readingUnreliable(pointer: pointer)
+        }
+        return hasAnyRawSetupResidue()
+            ? .setupUnfinished(pointer: pointer)
+            : .nothingConfigured(pointer: pointer)
+    }
+
+    // MARK: - Default-gateway adoption record (App Group ONLY — never iCloud KVS)
+
+    /// Persist an adoption and record it, in that order.
+    ///
+    /// Reuses `setDefaultRemoteAgentRef` so adoption inherits the documented
+    /// programmatic re-point semantics (clears the active-conversation pointer so
+    /// the next headless capture mints fresh on the adopted gateway; leaves the
+    /// sticky last-used pointer alone) instead of re-deriving them. Deliberately
+    /// does NOT post — the setter already did, via `clearActiveConversation()`.
+    private func adoptDefault(_ adopted: RemoteAgentRef, replacing previous: RemoteAgentRef) {
+        // Names captured BEFORE the write, while the roster still describes both.
+        let notice = DefaultGatewayAdoptionNotice(
+            adoptedRef: adopted, adoptedName: displayName(for: adopted),
+            previousRef: previous, previousName: displayName(for: previous)
+        )
+        setDefaultRemoteAgentRef(adopted)
+        #if DEBUG
+        // A QA run must not leave a notice sitting in the real App Group.
+        if QAMode.isActive { return }
+        #endif
+        if let data = try? JSONEncoder().encode(notice) {
+            defaults.set(data, forKey: Constants.remoteAgentAdoptedDefaultNoticeKey)
+        }
+    }
+
+    /// The pending repair notice, WITHOUT clearing it.
+    ///
+    /// Durable rather than in-memory because adoption usually happens in a
+    /// headless process the user never looks at, and the screen that will tell
+    /// them runs minutes later in a different one.
+    ///
+    /// Peek-only on purpose: several surfaces may legitimately describe the same
+    /// repair, and each dismissal is idempotent — a read-and-clear primitive
+    /// would let whichever screen happened to render first swallow it.
+    func pendingDefaultAdoptionNotice() -> DefaultGatewayAdoptionNotice? {
+        guard let data = defaults.data(forKey: Constants.remoteAgentAdoptedDefaultNoticeKey) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(DefaultGatewayAdoptionNotice.self, from: data)
+    }
+
+    /// The user has seen the repair, or has made the question moot. Idempotent.
+    func acknowledgeDefaultAdoptionNotice() {
+        defaults.removeObject(forKey: Constants.remoteAgentAdoptedDefaultNoticeKey)
     }
 
     /// Set the ref-based default pointer (built-in OR custom), DEVICE-LOCAL —
@@ -3512,8 +3780,21 @@ actor SettingsManager {
     /// behalf, and the gateway the user last worked on may be a different,
     /// still-configured one that they never asked to give up. When the USER picks
     /// a default, call `applyUserChosenDefault` instead.
+    ///
+    /// The no-op guard compares the RAW STORED STRING, for two reasons and the
+    /// first is load-bearing:
+    ///
+    ///   - `resolveDefaultGateway()` CALLS THIS METHOD to persist an adoption, so
+    ///     a guard that resolved would re-enter the resolver.
+    ///   - "Is the stored pointer already this ref?" is the question this guard
+    ///     actually asks. Against a RESOLVED value, setting a ref the resolver
+    ///     merely INFERRED reads as unchanged — so the pointer is never written
+    ///     down and `clearActiveConversation()` never runs, leaving a Forget
+    ///     fallback with a live pointer into the forgotten gateway's thread.
     func setDefaultRemoteAgentRef(_ newRef: RemoteAgentRef) {
-        guard newRef != defaultRemoteAgentRef() else { return }
+        guard newRef.rawString != defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey) else {
+            return
+        }
         defaults.set(newRef.rawString, forKey: Constants.remoteAgentDefaultBackendKVSKey)
         // Re-pointing the default gateway switches THIS DEVICE's HEADLESS captures
         // (Action Button / macOS menu bar / CarPlay seed / Watch-if-following) to
@@ -3544,12 +3825,112 @@ actor SettingsManager {
     ///     `selectedRef` and `pendingNewConversationRef` would both stay on the
     ///     retired gateway and the very next send would mint there, so the setting
     ///     would be not merely ignored-looking but actually ignored.
+    ///
+    /// This is THE canonical user-choice writer — any UI where the USER picks a
+    /// default calls it.
+    ///
+    /// `changed` reads the RAW stored string for the same reason the setter's
+    /// guard does, plus one of its own: asking the resolver here would let a
+    /// redundant re-tap trigger an ADOPTION as a side effect of merely being
+    /// observed. And `changed` must describe exactly the fact the setter's guard
+    /// tests, or the two can disagree about whether a post is owed.
     func applyUserChosenDefault(_ newRef: RemoteAgentRef) {
         clearLastUsedRemoteAgentRef()
-        let changed = newRef != defaultRemoteAgentRef()
+        // Whatever the pointer becomes, it is now the user's own. The by-value
+        // comparison covers every ref they could pick except the one the app
+        // parked; clearing outright covers that one too.
+        defaults.removeObject(forKey: Constants.remoteAgentParkedDefaultRefKey)
+        // The user has just made the choice themselves — an announcement that the
+        // app made one on their behalf is now stale news about a pointer that is
+        // gone.
+        acknowledgeDefaultAdoptionNotice()
+        let changed = newRef.rawString != defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey)
         // Posts `.settingsDidChangeRemotely` itself, via `clearActiveConversation()`.
         setDefaultRemoteAgentRef(newRef)
         if !changed { postSettingsDidChangeRemotely() }
+    }
+
+    /// Re-point the default after `ref` was forgotten. THE single rule; both the
+    /// custom path (`deleteCustomGateway`) and the built-in path
+    /// (`GatewayForget`) call it so they cannot drift.
+    ///
+    /// Parking the pointer on a built-in exists so the user CHOOSES their next
+    /// gateway rather than inheriting one — but with a SINGLE survivor there is
+    /// nothing to choose between, and parking dead-ends every picker-less lane
+    /// (Action Button / CarPlay / the wrist) on a gateway with nothing behind it
+    /// while one gateway works fine. The park's own objection was SILENCE: this
+    /// adoption is announced, records the gateway it replaced, and is one tap
+    /// from being undone. With two or more survivors the park holds unchanged,
+    /// and the blackout arm is non-destructive by construction.
+    ///
+    /// `hasPendingBearerCandidate(excluding:)` can still see the forgotten ref
+    /// while its slots are mid-wipe; that is acceptable, because it fails toward
+    /// asking rather than guessing.
+    func repointDefaultAfterForget(of ref: RemoteAgentRef) {
+        guard storedDefaultRef() == ref else { return }
+        let survivors = configuredRemoteAgentRefs().filter { $0 != ref }
+        if survivors.count == 1, let only = survivors.first,
+           isKeychainProvenReadable(configured: survivors),
+           !hasPendingBearerCandidate(excluding: only) {
+            // Names the DELETED gateway, which is why the adoption happens HERE
+            // and is not left to the next resolve — by then the roster no longer
+            // describes it.
+            adoptDefault(only, replacing: ref)
+        } else {
+            let fallback = survivors.first(where: { $0.isBuiltin })
+                ?? .builtin(Constants.remoteAgentDefaultBackendDefault)
+            setDefaultRemoteAgentRef(fallback)
+            // Record WHO parked it. The park is a placeholder, not a choice, and
+            // a surface that called this gateway "your default AI" would blame
+            // the user for a pointer the app wrote one step after they forgot a
+            // different one. Written AFTER the setter, which is the only writer
+            // that could disagree about the value.
+            defaults.set(fallback.rawString, forKey: Constants.remoteAgentParkedDefaultRefKey)
+        }
+    }
+
+    /// Whether the stored default pointer is one the APP parked rather than one
+    /// the user chose. Compared BY VALUE against the pointer, so any later
+    /// re-point answers false without anything having to remember to clear the
+    /// marker; an absent marker is the user's own choice.
+    ///
+    /// A park has a SECOND exit, and it is the one the user is actually steered
+    /// towards: every surface that speaks about a parked pointer says the
+    /// gateway is not set up here, and finishing that setup writes no pointer at
+    /// all. So membership of `configured` retires the marker outright. Cleared
+    /// rather than merely reported false, because a gateway that can send must
+    /// not read as a placeholder again if it later breaks.
+    ///
+    /// THAT EXIT IS SEND-ABILITY, NOT INTENT, and the distinction is real: this
+    /// pointer becomes configured the moment a URL and a token exist for it, and
+    /// both can arrive with nothing typed on this device — gateway definitions
+    /// sync, and an iCloud Keychain token finishes downloading. An unattended
+    /// sync can therefore retire the marker. That is deliberate. The marker's
+    /// only job is to stop a REFUSAL from naming a gateway nobody picked, and a
+    /// pointer that can send produces no refusal to name anything in. The
+    /// alternative — a marker only an explicit pick can clear — would leave a
+    /// working default labelled "Not chosen yet" indefinitely, on a device where
+    /// every capture lands on it. The one exit that does imply intent is
+    /// `applyUserChosenDefault`, which clears the marker outright.
+    ///
+    /// I3: `configured` is fail-closed, so an unreadable Keychain reports no
+    /// membership and the marker STANDS. That is the safe direction — keeping a
+    /// placeholder costs the user an unnamed sentence, while dropping it on a
+    /// blackout would let a later surface blame them by name for a pointer they
+    /// never chose.
+    ///
+    /// - Parameter configured: the set the caller's snapshot was classified
+    ///   against, so the marker and the verdict describe one instant.
+    private func isDefaultPointerParked(configured: [RemoteAgentRef]) -> Bool {
+        guard let parked = defaults.string(forKey: Constants.remoteAgentParkedDefaultRefKey),
+              parked == defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey) else {
+            return false
+        }
+        if let ref = RemoteAgentRef(rawString: parked), configured.contains(ref) {
+            defaults.removeObject(forKey: Constants.remoteAgentParkedDefaultRefKey)
+            return false
+        }
+        return true
     }
 
     // MARK: - Apple Watch default override (App-Group ONLY — never iCloud KVS)
@@ -3586,11 +3967,49 @@ actor SettingsManager {
         postSettingsDidChangeRemotely()
     }
 
-    /// The default ref the WATCH should use for headless captures = the override
-    /// (iff still configured) else the iPhone's device-local default. This is the
-    /// value that rides the broadcast envelope's `defaultBackendRef` slot.
+    /// The ref half of `watchEffectiveDefault()`, for readers that only need to
+    /// know where the wrist points. Courier sites want both halves and call
+    /// `watchEffectiveDefault()` instead.
     func watchEffectiveDefaultRef() -> RemoteAgentRef {
-        watchDefaultOverrideRef() ?? defaultRemoteAgentRef()
+        watchEffectiveDefault().ref
+    }
+
+    /// The default the WATCH uses for headless captures — the override (iff still
+    /// configured) else the iPhone's device-local default — AND whether it is a
+    /// gateway the user actually CHOSE. Resolved in one pass so the two can never
+    /// describe different moments. Both halves ride the broadcast envelope, in
+    /// its `defaultBackendRef` and `defaultBackendChosen` slots.
+    ///
+    /// Resolving the phone's default here CAN adopt, and that is intended — the
+    /// wrist should follow a healed default. The notice stays on the phone, where
+    /// the repair happened and where there is a screen to describe it.
+    ///
+    /// Do NOT change what the ref is for a broken default. Leaving the broken ref
+    /// here means the wrist refuses honestly rather than being silently rerouted
+    /// to a gateway the user never picked.
+    ///
+    /// `chosen` is false for the two states where no gateway was picked, and it
+    /// rides the envelope's `defaultBackendChosen` slot because the ref slot
+    /// cannot carry the distinction:
+    ///
+    /// - `.selectionRequired`, where the ref is the compatibility projection
+    ///   rather than a stored pointer. The projected fallback may itself be
+    ///   configured, and a wrist that read it as chosen would send every headless
+    ///   capture to a gateway the user never picked — sealing each conversation
+    ///   to it (I1).
+    /// - a PARKED pointer, which the app wrote one step after the user forgot a
+    ///   different gateway. It is stored, so it looks like a choice, but nobody
+    ///   made it; the wrist speaks its name in a refusal, and naming a
+    ///   placeholder blames the user for a decision they never took. False here
+    ///   routes the wrist to the same unnamed sentence the phone, CarPlay and
+    ///   the headless lanes use.
+    ///
+    /// A Watch-specific override IS a choice, so it answers true unconditionally.
+    func watchEffectiveDefault() -> (ref: RemoteAgentRef, chosen: Bool) {
+        if let override = watchDefaultOverrideRef() { return (override, true) }
+        let resolution = resolveDefaultGateway()
+        if case .selectionRequired = resolution { return (resolution.ref, false) }
+        return (resolution.ref, !resolution.pointerIsParked)
     }
 
     // MARK: - Last-used gateway (App-Group ONLY — never iCloud KVS)
@@ -3691,22 +4110,34 @@ actor SettingsManager {
 
     /// Everything the new-chat gateway picker needs, read in ONE actor turn.
     ///
-    /// The four values MUST describe one moment. Read separately, each `await` is a
+    /// The values MUST describe one moment. Read separately, each `await` is a
     /// suspension the picker can be re-seeded across: a refresh could sample the
     /// default, suspend, have Settings re-point it and clear last-used underneath,
     /// then resume and seed the value it read before the change — which the next
-    /// send would seal. `defaultRemoteAgentRef()` can also WRITE (its config-sync
-    /// bootstrap), so the reads are not even side-effect-free.
+    /// send would seal. Resolving can also WRITE (an adoption, the silent
+    /// single-gateway bootstrap, or the retirement of a park marker whose
+    /// gateway can send again), so the reads are not even side-effect-free —
+    /// another reason they must be sampled together.
     ///
-    /// Mirrors `remoteAgentSnapshot()` / `activeSTTSnapshot()`. All four component
-    /// calls are synchronous and actor-isolated, so this composes with no interior
+    /// Mirrors `remoteAgentSnapshot()` / `activeSTTSnapshot()`. Every component
+    /// call is synchronous and actor-isolated, so this composes with no interior
     /// suspension and no reentrancy.
+    ///
+    /// The configured set is computed ONCE and handed to the resolver, so
+    /// `configuredRefs` and the array the verdict was classified against are
+    /// literally the same value rather than two reads. `defaultRef` is exactly
+    /// `resolution.ref`, kept as its own field so the existing seed ladder and
+    /// its callers are untouched.
     func newChatPickerSnapshot() -> NewChatPickerSnapshot {
-        NewChatPickerSnapshot(
-            configuredRefs: configuredRemoteAgentRefs(),
+        let configured = configuredRemoteAgentRefs()
+        let resolution = resolveDefaultGateway(configured: configured)
+        return NewChatPickerSnapshot(
+            configuredRefs: configured,
             badgeRoster: gatewayBadgeRoster(),
-            defaultRef: defaultRemoteAgentRef(),
-            lastUsedRef: lastUsedRemoteAgentRef()
+            defaultRef: resolution.ref,
+            lastUsedRef: lastUsedRemoteAgentRef(),
+            resolution: resolution,
+            pendingAdoptionNotice: pendingDefaultAdoptionNotice()
         )
     }
 
@@ -3845,17 +4276,20 @@ actor SettingsManager {
     /// Delete a custom gateway: clears its per-ref URL / token / cert slots AND
     /// its roster entry. Conversations bound to it then resolve nil →
     /// `remoteAgentNotConfigured` (NO reroute). If it was the default pointer,
-    /// fall the default back to the first configured BUILT-IN (never silently to
-    /// another custom), else the built-in default.
+    /// `repointDefaultAfterForget(of:)` decides where the default lands: a SINGLE
+    /// surviving send-able gateway is adopted and announced; two or more park on
+    /// a built-in so the user chooses rather than inherits.
     func deleteCustomGateway(id: UUID) {
         let ref = RemoteAgentRef.custom(id)
-        // CAPTURE THE POINTER FIRST. Every clear below strips this ref's stored
-        // evidence, and `defaultRemoteAgentRef()` self-heals a pointer whose ref
-        // has no evidence left — so asking it AFTER the purge always returns
-        // some other gateway, the `== ref` test below never fires, and the
-        // built-in-only fallback (plus its `clearActiveConversation()`) is dead
-        // code. Reading it here is the only way the contract above holds.
-        let wasDefault = defaultRemoteAgentRef() == ref
+        // CAPTURE THE POINTER FIRST, and read it RAW. Every clear below strips
+        // this ref's stored evidence, and the RESOLVER drops a pointer whose
+        // custom ref has no evidence left — so asking it AFTER the purge always
+        // returns some other gateway, the `== ref` test below never fires, and
+        // the re-point (plus its `clearActiveConversation()`) is dead code.
+        // Asking the resolver at all is also what lets the pointer move under
+        // this delete's feet: it can adopt a survivor as a side effect of merely
+        // being read. The raw stored string is the question this line is asking.
+        let wasDefault = storedDefaultRef() == ref
         setRemoteAgentURL(nil, for: ref)
         try? clearRemoteAgentToken(for: ref)
         setRemoteAgentCertFingerprint(nil, for: ref)
@@ -3889,9 +4323,7 @@ actor SettingsManager {
         purgeGatewayOwnedSlots(for: id)
 
         if wasDefault {
-            let fallback = configuredRemoteAgentRefs().first(where: { $0.isBuiltin })
-                ?? .builtin(Constants.remoteAgentDefaultBackendDefault)
-            setDefaultRemoteAgentRef(fallback)
+            repointDefaultAfterForget(of: ref)
         }
     }
 
@@ -4317,12 +4749,12 @@ actor SettingsManager {
     /// BEFORE the mirrors run.
     ///
     /// Reads the raw stored string rather than calling `defaultRemoteAgentRef()`:
-    /// that getter WRITES (its config-sync bootstrap persists an adopted pointer)
-    /// and runs the device-local migration, and neither belongs in a detection
-    /// step that fires on every unrelated language or voice push. Built-ins only —
-    /// a dangling CUSTOM pointer is already dropped by `defaultRemoteAgentRef()`
-    /// itself; the built-in exemption there is precisely what leaves this case
-    /// unhandled.
+    /// that reader resolves, and resolving WRITES (an adoption, or the silent
+    /// single-gateway bootstrap) and runs the device-local migration — neither of
+    /// which belongs in a detection step that fires on every unrelated language
+    /// or voice push. Built-ins only — a dangling CUSTOM pointer is already
+    /// dropped by the resolver itself; the built-in exemption there is precisely
+    /// what leaves this case unhandled.
     private func storedDefaultBuiltInIfDefined() -> RemoteAgentRef? {
         guard let raw = defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey),
               let ref = RemoteAgentRef(rawString: raw),
@@ -4780,6 +5212,9 @@ actor SettingsManager {
                 timestamp: Date().timeIntervalSinceReferenceDate,
                 sessionPolicy: watchEffectiveSessionContinuationPolicy().rawValue,
                 clearAll: true
+                // `defaultBackendChosen` is deliberately omitted: a teardown says
+                // nothing about a choice, and the wrist's own empty-roster arm
+                // owns the copy for this state.
             )
         }
         // The phone has gateways to courier again, so the teardown latch has
@@ -4797,6 +5232,10 @@ actor SettingsManager {
         // — a single broadcast carries one logical stamp, not N drifting `Date()`
         // reads).
         let now = Date().timeIntervalSinceReferenceDate
+        // ONE resolve for both default slots: the ref and "is it a choice" must
+        // describe the same moment, or the wrist could read a chosen flag beside
+        // a ref from a different verdict.
+        let watchDefault = watchEffectiveDefault()
         let subEnvelopes: [RemoteAgentBroadcastEnvelope] = configured.compactMap { ref in
             guard let snapshot = remoteAgentSnapshot(for: ref) else {
                 return nil
@@ -4869,13 +5308,17 @@ actor SettingsManager {
             // set a Watch-specific gateway from the iPhone (the Watch keeps no
             // settings UI). `watchDefaultOverrideRef()` self-heals a dangling
             // override, so this never couriers a not-configured ref.
-            defaultBackendRef: watchEffectiveDefaultRef().rawString,
+            defaultBackendRef: watchDefault.ref.rawString,
             timestamp: now,
             // The Watch-EFFECTIVE session-continuation policy (its iPhone-set
             // override if any, else the iPhone's own per-device policy). The
             // wrist follows the iPhone unless the user set a Watch-specific TTL
             // from the iPhone. Replaces the old KVS courier for this value.
-            sessionPolicy: watchEffectiveSessionContinuationPolicy().rawValue
+            sessionPolicy: watchEffectiveSessionContinuationPolicy().rawValue,
+            // Sent only as `false`, and only when the iPhone has no chosen
+            // default at all — without it the wrist reads the compatibility
+            // fallback as a choice and sends there.
+            defaultBackendChosen: watchDefault.chosen ? nil : false
         )
     }
 
@@ -4935,40 +5378,88 @@ actor SettingsManager {
         migrateDefaultBackendToDeviceLocal()
     }
 
+    /// Re-attempt a legacy-default seed that came back inconclusive. The
+    /// in-process latch holds the migration to one attempt per launch, which is
+    /// right for a migration and wrong for a seed that is WAITING for iCloud.
+    /// Cheap: the persistent flag short-circuits the moment the question is
+    /// settled.
+    private func retryDeferredDefaultSeedIfPending() {
+        guard !defaults.bool(forKey: Constants.remoteAgentDefaultBackendDeviceLocalMigratedKey) else {
+            return
+        }
+        didAttemptDefaultBackendDeviceLocalMigration = false
+        ensureDefaultBackendDeviceLocalMigrated()
+    }
+
     /// One-time migration of the default-backend pointer from synced
-    /// (App Groups + iCloud KVS, old behavior) to **device-local** (App Groups
-    /// only). LOCAL-WINS:
+    /// (App Groups + iCloud KVS) to **device-local** (App Groups only).
+    /// LOCAL-WINS:
     ///   1. App Group already holds a valid `RemoteAgentRef.rawString` → keep it
     ///      (this device's existing choice). Mark migrated.
-    ///   2. Else the legacy synced iCloud-KVS value (a valid ref) → copy it down
-    ///      ONCE as the seed (a wiped/reinstalled device restores the user's last
-    ///      synced default). Mark migrated.
-    ///   3. Else leave absent → the config-sync bootstrap in
-    ///      `defaultRemoteAgentRef()` / the `.openclaw` fallback handle it.
+    ///   2. Else the legacy synced iCloud-KVS fossil, but ONLY when the gateway
+    ///      it names can SEND at the moment it is read → copy it down once as the
+    ///      seed. Mark migrated.
+    ///   3. Else inconclusive → write nothing, and DO NOT mark migrated.
+    ///
+    /// WHY ARM 2 IS CONDITIONAL: nothing ever deletes that KVS value, so every
+    /// fresh install on the account inherits whatever the default was on some
+    /// device some time ago — including a gateway that is not set up any more.
+    /// That is exactly how a restored iPad comes back pointing at a dead gateway
+    /// beside five working ones, and how the pointer then survives forever.
+    /// SEND-ABILITY, not evidence, is the bar here because nothing is DELETED on
+    /// this path — the only question is whether to write a pointer down, and a
+    /// pointer that cannot send is worth less than no pointer at all.
+    ///
+    /// WHY ARM 3 DOES NOT BURN THE ONE-SHOT: on a fresh install this runs on the
+    /// FIRST default read, which easily precedes iCloud's initial download, so a
+    /// perfectly good default reads dead before its URL and token have arrived.
+    /// Burning the flag there would discard the user's real choice permanently.
+    ///
+    /// Leaving the flag unset is SELF-LIMITING, not an open loop: the moment this
+    /// device acquires a pointer by ANY route (the silent single-gateway
+    /// bootstrap in the resolver, the first-gateway bootstrap in
+    /// `validateAndSaveRemoteAgent`, the user picking one) arm 1 fires and burns
+    /// it. The in-process `didAttemptDefaultBackendDeviceLocalMigration` latch
+    /// still holds it to one attempt per process, except where
+    /// `retryDeferredDefaultSeedIfPending()` deliberately re-arms it.
+    ///
+    /// ACCEPTED LIMIT: KVS sync and iCloud Keychain sync are independent
+    /// channels, so a token that lands after the last KVS notification leaves the
+    /// flag unset with no further trigger. That degrades to `.selectionRequired`
+    /// — the user is asked to choose — which is the designed behaviour, not a
+    /// defect.
     ///
     /// Tolerant decode — an empty / unknown stored value never overwrites; a
     /// syntactically valid `custom_<uuid>` is preserved even if the roster
     /// hasn't hydrated yet. NEVER clears the active-conversation pointer (this is
     /// not a user re-point; the resolve-time default re-check forces a fresh
     /// thread if the pointer is stale). NEVER gates on `kvsSchemaVersion`.
+    ///
+    /// ORDERING: this must keep running AFTER `ensureKeychainMigrated()` /
+    /// `ensureRemoteAgentMigrated()`, so `isRemoteAgentSendable` sees the per-ref
+    /// slots those migrations seed. Do not reorder.
     private func migrateDefaultBackendToDeviceLocal() {
         guard !defaults.bool(forKey: Constants.remoteAgentDefaultBackendDeviceLocalMigratedKey) else {
             return
         }
-        // 1. Local-wins.
+        // 1. Local-wins: this device's own choice. The arm every existing device
+        //    takes.
         if let local = defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey),
            RemoteAgentRef(rawString: local) != nil {
             defaults.set(true, forKey: Constants.remoteAgentDefaultBackendDeviceLocalMigratedKey)
             return
         }
-        // 2. Seed once from the legacy synced value.
+        // 2. Legacy synced fossil — inherited ONLY when the gateway it names can
+        //    send right now.
         if iCloudAvailable,
            let stored = iCloudStore.string(forKey: Constants.remoteAgentDefaultBackendKVSKey),
-           RemoteAgentRef(rawString: stored) != nil {
+           let ref = RemoteAgentRef(rawString: stored),
+           isRemoteAgentSendable(ref) {
             defaults.set(stored, forKey: Constants.remoteAgentDefaultBackendKVSKey)
+            defaults.set(true, forKey: Constants.remoteAgentDefaultBackendDeviceLocalMigratedKey)
+            return
         }
-        // 3. Else leave absent (bootstrap / fallback handles it).
-        defaults.set(true, forKey: Constants.remoteAgentDefaultBackendDeviceLocalMigratedKey)
+        // 3. Inconclusive — no pointer, NO FLAG.
     }
 
     /// One-time, guarded migration copying the LEGACY single-slot remote-agent
@@ -5541,6 +6032,14 @@ actor SettingsManager {
         if iCloudStore.object(forKey: Constants.kvsSchemaVersionKey) == nil {
             iCloudStore.set(Constants.kvsSchemaVersion, forKey: Constants.kvsSchemaVersionKey)
         }
+
+        // LAST. The legacy-default seed only inherits a fossil whose gateway can
+        // SEND, so it has to run after every hydration loop above — the very
+        // reads that make a restored device's gateways send-able in the first
+        // place. An earlier attempt in this launch may have come back
+        // inconclusive and left its one-shot flag unset; this is where that gets
+        // a second look, with iCloud's initial download already applied.
+        retryDeferredDefaultSeedIfPending()
     }
 
     // MARK: - Per-uuid key families
@@ -6092,12 +6591,13 @@ actor SettingsManager {
         // exempt from its self-heal by design), and every headless capture minted
         // onto a gateway that could not take the turn.
         //
-        // The remedy is to DROP the pointer, which is exactly what this method's
-        // own resolver already does to a dangling CUSTOM pointer
-        // (`defaultRemoteAgentRef()`, the `removeObject` beside the built-in
-        // exemption) — the exemption is the only reason a built-in never got the
-        // same treatment. With the key gone, the config-sync bootstrap there
-        // adopts the first gateway that can actually send, on the next read.
+        // The remedy is to DROP the pointer, which is exactly what
+        // `resolveDefaultGateway()` already does to a dangling CUSTOM pointer —
+        // the built-in exemption there is the only reason a built-in never got
+        // the same treatment. With the key gone, the next resolve reports
+        // `.selectionRequired` and the user is asked to pick, UNLESS exactly one
+        // gateway can send under the safety gates, in which case it is adopted
+        // silently.
         //
         // Dropping rather than re-pointing HERE is what makes this safe to run
         // unattended:
@@ -6130,19 +6630,31 @@ actor SettingsManager {
            let ref = defaultBuiltInWasDefined,
            !hasSyncedRemoteAgentDefinition(ref) {
             // Settle the legacy device-local migration FIRST, while the pointer it
-            // reads is still here. That migration seeds an absent local pointer
-            // from the legacy SYNCED copy in KVS — which nothing ever removes — so
-            // dropping the key while it is still pending would hand the dead
-            // built-in straight back on the next read, and the transition that
-            // detected the deletion can never recur. Worse than a no-op: the
-            // session below would have been cleared for nothing. Running it now
-            // takes its local-wins arm and marks it done. Placed here rather than
-            // in the capture above so it stays behind the file-server seeding
-            // step, whose ordering is pinned by its own doc.
+            // reads is still here. It takes its local-wins arm and marks itself
+            // done, which is the correct and cheapest outcome available at this
+            // instant.
+            //
+            // A hand-back of the dead built-in is impossible from either side, so
+            // this is not the safety it once looked like: the seed inherits the
+            // legacy KVS value ONLY when the gateway it names can send, and a
+            // gateway whose definition has just vanished cannot. Placed here
+            // rather than in the capture above so it stays behind the file-server
+            // seeding step, whose ordering is pinned by its own doc.
             ensureDefaultBackendDeviceLocalMigrated()
             defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
             clearActiveConversation()
         }
+
+        // A fresh install's legacy-default seed waits for exactly this: the bulk
+        // arrival that makes the fossil's gateway send-able. Deliberately NOT
+        // restricted to `.serverChange`, unlike the retires above —
+        // `.initialSyncChange` IS the fresh-install download the seed is waiting
+        // for. Those blocks exclude it because an initial sync can deliver state
+        // OLDER than this device's own setup, which is indistinguishable from a
+        // removal — an argument about DELETING. This only ever writes a pointer
+        // into an EMPTY slot and can never re-point an existing one (arm 1 wins
+        // first), so nothing it does is destructive.
+        retryDeferredDefaultSeedIfPending()
 
         if didChange {
             postSettingsDidChangeRemotely()

@@ -32,7 +32,14 @@ struct MacSettingsView: View {
     /// Optional starting category. Defaults to `.general`; callers that deep-link
     /// (e.g. the contextual voice-setup "use a cloud provider" escape → `.voice`)
     /// pass the category to land on. Nil keeps the default.
-    var initialCategory: Category? = nil
+    ///
+    /// A BINDING, and cleared the moment it is applied. This host is a full-window
+    /// mode swap that does not remount, so a second deep-link arriving while
+    /// Settings is open is delivered only by `.onChange` — and `.onChange` fires
+    /// on CHANGE, so writing the same category twice in a row is silent. Consuming
+    /// the value on delivery makes every repeat a change again: the request is
+    /// one-shot, and the slot is empty once it has been served.
+    @Binding var initialCategory: Category?
 
     /// Optional focused failure for a `.diagnostics` deep-link (the menu-bar
     /// popover's Troubleshoot hand-off). Applied to `diagnosticsRunner` on appear,
@@ -149,7 +156,12 @@ struct MacSettingsView: View {
             if let initialFocus {
                 diagnosticsRunner.setFocus(ref: initialFocus.ref, code: initialFocus.errorCode)
             }
-            if let initialCategory { selection = initialCategory }
+            if let initialCategory {
+                selection = initialCategory
+                // Served — empty the slot, so the next deep-link to this same
+                // category still reads as a change to `.onChange` below.
+                self.initialCategory = nil
+            }
         }
         // Settings ALREADY OPEN when a menu-bar Troubleshoot fires: the host doesn't
         // remount, so `.onAppear` won't re-run and the hand-off would be a dead no-op.
@@ -160,6 +172,42 @@ struct MacSettingsView: View {
             guard let focus else { return }
             diagnosticsRunner.setFocus(ref: focus.ref, code: focus.errorCode)
             selection = .diagnostics
+        }
+        // The same problem for the CATEGORY deep-link, and the same shape of
+        // answer. The host is a full-window mode swap, so a deep-link arriving
+        // while Settings is up re-renders this view without remounting it —
+        // `.onAppear` never re-runs and the category would be a dead no-op.
+        //
+        // It goes through the SAME veto the sidebar's selection binding uses
+        // rather than assigning `selection` outright: switching category tears a
+        // buffered editor down, and a deep-link is not permission to discard a
+        // half-typed token without asking.
+        //
+        // CONSUMED ON DELIVERY, on every branch. `.onChange` fires on change, and
+        // the shell holds the deep-link slot until Settings exits — so a second
+        // request for the category already sitting there would write the same
+        // value, fire nothing, and be as inert as it was before this reaction
+        // existed. Emptying the slot is what makes a repeat land.
+        .onChange(of: initialCategory) { _, category in
+            guard let category else { return }
+            self.initialCategory = nil
+            // The discard alert is up and its two branches are decided by
+            // `pendingSelection`: nil closes Settings, non-nil switches category.
+            // Writing a target underneath it would flip what the user's Discard
+            // means between reading the alert and tapping it. The sidebar's path
+            // to the same state is `.disabled(showingDiscardConfirm)` for exactly
+            // this reason; a deep-link gets the same answer, and is dropped rather
+            // than queued — a request that navigates after an unrelated decision
+            // resolves is a surprise, and the route that raised it re-arms on the
+            // next refusal.
+            guard !showingDiscardConfirm else { return }
+            guard category != selection else { return }
+            if viewModel.editorHasUnsavedChanges {
+                pendingSelection = category
+                showingDiscardConfirm = true
+            } else {
+                selection = category
+            }
         }
         // ONE confirm for every outer exit (Done / sidebar switch), with copy that
         // names the actual consequence — see `outerDiscardTitle`. The editor's

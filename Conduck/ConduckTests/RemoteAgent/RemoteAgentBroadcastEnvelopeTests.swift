@@ -617,6 +617,38 @@ final class RemoteAgentBroadcastEnvelopeTests: XCTestCase {
         XCTAssertEqual(decoded.defaultBackendRef, "openclaw")
     }
 
+    /// The slot that lets the wrist tell "this is the chosen default" from "the
+    /// iPhone has chosen nothing and is projecting its fallback". Silence means
+    /// CHOSEN, in both directions: an old iPhone never sends the key, an old
+    /// Watch ignores it, and neither changes behaviour. Only an explicit `false`
+    /// carries meaning, and it is the only value ever encoded.
+    func testMultiEnvelopeDefaultBackendChosenRoundTripsAndDefaultsToChosen() throws {
+        let sub = try makeSub(ref: "openclaw", urlString: "https://gw.local:18789", token: "t")
+
+        let chosen = RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub], defaultBackendRef: "openclaw", timestamp: 4.0, sessionPolicy: nil
+        ).encodedDict()
+        XCTAssertNil(chosen["defaultBackendChosen"],
+                     "The ordinary answer costs no key — it is what every reader already assumes.")
+        XCTAssertNil(try XCTUnwrap(RemoteAgentMultiBroadcastEnvelope.decode(from: chosen)).defaultBackendChosen)
+
+        let unchosen = RemoteAgentMultiBroadcastEnvelope(
+            backends: [sub], defaultBackendRef: "openclaw", timestamp: 5.0, sessionPolicy: nil,
+            defaultBackendChosen: false
+        ).encodedDict()
+        XCTAssertEqual(unchosen["defaultBackendChosen"] as? Bool, false)
+        XCTAssertEqual(try XCTUnwrap(RemoteAgentMultiBroadcastEnvelope.decode(from: unchosen)).defaultBackendChosen,
+                       false,
+                       "Losing this in transit would put the wrist back to sending at a gateway nobody picked.")
+
+        // A wrong-typed value from a future or corrupted sender must decode to
+        // nil, never to `false`: reading garbage as "unchosen" would refuse every
+        // headless capture on a perfectly configured pair.
+        var garbled = unchosen
+        garbled["defaultBackendChosen"] = "no"
+        XCTAssertNil(try XCTUnwrap(RemoteAgentMultiBroadcastEnvelope.decode(from: garbled)).defaultBackendChosen)
+    }
+
     func testMultiEnvelopeMonotonicTimestamp() throws {
         let sub = try makeSub(ref: "openclaw", urlString: "https://x", token: "t")
         let older = RemoteAgentMultiBroadcastEnvelope(backends: [sub], defaultBackendRef: "openclaw", timestamp: 100.0, sessionPolicy: nil)

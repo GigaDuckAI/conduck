@@ -28,6 +28,40 @@
 // it and the copy honest about "until you use a different gateway", because the row
 // shows the STORED default and the next chat may legitimately start elsewhere.
 //
+// The amber check answers "which one is currently CHOSEN", never "which one
+// works" — so a row the user CHOSE keeps it even when that gateway is not set up
+// here, which is precisely the state a device whose default broke lands in. A
+// chooser that showed no selection there would leave the user unable to tell
+// which gateway the screen is even about; the row still says "Set up…" and still
+// deep-links, so both facts stay legible at once.
+//
+// NO row is checked in exactly one state — `defaultSelectorNeedsChoice`, which is
+// "nothing chosen ON A DEVICE THAT HAS SOMETHING TO CHOOSE BETWEEN": either the
+// resolver asked for a pick (`.selectionRequired`, returned only past its
+// zero-configured branch, so working gateways always exist there) or the app
+// parked the pointer after a Forget. `SettingsViewModel.personalAIRows` clears
+// the check rather than decorate a gateway the user never picked, and the leading
+// callout is what says what the screen is about.
+//
+// A device with NOTHING configured is not that state and must not be read as it.
+// `zeroConfiguredVerdict` answers `.nothingConfigured`, `.setupUnfinished` or
+// `.readingUnreliable` depending on what residue it finds — but none of the three
+// is `.selectionRequired` and none parks the pointer, so `selectorNeedsChoice` is
+// false for all of them: the compiled-in built-in keeps the check and no callout
+// renders. There is nothing to choose between yet, and the screen that owns that
+// moment is the empty state, not this chooser.
+//
+// A leading callout names the trouble when there is any: the stored default
+// cannot send here (`brokenDefaultName`), or nothing has been chosen
+// (`needsDefaultChoice`). Both are optional and default to off, so the
+// iPhone-hosted Apple Watch chooser and the headless Fix sheet mount this view
+// unchanged.
+//
+// REJECTED, and do not re-propose: auto-pushing this chooser from the chat
+// notice. It presumes the user wants to abandon the named gateway, when
+// finishing its setup is just as often the right fix. The honest one-tap
+// destination is the Personal AI screen, which shows BOTH doors.
+//
 // Presentation only — the caller owns `setDefaultRemoteAgentRef` + the deep-link.
 
 import SwiftUI
@@ -65,13 +99,24 @@ struct DefaultGatewaySelectorRow: View {
                 if needsSetup {
                     // Same key + wording as `SettingsStatusMark`'s incomplete row,
                     // so the selector and the gateway list below it say the same
-                    // thing about the same gateway.
-                    Text(LocalizedStringResource(
-                        "settings.status.incomplete",
-                        defaultValue: "Needs setup"
-                    ))
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textTertiary)
+                    // thing about the same gateway. The glyph sits ON that line
+                    // rather than above it: a third line would break the macOS
+                    // two-line row allowance in `MacPersonalAICategory`.
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(AppColors.sunsetOrange)
+                            .accessibilityLabel(Text(LocalizedStringResource(
+                                "settings.personalAI.default.selector.broken.a11y",
+                                defaultValue: "Needs attention"
+                            )))
+                        Text(LocalizedStringResource(
+                            "settings.status.incomplete",
+                            defaultValue: "Needs setup"
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textTertiary)
+                    }
                 }
             }
             Image(systemName: "chevron.right")
@@ -99,6 +144,16 @@ struct DefaultGatewayPicker: View {
     var onFollowPhone: (() -> Void)? = nil
     /// Whether the "Follow iPhone" row carries the amber check (override unset).
     var followPhoneSelected: Bool = false
+
+    /// The stored default's display name when it cannot send here. Renders a
+    /// leading callout naming it, so the chooser shows BOTH doors: pick another
+    /// gateway, or finish setting this one up. Defaulted so the Watch chooser and
+    /// the headless Fix sheet need no change.
+    var brokenDefaultName: String? = nil
+    /// True when NOTHING has been chosen — either no default is stored at all and
+    /// the device may not guess one, or a pointer is stored but the app parked it
+    /// on the user's behalf after a Forget. Renders the no-name callout.
+    var needsDefaultChoice: Bool = false
 
     private var navTitle: LocalizedStringResource {
         LocalizedStringResource("settings.personalAI.default.picker.title", defaultValue: "Default for new chats")
@@ -132,6 +187,46 @@ struct DefaultGatewayPicker: View {
         // as a grouped `Form` on iOS and as full-bleed `SettingsCard`s on macOS;
         // only the iOS-only nav-bar display mode is gated.
         PlatformSettingsForm {
+            // The trouble, named, as the FIRST thing on the screen — above even
+            // the Watch's "Follow iPhone" option, because it is the reason the
+            // user is here. A named broken gateway wins over "nothing chosen":
+            // it is the more specific fact. The two are mutually exclusive because
+            // the caller derives the name from the same predicate that "nothing
+            // chosen" clears (`defaultSelectorBrokenName` off
+            // `defaultSelectorFlagsBroken`), so the `else` is belt-and-braces
+            // rather than the thing keeping them apart.
+            if let brokenDefaultName {
+                Section {
+                    AmberCallout(
+                        systemImage: "exclamationmark.triangle.fill",
+                        title: LocalizedStringResource(
+                            "settings.personalAI.default.picker.broken.title",
+                            defaultValue: "\(brokenDefaultName) isn't set up here"
+                        ),
+                        message: LocalizedStringResource(
+                            "settings.personalAI.default.picker.broken.body",
+                            defaultValue: "Pick a gateway below to use for new chats, or tap \(brokenDefaultName) to finish setting it up."
+                        )
+                    )
+                    .settingsCardPassiveRow()
+                }
+            } else if needsDefaultChoice {
+                Section {
+                    AmberCallout(
+                        systemImage: "questionmark.circle",
+                        title: LocalizedStringResource(
+                            "settings.personalAI.default.picker.noChoice.title",
+                            defaultValue: "No default yet"
+                        ),
+                        message: LocalizedStringResource(
+                            "settings.personalAI.default.picker.noChoice.body",
+                            defaultValue: "Pick a gateway below and new chats will start on it."
+                        )
+                    )
+                    .settingsCardPassiveRow()
+                }
+            }
+
             // Optional leading "Follow iPhone" option (Apple Watch chooser only).
             // Sits in its own section above the gateway list so it reads as the
             // "inherit" choice, distinct from picking a specific gateway.
@@ -225,7 +320,11 @@ struct DefaultGatewayPicker: View {
                 onSetUp(row.ref)
             } label: {
                 HStack(spacing: 12) {
-                    leadingCheck(false)
+                    // The check follows the CHOSEN gateway, not the working one —
+                    // see the file header. An unconfigured default wears it when
+                    // the user chose it; nothing is checked at all when nothing
+                    // has been chosen — see `SettingsViewModel.personalAIRows`.
+                    leadingCheck(row.isDefault)
                     Text(row.displayName)
                         .foregroundStyle(AppColors.textSecondary)
                     Spacer()
@@ -273,7 +372,11 @@ struct DefaultGatewayPicker: View {
                 onSetUp(row.ref)
             } label: {
                 HStack(spacing: 12) {
-                    leadingCheck(false)
+                    // The check follows the CHOSEN gateway, not the working one —
+                    // see the file header. An unconfigured default wears it when
+                    // the user chose it; nothing is checked at all when nothing
+                    // has been chosen — see `SettingsViewModel.personalAIRows`.
+                    leadingCheck(row.isDefault)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.displayName)
                             .foregroundStyle(AppColors.textSecondary)

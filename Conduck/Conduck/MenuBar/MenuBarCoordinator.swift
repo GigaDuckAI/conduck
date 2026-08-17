@@ -190,9 +190,11 @@ final class MenuBarCoordinator {
     /// `isQuickCaptureReady`, from one snapshot — see `refreshConfiguredFlag`.
     private(set) var hasAnyConfiguredGateway: Bool = false
 
-    /// True when the DEFAULT gateway can send — what the menu-bar POPOVER gates
-    /// on, because the quick lane has no picker: a hotkey capture always mints on
-    /// the persisted default (Decision F).
+    /// True when the quick lane has somewhere to land — the DEFAULT gateway can
+    /// send, OR a live quick-lane conversation would be continued instead. That
+    /// is the whole question the menu-bar POPOVER gates on, because the lane has
+    /// no picker: a capture either appends to the pointer's thread on its own
+    /// sealed ref, or mints on the persisted default (Decision F).
     ///
     /// Strictly stronger than `hasAnyConfiguredGateway`, and the gap between them
     /// is a legitimate state rather than a glitch (`GatewayGate` carries the three
@@ -200,6 +202,13 @@ final class MenuBarCoordinator {
     /// missing instead of claiming no AI is set up — the beginner empty state
     /// belongs to `!hasAnyConfiguredGateway` alone.
     private(set) var isQuickCaptureReady: Bool = false
+
+    /// The full verdict behind the two flags above, kept so the popover can say
+    /// WHICH state it is in rather than re-deriving one from a pair of booleans.
+    ///
+    /// Nil until the first refresh lands — the same "unknown, not false"
+    /// distinction `hasLoadedGatewayState` draws for the flags.
+    private(set) var defaultGatewayResolution: DefaultGatewayResolution?
 
     /// Whether the flags above describe a real read rather than their initial
     /// values. Both start false, which is indistinguishable from "nothing is set
@@ -948,13 +957,50 @@ final class MenuBarCoordinator {
     /// rest on: `remoteAgentSnapshot()` returns non-nil on a URL-ONLY gateway (no
     /// token for `.bearer`, no model for OpenRouter), a false positive that would
     /// let the user dictate into a half-configured gateway.
+    ///
+    /// Quick-capture readiness is `resolution.canSend`, which agrees with plain
+    /// set membership of the default in the configured roster for every shape but
+    /// two. Under `.selectionRequired` the compatibility projection is the
+    /// built-in fallback, which may itself be configured — membership would
+    /// answer "ready" for a device with no default chosen at all. And a custom
+    /// the user retired from the roster can still be send-able, where membership
+    /// and send-ability disagree in the other direction. `canSend` is true only
+    /// where the pointer is a member of the configured set BY CONSTRUCTION.
+    ///
+    /// …OR the quick lane would CONTINUE a live conversation, which never touches
+    /// the default at all. `resolveAutomaticDestinationNow` routes a TTL-fresh
+    /// pointer straight to its own thread on that thread's sealed ref, so a
+    /// verdict about the default has no authority over it — the same question
+    /// `CheckNetworkIntent` and `ConverseIntent` ask before they look at the
+    /// default, through the same helper, and the same one the wrist's
+    /// `resolveHeadlessCaptureTarget` asks first. Without it a Mac whose user has
+    /// picked no default is refused on EVERY press while their quick-lane thread
+    /// is sitting right there, live.
+    ///
+    /// The pointer can lapse between this read and a press, which makes the flag
+    /// permissive rather than restrictive for one TTL boundary — and that is the
+    /// direction this gate already fails in by design (`isQuickCaptureKnownUnavailable`
+    /// lets presses through while readiness is unknown, because the send path
+    /// validates before it delivers and keeps the words in the retry stash).
     private func refreshConfiguredFlag() async {
         let snapshot = await SettingsManager.shared.newChatPickerSnapshot()
         hasAnyConfiguredGateway = GatewayGate.canSendAnywhere(configured: snapshot.configuredRefs)
-        isQuickCaptureReady = GatewayGate.isQuickCaptureReady(
-            configured: snapshot.configuredRefs,
-            defaultRef: snapshot.defaultRef
-        )
+        // Spelled out rather than `||` — the operator's right-hand side is a
+        // non-async autoclosure and cannot carry the `await`. Short-circuited the
+        // same way, so the healthy device never pays for the store fetch.
+        var quickReady = GatewayGate.isQuickCaptureReady(resolution: snapshot.resolution)
+        if !quickReady {
+            quickReady = await SharedInboxRouting.liveQuickCaptureCanContinue(
+                defaultRef: snapshot.defaultRef, store: conversationStore)
+        }
+        isQuickCaptureReady = quickReady
+        defaultGatewayResolution = snapshot.resolution
+        // The same value `armQuickCapture` resolves, from an earlier and cheaper
+        // read — this snapshot is already in hand, so the popover has a name to
+        // show before the arm path runs. Both sites stay: the arm path also
+        // refreshes the custom roster the name is resolved against.
+        quickDefaultGatewayName = RemoteAgentRefMetadata.displayName(
+            for: snapshot.resolution.ref, customs: snapshot.badgeRoster)
         newChatSeedRef = NewChatGatewaySeed.resolve(
             configured: snapshot.configuredRefs,
             lastUsed: snapshot.lastUsedRef,

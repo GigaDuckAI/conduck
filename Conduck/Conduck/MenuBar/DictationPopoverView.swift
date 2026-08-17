@@ -742,13 +742,16 @@ struct DictationPopoverView: View {
     /// but not the default → the `DefaultNeedsSetup` wording, which is the only one
     /// that is true there: the user has AI, this lane just has no destination.
     ///
-    /// The condition is spelled out rather than resting on the caller's guard —
-    /// `hasAnyConfiguredGateway` alone means "the default is the missing piece"
-    /// only underneath `!isQuickCaptureReady`, and a second call site would not
-    /// carry that. The shortcut hint is dropped in that arm: it reads "after
-    /// setup, press ⌘⇧1", and here setup is not what is missing.
+    /// The condition reads the SHARED verdict rather than re-deriving one from a
+    /// pair of booleans, so the popover and every other surface can never
+    /// disagree about which state this device is in. `needsUserChoice` is true
+    /// for exactly the two verdicts this arm exists for — a stored default that
+    /// cannot send while others can, and no default chosen at all — and both are
+    /// "gateways work here, but the quick lane has no destination the user
+    /// picked". The shortcut hint is dropped in that arm: it reads "after setup,
+    /// press ⌘⇧1", and here setup is not what is missing.
     private var unconfiguredEmptyState: some View {
-        let needsDefault = coordinator.hasAnyConfiguredGateway && !coordinator.isQuickCaptureReady
+        let needsDefault = coordinator.defaultGatewayResolution?.needsUserChoice == true
         return VStack(spacing: 12) {
             Image(systemName: "gearshape.2")
                 .font(.system(size: 40))

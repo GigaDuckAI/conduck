@@ -264,6 +264,13 @@ final class WatchSettingsReader {
     /// `Constants.remoteAgentDefaultBackendDefault` (`.openclaw`) when unset.
     private(set) var remoteAgentDefaultBackendRef: String?
 
+    /// Whether `remoteAgentDefaultBackendRef` names a gateway the user CHOSE.
+    /// False only when the iPhone reports that it has no stored default at all
+    /// and is projecting its compatibility fallback. Defaults to true: that is
+    /// both the ordinary answer and what every iPhone build predating the
+    /// `defaultBackendChosen` envelope slot means by staying silent.
+    private(set) var remoteAgentDefaultBackendChosen: Bool = true
+
     /// Active Personal AI gateway backend (single-envelope mirror). Kept for the
     /// legacy single-config readers; derived from `remoteAgentBackendRef`.
     var remoteAgentBackend: RemoteAgentBackend? {
@@ -278,6 +285,15 @@ final class WatchSettingsReader {
     /// `SettingsManager.defaultRemoteAgentRef().rawString`.
     var defaultBackendRef: String {
         remoteAgentDefaultBackendRef ?? Constants.remoteAgentDefaultBackendDefault.rawValue
+    }
+
+    /// Whether `defaultBackendRef` is a gateway the user chose on their iPhone,
+    /// as opposed to the fallback the iPhone projects when nothing is chosen.
+    /// A headless capture must REFUSE rather than send when this is false — the
+    /// fallback may itself be configured here, and a send would bind the new
+    /// conversation to it permanently (I1).
+    var hasChosenDefaultBackend: Bool {
+        remoteAgentDefaultBackendChosen
     }
 
     /// All refs currently configured ON THIS WATCH (cached URL + Keychain token
@@ -864,6 +880,12 @@ final class WatchSettingsReader {
         let oldDefaultRef = remoteAgentDefaultBackendRef
         remoteAgentDefaultBackendRef = envelope.defaultBackendRef
         appGroupDefaults.set(envelope.defaultBackendRef, forKey: Constants.remoteAgentDefaultBackendKVSKey)
+        // A missing slot means CHOSEN — an iPhone that predates the flag never
+        // sends it, and reading its silence as "unchosen" would refuse every
+        // headless capture on a perfectly configured pair.
+        let chosen = envelope.defaultBackendChosen ?? true
+        remoteAgentDefaultBackendChosen = chosen
+        appGroupDefaults.set(chosen, forKey: Constants.remoteAgentDefaultBackendChosenKey)
         // A teardown clears the pointer UNCONDITIONALLY. The comparison above is
         // the wrong test here: a teardown carries the iPhone's fallback default,
         // which is usually the SAME ref the wrist already stored, so the pointer
@@ -1574,6 +1596,14 @@ final class WatchSettingsReader {
             // a custom default round-trips on cold launch.
             if let rawDefault, RemoteAgentRef(rawString: rawDefault) != nil {
                 remoteAgentDefaultBackendRef = rawDefault
+            }
+            // App Group ONLY, and only when the slot exists: an absent slot is a
+            // pair that has never couriered the flag, which means CHOSEN. Read
+            // beside the ref it qualifies so a cold-launched headless capture
+            // never sees one without the other.
+            if appGroupDefaults.object(forKey: Constants.remoteAgentDefaultBackendChosenKey) != nil {
+                remoteAgentDefaultBackendChosen =
+                    appGroupDefaults.bool(forKey: Constants.remoteAgentDefaultBackendChosenKey)
             }
         }
     }

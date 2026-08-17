@@ -119,6 +119,13 @@ enum DiagnosticsExplainer {
         // or "untrusted" — a pasted report must not read as either.
         67: "gateway-cert-key-unpinnable", 68: "custom-stt-cert-key-unpinnable",
         69: "custom-tts-cert-key-unpinnable", 70: "file-cert-key-unpinnable",
+        71: "gateway-unexpected-status", 72: "gateway-service-unavailable",
+        73: "gateway-not-established", 74: "gateway-default-needs-setup",
+        // 75 is the Keychain BLACKOUT, and its slug must not read like 23's
+        // (`stt-missing-key`): a pasted report that conflated "the slot is
+        // empty" with "the slot could not be read" would send whoever reads it
+        // looking for a key the user already has.
+        75: "stt-key-unreadable",
         99: "unknown",
     ]
 }

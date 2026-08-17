@@ -6,7 +6,9 @@
 // Application error taxonomy with gappy numeric error codes
 // (1-7, 9-11, 14-15, 20-23, 99) — the gaps are intentional, frozen for
 // Shortcuts user-facing continuity. Gappy slots (8, 13, 16, 17) are filled
-// and (24, 25) appended with the `stt*` taxonomy.
+// and (24, 25) appended with the `stt*` taxonomy. The live range runs 1-75 with
+// 27 a permanently reserved gap, plus the 99 catch-all; every emitted code
+// round-trips through `from(errorCode:message:)`.
 //
 // No `rateLimitExceeded(usage:)`, `previewRateLimitExceeded(remaining:)`,
 // `receiptVerificationFailed`, `invalidTransactionID`, `llmUnavailable`,
@@ -283,6 +285,38 @@ enum AppError: LocalizedError {
     // negative, and even metrics could not prove the gateway didn't execute.
     case remoteAgentNotEstablished                 // 73 — no connection was established
 
+    // The default pointer can't take a NEW chat (74). Three things this case is,
+    // and each one is the reason it is not code 12:
+    //
+    //   1. Code 12 asserts "No personal AI gateway is configured", which is FALSE
+    //      the moment any other gateway on this device works. The measured case
+    //      is a restored iPad with five verified gateways being told none were
+    //      set up, with no way to tell which sentence was the lie.
+    //   2. It fires ONLY on the MINT path for a NEW conversation. A conversation
+    //      already BOUND to a dead gateway keeps throwing 12, unchanged: routing
+    //      is per-conversation, and 74 there would read as an invitation to
+    //      re-point a thread the app must never re-point. Clone to switch.
+    //   3. `gatewayName` is a DISPLAY NAME from
+    //      `RemoteAgentRefMetadata.displayName(for:customs:)` — never a URL,
+    //      never a raw ref. It is OPTIONAL for the same reason 71's `status` is:
+    //      a live throw fills it, and a failure reconstructed from a bare wire
+    //      code cannot, so the name degrades to ABSENT rather than to a guess.
+    case remoteAgentDefaultNeedsSetup(gatewayName: String?)  // 74 — the default pointer can't take a new chat
+
+    // The STT key slot could not be READ (75), which is not the same fact as
+    // there being no key in it — and code 23 asserts the second one. Keys are
+    // stored `kSecAttrAccessibleAfterFirstUnlock`, so on a device that has
+    // rebooted and not yet been unlocked every slot answers the same way an
+    // empty slot does. Telling that user "No STT API key set" is a false
+    // statement about a device that is correctly configured, and it points them
+    // at a settings screen where they would find their key already there.
+    //
+    // The two are separable because `SettingsManager.apiKeyReadResult` returns
+    // the TYPED `APIKeyReadResult`: `errSecItemNotFound` is provable absence
+    // (23), and every other non-success status — plus a success carrying an
+    // undecodable payload — is this code. Nothing infers absence from a nil.
+    case sttKeyUnreadable                                    // 75 — the Keychain could not answer for the STT key
+
     // Catch-all (99)
     case unknown(Error)
 
@@ -382,6 +416,28 @@ enum AppError: LocalizedError {
             return String(localized: "audio.error.tooLarge", defaultValue: "Recording too long. Keep it under 5 minutes.")
         case .sttMissingAPIKey:
             return String(localized: "stt.error.missingKey", defaultValue: "No STT API key set. Open Conduck → Settings to add one.")
+        case .sttKeyUnreadable:
+            // Says what is TRUE (the key could not be read) and never what is
+            // merely likely (that there is no key). Carries its own instruction
+            // in the cause line, like `.sttMissingAPIKey` does, because one lane
+            // that raises it is a Shortcut, which renders `errorDescription`
+            // alone and has no second slot for a remedy.
+            //
+            // It makes NO claim about the recording, and the `.v2` key is that
+            // removal. The claim read as a `ConverseIntent` guarantee, but ARMED
+            // is not SAVED: `PendingRetryGuard.arm` reports a `PendingRetryStore`
+            // save failure on its token instead of throwing, and that save is a
+            // `.completeFileProtection` write — least certain in the very window
+            // this code exists for, a device that has rebooted and not been
+            // unlocked. Several lanes raise 75 and not all of them can verify
+            // the promise, so it belongs to the surfaces that can: the deferred
+            // "Recording Saved" notification, which is scheduled only when the
+            // bytes actually landed, and the live Retry affordance the in-app
+            // and wrist banners sit beside.
+            //
+            // Catalog-value-wins rule: a reworded existing key ships the OLD
+            // string, so this is a new key.
+            return String(localized: "stt.error.keyUnreadable.v2", defaultValue: "Couldn't read your STT API key. If this device just restarted, unlock it and try again.")
 
         // New tail
         case .audioProcessingFailed:
@@ -442,6 +498,20 @@ enum AppError: LocalizedError {
                 return String(localized: "remoteAgent.error.notEstablished.hosted", defaultValue: "Conduck couldn't open a connection to your AI.")
             }
             return String(localized: "remoteAgent.error.notEstablished", defaultValue: "Conduck couldn't open a connection to your gateway.")
+        case .remoteAgentDefaultNeedsSetup(let gatewayName):
+            // Two keys, not one interpolation: a 74 reconstructed off the wire
+            // carries no name, and "Your default AI, , isn't set up" is a defect.
+            // Cause only — the remedy lives in `recoverySuggestion`, because
+            // `descriptionWithRecovery` concatenates the pair and a remedy baked
+            // into both halves would ship twice.
+            if let gatewayName {
+                return String(localized: "remoteAgent.error.defaultNeedsSetup", defaultValue: "Your default AI, \(gatewayName), isn't set up on this device.")
+            }
+            // Serves THREE readings and has to be true for all of them: a broken
+            // default whose name could not be resolved, a device with no default
+            // chosen at all, and a 74 rebuilt from a bare code. Hence "doesn't
+            // know which AI to use" rather than naming a fault.
+            return String(localized: "remoteAgent.error.defaultNeedsSetup.unnamed", defaultValue: "Conduck doesn't know which AI to use for new chats.")
         case .remoteAgentCertMismatch:
             // Each `*CertMismatch` line names the SERVER whose key disagreed;
             // the remedy is shared and lives in `recoverySuggestion`. Never
@@ -651,6 +721,12 @@ enum AppError: LocalizedError {
             return String(localized: "api.error.failure.recovery", defaultValue: "Should be back in a minute or two.")
         case .sttMissingAPIKey:
             return String(localized: "stt.error.missingKey.recovery", defaultValue: "Open Settings → STT API Key to add one.")
+        case .sttKeyUnreadable:
+            // An EXPLICIT arm rather than the generic "Try again.": the fix is a
+            // specific act (unlock the device) that a bare retry invitation does
+            // not name, and the surfaces that render one line would otherwise
+            // drop the remedy entirely.
+            return String(localized: "stt.error.keyUnreadable.recovery", defaultValue: "Unlock this device, then open Conduck and retry.")
         case .audioInvalid:
             return String(localized: "audio.error.invalid.recovery", defaultValue: "Record new audio.")
         case .audioMicBusy:
@@ -673,6 +749,19 @@ enum AppError: LocalizedError {
                 return String(localized: "remoteAgent.error.notConfigured.recovery.hosted", defaultValue: "Open Settings → Personal AI and add your key.")
             }
             return String(localized: "remoteAgent.error.notConfigured.recovery.v2", defaultValue: "Open Settings → Personal AI and add its address and key.")
+        case .remoteAgentDefaultNeedsSetup:
+            // An EXPLICIT arm, never `default:`: the generic "Try again."
+            // `descriptionWithRecovery` deliberately drops would leave the one
+            // surface that renders a single line with nothing to act on.
+            //
+            // Says "AI", never "gateway", matching the shipped
+            // `UnconfiguredCopy.DefaultNeedsSetup` strings the empty state uses.
+            // Never asks for a key — 12's recovery does, which is wrong for a
+            // keyless gateway anyway and doubly wrong here, where the problem
+            // is WHICH AI, not a missing credential. The first clause
+            // defuses the panic the false "nothing is configured" banner caused,
+            // before asking the user for anything.
+            return String(localized: "remoteAgent.error.defaultNeedsSetup.recovery", defaultValue: "Your other AIs still work. Open Settings → Personal AI and pick one for new chats.")
         case .remoteAgentUnreachable:
             // `.v2`: 19 is now the UNCERTAIN bucket. The codes that prove a
             // connection never opened moved to 73, and a genuinely offline
@@ -968,6 +1057,14 @@ enum AppError: LocalizedError {
              // balance to spend, and 429 doesn't bill. Retry stays an explicit
              // user tap, never a loop (`maxAttempts` 1 below).
              .remoteAgentOutOfCredits, .remoteAgentRateLimited,
+             // 75 belongs beside 52/57 on the same test: what refused is state
+             // OUTSIDE the request — a Keychain that has not been unlocked yet —
+             // and it clears on its own the moment the user unlocks the device,
+             // at which point the identical bytes succeed. Calling it terminal
+             // would deny the retry its own copy instructs the user to make.
+             // Never a loop: `maxAttempts` leaves it at 1, so the retry is the
+             // user's tap and nothing spins against a locked Keychain.
+             .sttKeyUnreadable,
              .ttsProviderUnreachable, .ttsEmptyAudio, .ttsRateLimited,
              .fileTransferUploadFailed, .fileTransferUnreachable,
              .fileTransferServerError:
@@ -981,6 +1078,11 @@ enum AppError: LocalizedError {
              .audioProcessingFailed, .sttDecodingFailure,
              .appleSpeechModelNotInstalled, .appleSpeechLanguageUnsupported,
              .remoteAgentNotConfigured, .remoteAgentAuthFailed,
+             // 74 sits beside 12 for the same reason: retrying the same bytes
+             // against the same dead pointer reaches the same verdict. The audio
+             // is still worth keeping — see `shouldPreserveForRetry`, where 74 is
+             // the deliberate exception — but the loop must not spin on it.
+             .remoteAgentDefaultNeedsSetup,
              .remoteAgentCertMismatch, .remoteAgentInvalidResponse,
              .remoteAgentVisionUnsupported, .remoteAgentImageTooLarge,
              .remoteAgentModelUnavailable, .remoteAgentContextTooLong,
@@ -1058,6 +1160,23 @@ enum AppError: LocalizedError {
     var shouldPreserveForRetry: Bool {
         switch self {
         case .persistentNetworkFailure, .sttProviderUnreachable, .sttServerError:
+            return true
+        // The deliberate exception to the "transient upstream only" rule above.
+        // 74 is a user-side problem and `isRetryable` is false for it, but the
+        // audio is bit-for-bit valid, the fix is one tap, and after that tap the
+        // SAME bytes succeed. Preserving is what lets `ConverseIntent`'s
+        // `shouldPreserveForRetry` arm keep the recording armed instead of
+        // disarming it — otherwise a broken default silently eats the words the
+        // user already spoke.
+        case .remoteAgentDefaultNeedsSetup:
+            return true
+        // 75 for 74's reason: the bytes are bit-for-bit valid, the fix is an
+        // unlock rather than a re-record, and the SAME bytes succeed afterwards.
+        // `ConverseIntent` does not depend on this — it refuses a blackout above
+        // its catch chain, where no disarm can reach the recording at all — so
+        // this arm is what makes the answer right for any OTHER lane that
+        // decides preservation from the taxonomy.
+        case .sttKeyUnreadable:
             return true
         default:
             return false
@@ -1177,6 +1296,13 @@ enum AppError: LocalizedError {
         case 71: return .remoteAgentUnexpectedStatus(status: nil)
         case 72: return .remoteAgentServiceUnavailable
         case 73: return .remoteAgentNotEstablished
+        // 74 reconstructs WITHOUT its gateway name, on 71's exact reasoning: the
+        // wire and the persisted row carry one Int and nothing else, and
+        // `message` is untrusted relay text that must never be parsed back into
+        // user copy. Absent name → the unnamed variant, which is written to be
+        // true on its own.
+        case 74: return .remoteAgentDefaultNeedsSetup(gatewayName: nil)
+        case 75: return .sttKeyUnreadable
         case 99: return .apiFailure(message: message ?? "")       // unknown(Error) — Error not reconstructible
         default:
             return .apiFailure(message: message ?? "")
@@ -1273,6 +1399,8 @@ extension AppError: CustomNSError {
         case .remoteAgentUnexpectedStatus: return 71
         case .remoteAgentServiceUnavailable: return 72
         case .remoteAgentNotEstablished: return 73
+        case .remoteAgentDefaultNeedsSetup: return 74
+        case .sttKeyUnreadable: return 75
         case .unknown: return 99
         }
     }

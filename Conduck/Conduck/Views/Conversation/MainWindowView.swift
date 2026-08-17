@@ -79,6 +79,21 @@ struct MainWindowView: View {
     @State private var configuredRefs: [RemoteAgentRef] = []
     /// Cached custom roster, for resolving picker labels without an actor hop.
     @State private var customGateways: [CustomGateway] = []
+    /// The default-gateway statement for THIS Mac, recomputed from the same
+    /// `newChatPickerSnapshot` turn the picker seed already takes — one actor turn,
+    /// one answer, so the banner and the title-bar pill can never describe
+    /// different rosters. nil = nothing honest to say.
+    ///
+    /// Twin of `ContentView.defaultGatewayNotice`; the two must not drift, the same
+    /// way `refreshConfiguredBackends()` and `ContentView.refreshGatewayRoster()`
+    /// must not.
+    @State private var defaultGatewayNotice: DefaultGatewayNotice?
+    /// The notice the user waved off THIS SESSION, keyed to what it was ABOUT
+    /// (`.broken(ref)` / `.noDefaultChosen`) rather than to a bare Bool, so
+    /// forgetting one gateway and breaking another still speaks up. Session-scoped
+    /// on purpose: persisting a dismissal would need a storage key for a state that
+    /// fixes itself the moment the user acts.
+    @State private var dismissedGatewayNoticeKey: DefaultGatewayNotice.DismissalKey?
     /// New-chat empty-mascot pose. Drawn once at `@State` creation (NOT in
     /// `.onAppear`, which SwiftUI re-fires) so it stays stable across re-render.
     @State private var hostMascot = MascotShuffleBag.next()
@@ -93,6 +108,23 @@ struct MainWindowView: View {
     /// `.openSettingsWindow` bus, and the menu-bar "Settings…" item (via the
     /// coordinator's `pendingShowSettings` flag for the window-was-closed case).
     @State private var showingSettings = false
+
+    /// Set for exactly ONE `showingSettings` transition: the close that
+    /// `leaveSettingsForConversationAction()` performs because a NEWER, explicit
+    /// conversation action arrived (a reply notification's deep link, ⌘N).
+    ///
+    /// The state reaction below collects a deferred gateway fix route on every
+    /// close, which is what makes that collection total. But a route describes a
+    /// STATE ("your default needs setup"), not an appointment, while the deep link
+    /// is a fresh, explicit request for specific content — so on that one
+    /// transition the route must not be cashed in, or Settings re-presents on top
+    /// of the thread the user just asked for. The route stays ARMED: it is skipped,
+    /// never spent, and lands on the next ordinary close (Done) or the next
+    /// `.openGatewayFixRoute` post.
+    ///
+    /// A one-shot flag rather than a second close path, so totality survives: any
+    /// close that does not set it still collects by default.
+    @State private var settingsClosedForConversationAction = false
     /// Backing VM for the Settings sheet — one instance for the window's
     /// lifetime so its live edits/pills are coherent (NOT re-minted per open).
     @State private var settingsVM = SettingsViewModel()
@@ -117,15 +149,22 @@ struct MainWindowView: View {
     /// so this is the user-tapped forward path for residual hard failures (never
     /// an automatic teleport). Bound by BOTH composer mounts (new-chat + active).
     @State private var voiceRecovery: VoiceRecoveryOption? = nil
-    /// When non-nil the Settings sheet opens directly on this category — used by
-    /// the mic-gate redirect to land on Voice. Reset to nil on dismiss so a
-    /// normal ⌘, open still starts on General.
+    /// When non-nil the Settings screen opens directly on this category — used by
+    /// the mic-gate redirect to land on Voice, and by the gateway fix route to
+    /// land on Personal AI. Reset to nil on dismiss so a normal ⌘, open still
+    /// starts on General.
+    ///
+    /// A ONE-SHOT REQUEST SLOT: `MacSettingsView` holds it as a binding and empties
+    /// it as soon as it has applied the category, so writing the same category
+    /// twice in a row is two deliveries rather than one silent no-op.
     @State private var settingsInitialCategory: MacSettingsView.Category?
 
     /// When non-nil, the Diagnostics category opens focused on this failure — set
-    /// by the menu-bar popover's Troubleshoot hand-off (consumed alongside
-    /// `settingsInitialCategory`). Reset to nil on every Settings exit so a stale
-    /// focus can't leak into an unrelated Diagnostics open.
+    /// by the menu-bar popover's Troubleshoot hand-off, alongside
+    /// `settingsInitialCategory`. Reset to nil on every Settings exit so a stale
+    /// focus can't leak into an unrelated Diagnostics open. Unlike the category
+    /// slot it is not emptied on delivery: a focus carries a ref AND a code, so a
+    /// repeat hand-off for a different failure is already a change.
     @State private var settingsInitialFocus: DiagnosticsFocus?
 
     /// Guided gateway-setup presentation, owned HERE at the window root so it can be
@@ -300,9 +339,13 @@ struct MainWindowView: View {
                 // (replaces the old `.sheet(onDismiss:)` reset).
                 MacSettingsView(
                     viewModel: settingsVM,
-                    initialCategory: settingsInitialCategory,
+                    initialCategory: $settingsInitialCategory,
                     initialFocus: settingsInitialFocus,
                     onDone: {
+                        // Clearing `showingSettings` is ALL this has to do about a
+                        // deferred gateway fix route: the `.onChange(of:
+                        // showingSettings)` reaction below re-runs the claim on
+                        // every close, this one included. Nothing to add here.
                         showingSettings = false
                         settingsInitialCategory = nil
                         settingsInitialFocus = nil
@@ -380,6 +423,27 @@ struct MainWindowView: View {
         }
         // Opening the full-window settings overlay leaves the chat — clear the
         // transient composer feedback so a stale banner isn't waiting on return.
+        //
+        // CLOSING it is where a deferred gateway fix route gets collected. A route
+        // that arrived while Settings was up was left ARMED, not spent — the
+        // presentation guard in `consumeGatewayFixRoute` refuses to tear down a
+        // mounted editor — so something has to re-run the claim once the surface is
+        // gone. It rides the STATE CHANGE rather than any one close path because
+        // this window has several: Done clears the flag in `onDone`, while a reply
+        // deep-link and ⌘N clear it through `leaveSettingsForConversationAction()`
+        // — and the next one added will not remember to call anything. Reacting to
+        // the flag covers all of them by construction. The claim is one-shot, so
+        // an unarmed route is a no-op, and this is the root's ONLY re-consume
+        // site — a second one is the drift this arrangement exists to end. iOS
+        // needs no twin reaction: its Settings surface is a sheet/cover whose
+        // `onDismiss` (`ContentView.handleSettingsDismiss()`) fires on every exit.
+        //
+        // ONE transition is skipped, and skipping is not spending: a close caused
+        // by a NEWER conversation action leaves the route armed for the next
+        // ordinary close. Collecting there would replace the very thread the user
+        // just tapped a notification to reach. See
+        // `settingsClosedForConversationAction`; `ContentView.handleDeepLink` is
+        // the iOS twin.
         .onChange(of: showingSettings) { _, shown in
             if shown {
                 windowRecorder.dismissError()
@@ -388,6 +452,12 @@ struct MainWindowView: View {
                 // so no `onDisappear` fires for the pane. The composer that
                 // would claim a drop is gone; discard rather than strand.
                 cancelDropWork()
+            } else {
+                if settingsClosedForConversationAction {
+                    settingsClosedForConversationAction = false
+                } else {
+                    consumeGatewayFixRoute()
+                }
             }
         }
         // The destination a drop was stamped for has gone away. Discard it —
@@ -414,6 +484,14 @@ struct MainWindowView: View {
             leaveSettingsForConversationAction()
             handleDeepLink(note)
         }
+        // The landing half of the headless one-tap fix. `ConduckApp` opens this
+        // window when the route arrives while it is closed, and by contract it
+        // must NOT call `consume()` — the flag has to survive until a root that
+        // can actually show Settings reads it. This view is that root on macOS;
+        // the cold-launch/window-reopen arm lives in `onAppear()`.
+        .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
+            consumeGatewayFixRoute()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openSettingsWindow)) { _ in
             // Clear the deferred-present flag too: it's otherwise only consumed in
             // `onAppear` (the window-was-closed case), so an already-open window
@@ -439,9 +517,17 @@ struct MainWindowView: View {
     /// the conversation — but ONLY when no buffered editor is dirty, so the action
     /// can't silently discard unsaved edits. In the dirty case Settings stays up
     /// (the conversation change still applies underneath, visible on Done).
+    ///
+    /// Marks the close as conversation-driven so the state reaction skips its
+    /// deferred-route collection for this one transition — the caller is about to
+    /// select the thread the user asked for, and re-opening Settings over it would
+    /// answer a newer, explicit request with an older, ambient one. The claim
+    /// itself stays out of this function: a second call site is the drift the state
+    /// reaction exists to end.
     private func leaveSettingsForConversationAction() {
         guard showingSettings else { return }
         if !settingsVM.editorHasUnsavedChanges {
+            settingsClosedForConversationAction = true
             showingSettings = false
             settingsInitialCategory = nil
             settingsInitialFocus = nil
@@ -730,6 +816,16 @@ struct MainWindowView: View {
 
         configuredRefs = refs
         customGateways = snapshot.badgeRoster
+        // ABOVE the guard, deliberately: the default pointer is a property of the
+        // DEVICE, not of the chat on screen. Below it this would freeze at whatever
+        // it said the last time the window sat on a new chat, so a default that
+        // broke while a thread was open would never be mentioned. Same placement
+        // argument as the iOS twin.
+        defaultGatewayNotice = DefaultGatewayNotice.resolve(
+            resolution: snapshot.resolution,
+            roster: snapshot.badgeRoster,
+            pendingAdoption: snapshot.pendingAdoptionNotice
+        )
         guard !gatewaySelectionLocked else { return }
         // A hand-pick outranks the seed until this chat is minted or the user
         // starts another one. It yields only when the picked gateway is no longer
@@ -748,6 +844,88 @@ struct MainWindowView: View {
         // on the WINDOW lane — `pendingNewConversationRef` is window-mint state.
         if coordinator.windowViewModel == nil {
             coordinator.pendingNewConversationRef = selectedRef
+        }
+    }
+
+    // MARK: - Default-gateway notice
+
+    /// The resolved notice minus anything the user waved off this session.
+    private var visibleDefaultGatewayNotice: DefaultGatewayNotice? {
+        guard let notice = defaultGatewayNotice else { return nil }
+        if let key = notice.dismissalKey, key == dismissedGatewayNoticeKey { return nil }
+        return notice
+    }
+
+    /// Wave the notice off. The two SESSION states park their identity in
+    /// `dismissedGatewayNoticeKey`; `.adopted` has no key because acknowledging the
+    /// STORED record is what dismisses it — that acknowledgment survives a relaunch,
+    /// and clearing it lets the slot fall through to a broken-default or no-default
+    /// notice when the pointer is unhappy again.
+    private func dismissDefaultGatewayNotice() {
+        guard let notice = defaultGatewayNotice else { return }
+        if let key = notice.dismissalKey {
+            withAnimation { dismissedGatewayNoticeKey = key }
+        } else {
+            Task {
+                await SettingsManager.shared.acknowledgeDefaultAdoptionNotice()
+                await refreshConfiguredBackends()
+            }
+        }
+    }
+
+    /// Land on Settings → Personal AI, which shows BOTH doors: pick a different
+    /// gateway, or finish setting up the named one. The full-window mode swap
+    /// `unconfiguredEmptyState` and the guided overlay already use.
+    ///
+    /// One body for three call sites — the banner button, the `.openGatewayFixRoute`
+    /// receiver and the `onAppear` arm — so a headless fix request and a click on
+    /// the banner cannot land in different places.
+    private func openPersonalAISettingsFromNotice() {
+        settingsInitialCategory = .personalAI
+        showingSettings = true
+    }
+
+    /// Land a headless fix request (`GatewayFixRoute.request()`) on
+    /// Settings → Personal AI — the `.openGatewayFixRoute` receiver and the
+    /// `onAppear` arm, one body, because `consumeIfStillBroken()` is one-shot and
+    /// a cold launch never hears the post.
+    ///
+    /// It re-reads the default first and drops a request whose problem has since
+    /// been solved without a pointer write — gateway definitions sync, and a
+    /// Keychain that has become readable makes the same pointer sendable.
+    /// `ContentView` lands the same request through the same call, so the two
+    /// roots cannot disagree about when the route still stands.
+    ///
+    /// THE GUARD COMES BEFORE THE CLAIM, exactly as on iOS. Settings is already
+    /// where this route wanted to send the user, so arriving with it open has
+    /// nothing left to do — and forcing a category switch there would tear down
+    /// whatever editor is mounted. `consumeIfStillBroken()` is a one-shot
+    /// read-and-clear, so claiming first and guarding second would spend the
+    /// route and move nothing.
+    ///
+    /// `settingsJustOpened` is the one exemption, and it is narrow by
+    /// construction: only `onAppear`'s deferred-settings block passes it, one
+    /// statement after opening Settings itself. Nothing is mounted there, so the
+    /// guard is protecting an editor that does not exist, and refusing would drop
+    /// an explicit fix request in favour of a deferred category the user asked
+    /// for first and less specifically.
+    ///
+    /// A route left unclaimed here is not lost: both roots re-run the claim once
+    /// their Settings surface goes away, so accepting a refusal's offer while
+    /// Settings is open still lands the user on Personal AI when they leave. This
+    /// root collects it from `.onChange(of: showingSettings)` — the flag itself,
+    /// not any single close path, because Done, a reply deep-link and ⌘N all clear
+    /// it. iOS collects it from the sheet's own `onDismiss`.
+    ///
+    /// The one transition that collects nothing is a close a NEWER conversation
+    /// action caused (`settingsClosedForConversationAction`). The route is skipped
+    /// there rather than spent, so the next ordinary close still lands it.
+    private func consumeGatewayFixRoute(settingsJustOpened: Bool = false) {
+        Task {
+            guard settingsJustOpened || !showingSettings else { return }
+            guard await GatewayFixRoute.consumeIfStillBroken() else { return }
+            guard settingsJustOpened || !showingSettings else { return }
+            openPersonalAISettingsFromNotice()
         }
     }
 
@@ -891,11 +1069,31 @@ struct MainWindowView: View {
     /// the content's natural size instead of the whole pane.
     @ViewBuilder
     private var configuredDetail: some View {
-        Group {
-            if let vm = coordinator.windowViewModel {
-                activeChat(vm: vm)
-            } else {
-                newChat
+        // The banner sits INSIDE the drop destination, not above it: this file's
+        // header states the drop target spans the whole configured conversation
+        // pane, and a strip at the top that silently refused a drop would be
+        // exactly the highlight-then-bounce that rule exists to prevent. Capped to
+        // the transcript column so it lines up with the conversation it is about.
+        VStack(spacing: 0) {
+            if let notice = visibleDefaultGatewayNotice {
+                DefaultGatewayNoticeBanner(
+                    notice: notice,
+                    onOpenPersonalAI: { openPersonalAISettingsFromNotice() },
+                    onDismiss: { dismissDefaultGatewayNotice() }
+                )
+                .frame(maxWidth: Constants.Layout.chatContentWidth)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            Group {
+                if let vm = coordinator.windowViewModel {
+                    activeChat(vm: vm)
+                } else {
+                    newChat
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1203,6 +1401,7 @@ struct MainWindowView: View {
         }
         if let id = selectedConversationID { coordinator.openConversation(id) }
         // Deferred settings present (menu-bar "Settings…" opened the window).
+        var settingsJustOpened = false
         if coordinator.pendingShowSettings {
             settingsInitialCategory = coordinator.pendingSettingsCategory
             settingsInitialFocus = coordinator.pendingDiagnosticsFocus
@@ -1210,7 +1409,21 @@ struct MainWindowView: View {
             coordinator.pendingDiagnosticsFocus = nil
             coordinator.pendingShowSettings = false
             showingSettings = true
+            settingsJustOpened = true
         }
+        // AFTER the deferred-settings block on purpose: an explicit fix request is
+        // the more specific ask, so it must land on Personal AI even when a stale
+        // deferred category pointed somewhere else. Paired with the `.onReceive`
+        // above because the claim is one-shot and a cold launch — or a window
+        // opened by the route itself — never hears the post.
+        //
+        // `settingsJustOpened` is what makes that first sentence TRUE rather than
+        // merely intended. The claim runs in a `Task`, so it reads `showingSettings`
+        // after this function returns and would find the flag the block above just
+        // set — and the presentation guard would drop the route on the floor. The
+        // guard exists to protect a MOUNTED editor from being torn down, and
+        // Settings opened one statement ago with nothing in it.
+        consumeGatewayFixRoute(settingsJustOpened: settingsJustOpened)
         adoptCoordinatorNewChatSeed()
         // Seed the gateway-picker list + selection.
         Task { await refreshConfiguredBackends() }

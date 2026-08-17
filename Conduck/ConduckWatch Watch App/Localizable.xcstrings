@@ -441,6 +441,94 @@
         }
       }
     },
+    "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again."
+          }
+        }
+      }
+    },
+    "A queued recording expired before your iPhone could transcribe it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A queued recording expired before your iPhone could transcribe it."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again."
+          }
+        }
+      }
+    },
+    "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again — your recording is saved."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unlock this device, then open Conduck and retry."
+          }
+        }
+      }
+    },
+    "watch.capture.defaultGatewayNotSetUp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up. Choose which AI new chats use, on your iPhone."
+          }
+        }
+      }
+    },
+    "watch.capture.noDefaultGatewayNamed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose which AI new chats use, on your iPhone."
+          }
+        }
+      }
+    },
     "" : {
 
     },

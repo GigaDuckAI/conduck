@@ -13,6 +13,21 @@
 //   route by ITS bound backend (no silent reroute to default) →
 //   ELSE snapshot+validate the DEFAULT backend BEFORE minting a fresh thread.
 //
+// Precedence #5 — the pointer-driven lane, the one with no picker in front of it
+// — switches on `DefaultGatewayResolution` rather than on a bare ref, because
+// the same nil snapshot means several different things and only one of them may
+// say "your default is broken". A pointer at a gateway that is not set up HERE
+// while others work throws code 74 and NAMES the broken one; a device with no
+// chosen default at all throws 74 unnamed; a genuinely empty device and an
+// abandoned half-setup keep code 12 and its existing copy; and a reading the
+// Keychain cannot be trusted for accuses nobody and simply falls through to fail
+// closed. `MintRole` carries that distinction into `mintOnRef`.
+//
+// ONE SNAPSHOT TURN drives that whole decision. Two reads of the default would
+// describe two different moments — and under the resolver the default accessor
+// can PERSIST an adoption, so a second read is not even free. The pointer check
+// therefore takes the ref it was handed rather than fetching its own.
+//
 // Extracted to ONE function so the rule can never drift between the two callers.
 // It also takes an
 // explicit `overrideConversationID` (the share manifest's "New conversation"
@@ -33,6 +48,37 @@ import Foundation
 /// Stateless namespace for the shared resolve-or-mint routing decision. Every
 /// member is `static` (no instances) — it holds no state, just the branch.
 enum SharedInboxRouting {
+
+    /// Why a mint is happening, and therefore which not-configured verdict it
+    /// owes the user. The same nil snapshot means three different things
+    /// depending on how we arrived, and only one of them may say "your default
+    /// is broken".
+    private enum MintRole {
+        /// The user NAMED this gateway (share-sheet pick, deleted-conversation
+        /// fallback hint). "Your default isn't set up" would be a lie here — the
+        /// default may be perfectly healthy and simply not the target.
+        case explicitPick
+
+        /// The stored default pointer, on a reading we can trust. Names the
+        /// gateway so the user can fix the right one; the name is a DISPLAY
+        /// NAME, never a URL.
+        case defaultPointer(displayName: String?)
+
+        /// The stored default pointer on a reading we CANNOT trust — a Keychain
+        /// blackout looks identical to a deleted token from here. Fails closed
+        /// with the existing, non-accusatory verdict rather than blaming a
+        /// default that may be perfectly healthy behind a locked Keychain.
+        case defaultPointerUnverified
+
+        var notConfiguredError: AppError {
+            switch self {
+            case .explicitPick, .defaultPointerUnverified:
+                return .remoteAgentNotConfigured
+            case .defaultPointer(let displayName):
+                return .remoteAgentDefaultNeedsSetup(gatewayName: displayName)
+            }
+        }
+    }
 
     /// The resolved routing target: which conversation a turn appends to, the
     /// gateway snapshot to send it through, and the (non-empty) bearer token.
@@ -114,7 +160,10 @@ enum SharedInboxRouting {
             // thread on that SAME gateway; otherwise throw (drainer fails it).
             if let backendRaw = selectedBackendRef,
                let ref = RemoteAgentRef(rawString: backendRaw) {
-                return try await mintOnRef(ref, settings: settings, store: store)
+                // `.explicitPick`: this ref came from the user's own share-time
+                // choice, not from the default pointer, so a failure here says
+                // nothing about the default.
+                return try await mintOnRef(ref, role: .explicitPick, settings: settings, store: store)
             }
             // No usable fallback hint → not-configured → the drainer fails it.
             throw AppError.remoteAgentNotConfigured
@@ -127,24 +176,75 @@ enum SharedInboxRouting {
                 throw AppError.remoteAgentNotConfigured
             }
             // #3 configured → mint; #4 gone/unconfigured → `mintOnRef` throws.
-            return try await mintOnRef(ref, settings: settings, store: store)
+            // `.explicitPick` for the same reason as #2: the user named it.
+            return try await mintOnRef(ref, role: .explicitPick, settings: settings, store: store)
         }
 
         // --- Precedence #5: legacy / no explicit target → pointer-driven ---
+        // ONE snapshot turn feeds both the pointer check and the mint decision,
+        // so the two describe the same instant.
+        let snap = await settings.newChatPickerSnapshot()
+
         // Quick-capture pointer resolution (TTL + default-gateway re-check).
         // A pointer that names a not-yet-imported / remotely-deleted row, OR a
         // row bound to a gateway that is no longer the default, is treated
         // exactly like "no pointer" (fall through to mint on the default —
         // never append to a ghost or to a re-pointed gateway's old thread).
-        if let record = await resolveQuickCaptureConversation(settings: settings, store: store) {
+        if let record = await resolveQuickCaptureConversation(
+            defaultRef: snap.defaultRef, settings: settings, store: store) {
             return try await resolveExistingRow(record, settings: settings)
         }
 
-        // No live pointer → snapshot + validate the DEFAULT backend BEFORE minting
-        // (a default with URL-but-no-token takes the not-configured path WITHOUT
-        // leaving a stray empty thread).
-        let defaultRef = await settings.defaultRemoteAgentRef()
-        return try await mintOnRef(defaultRef, settings: settings, store: store)
+        // No live pointer → the verdict decides what happens and what is said.
+        switch snap.resolution {
+        case .usable, .adopted, .bootstrapped:
+            // The pointer can send. Snapshot + validate BEFORE minting, so a
+            // gateway that lost its token between the resolve and the mint takes
+            // the not-configured path WITHOUT leaving a stray empty thread.
+            // `.explicitPick` semantics: there is nothing to accuse here, and a
+            // nil snapshot at this point is a race we describe honestly.
+            return try await mintOnRef(snap.resolution.ref, role: .explicitPick,
+                                       settings: settings, store: store)
+
+        case .brokenDefault(let broken, _, let pointerIsParked):
+            // The roster genuinely offers alternatives. Name the one that is
+            // broken — a DISPLAY NAME, never a URL — and let the user fix it in
+            // one tap. Nothing is minted and nothing is re-pointed.
+            //
+            // A pointer the APP parked after a Forget carries no name: the user
+            // never chose that gateway, so "your default AI, X" would blame them
+            // for a placeholder. The unnamed copy is the true sentence there,
+            // and the pre-flight that guards this lane says the same thing.
+            guard !pointerIsParked else {
+                throw AppError.remoteAgentDefaultNeedsSetup(gatewayName: nil)
+            }
+            throw AppError.remoteAgentDefaultNeedsSetup(
+                gatewayName: RemoteAgentRefMetadata.displayName(for: broken, customs: snap.badgeRoster))
+
+        case .selectionRequired:
+            // No pointer, and the device cannot honestly infer one. There is no
+            // gateway to name, so the unnamed copy carries it: "Conduck doesn't
+            // know which AI to use for new chats."
+            throw AppError.remoteAgentDefaultNeedsSetup(gatewayName: nil)
+
+        case .nothingConfigured, .setupUnfinished:
+            // Nothing can send and the reading IS trustworthy. Code 12's
+            // existing copy is accurate for both — one is the honest first run,
+            // the other an abandoned setup, and neither has an alternative to
+            // offer.
+            throw AppError.remoteAgentNotConfigured
+
+        case .readingUnreliable:
+            // Nothing can send AND the reading cannot be trusted: some gateway
+            // meets every non-Keychain requirement and is waiting only on a
+            // token that does not read back (an after-first-unlock blackout, or
+            // a half-arrived iCloud Keychain sync). Refuse nothing, accuse
+            // nothing, persist nothing — fall through and let the send fail
+            // closed with code 12 exactly as it does on a genuinely empty
+            // device. If the reading was wrong, that costs the user nothing.
+            return try await mintOnRef(snap.resolution.ref, role: .defaultPointerUnverified,
+                                       settings: settings, store: store)
+        }
     }
 
     /// Quick-capture pointer resolution with the default-gateway guard: a
@@ -152,8 +252,16 @@ enum SharedInboxRouting {
     /// default gateway; a mismatch (default re-pointed since the stamp, e.g.
     /// remotely via the KVS mirror) resolves nil → the caller mints fresh on
     /// the default. Returns the fetched record so callers skip a re-fetch.
+    ///
+    /// - Parameter defaultRef: the default pointer to compare against. A caller
+    ///   that already holds a `NewChatPickerSnapshot` passes its ref so the
+    ///   pointer check and the mint decision describe the SAME instant — and so
+    ///   the default is resolved once, which matters because resolving it can
+    ///   persist an adoption. `nil` reads it here, for the menu-bar callers that
+    ///   hold no snapshot.
     static func resolveQuickCaptureConversation(
         now: Date = Date(),
+        defaultRef: RemoteAgentRef? = nil,
         settings: SettingsManager = .shared,
         store: ConversationStore = .shared
     ) async -> ConversationRecord? {
@@ -161,9 +269,49 @@ enum SharedInboxRouting {
               let record = try? await store.fetchConversation(id: pointerID) else {
             return nil
         }
-        let defaultRef = await settings.defaultRemoteAgentRef()
-        guard record.backend == defaultRef.rawString else { return nil }
+        // Spelled out rather than `??` — the right-hand side of a nil-coalesce is
+        // an autoclosure, which cannot carry the `await`.
+        let effective: RemoteAgentRef
+        if let defaultRef {
+            effective = defaultRef
+        } else {
+            effective = await settings.defaultRemoteAgentRef()
+        }
+        guard record.backend == effective.rawString else { return nil }
         return record
+    }
+
+    /// Whether a capture taken RIGHT NOW would land on an existing conversation
+    /// this device can actually send on — precedence #5's pointer arm, asked as a
+    /// yes/no and answered by the same two helpers `resolveOrMint` uses.
+    ///
+    /// It exists for the pre-flight (`CheckNetworkIntent`), which refuses before
+    /// the microphone on the DEFAULT pointer's verdict. A capture that continues
+    /// a live conversation never touches the default, so a verdict about the
+    /// default must not refuse it — and the only way the two can be certain to
+    /// agree is to ask the same question through the same code. A second copy of
+    /// the rule is exactly how they drift.
+    ///
+    /// PER-CONVERSATION BINDING IS UNTOUCHED. This answers false whenever the
+    /// pointer's conversation is bound to a gateway that is not set up here, so
+    /// the refusal a bound-but-unconfigured gateway earns stands exactly as it
+    /// does with no pointer at all. Nothing is minted, nothing is re-pointed,
+    /// nothing is persisted: both helpers only read.
+    ///
+    /// - Parameter defaultRef: the default to compare the pointer against, from
+    ///   the caller's own snapshot, so the pre-flight and the router describe the
+    ///   same instant.
+    static func liveQuickCaptureCanContinue(
+        now: Date = Date(),
+        defaultRef: RemoteAgentRef? = nil,
+        settings: SettingsManager = .shared,
+        store: ConversationStore = .shared
+    ) async -> Bool {
+        guard let record = await resolveQuickCaptureConversation(
+            now: now, defaultRef: defaultRef, settings: settings, store: store) else {
+            return false
+        }
+        return (try? await resolveExistingRow(record, settings: settings)) != nil
     }
 
     // MARK: - Shared helpers
@@ -171,6 +319,15 @@ enum SharedInboxRouting {
     /// Route by an EXISTING conversation row's bound backend. Nil snapshot
     /// (unknown raw OR unconfigured) OR empty token → not-configured (no
     /// silent reroute to the default gateway).
+    ///
+    /// All three refusals here stay `.remoteAgentNotConfigured`, and that is
+    /// deliberate. A conversation that already has turns is BOUND to its
+    /// gateway: routing is per-conversation, and a bound ref that is not set up
+    /// on this device must refuse with its existing meaning and its existing
+    /// code. `.remoteAgentDefaultNeedsSetup` must NEVER appear on this path — it
+    /// offers to fix the default for new chats, which would read as an offer to
+    /// re-point a thread the app is forbidden to re-point. Cloning the chat onto
+    /// another gateway is the only exit, and the user makes that choice.
     private static func resolveExistingRow(
         _ record: ConversationRecord,
         settings: SettingsManager
@@ -196,24 +353,30 @@ enum SharedInboxRouting {
 
     /// Snapshot + validate `ref`'s token BEFORE minting a fresh conversation on
     /// it, then mint. A ref that is unknown / unconfigured / token-less throws
-    /// `.remoteAgentNotConfigured` WITHOUT leaving a stray empty thread behind
-    /// (the validate-before-mint order is load-bearing). Used by every mint path
-    /// (default, new-on-gateway, deleted-conversation fallback) so the rule is
-    /// identical across them.
+    /// WITHOUT leaving a stray empty thread behind (the validate-before-mint
+    /// order is load-bearing). Used by every mint path (default,
+    /// new-on-gateway, deleted-conversation fallback) so the rule is identical
+    /// across them.
+    ///
+    /// - Parameter role: WHY this mint is happening, and therefore which
+    ///   not-configured verdict the user is owed. Every mint path funnels
+    ///   through here, so the error cannot be a property of the function — it
+    ///   has to be a property of the arrival.
     private static func mintOnRef(
         _ ref: RemoteAgentRef,
+        role: MintRole,
         settings: SettingsManager,
         store: ConversationStore
     ) async throws -> Resolved {
         guard let snapshot = await settings.remoteAgentSnapshot(for: ref) else {
-            throw AppError.remoteAgentNotConfigured
+            throw role.notConfiguredError
         }
         // Keyless (`.none`) routes with no token; `.bearer` requires a non-empty
         // token (fail closed — a nil token, e.g. a transient Keychain read
         // failure, is NOT treated as a silent keyless downgrade).
         let token = snapshot.token ?? ""
         if snapshot.authScheme.requiresToken, token.isEmpty {
-            throw AppError.remoteAgentNotConfigured
+            throw role.notConfiguredError
         }
         // Snapshot + token validated — only NOW mint the conversation (binds to
         // the ref's rawString — built-in OR custom).

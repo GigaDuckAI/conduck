@@ -175,6 +175,22 @@ The gateway is chosen when a conversation starts. Once the thread has turns in i
 
 **Why:** the whole history goes with every turn. Silently rerouting would hand one server the entire conversation the user had with a different one. There is no user-visible benefit that justifies that, and the failure is invisible when it happens.
 
+**The rule governs a bound conversation and nothing else.** It says nothing about which gateway a *new* chat starts on: nothing has been sent yet, so there is no history to hand to the wrong server. The two questions are decided separately, and the next section decides the second one.
+
+### The pointer to where a new chat starts is repaired only when there is one honest answer
+
+Each device holds its own pointer at the gateway new conversations begin on. When that pointer names a gateway this device cannot send to, the app moves it to one it can — but only when exactly one gateway can send, only when the secret store has proved itself readable, and only when no other gateway is sitting one unsynced token away from working. Every other shape — several candidates, none, or a pointer that might merely be locked rather than broken — is handed back to the user as a choice, and nothing is written down.
+
+**Why repair at all:** the surfaces that follow this pointer have no picker in front of them — the Action Button, CarPlay, the Watch, a share drain. A pointer at a gateway that is not set up here dead-ends every one of them while a working gateway sits beside it, and the user is given no way to see why.
+
+**Why the conditions are that narrow:** a pointer the app invented is indistinguishable afterwards from one the user chose, so the app may only invent one where there is nothing to choose between. A repair that overrides a stored choice therefore records what it replaced, says so exactly once, and is one tap from being undone; where certainty is not available the user is asked instead.
+
+**Rejected:** adopting the first configured gateway whenever no pointer is stored. It makes a permanent, unannounced choice among several gateways, decided by the order the backends happen to be declared in, that nothing ever revisits — and the user's first sign of it is a conversation already sealed to a server they never picked.
+
+**A device with no pointer of its own inherits the account's last synced default only when that gateway can send at the moment it is read.** Nothing ever deletes that inherited value, so an install made long afterwards would otherwise arrive pointing at a gateway nobody has used in months and keep it forever. An inconclusive reading — iCloud has not finished arriving — writes nothing and is retried rather than settled, because a wrong answer here outlives the reason for it.
+
+**Zero gateways readable is never grounds to change anything**, for the reason spelled out where the Watch teardown is authorised: a locked secret store, a restoring device and a genuinely empty one all read identically. On that reading the app repairs nothing, deletes nothing, blames nothing and refuses nothing — it fails closed and stays quiet. One gateway reading as configured is the only accepted proof that the store is open.
+
 ### Transport trust can only be tightened, never loosened
 
 The gateway must present a certificate the device already trusts. A self-signed certificate, or one from a private authority the device does not know, is refused — and Conduck cannot offer an "accept anyway" toggle even if it wanted to.
@@ -216,6 +232,20 @@ Deep links from a notification bypass the landing preference entirely, and the m
 A failed send surfaces to the user as a tappable Try Again. Nothing re-sends in the background. Speech recognition, by contrast, does own a retry loop with a per-error budget.
 
 **Why the two differ:** re-sending a turn spends the user's own model budget a second time, and the agent may act on the world twice. Re-sending audio costs one cheap transcription call. The asymmetry is intentional.
+
+### A key that reads back as nothing has two meanings, and the app never assumes which
+
+Secrets are stored so that they become readable after the device's first unlock. Between a restart and that unlock, a key that is present and correct reads back exactly as an empty slot does. So no lane asks the store for a key's *value* and infers from a blank answer; every lane asks for the read's *status*, and only the store reporting that the item does not exist counts as proof the user has none. A read that fails for any other reason — locked, denied, unreadable, or never attempted — is the store declining to answer, and is treated as such.
+
+The two readings get two different sentences and two different fates. Provable absence says the key is missing and points at where to add one; that verdict is final, and a capture refused on it is discarded, because repeating it cannot succeed. An unanswered read says only that the key could not be read, invites the user to unlock and try again, and is retryable — so the capture is kept.
+
+**Why the distinction is worth the second read:** the alternative tells a user with a perfectly good key that they never set one up, on a device where the remedy shown does nothing, and throws away what they just said in the process. Both halves are wrong, and the wrong half the user notices is the lost recording.
+
+**A capture refused after the user has spoken is kept wherever the surface has somewhere to keep it.** In the app and on the wrist that is a preserved recording or a queued entry with a visible retry. On CarPlay there is no such place, and none is invented: that refusal loses the capture, so it earns its keep by being true and by leaving the driver able to simply say it again. Where preservation is claimed it must be real — the promise that a recording is saved is made only by the surfaces that can see the bytes landed, never by the code that merely attempted to write them.
+
+**The wrist queue decides what is permanent by asking whether the error is retryable**, not by matching particular failures, because an entry deleted on a recoverable error takes the user's words with it. Entries are still bounded — they expire by age and by count — and the expiry notice claims no cause, since a queued capture can reach the iPhone every time and still be refused there.
+
+**Every sentence names the device that actually failed.** A watch showing a phone's failure says so; the same words rendered on the wrist, on the paired phone's lock screen and in the car have to be unambiguous on each, so a bare "this device" is never enough where two devices are involved.
 
 ### A conversation row distinguishes working, answered, and failed
 
