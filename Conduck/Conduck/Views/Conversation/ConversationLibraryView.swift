@@ -62,8 +62,8 @@ struct ConversationLibraryView: View {
     /// `selectedConversationID`: `startNewConversation()` only writes `nil`, so
     /// pressing New while already on the empty state is a nil → nil write that no
     /// `onChange` observes — and that is exactly the "pick a gateway, change your
-    /// mind, press New again" gesture. All four iPad entry points (list callback,
-    /// sidebar button, detail toolbar, ⌘N) funnel through that one function.
+    /// mind, press New again" gesture. Both iPad entry points — the detail bar's
+    /// compose item and ⌘N — funnel through that one function.
     let onStartNewConversation: () -> Void
     /// Open the host's Settings sheet, optionally deep-linked to a category. The
     /// host owns the sheet; passing `.voice` lands directly on Settings → Voice
@@ -119,12 +119,12 @@ struct ConversationLibraryView: View {
     /// with the history up, matching the macOS window. That is a product choice,
     /// not a measurement.
     ///
-    /// MEASURED on an iPad Pro 12.9-inch (6th gen), iPadOS 26.5 simulator: a
-    /// collapse survives backgrounding and re-foregrounding the process, and
-    /// survives a rotation round-trip. A COLD launch (process terminated, then
-    /// relaunched) opens with the sidebar up again — scene restoration does not
-    /// carry the value across a kill, which is iOS's own policy for a scene the
-    /// user or the tooling ended, and lands on the same sidebar-up default. The
+    /// MEASURED on an iPad Pro 13-inch (M5), iPadOS 26.5 simulator: a collapse
+    /// survives backgrounding and re-foregrounding the process, survives a
+    /// rotation round-trip, and survives a COLD launch — the process was
+    /// terminated with the column down and came back with it still down. So the
+    /// default only ever decides the FIRST launch of a window that has never
+    /// been told anything; after that the user's answer is what opens. The
     /// multitasking rebuild is NOT exercised: iPadOS Split View and Stage
     /// Manager cannot be driven from the probe harness.
     @SceneStorage("conversationLibrary.sidebarUp") private var sidebarUp: Bool = true
@@ -164,7 +164,7 @@ struct ConversationLibraryView: View {
     /// Both signals must agree, and disagreement resolves toward "not on screen".
     ///
     /// The failure that matters here is ZERO compose buttons — a user with no way
-    /// to start a chat. The detail bar is on screen in every column state, so
+    /// to start a chat. The detail bar is present in every column state, so
     /// ambiguity must send compose there; believing an `.all` binding while the
     /// column is actually gone is the one outcome that strands the user, and a
     /// transient duplicate is a far better failure than that.
@@ -201,7 +201,7 @@ struct ConversationLibraryView: View {
                 // The pinned header (safeAreaInset below) owns the custom search
                 // field, so suppress the toolbar New item and drive the list's
                 // filter via `externalSearchText` (no native `.searchable`). New
-                // is toolbar chrome on whichever column's bar is on screen
+                // is toolbar chrome on whichever COLUMN's bar is on screen
                 // (`LeadingToolbarChrome`, attached to BOTH columns below, one
                 // per sidebar state) — which is why no `onNewConversation` is
                 // passed: nothing here would call it, and
@@ -209,12 +209,14 @@ struct ConversationLibraryView: View {
                 // from ever doubling it. Delete-All renders as a bare trash
                 // button like iPhone (`deleteAllInMenu: false`), docked at this
                 // bar's LEADING edge (`deleteAllLeading: true`) — the far end
-                // from the compose/toggle pair at the trailing edge, so the
+                // from the compose/reveal pair at the trailing edge, so the
                 // destructive action is not adjacent to the controls the user
                 // reaches for constantly. Its 4pt inset from the column is the
-                // system's; the pinned header above matches it rather than the
-                // reverse (see `ConversationListView.deleteAllPlacement` for the
-                // levers probed, and the `.safeAreaInset` below for the match).
+                // system's and no lever this app declares moves it (see
+                // `ConversationListView.deleteAllPlacement`), so the toolbar band
+                // owns that edge alone; the content band below it — the pinned
+                // search capsule and the list — shares a different one, measured
+                // on the `.safeAreaInset` below.
                 // (Args in declaration order.)
                 showsToolbarActions: true,
                 externalSearchText: $sidebarSearch,
@@ -227,6 +229,31 @@ struct ConversationLibraryView: View {
                 newConversationInToolbar: false,
                 deleteAllInMenu: false,
                 deleteAllLeading: true,
+                // Sidebar list chrome: the same inset style the macOS window's
+                // sidebar takes. It is opt-in on that list because the iPhone
+                // conversation sheet is a browsing sheet, not a sidebar, and the
+                // platform's own chrome is the right one there. MEASURED on an
+                // iPad Pro 13-inch (M5), iPadOS 26.5 simulator, portrait,
+                // sidebar column x 10–330: the style draws a hairline separator
+                // under every row (none at the default) spanning x 38.5–305.5,
+                // and puts row content at x 34.0 where the default puts it at
+                // 42.0. Row pitch measures 117.0 under both, so this does NOT
+                // close the density difference against the macOS window: row
+                // metrics live inside `conversationRow`, which is identical on
+                // all three platforms, and this style leaves them alone.
+                //
+                // NO SCROLL-INDICATOR FLAG SITS BESIDE THIS ONE, and the reason
+                // is measured rather than declined. `.scrollIndicators(.visible)`
+                // on this list is INERT on the same device: mid-drag the column
+                // shows an indicator at x 324.0–326.5 with the modifier and at
+                // exactly the same x without it, and two seconds after the drag
+                // settles it is gone in both. iOS fades a list's indicator on its
+                // own schedule and the modifier does not change that schedule, so
+                // a flag here would name a behavior it cannot deliver. Whether a
+                // persistently visible indicator is reachable at all on this
+                // platform is unmeasured; what is measured is that this modifier
+                // does not reach it.
+                usesInsetListStyle: true,
                 // Persistent split-view sidebar: highlight the active thread's row.
                 selectedConversationID: selectedConversationID
             )
@@ -237,44 +264,53 @@ struct ConversationLibraryView: View {
             // large-title band. The card background is what makes it read as
             // pinned against the scrolling list below.
             //
-            // THE 4pt INSET IS THE SIDEBAR'S ONE LEADING EDGE, and it is 4 here
-            // where the macOS window keeps 12, because only this column carries
-            // a control at the leading edge of the bar directly above it —
-            // Delete-All, which macOS suppresses entirely
-            // (`showsToolbarActions: false`), so there is nothing there to align
-            // to on that surface. iPadOS pins a `.topBarLeading` item 4pt inside
-            // the column and holds it there; nothing this app declares insets it
-            // further (`ConversationListView.deleteAllPlacement` carries the
-            // levers built and probed). So the only edge under this file's
-            // control is the capsule's, and matching it to the bar is what
-            // removes the step. MEASURED on an iPad Pro 12.9-inch (6th gen),
-            // iPadOS 26.5, portrait, sidebar column x 10–330 (`final-probe/`):
+            // THE 24pt INSET BRACKETS THE LIST. The capsule filters the rows
+            // below it, so it takes their box: both of its edges land on the
+            // list's own, which is what makes the band read as this column's
+            // header rather than as a field floating at the column's edge. The
+            // macOS window's 12 is not a parity target: that column carries no
+            // Delete-All (`showsToolbarActions: false`), and its own row box is
+            // not measured here — whatever number squares a capsule against it is
+            // that surface's question, answered on that surface.
             //
-            //   inset 12 (`E0-baseline`)   capsule edge 22.0   magnifier x 36.0
-            //   inset  4 (`E6-capsule-inset4`)          14.0             28.0
+            // MEASURED on an iPad Pro 13-inch (M5), iPadOS 26.5 simulator,
+            // portrait, sidebar column x 10–330, screenshot pixel columns at 2x:
             //
-            // against a Delete-All button frame that stays at x=14.0 and a trash
-            // GLYPH whose leftmost lit pixel column is 27.5 in both. At 4 the
-            // capsule's edge lands on the button's, the magnifier lands on the
-            // trash, and the column reads as one aligned edge instead of two.
+            //   inset  4   capsule 14.0–325.5   magnifier 28.0
+            //   inset 12           22.0–317.5             36.0
+            //   inset 24           34.0–305.5             48.0
+            //
+            // against a list whose row content starts at x 34.0 and whose row
+            // separators run 38.5–305.5. At 24 the capsule's leading edge lands
+            // on the row content's and its trailing edge on the separators', to
+            // the half-point on both.
+            //
+            // The toolbar band above keeps its own edge and cannot be brought
+            // onto this one: iPadOS pins Delete-All 4pt inside the column at
+            // x=14.0 and holds it there, and no lever offsets it by a chosen
+            // amount (`ConversationListView.deleteAllPlacement` carries the five
+            // built and probed). Two bands, two edges, each internally square —
+            // and the toolbar's is symmetric in itself, the reveal control
+            // sitting the same 4pt inside the column's trailing edge at 326.0.
             .safeAreaInset(edge: .top) {
                 SidebarSearchField(text: $sidebarSearch)
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, 24)
                     .padding(.vertical, 8)
                     .background(AppColors.cardBackground)
             }
-            // Compose, immediately LEFT of the system toggle at the sidebar's
-            // trailing edge, flush against the divider — the macOS window's
-            // arrangement, and the reason Delete-All takes the leading edge
-            // instead. This bar dies with its column, so the detail column
-            // carries the same action while the sidebar is down; the two are
-            // mutually exclusive by `sidebarBarOnScreen`, never both.
-            // Deliberately UNCONDITIONAL here: the column's unmount is what
-            // removes it, so this copy cannot outlive the bar it lives in — and
-            // gating it on the same flag that gates the detail copy would make
-            // both answers come from one signal, which is precisely what
-            // `sidebarBarOnScreen` refuses to do. `LeadingToolbarChrome`'s
-            // header carries the measurements behind both halves.
+            // Compose, immediately LEFT of the system reveal control at this
+            // bar's trailing edge — the macOS window's arrangement, and the
+            // reason Delete-All takes the leading edge instead. This bar dies
+            // with its column, so the detail column carries the same action
+            // while the sidebar is down; the two are mutually exclusive by
+            // `sidebarBarOnScreen`, never both. Deliberately UNCONDITIONAL here:
+            // the column's unmount is what removes it, so this copy cannot
+            // outlive the bar it lives in — and gating it on the same flag that
+            // gates the detail copy would make both answers come from one
+            // signal, which is precisely what `sidebarBarOnScreen` refuses to do.
+            // `LeadingToolbarChrome`'s header carries the measurements behind
+            // both halves, and the lever table recording why the collapsed bar
+            // cannot be made to match this order.
             .toolbar {
                 LeadingToolbarChrome(column: .sidebar) { startNewConversation() }
             }
@@ -287,10 +323,10 @@ struct ConversationLibraryView: View {
             // each callback, presenting AND dismissing the Settings
             // `.fullScreenCover` over this split view fired NEITHER callback,
             // while collapsing the sidebar in the same session fired
-            // `.onDisappear` and re-expanding fired `.onAppear`
-            // (`final-probe/F4-cover-vs-collapse.txt`). So the cover cannot flip
-            // this flag under a sidebar that is genuinely up, and cannot mount a
-            // second compose item across its present/dismiss animation.
+            // `.onDisappear` and re-expanding fired `.onAppear`. So the cover
+            // cannot flip this flag under a sidebar that is genuinely up, and
+            // cannot mount a second compose item across its present/dismiss
+            // animation.
             .onAppear { sidebarColumnMounted = true }
             .onDisappear { sidebarColumnMounted = false }
         } detail: {
@@ -389,14 +425,18 @@ struct ConversationLibraryView: View {
         // into that control — no separate trailing button.
         .navigationTitle(Text(""))
         .toolbar {
-            // Compose, immediately right of the sidebar-reveal control that
-            // iPadOS pins leading-most in this bar. THIS is the copy that
-            // survives ambiguity: the detail bar is on screen in every column
-            // state, so it carries compose whenever `sidebarBarOnScreen` is not
-            // certain the sidebar's own bar does — including the values that
-            // merely fail to say so. `.topBarLeading` rather than `.navigation`
-            // is what keeps a conditionally-mounted item leading in a bar that
-            // is already up; `LeadingToolbarChrome`'s header carries the frames.
+            // Compose, immediately right of the reveal control that iPadOS pins
+            // leading-most in this bar. THIS is the copy that survives ambiguity:
+            // the detail bar is present in every column state, so it carries
+            // compose whenever `sidebarBarOnScreen` is not certain the sidebar's
+            // own bar does — including the values that merely fail to say so.
+            // `.topBarLeading` rather than `.navigation` is what keeps a
+            // conditionally-mounted item leading in a bar that is already up.
+            //
+            // The ORDER here is the system's and cannot be matched to the sidebar
+            // bar's: iPadOS pins its reveal control leading-most and nothing this
+            // app declares outranks it. `LeadingToolbarChrome`'s header carries
+            // the seven levers measured against that, each with its frames.
             if !sidebarBarOnScreen {
                 LeadingToolbarChrome(column: .detail) { startNewConversation() }
             }

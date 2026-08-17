@@ -5,7 +5,11 @@
 //
 // The compose action for the two SPLIT-VIEW surfaces — the macOS unified window
 // (`MainWindowView`) and the iPad library (`ConversationLibraryView`) — placed
-// so it sits immediately beside the sidebar toggle in BOTH sidebar states.
+// so it reads as the sidebar toggle's neighbour in BOTH sidebar states. macOS
+// puts the pair inside one toolbar and reads compose → toggle throughout. iPad
+// reads compose → toggle inside the sidebar bar while that column is up, and
+// toggle → compose once the column is gone — an inversion the platform imposes
+// and no lever removes; the seven measured against it are below.
 //
 // WHY compose is toolbar chrome and not a sidebar row: a button in the sidebar's
 // CONTENT is unmounted the moment the column collapses, which is exactly when
@@ -100,47 +104,132 @@
 // sidebar column carries compose while that column's bar is on screen, the
 // detail column carries it otherwise. `ConversationLibraryView.sidebarBarOnScreen`
 // picks between them, and its doc comment carries the fail-safe reasoning: the
-// detail bar is on screen in EVERY column state, so any ambiguity about where
-// the sidebar column is must resolve toward the detail copy. Zero compose
-// buttons strands the user; a transient duplicate does not.
+// detail bar is present in EVERY column state, so any ambiguity about where the
+// sidebar column is must resolve toward the detail copy. Zero compose buttons
+// strands the user; a transient duplicate does not.
 //
-// ── MEASURED, iPad Pro 12.9-inch (6th gen), iPadOS 26.5 simulator ──────────
-// The founder's own geometry. Artifacts under `final-probe/`, taken on the
-// arrangement in this file. Frames are absolute window x from `idb ui
-// describe-point` sweeps across the whole bar row (a flat `describe-all` does
-// not reach either column's bar); the toolbar row is y 36 h 36.
+// THE ALTERNATIVE — one unconditional item in the detail bar, making "exactly
+// one compose button" a property of the view tree instead of two signals
+// agreeing — was built and measured (frames in the lever table below, expanded
+// compose at 356.5–387.5). It is a genuinely stronger guarantee and it is NOT
+// what ships: expanded, it puts compose across the column divider, 30.5pt from
+// the toggle and in a different treatment (capsule vs flat-in-panel), so the two
+// stop reading as one pair. The product call is that the expanded pair matching
+// the macOS window is worth keeping a runtime fail-safe for. If that fail-safe
+// ever proves unsound, that arrangement is the measured way out.
 //
-//   PORTRAIT 1024x1366pt, sidebar column x 10–330
+// ── MEASURED, iPad Pro 13-inch (M5), iPadOS 26.5 simulator ─────────────────
+// Frames are absolute window x from `idb ui describe-point` sweeps across the
+// whole bar row. A flat `describe-all` is NOT a substitute — but its limit is
+// narrower than "it reaches nothing": in portrait it returns ~20 elements and
+// DOES return this column's bar items (Delete-All at 14.0, the reveal control at
+// 271.5) while missing the detail bar's compose entirely. So it can report a
+// toolbar as empty that a sweep finds fully populated, and a sweep is what any
+// frame quoted here rests on. The toolbar row is y 36 h 36. A sweep is only
+// trustworthy after a cross-check against an element whose x is already known:
+// Delete-All, which iPadOS pins at 14.0 and holds there.
+//
+//   PORTRAIT 1032x1376pt, sidebar column x 10–330 (the `Sidebar` group's frame)
 //
 //   — sidebar SHOWING — everything in the SIDEBAR bar, drawn flat in its one
-//     rounded panel, no per-item capsule (`ax-V1-final-portrait-expanded.json`)
+//     rounded panel, no per-item capsule
 //     Delete-All   14.0–62.0
 //     compose     214.5–265.5
 //     toggle      271.5–326.0
 //     6pt compose→toggle, 4pt toggle→column edge. Item for item the macOS
-//     arrangement, which is why parity is reachable. Delete-All's own inset is
-//     the system's; `ConversationListView.deleteAllPlacement` carries the
-//     levers built and probed against it.
+//     arrangement, which is why parity is reachable in THIS state. Delete-All's
+//     own inset is the system's; `ConversationListView.deleteAllPlacement`
+//     carries the levers built and probed against it.
 //
 //   — sidebar HIDDEN — the sidebar bar is gone, the detail bar is all there is
-//     (`ax-V2-final-portrait-collapsed.json`)
-//     toggle      14.0–50.0   CAPSULE
-//     compose     72.5–103.5  CAPSULE      22.5pt apart
+//     toggle      14.0–50.0    CAPSULE
+//     compose     72.5–103.5   CAPSULE      22.5pt apart
+//     The order inverts here and cannot be made to match the state above; the
+//     lever table below is the evidence.
 //
-//   LANDSCAPE 1366x1024pt — SCREENSHOT evidence only
-//     `V3-final-landscape-expanded.png` (sidebar up) and
-//     `V4-final-landscape-collapsed.png` (sidebar down) show the same
-//     arrangement and, collapsed, exactly one compose glyph beside the toggle
-//     at the leading edge with nothing at the trailing edge. No AX frames are
-//     quoted for landscape: `describe-point` takes UNROTATED coordinates there
-//     and a mis-mapped sweep silently returns bottom-of-screen elements, so a
-//     sweep result would need its own cross-check to mean anything.
+//   LANDSCAPE 1376x1032pt — cross-checked, then swept
+//     sidebar HIDDEN    toggle  14.0–50.0    compose  72.5–103.5
+//     Identical to portrait: the bar's leading cluster does not reflow with the
+//     long edge, and a full-width sweep to 1376 finds nothing else in the row.
+//     This state is the DETAIL bar alone, so it is the same measurement whichever
+//     column owns compose when the sidebar is up.
+//     sidebar SHOWING is NOT measured in landscape on this arrangement. The
+//     landscape sweep was run against the one-attachment build, whose expanded
+//     compose lives in the detail bar; its numbers do not describe this file's
+//     sidebar-bar attachment and are deliberately not quoted here.
 //
-// WHY the detail host takes `.topBarLeading`: it names the leading slot
-// outright rather than leaving it to a placement that has to resolve, and it
-// measures there in every collapsed state probed. NO CLAIM is made about
-// `.navigation` on this attachment — no experiment in this corpus swapped it,
-// so nothing here rules it in or out.
+//     THE COORDINATE TRAP, and the mapping that clears it. AX REPORTS rotated,
+//     logical frames (the Application element measures 0–1376 x 0–1032), but
+//     `idb ui describe-point` CONSUMES unrotated buffer coordinates, so feeding
+//     it a logical point returns a miss or a silently unrelated element. Rotated
+//     left, the mapping is `bufferX = 1032 - logicalY`, `bufferY = logicalX`. It
+//     was confirmed by containment on three elements of known frame before any
+//     toolbar number was trusted — the Settings footer row, the composer's
+//     bottom band, and a conversation row — and only then by Delete-All coming
+//     back at 14.0, matching portrait. Do not quote a landscape frame that has
+//     not passed that check.
+//
+// ── ORDER: THE COLLAPSED INVERSION IS UNFIXABLE, MEASURED ──────────────────
+// macOS reads compose → toggle in both states. iPad matches it while the sidebar
+// is up — the sidebar bar renders app items to the LEFT of its trailing-pinned
+// reveal control — and cannot match it once the sidebar is down, because iPadOS
+// pins the reveal control leading-most in the detail bar and nothing an app
+// declares out-ranks it. Seven levers were built and probed against the geometry
+// above, one per build, never stacked; the pass criterion was
+// `compose.maxX <= toggle.minX` in the COLLAPSED bar, with exactly one compose
+// item and one reveal control still present and still working.
+//
+// An independent review (a different model and harness, not this one) was asked
+// whether any untried API could reach it — toolbar customization IDs,
+// `.toolbar(id:)`, `UINavigationItem.leadingItemGroups`, `additionalOverflowItems`,
+// `UINavigationBarAppearance`, `.principal`/custom title view, `.balanced` /
+// `.prominentDetail`, and driving `columnVisibility` by hand. It rated every one
+// of them a no, and named only two escapes: own a UIKit `UISplitViewController`
+// outright, or hide both bars and hand-draw the top band. Both replace the system
+// reveal control with an imitation, which is the cost the last section rejects.
+//
+//   BASELINE                    toggle  14.0–50.0    compose  72.5–103.5
+//
+//   `.navigation` on the detail item              MOVES — WRONG DIRECTION
+//     toggle  14.0–50.0   compose 984.5–1015.5. The item does not vanish; it
+//     relocates to the bar's TRAILING edge, the full width of the screen away
+//     from the control it is meant to sit beside.
+//
+//   `DefaultToolbarItem(kind: .sidebarToggle, placement: .topBarLeading)`
+//   declared after compose in the detail bar      NO REORDER
+//     toggle 14.0–50.0 unchanged; compose 70.0–111.0, i.e. the SAME glyph in a
+//     capsule widened 31.0 → 41.0 with the glyph in its left half and dead
+//     padding to its right. It contributes an empty item, not a representation
+//     of the real toggle.
+//
+//   `.toolbar(removing: .sidebarToggle)` on the DETAIL column        INERT
+//     toggle 14.0–50.0, compose 72.5–103.5 — baseline, unchanged.
+//
+//   `.toolbar(removing: .sidebarToggle)` on the SPLIT VIEW           INERT
+//     toggle 14.0–50.0, compose 72.5–103.5 — baseline, unchanged.
+//
+//   `.toolbar(removing: .sidebarToggle)` on the SIDEBAR column   MOVES — FATAL
+//     It reaches the SIDEBAR bar's toggle and no other. Expanded, `Hide Sidebar`
+//     leaves the tree entirely and compose slides into the vacated slot
+//     (214.5–265.5 → 275.0–326.0) while a full-width sweep finds no reveal
+//     control anywhere on screen: the sidebar can never be collapsed again. The
+//     collapsed detail bar is untouched, because the column carrying the
+//     modifier is unmounted by then.
+//
+//   the same removal + `DefaultToolbarItem(kind: .sidebarToggle,
+//   placement: .primaryAction)` declared ahead of compose      NO TOGGLE BACK
+//     Expanded: Delete-All 14.0–62.0, compose 275.0–326.0, and still no reveal
+//     control. The item does not represent the removed system control.
+//
+//   `.topBarTrailing` instead of `.primaryAction` on the sidebar item  INERT
+//     Expanded: compose 214.5–265.5, toggle 271.5–326.0 — the two placements
+//     resolve to the same slot, and the system's toggle stays trailing-most.
+//
+// So the arrangement this file ships matches macOS while the sidebar is up and
+// takes the platform's order once it is down. The other way round — the
+// platform's order in BOTH states — is reachable, and is the one-attachment
+// build described above; it trades the expanded pair for consistency. Neither
+// choice buys both, and no lever here changes that.
 //
 // WHY the detail item is CONDITIONAL rather than mounted-but-hidden: `.opacity`
 // holds the leading slot, but it also leaves an empty 36pt glass capsule
@@ -148,14 +237,14 @@
 // `.sharedBackgroundVisibility(.hidden)` is a property of the ITEM — it would
 // strip the capsule from the VISIBLE collapsed button too.
 //
-//   ORDER collapsed is toggle → compose, the mirror of macOS, and it is the
-//   system's choice: iPadOS pins its reveal control leading-most in the detail
-//   bar. This file records no iPadOS reorder experiment, so it claims neither
-//   that a lever exists nor that one is inert — only the measured order.
-//
-// WHY no `ToolbarSpacer` on iPad in EITHER host: its bars do not fuse adjacent
-// items. The sidebar bar draws them flat inside one panel with a 6pt system gap,
-// and the collapsed detail bar's two capsules already sit 22.5pt apart.
+// WHY no `ToolbarSpacer` on iPad in EITHER host: neither bar fuses the items
+// this file actually declares. The sidebar bar draws compose and the toggle flat
+// inside one panel with a 6pt system gap; the collapsed detail bar's two
+// capsules sit 22.5pt apart. That is NOT a general "iPad bars never fuse" rule,
+// and the lever table above is the counter-example: a `DefaultToolbarItem`
+// declared next to compose was absorbed INTO its capsule, widening it 31.0 →
+// 41.0. So a second real item added to either bar has to be re-measured, not
+// assumed spaced.
 //
 // WHY the iPad cluster is not hand-drawn: an iPadOS nav bar is all-or-nothing,
 // so hand-placing ONE control beside the system toggle is not an available
@@ -164,25 +253,39 @@
 // centred gateway control, Delete-All, the safe-area/scroll-inset contract,
 // Dynamic Type metrics, pointer hover, keyboard focus order, and the toggle's
 // localized VoiceOver name plus its expanded/collapsed state) for one gain a
-// system bar cannot give.
+// system bar cannot give. The narrower hand-draw — remove the system toggle and
+// replace just that one control — is measured above: removal reaches only the
+// sidebar bar, so it would hand the two sidebar states two different reveal
+// controls announcing themselves two different ways to VoiceOver.
 //
 // ── THE TRAILING-COMPOSE OBSERVATION: UNREPRODUCED ─────────────────────────
 // The founder observed a `square.and.pencil` at the TRAILING edge of the
 // collapsed bar, with nothing at the leading edge, on a 12.9-inch iPad Pro, in
 // the empty-thread mascot state. That observation is what set this rework
-// going, and it is UNREPRODUCED: it has been hunted on that exact geometry, in
-// portrait and landscape, and every probe puts compose at the LEADING edge with
-// nothing at the trailing one. NO MECHANISM IS CLAIMED — do not write a comment
-// in this file that asserts one. Probing settled states also cannot rule out a
-// sub-frame window, and it says nothing about the presentations the simulator
-// cannot reach (see `sidebarBarOnScreen`).
+// going, and it is UNREPRODUCED by the shipped arrangement: it has been hunted
+// on 12.9-inch and 13-inch geometry, portrait and landscape, and every probe of
+// the shipped code puts compose at the leading edge with nothing at the trailing
+// one. NO MECHANISM IS CLAIMED — do not write a comment in this file that
+// asserts one. The `.navigation` row above is the one arrangement measured to
+// put compose at the trailing edge, and this file does not use it; that is a
+// coincidence of appearance, not an explanation. Probing settled states also
+// cannot rule out a sub-frame window, and it says nothing about the
+// presentations the simulator cannot reach (iPadOS Split View and Stage Manager
+// are unreachable from the probe harness).
 //
-// WHY never `DefaultToolbarItem(kind: .sidebarToggle, placement:)`: on macOS it
-// does NOT represent, move, or reorder the toggle. It adds a SEPARATE, EMPTY
+// WHY never `DefaultToolbarItem(kind: .sidebarToggle, placement:)` — measured on
+// BOTH platforms, and neither finding is inferred from the other. On macOS it
+// does NOT represent, move, or reorder the toggle: it adds a SEPARATE, EMPTY
 // item — 10x10pt inside a ~41pt viewer carrying its own glass — which macOS then
 // merges into one capsule with the item beside it, producing a wide pill with
-// the glyph in its right half and dead, unclickable padding to its left. AppKit
-// places the real toggle either way.
+// the glyph in its right half and dead, unclickable padding to its left, and
+// AppKit places the real toggle either way. On iPadOS it likewise adds an empty
+// item rather than representing the toggle: beside a system toggle it widens the
+// neighbouring capsule 31.0 → 41.0 and reorders nothing, and with that toggle
+// removed it supplies no control at all. The two platforms' toolbars are
+// structurally unrelated — macOS has one `NSToolbar` split by an
+// `NSTrackingSeparatorToolbarItem`, iPadOS gives each column an independent nav
+// bar — so each half of this finding rests on its own measurement.
 //
 // WHY the label stays a bare `Image`: measured, `Label` and a titled `Button`
 // produce identical item metrics — width tracks the GLYPH, not the label
@@ -230,9 +333,13 @@ struct LeadingToolbarChrome: ToolbarContent {
     ///
     /// iOS: `.primaryAction` docks TRAILING — which inside the sidebar column's
     /// own bar means immediately LEFT of the trailing-pinned system toggle, the
-    /// macOS relationship. The detail host takes `.topBarLeading`, which names
+    /// macOS relationship. The `.detail` host takes `.topBarLeading`, which names
     /// the leading slot outright rather than leaving it to a placement that has
-    /// to resolve; the header carries the frames for both.
+    /// to resolve. The header's lever table carries what every other placement
+    /// measured there. Both cases are reachable on iOS — that is the point of
+    /// the enum, and the header explains which state each serves — so the enum
+    /// stays total and a future iOS sidebar-bar item inherits a measured value
+    /// rather than an invented one.
     private var placement: ToolbarItemPlacement {
         #if os(macOS)
         .primaryAction
@@ -264,11 +371,11 @@ struct LeadingToolbarChrome: ToolbarContent {
 
         #if os(macOS)
         // Keeps compose and the sidebar toggle two separate capsules instead of
-        // one fused pill. macOS only: iPad needs no spacer in either host —
-        // measured, its bars never fuse adjacent items (6pt flat gap in the
-        // sidebar bar; 22.5pt between separate capsules in the detail bar), and
-        // a spacer ahead of the principal gateway control would push it off
-        // centre for no gain.
+        // one fused pill. macOS only: neither iPad host needs a spacer — measured,
+        // the sidebar bar draws the pair flat with a 6pt system gap and the
+        // collapsed detail bar's two capsules sit 22.5pt apart — and in the detail
+        // host a spacer ahead of the principal gateway control would push that
+        // control off centre for no gain.
         ToolbarSpacer(.fixed, placement: .primaryAction)
         #endif
     }

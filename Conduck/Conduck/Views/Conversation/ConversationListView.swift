@@ -3,7 +3,9 @@
 // Conduck
 // ConversationListView.swift
 //
-// iPhone conversation list.
+// The conversation list, shared verbatim by three hosts: the iPhone browsing
+// sheet (`ContentView`), the iPad split sidebar (`ConversationLibraryView`) and
+// the macOS window sidebar (`MainWindowView`).
 // Time-grouped (Today / This Week / Earlier) by `lastActivityAt`,
 // `.searchable`, swipe-delete. Each row = title (fallback to the first line of
 // the last message) + a reserved trailing activity mark + a role-aware preview
@@ -11,6 +13,12 @@
 // status words while a turn is in flight.
 // Tapping a row selects that conversation ("Continue" = set it active +
 // show it). Backed by `ConversationListViewModel`.
+//
+// Every difference between the three hosts is an ADDITIVE flag declared below,
+// defaulting to the iPhone sheet's rendering, so a host that says nothing gets
+// the sheet. macOS differences are spelled inside `#if os(macOS)` fences
+// instead, which is a stronger guarantee than a default: that platform's view
+// tree never gains the modifier at compile time.
 
 import SwiftUI
 
@@ -78,6 +86,29 @@ struct ConversationListView: View {
     /// Those two facts are independent of this flag, which is why the sheet is
     /// safe at the default rather than by exclusion.
     var deleteAllLeading: Bool = false
+    /// Additive: adopt the inset list style instead of the style a
+    /// `NavigationSplitView` sidebar column resolves to on its own. The iPad
+    /// split sidebar (`ConversationLibraryView`) is the only host that passes
+    /// `true`, so its column takes the same style the macOS window's sidebar
+    /// takes unconditionally, and with it the row separators the sidebar column
+    /// draws none of. The iPhone conversation sheet keeps the default `false` —
+    /// it is a browsing sheet, not a sidebar, and the platform already gives it
+    /// separators there. macOS never reads this flag: its style is set inside
+    /// the `#if os(macOS)` fence below and is not conditional, so the guarantee
+    /// that this changes nothing on that platform is the fence, not the default.
+    ///
+    /// MEASURED on an iPad Pro 13-inch (M5), iPadOS 26.5 simulator, portrait,
+    /// sidebar column x 10–330, from screenshot pixel columns at 2x:
+    ///
+    ///   default   no separator drawn      row content x 42.0
+    ///   `.inset`  separator 38.5–305.5    row content x 34.0
+    ///
+    /// with the selected row's `.listRowBackground` band spanning 26.0–313.5
+    /// (16pt inside the column, both ends) under `.inset`. Row PITCH measures
+    /// 117.0 under both — `conversationRow` owns the vertical metrics and this
+    /// style leaves them alone — so the flag changes what separates the rows and
+    /// where their content sits, never how tall they are.
+    var usesInsetListStyle: Bool = false
     /// Optional active-conversation highlight. The persistent-sidebar hosts (iPad
     /// split + macOS window) pass the currently-selected id so its row reads as
     /// "selected" (subtle amber row fill + the `.isSelected` VoiceOver trait); the
@@ -134,13 +165,13 @@ struct ConversationListView: View {
     /// pinned to 8pt. There is no lever that offsets the item by a chosen amount,
     /// which is why this file declares a bare `ToolbarItem` and takes the 14.
     ///
-    /// The 14 is also SYMMETRIC with the system's own sidebar toggle at the other
-    /// end of the same bar (326.0, 4pt inside the column's trailing edge at 330).
-    /// The `SidebarSearchField` capsule stacked underneath is what has to match
-    /// it, and it can, because ITS inset belongs to its host — see
-    /// `ConversationLibraryView`'s `.safeAreaInset`, which insets 4 so the
-    /// capsule's leading edge lands on this button's frame and its magnifier
-    /// glyph on this button's trash glyph.
+    /// The 14 is SYMMETRIC with the system's own sidebar toggle at the other end
+    /// of the same bar (326.0, 4pt inside the column's trailing edge at 330), so
+    /// the toolbar band is square in itself. It is the band's own edge and not
+    /// the column's: the content below — the pinned `SidebarSearchField` and the
+    /// list it filters — squares against the list's row box instead, which sits
+    /// further in. `ConversationLibraryView`'s `.safeAreaInset` carries those
+    /// frames.
     private var deleteAllPlacement: ToolbarItemPlacement {
         #if os(iOS)
         deleteAllLeading ? .topBarLeading : .primaryAction
@@ -452,6 +483,8 @@ struct ConversationListView: View {
         }
         #if os(macOS)
         .listStyle(.inset)
+        #elseif os(iOS)
+        .modifier(InsetListStyleModifier(isEnabled: usesInsetListStyle))
         #endif
         .scrollContentBackground(.hidden)
         .refreshable { await viewModel.reload() }
@@ -709,6 +742,26 @@ struct ConversationListView: View {
 }
 
 #if os(iOS)
+/// Applies the inset list style only where a host asks for it. Follows the same
+/// shape as `NativeSearchableModifier` below rather than an inline conditional:
+/// the `else` branch returns the content with no list style applied, so a host at
+/// the default renders exactly as it did before this flag existed. It is not a
+/// zero-cost wrapper — the content still gains a `ModifiedContent`/
+/// `_ConditionalContent` pair — but `isEnabled` is a constant per host, so the
+/// branch never flips and SwiftUI never rebuilds the subtree across it.
+private struct InsetListStyleModifier: ViewModifier {
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.listStyle(.inset)
+        } else {
+            content
+        }
+    }
+}
+
 /// Applies the native `.searchable` field ONLY when the host hasn't supplied its
 /// own search field. The iPhone sheet (no `externalSearchText`) opts in; the iPad
 /// sidebar passes an `externalSearchText` binding and renders a custom
