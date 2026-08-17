@@ -435,17 +435,39 @@ final class GatewayStaleStateTests: XCTestCase {
         XCTAssertNil(defaults.string(forKey: defaultBackendKey),
                      "The pointer names a gateway that no longer exists — dropped, exactly as a dangling CUSTOM pointer is.")
 
-        let resolved = await manager.defaultRemoteAgentRef()
-        XCTAssertEqual(resolved, .builtin(.hermes),
-                       "…and the existing config-sync bootstrap adopts a gateway that can actually take a turn — "
-                       + "the legacy KVS copy must NOT be seeded back in ahead of it.")
+        // …and the legacy KVS fossil is not seeded back in over the drop. Note
+        // WHY, because it is not this case's send-ability guard: the local pointer
+        // was still present when `handleICloudChange` settled the device-local
+        // migration, so it took its local-wins arm and burned the one-shot before
+        // the drop. Arm 2's guard is covered separately, by the cases in §6 that
+        // start from a device with no local pointer at all.
+        //
+        // What this case locks is the verdict on the other side of the drop. The
+        // resolver ASKS rather than guessing: nothing is stored, so it offers
+        // the survivor as a candidate and persists nothing. (The old expectation
+        // here was that a config-sync bootstrap silently adopted Hermes. That
+        // bootstrap is deleted on purpose — a pointer the device invented is
+        // indistinguishable one launch later from one the user chose, and only the
+        // user can tell them apart. Hermes is keyless here, so nothing proves the
+        // Keychain readable either, which is the second reason adoption is
+        // refused.)
+        let resolution = await manager.resolveDefaultGateway()
+        XCTAssertEqual(resolution, .selectionRequired(candidates: [.builtin(.hermes)]))
+        XCTAssertNil(defaults.string(forKey: defaultBackendKey),
+                     "Resolving must persist nothing here — least of all the fossil the drop just removed.")
     }
 
     /// The shape the built-ins-only version of this fix got wrong: a user whose
-    /// surviving gateways are all CUSTOM. A local Forget of a built-in promotes any
-    /// survivor, customs included (`SettingsViewModel.clearRemoteAgent`, Decision
-    /// B) — a peer's Forget of the same built-in must land in the same place, or
-    /// the outcome depends on which device the user happened to tap Forget on.
+    /// surviving gateways are all CUSTOM. A survivor that is a custom must be
+    /// treated exactly like a survivor that is a built-in — the outcome must not
+    /// depend on which kind of gateway happened to live through the Forget.
+    ///
+    /// "Treated the same" now means OFFERED, not promoted: the pointer is dropped
+    /// and the custom appears as the candidate the user is asked to pick. The old
+    /// expectation — silent promotion — was the unannounced guess this whole
+    /// design deletes; a headless capture no longer dead-ends on it either,
+    /// because it is refused with a named 74 instead of minting onto a gateway
+    /// that cannot answer.
     func testPeerForgetHealsWhenOnlyCustomGatewaysSurvive() async throws {
         let survivor = UUID()
         let defaults = InMemoryDefaultsStore()
@@ -465,10 +487,15 @@ final class GatewayStaleStateTests: XCTestCase {
             KVSChange(reason: .serverChange, changedKeys: [openclawURLKey, openclawAuthKey])
         )
 
-        let resolved = await manager.defaultRemoteAgentRef()
-        XCTAssertEqual(resolved, ref,
-                       "With no built-in left to take over, the surviving custom must — otherwise every "
-                       + "headless capture on this device mints onto a gateway that cannot answer, forever.")
+        XCTAssertNil(defaults.string(forKey: defaultBackendKey),
+                     "The pointer names a built-in the peer forgot — dropped here too.")
+
+        let resolution = await manager.resolveDefaultGateway()
+        XCTAssertEqual(resolution, .selectionRequired(candidates: [ref]),
+                       "A surviving CUSTOM is a candidate exactly as a surviving built-in is — "
+                       + "the user is asked, and nothing is written on their behalf.")
+        XCTAssertNil(defaults.string(forKey: defaultBackendKey),
+                     "…and asking persists nothing.")
     }
 
     func testInitialSyncDoesNotRepointTheDefault() async {
@@ -594,5 +621,95 @@ final class GatewayStaleStateTests: XCTestCase {
 
         XCTAssertEqual(defaults.string(forKey: defaultBackendKey), "openclaw",
                        "The default still works; a sibling's deletion is not its business.")
+    }
+
+    // MARK: - 6. The legacy default seed inherits only a gateway that can SEND
+
+    // Nothing ever deletes the legacy synced default from iCloud KVS, so every
+    // fresh install on the account inherits whatever some device chose some time
+    // ago — including a gateway nobody has set up since. That fossil is how a
+    // restored device comes back pointing at a dead gateway beside working ones,
+    // and how the pointer then survives forever (arm 1 wins on every later
+    // launch). The send-ability guard on arm 2 is the whole fix, so it needs a
+    // case that actually REACHES arm 2.
+    //
+    // Reaching it is the subtle part: whenever a local pointer is present, arm 1
+    // settles first and burns the one-shot flag, and every sibling case above
+    // stages a local pointer. These start from a fresh `InMemoryDefaultsStore`
+    // with NO local pointer and no flag, which is the restored-install shape.
+
+    /// The migration flag key, pinned as a literal for the same reason every other
+    /// key in this file is: a rename that would silently re-run a one-shot
+    /// migration on real devices must break a test, not pass quietly.
+    private var deviceLocalMigratedKey: String { "remoteAgentDefaultBackendDeviceLocalMigrated" }
+
+    func testTheLegacyFossilIsRefusedWhenItsGatewayCannotSend() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        // The fossil names OpenClaw, which has nothing behind it on this device.
+        kvs.set("openclaw", forKey: defaultBackendKey)
+        // …beside a gateway that genuinely works. This is the founder's iPad.
+        seedKeylessGateway(defaults, urlKey: hermesURLKey, authKey: hermesAuthKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        let resolution = await manager.resolveDefaultGateway()
+
+        XCTAssertNil(defaults.string(forKey: defaultBackendKey),
+                     "A pointer that cannot send is worth less than no pointer at all — nothing is DELETED on this path, so send-ability is the right bar.")
+        XCTAssertEqual(resolution, .selectionRequired(candidates: [.builtin(.hermes)]),
+                       "Refusing the fossil degrades to asking the user, which is the designed behaviour.")
+        XCTAssertFalse(defaults.bool(forKey: deviceLocalMigratedKey),
+                       "An inconclusive read must leave the one-shot UNSET, or a token that arrives later can never be honoured.")
+    }
+
+    /// The control that keeps the case above from passing vacuously: the same
+    /// shape with a fossil that CAN send is inherited, exactly as it always was.
+    func testTheLegacyFossilIsInheritedWhenItsGatewayCanSend() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        kvs.set("openclaw", forKey: defaultBackendKey)
+        seedKeylessGateway(defaults, urlKey: openclawURLKey, authKey: openclawAuthKey)
+        seedKeylessGateway(defaults, urlKey: hermesURLKey, authKey: hermesAuthKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        let resolution = await manager.resolveDefaultGateway()
+
+        XCTAssertEqual(defaults.string(forKey: defaultBackendKey), "openclaw",
+                       "The guard narrows arm 2; it must not disable it. A working fossil IS the user's own earlier choice.")
+        XCTAssertTrue(defaults.bool(forKey: deviceLocalMigratedKey),
+                      "A conclusive outcome burns the one-shot.")
+        XCTAssertEqual(resolution, .usable(.builtin(.openclaw)))
+    }
+
+    /// The deferred retry, which is the only reason refusing the fossil is safe.
+    /// The in-process latch holds the migration to one attempt per launch — right
+    /// for a migration, wrong for a seed that is WAITING for iCloud — so an
+    /// inbound change re-arms it once the gateway becomes send-able.
+    func testTheRefusedFossilIsSeededOnceItsGatewayArrives() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        kvs.set("openclaw", forKey: defaultBackendKey)
+        seedKeylessGateway(defaults, urlKey: hermesURLKey, authKey: hermesAuthKey)
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+
+        _ = await manager.resolveDefaultGateway()
+        XCTAssertNil(defaults.string(forKey: defaultBackendKey), "Precondition: the fossil was refused.")
+        XCTAssertFalse(defaults.bool(forKey: deviceLocalMigratedKey),
+                       "Precondition: the one-shot is still armed, which is what makes the retry possible.")
+
+        // iCloud finishes delivering the gateway the fossil names. Seeded into
+        // KVS, not `defaults`, because that IS the delivery: the inbound mirror
+        // in `handleICloudChange` copies a changed key down from the cloud store,
+        // and a value staged only locally would be removed by that same mirror as
+        // an absence.
+        kvs.set("https://gateway.example.test", forKey: openclawURLKey)
+        kvs.set(RemoteAgentAuthScheme.none.rawValue, forKey: openclawAuthKey)
+        await manager.handleICloudChange(
+            KVSChange(reason: .initialSyncChange, changedKeys: [openclawURLKey, openclawAuthKey])
+        )
+
+        XCTAssertEqual(defaults.string(forKey: defaultBackendKey), "openclaw",
+                       "The seed is retried on the bulk arrival it was waiting for — `.initialSyncChange` IS the fresh-install download.")
+        XCTAssertTrue(defaults.bool(forKey: deviceLocalMigratedKey))
     }
 }

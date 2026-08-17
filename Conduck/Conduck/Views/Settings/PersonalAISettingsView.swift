@@ -84,13 +84,20 @@ struct PersonalAISettingsView: View {
             case .defaultChooser:
                 DefaultGatewayPicker(
                     rows: viewModel.personalAIRows,
+                    // `viewModel.setDefaultRemoteAgentRef` routes through
+                    // `SettingsManager.applyUserChosenDefault` — the canonical
+                    // user-choice writer, which also retires the sticky last-used
+                    // pointer and acknowledges any pending adoption notice. Never
+                    // call `SettingsManager.setDefaultRemoteAgentRef` from here.
                     onActivate: { ref in
                         Task {
                             await viewModel.setDefaultRemoteAgentRef(ref)
                             self.route = nil
                         }
                     },
-                    onSetUp: { ref in self.route = .configure(ref) }
+                    onSetUp: { ref in self.route = .configure(ref) },
+                    brokenDefaultName: viewModel.defaultSelectorBrokenName,
+                    needsDefaultChoice: viewModel.defaultSelectorNeedsChoice
                 )
             case .configure(let ref):
                 RemoteAgentDetailView(viewModel: viewModel, ref: ref, guidedHost: $guidedHost)
@@ -123,32 +130,98 @@ struct PersonalAISettingsView: View {
     /// place to choose the gateway new conversations start on (mirrors the Voice
     /// STT/TTS selectors). Tapping opens the chooser; the gateway rows below are
     /// configure-only.
+    @ViewBuilder
     private var defaultSelectorSection: some View {
-        Section {
-            Button {
-                route = .defaultChooser
-            } label: {
-                DefaultGatewaySelectorRow(
-                    defaultName: viewModel.defaultSelectorDisplayName,
-                    needsSetup: viewModel.defaultSelectorNeedsSetup
-                )
+        // Two spellings of ONE section rather than a footer that renders an empty
+        // view: an empty footer slot still occupies a position and would leave a
+        // gap under the card. Everything but the footer is shared.
+        if let footer = defaultSelectorFooter {
+            Section {
+                defaultSelectorRow
+            } header: {
+                defaultSelectorHeader
+            } footer: {
+                Text(footer)
             }
-            .buttonStyle(.plain)
-        } header: {
-            // The tip sits in the HEADER, not the row: the row is a full-width
-            // Button whose `contentShape` claims every point in it, and
-            // `InfoTipButton`'s placement contract forbids nesting a tip inside a
-            // row action (its taps would go to the row). Its trailing slot is
-            // taken by the amber value + chevron, so the header is the one spot
-            // that keeps the tip a separate, actionable sibling.
-            HStack(spacing: 0) {
-                Text(LocalizedStringResource(
-                    "settings.personalAI.newChats.header",
-                    defaultValue: "New chats use"
-                ))
-                InfoTipButton(tip: GatewayFieldTips.defaultForNewChats)
+        } else {
+            Section {
+                defaultSelectorRow
+            } header: {
+                defaultSelectorHeader
             }
         }
+    }
+
+    private var defaultSelectorRow: some View {
+        Button {
+            route = .defaultChooser
+        } label: {
+            DefaultGatewaySelectorRow(
+                // "Not chosen yet" rather than a name when no default is stored:
+                // the compatibility shim projects to the built-in fallback there,
+                // which may itself be configured, so a name would claim a choice
+                // the user never made. Expressed through its OWN flag because
+                // `defaultSelectorNeedsSetup` must stay byte-identical.
+                defaultName: DefaultGatewayNotice.selectorValue(
+                    needsChoice: viewModel.defaultSelectorNeedsChoice,
+                    displayName: viewModel.defaultSelectorDisplayName
+                ),
+                needsSetup: viewModel.defaultSelectorFlagsBroken
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    // The tip sits in the HEADER, not the row: the row is a full-width
+    // Button whose `contentShape` claims every point in it, and
+    // `InfoTipButton`'s placement contract forbids nesting a tip inside a
+    // row action (its taps would go to the row). Its trailing slot is
+    // taken by the amber value + chevron, so the header is the one spot
+    // that keeps the tip a separate, actionable sibling.
+    private var defaultSelectorHeader: some View {
+        HStack(spacing: 0) {
+            Text(LocalizedStringResource(
+                "settings.personalAI.newChats.header",
+                defaultValue: "New chats use"
+            ))
+            InfoTipButton(tip: GatewayFieldTips.defaultForNewChats)
+        }
+    }
+
+    /// The footer under the selector, or nil when the default is unremarkable.
+    /// Broken first — a named gateway is the more specific fact — then the
+    /// nothing-chosen state.
+    ///
+    /// Two sentences only: the chooser one tap away already carries the
+    /// per-conversation invariant ("Existing chats keep the one they started on")
+    /// in `DefaultGatewayPicker`'s own footer, and repeating it here would make
+    /// the screen argue with itself about which sentence matters.
+    private var defaultSelectorFooter: String? {
+        if let name = viewModel.defaultSelectorBrokenName {
+            if DeviceCapabilities.isiPad {
+                return String(localized: LocalizedStringResource(
+                    "settings.personalAI.default.broken.footer.ipad",
+                    defaultValue: "\(name) isn't set up on this iPad, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up \(name)."
+                ))
+            }
+            return String(localized: LocalizedStringResource(
+                "settings.personalAI.default.broken.footer.iphone",
+                defaultValue: "\(name) isn't set up on this iPhone, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up \(name)."
+            ))
+        }
+        if viewModel.defaultSelectorNeedsChoice {
+            if DeviceCapabilities.isiPad {
+                return String(localized: LocalizedStringResource(
+                    "settings.personalAI.default.noChoice.footer.ipad",
+                    defaultValue: "Nothing that starts a chat from outside this iPad knows which gateway to use. Pick one and new chats will start on it."
+                ))
+            }
+            return String(localized: LocalizedStringResource(
+                "settings.personalAI.default.noChoice.footer.iphone",
+                defaultValue: "Nothing that starts a chat from outside this iPhone knows which gateway to use. Pick one and new chats will start on it."
+            ))
+        }
+        return nil
     }
 
     // MARK: - Gateway List

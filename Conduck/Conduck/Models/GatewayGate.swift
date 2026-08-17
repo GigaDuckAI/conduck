@@ -24,17 +24,16 @@
 //                        already spoken.
 //
 // The second is strictly stronger than the first, and the gap between them is a
-// REAL state, not a transient: `defaultRemoteAgentRef()` honours a built-in
-// pointer whether or not anything is stored behind it (see its comment for why
-// healing it is harmful), and `deleteCustomGateway` deliberately parks the
-// pointer on a built-in so the user chooses their next gateway rather than
-// inheriting one. A peer device's Forget arriving over iCloud reaches the same
-// state from the other direction. In all three the honest reading is "five
-// gateways work, the default among them does not" — never "no AI is set up".
-//
-// The Mac window used to answer the first question with the second and rendered
-// the beginner "Bring your own AI" empty state on it, on a device with five
-// verified gateways, with the toolbar blanked so there was no way back.
+// REAL state, not a transient. `SettingsManager.resolveDefaultGateway()` names
+// the shapes it takes: a stored pointer at a gateway that is not set up HERE
+// (`.brokenDefault`), no chosen default at all on a device where several
+// gateways work (`.selectionRequired`), a pointer parked on a built-in by
+// `deleteCustomGateway` so the user chooses their next gateway rather than
+// inheriting one, or a peer device's Forget arriving over iCloud. In every one
+// the honest reading is "five gateways work, the default among them does not" —
+// never "no AI is set up". Answering the first question with the second renders
+// the beginner "Bring your own AI" empty state on a device with five verified
+// gateways, with the toolbar blanked so there is no way back.
 //
 // REJECTED, and do not re-propose: resolving a FALLBACK gateway when the default
 // cannot send, so a capture never dead-ends. It reads as an obvious kindness and
@@ -75,17 +74,26 @@ enum GatewayGate {
         !configured.isEmpty
     }
 
-    /// Whether the menu-bar quick lane can send — i.e. whether the gateway a
-    /// hotkey capture will mint on is one that can actually take the turn.
+    /// Whether the menu-bar quick lane can MINT — i.e. whether the gateway a
+    /// hotkey capture would start a fresh chat on can actually take the turn.
     ///
-    /// Membership of the CONFIGURED set, not merely "the pointer parses": the set
-    /// is the fail-closed predicate (a URL alone is not enough — a `.bearer` ref
-    /// needs its token), which is exactly the guarantee a lane with no picker and
-    /// no pre-send confirmation needs.
-    static func isQuickCaptureReady(
-        configured: [RemoteAgentRef],
-        defaultRef: RemoteAgentRef
-    ) -> Bool {
-        configured.contains(defaultRef)
+    /// It is half of the lane's readiness, not all of it. A capture that
+    /// CONTINUES a live quick-lane conversation never reaches the default, so
+    /// `MenuBarCoordinator` asks `SharedInboxRouting.liveQuickCaptureCanContinue`
+    /// first and only falls back to this verdict — the same order the router
+    /// itself resolves in, and the same order the Shortcut pre-flight and the
+    /// wrist use. Keep that composition at the call site: this function is pure
+    /// over a resolution and has no pointer to consult.
+    ///
+    /// A projection of the RESOLUTION rather than a set-membership test, because
+    /// membership cannot express every state the pointer can be in: with no
+    /// default chosen at all the resolution projects to the built-in fallback,
+    /// which may itself be configured, so a membership test would answer "ready"
+    /// for a device whose next capture has nowhere honest to go. `canSend` is
+    /// true only where the pointer is a member of the configured set by
+    /// construction — exactly the guarantee a lane with no picker and no pre-send
+    /// confirmation needs.
+    static func isQuickCaptureReady(resolution: DefaultGatewayResolution) -> Bool {
+        resolution.canSend
     }
 }

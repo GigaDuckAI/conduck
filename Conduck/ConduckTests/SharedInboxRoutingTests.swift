@@ -69,6 +69,13 @@ final class SharedInboxRoutingTests: XCTestCase {
     func testUnconfiguredDefaultThrowsNotConfigured() async {
         // No default backend URL/token configured + no pointer → the mint path
         // snapshots the default backend, finds nothing, and throws.
+        //
+        // VERDICT: `.nothingConfigured`. Nothing can send, no ref clears the
+        // non-Keychain requirements, and the wipe left no setup residue — so the
+        // reading IS trustworthy and code 12's copy is exactly accurate. Code 74
+        // requires OTHER gateways to be working, which this fixture never
+        // arranges; flipping this expectation would assert the opposite of what
+        // the test sets up.
         let store = ConversationStore(inMemory: true)
         do {
             _ = try await SharedInboxRouting.resolveOrMint(store: store)
@@ -86,6 +93,13 @@ final class SharedInboxRoutingTests: XCTestCase {
 
     func testURLButNoTokenThrowsWithoutMinting() async throws {
         // Default backend has a URL but NO token → not-configured, no mint.
+        //
+        // VERDICT: `.readingUnreliable`. Nothing can send, and the default meets
+        // every non-Keychain requirement while waiting only on a token that does
+        // not read back — which is exactly what an after-first-unlock blackout
+        // looks like. The mint therefore runs with the UNVERIFIED role and fails
+        // closed on code 12: naming a broken default here would be an accusation
+        // made by a device that cannot see its own secrets.
         let store = ConversationStore(inMemory: true)
         await SettingsManager.shared.setDefaultRemoteAgentBackend(.openclaw)
         let u = try XCTUnwrap(URL(string: "https://openclaw.example.test:18789"))
@@ -255,6 +269,11 @@ final class SharedInboxRoutingTests: XCTestCase {
     func testDeletedConversationWithUnconfiguredBackendHintThrows() async throws {
         // The captured backend hint is for a gateway that is NOT configured →
         // throw (drainer fails the share), never reroute to the default.
+        //
+        // STAYS CODE 12, and never reaches the resolver at all: this is
+        // precedence #2, an `.explicitPick`. The user NAMED Hermes, so the
+        // refusal is about Hermes — "your default AI isn't set up" would be a
+        // lie about a gateway (OpenClaw) that is working perfectly here.
         let store = ConversationStore(inMemory: true)
         await SettingsManager.shared.setDefaultRemoteAgentBackend(.openclaw)
         try await configureOrSkip(.openclaw, url: "https://openclaw.example.test:18789", token: "tok-oc")
@@ -279,6 +298,11 @@ final class SharedInboxRoutingTests: XCTestCase {
         // unsigned (no token needed — the throw fires before any snapshot read
         // when the default itself is unconfigured; here we leave default
         // unconfigured so it's deterministic without a token).
+        //
+        // STAYS CODE 12: precedence #2's no-hint arm throws directly, before any
+        // resolution is computed. The user targeted a specific CONVERSATION and
+        // it is gone — nothing about this device's default is in question, so 74
+        // would answer a question nobody asked.
         let store = ConversationStore(inMemory: true)
         do {
             _ = try await SharedInboxRouting.resolveOrMint(
@@ -316,6 +340,10 @@ final class SharedInboxRoutingTests: XCTestCase {
         // "New conversation in Hermes" but Hermes is not configured → throw
         // (drainer fails the share), no stray thread. Runs unsigned (no token write needed —
         // the unconfigured Hermes snapshot is nil before any token check).
+        //
+        // STAYS CODE 12: precedence #3/#4 is an `.explicitPick` too. The pick is
+        // the user's, not the pointer's, so the refusal must not describe the
+        // default.
         let store = ConversationStore(inMemory: true)
         do {
             _ = try await SharedInboxRouting.resolveOrMint(
@@ -333,6 +361,9 @@ final class SharedInboxRoutingTests: XCTestCase {
     func testMalformedNewGatewayRefThrows() async throws {
         // A new-gateway ref string that parses to no RemoteAgentRef → throw
         // (drainer fails the share), never reroute. Runs unsigned.
+        //
+        // STAYS CODE 12: a malformed target is not a statement about the
+        // default, and this arm throws before any resolution is computed.
         let store = ConversationStore(inMemory: true)
         do {
             _ = try await SharedInboxRouting.resolveOrMint(

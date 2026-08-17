@@ -131,6 +131,11 @@ final class AppErrorTests: XCTestCase {
             ("remoteAgentServerError",      .remoteAgentServerError),
             ("remoteAgentCertMismatch",     .remoteAgentCertMismatch),
             ("remoteAgentInvalidResponse",  .remoteAgentInvalidResponse),
+            // 74 — the default pointer can't take a NEW chat. Its display-name
+            // payload is lossy over the wire (a bare code restores no String),
+            // but the CODE round-trips to itself rather than collapsing, so the
+            // Watch relay renders the unnamed copy instead of a blank banner.
+            ("remoteAgentDefaultNeedsSetup", .remoteAgentDefaultNeedsSetup(gatewayName: "OpenClaw")),
             // cloud TTS taxonomy (codes 36-40). Round-trip is load-bearing
             // for the Watch relay wire decoder — same contract as STT codes.
             ("ttsProviderUnreachable",      .ttsProviderUnreachable),

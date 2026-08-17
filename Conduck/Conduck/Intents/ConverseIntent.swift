@@ -8,8 +8,10 @@
 //
 // Two-hop terminal contract:
 //   1. STT hop (foreground STTClient) — Shortcuts gives ~30 s before
-//      suspension; a typical clip + Mistral round-trip fits within. The
-//      `PendingRetryGuard` arm/disarm discipline covers THIS hop only.
+//      suspension; a typical clip + Mistral round-trip fits within.
+//      `PendingRetryGuard` covers this hop AND the destination resolve that
+//      follows it, disarming at exactly one place: the moment the user turn
+//      lands in `ConversationStore`. See the RETRY-GUARD SPAN note below.
 //   2. Converse hop (background URLSession via `BackgroundRemoteAgent`) —
 //      FIRE-AND-FORGET: perform() dispatches the converse and returns
 //      immediately, so the Shortcut ends without waiting for the reply (which
@@ -25,6 +27,35 @@
 // configured backend. The user turn is appended BEFORE the converse hop so the
 // store is the source of truth even if the reply never lands.
 //
+// DESTINATION PRE-FLIGHT, and its honest limit. This intent receives
+// `audioFile: IntentFile` — the recording has ALREADY happened, inside the
+// system Record Audio action — so a check here can only fail FASTER, never
+// before the microphone. It exists for users who hand-built their own shortcut
+// and never included `CheckNetworkIntent`. The lanes where the check genuinely
+// lands before the mic are `CheckNetworkIntent` (first action of the bundled
+// shortcut), CarPlay, the menu bar and the Watch.
+//
+// It asks its question in the SAME ORDER `SharedInboxRouting.resolveOrMint`
+// asks it — live quick-capture pointer first, this device's "Default for new
+// chats" only when there is no live pointer — through the same helper
+// `CheckNetworkIntent` uses. That order is load-bearing here rather than merely
+// tidy: this check runs AFTER the microphone, so a refusal it invents that the
+// pre-flight already waved through costs the user words they have spoken.
+//
+// RETRY-GUARD SPAN, and why it is not the STT hop. Ordering the two checks
+// identically closes a RULE gap; it cannot close a TIME gap. A quick-capture
+// pointer that is TTL-fresh at the pre-flight can cross its
+// `SessionContinuationPolicy` window while the user is still speaking, so the
+// post-mic resolve reaches the default's verdict after the pre-flight waved the
+// capture through — and refuses. I6 says a refusal that arrives after the user
+// has spoken must leave the audio in the retry lane, so the guard stays armed
+// across BOTH the STT hop and the destination resolve, and disarms at the one
+// point the spoken words stop depending on it: `runConverseHop`'s
+// `appendMessage`, where the transcript becomes a durable row. Everything that
+// can fail after that append (assembly, dispatch) leaves a turn in the thread
+// with its own Retry affordance, so keeping the recording too would only
+// duplicate it.
+//
 // Title / description / parameter labels carry `// xcstrings` markers.
 
 import Foundation
@@ -37,9 +68,9 @@ import UIKit
 
 /// Main capture-and-converse intent — fires from the bundled Shortcut
 /// (Action Button, Lock Screen, Control Center widget). Foreground STTClient
-/// call for the STT hop; `PendingRetryGuard` arms preempt-save so an OS-kill
-/// mid-STT still leaves the recording recoverable. The agent converse hop
-/// runs on the background URLSession.
+/// call for the STT hop; `PendingRetryGuard` arms preempt-save so an OS-kill —
+/// or a destination that goes away mid-recording — still leaves the recording
+/// recoverable. The agent converse hop runs on the background URLSession.
 struct ConverseIntent: AppIntent {
     static var title: LocalizedStringResource = "GigaAction"   // xcstrings
 
@@ -169,6 +200,74 @@ struct ConverseIntent: AppIntent {
             metadata: pendingMetadata
         )
 
+        // Pre-flight the DESTINATION before spending an STT call. Placed AFTER
+        // `arm` and OUTSIDE the `do` on purpose: Shortcuts already recorded the
+        // audio, so the only thing left to save is the recording, and throwing
+        // from here reaches no disarm at all — the user gets the in-app Retry
+        // card plus the deferred "Recording Saved" notification, and the STT
+        // provider is never charged for a turn that had nowhere to land. (The
+        // mid-flight twin — a pointer that ages out of its continuation window,
+        // or a peer forgetting the default, DURING the recording — throws 74 out
+        // of `runConverseHop` instead. The guard is still armed there, because
+        // it disarms only inside `runConverseHop` once the user turn is stored,
+        // so that refusal reaches the same outcome.)
+        let preflight = await SettingsManager.shared.newChatPickerSnapshot()
+        // The pointer arm, asked FIRST and through the router's own helper — the
+        // same question `CheckNetworkIntent` asks before the microphone, so a
+        // capture that lane waves through can never be refused by this one after
+        // the words are already spoken. `resolveOrMint` reaches the default only
+        // when no live pointer answers, so a capture that continues a
+        // conversation on a gateway set up here is not minting anything and no
+        // verdict about the default may refuse it. A conversation bound to a
+        // gateway that is NOT set up here answers false and earns the refusal
+        // below, unchanged (I1).
+        let continuesLiveConversation = await SharedInboxRouting.liveQuickCaptureCanContinue(
+            defaultRef: preflight.defaultRef
+        )
+        if !continuesLiveConversation {
+            switch preflight.resolution {
+            case .brokenDefault(let broken, _, let pointerIsParked):
+                // Dropping the temp file is safe: `PendingRetryStore.save(audioData:
+                // metadata:)` already wrote its own App Group copy, and the in-app
+                // retry path re-writes a fresh temp file from those bytes.
+                try? FileManager.default.removeItem(at: audioFileURL)
+                // A pointer the APP parked after a Forget is not "your default
+                // AI": the user never chose it, and may never have set it up, so
+                // it takes the unnamed sentence rather than being blamed by name.
+                let error: AppError
+                if pointerIsParked {
+                    error = .remoteAgentDefaultNeedsSetup(gatewayName: nil)
+                } else {
+                    error = .remoteAgentDefaultNeedsSetup(
+                        gatewayName: RemoteAgentRefMetadata.displayName(for: broken, customs: preflight.badgeRoster))
+                }
+                // The Shortcut may have no visible UI (Action Button), so the push
+                // is the user's only tappable route to the fix. Its identifier is
+                // fixed, so repeated captures replace rather than stack.
+                await BackgroundRemoteAgent.postDefaultNeedsSetupNotification(error: error)
+                throw error
+            case .selectionRequired:
+                try? FileManager.default.removeItem(at: audioFileURL)
+                let error = AppError.remoteAgentDefaultNeedsSetup(gatewayName: nil)
+                await BackgroundRemoteAgent.postDefaultNeedsSetupNotification(error: error)
+                throw error
+            case .usable, .adopted, .bootstrapped, .nothingConfigured, .setupUnfinished, .readingUnreliable:
+                // The three not-configured verdicts deliberately fall through to the
+                // send path, which throws code 12 with its existing, accurate copy.
+                // Refusing `.readingUnreliable` here would accuse a default that may
+                // be perfectly healthy behind a locked Keychain.
+                break
+            }
+        }
+
+        // True from the moment the spoken words exist as text. Until the user
+        // turn is stored, the preserved recording is the ONLY copy of what the
+        // user said, so the catch chain below may not clear the retry lane on
+        // any failure past this point (I6). Before it, a bad-input verdict —
+        // silence, a bad key, an oversized clip — still disarms, because the
+        // same bytes cannot succeed on a second attempt.
+        var transcriptCaptured = false
+
         do {
             // Foreground multipart upload. STTClient owns the retry loop
             // (per-error budget) + audio-file `defer` cleanup. We hand it
@@ -197,22 +296,23 @@ struct ConverseIntent: AppIntent {
                 // "no speech" message, NOT the catch-all `.apiFailure` (which
                 // renders the misleading "Something glitched on our end" banner —
                 // implies a server fault for what is just silence). Both are
-                // `shouldPreserveForRetry == false`, so the catch chain below still
-                // disarms the guard identically; only the surfaced string changes.
+                // `shouldPreserveForRetry == false` AND both land while
+                // `transcriptCaptured` is still false, so the catch chain below
+                // disarms on either; only the surfaced string changes.
                 throw AppError.noSpeechDetected
             }
 
-            // STT hop succeeded — disarm the retry guard (cancels notification
-            // + clears store). The converse hop below relies on the background
-            // URLSession's relaunch semantics, NOT the retry guard.
-            await PendingRetryGuard.disarm(guardToken)
+            // The words now exist as text, and nothing from here on may throw
+            // them away. The guard stays armed until `runConverseHop` stores the
+            // user turn.
+            transcriptCaptured = true
 
             // Completion chime / haptic for the STT hop landing.
             CompletionFeedbackPlayer.play(mode: "sound")
 
-            // --- Optional screenshot: process AFTER the retry guard is disarmed ---
-            // Kept entirely outside the audio retry machinery (the guard above
-            // covers the STT hop only). Best-effort, mirroring the composer's
+            // --- Optional screenshot ---
+            // Kept entirely outside the audio retry machinery. Best-effort,
+            // mirroring the composer's
             // `try?` semantics: an image-processing failure NEVER fails the whole
             // ask — it degrades to text-only. `screenshotDataURIs` rides the
             // EXISTING inline-vision wire path; `screenshotDraft` persists the
@@ -245,7 +345,8 @@ struct ConverseIntent: AppIntent {
             try await Self.runConverseHop(
                 userText: transcript,
                 imageDataURIs: screenshotDataURIs,
-                screenshotDraft: screenshotDraft
+                screenshotDraft: screenshotDraft,
+                retryGuardToken: guardToken
             )
             // Return the transcript (what was captured) as the intent result —
             // unused by the bundled Shortcut today, but meaningful if a
@@ -264,7 +365,17 @@ struct ConverseIntent: AppIntent {
             // Known-bad-input errors (audio_too_large, audioInvalid,
             // sttAuthFailed, sttMissingAPIKey, sttQuotaExceeded, etc.) —
             // same audio won't recover by retrying, so disarm.
-            await PendingRetryGuard.disarm(guardToken)
+            //
+            // `transcriptCaptured` is what keeps that rule from reaching past
+            // the microphone. Every code that lands here once the words ARE
+            // transcribed is a destination verdict, not a verdict about the
+            // bytes — `.remoteAgentNotConfigured` when nothing is set up here,
+            // a store failure before the append — and the same recording DOES
+            // succeed once the user has fixed what the verdict names. Disarming
+            // there would delete the only copy of what they said (I6).
+            if !transcriptCaptured {
+                await PendingRetryGuard.disarm(guardToken)
+            }
             throw error
 
         } catch {
@@ -285,9 +396,28 @@ struct ConverseIntent: AppIntent {
     /// the reply notification on success, or a failure notification on error,
     /// AFTER this returns.
     ///
-    /// `RemoteAgent` not configured → throws `.remoteAgentNotConfigured`
-    /// (surfaced as the friendly error in Shortcuts; no crash). Such pre-dispatch
-    /// errors still surface in the Shortcut; only the reply WAIT is removed.
+    /// THROWING CONTRACT for the destination. `SharedInboxRouting.resolveOrMint()`
+    /// raises `.remoteAgentDefaultNeedsSetup` on the MINT path when this device's
+    /// default cannot take a new chat and the roster offers alternatives, or when
+    /// no default has been chosen at all; it raises `.remoteAgentNotConfigured`
+    /// when nothing is set up, when the reading cannot be trusted, and whenever a
+    /// conversation is BOUND to a gateway that is not set up here. Either way the
+    /// error surfaces as a friendly Shortcuts error; no crash.
+    ///
+    /// The mid-flight answer, explicitly: if the quick-capture pointer ages out
+    /// of its continuation window — or a peer forgets the default — DURING the
+    /// recording, `perform()`'s pre-flight has already passed and this resolve
+    /// throws instead. No conversation is minted, no user turn is appended,
+    /// nothing is rebound, and no fallback gateway is chosen. The audio survives
+    /// because `retryGuardToken` is still armed at that point: the disarm sits
+    /// below the append, not above this resolve (I6).
+    ///
+    /// `retryGuardToken` is the OWNER of that decision, which is why it is
+    /// required rather than optional. It disarms in exactly one place — once
+    /// `appendMessage` has stored the user turn — because that is the moment the
+    /// transcript stops depending on the recording. A failure after it leaves a
+    /// turn in the thread carrying its own Retry chip, so a preserved recording
+    /// on top would duplicate the ask on the next tap.
     ///
     /// `imageDataURIs` (default `[]`) rides the EXISTING inline-vision path into
     /// `BackgroundRemoteAgent.send(newUserImageDataURIs:)`. `screenshotDraft`
@@ -297,7 +427,8 @@ struct ConverseIntent: AppIntent {
     private static func runConverseHop(
         userText: String,
         imageDataURIs: [String] = [],
-        screenshotDraft: AttachmentDraft? = nil
+        screenshotDraft: AttachmentDraft? = nil,
+        retryGuardToken: PendingRetryGuard.Token
     ) async throws {
         // REORDER (per-conversation routing): resolve-or-mint the conversation
         // FIRST, then route by ITS bound backend (not the global default). An
@@ -306,7 +437,19 @@ struct ConverseIntent: AppIntent {
         // branch (pointer → existing-row-route, else validate-default-then-mint)
         // is the SHARED helper both this intent and the Share-Extension drainer
         // call, so the routing rule can never drift between them.
-        let routed = try await SharedInboxRouting.resolveOrMint()
+        let routed: SharedInboxRouting.Resolved
+        do {
+            routed = try await SharedInboxRouting.resolveOrMint()
+        } catch let error as AppError {
+            // A default that broke between the pre-flight and here. There is no
+            // conversation to notify against, so the fix-route push carries it —
+            // same fixed identifier as the pre-flight's, so the two can never
+            // stack. Every other error rethrows untouched.
+            if case .remoteAgentDefaultNeedsSetup = error {
+                await BackgroundRemoteAgent.postDefaultNeedsSetupNotification(error: error)
+            }
+            throw error
+        }
         let conversationID = routed.conversationID
         let snapshot = routed.snapshot
         let token = routed.token
@@ -342,6 +485,15 @@ struct ConverseIntent: AppIntent {
             status: "sending",
             attachments: attachments
         )
+
+        // THE DISARM. The spoken words are now a durable row, so the preserved
+        // recording has nothing left to protect: cancel the deferred "Recording
+        // Saved" notification and clear the store. Everything above this line —
+        // the destination resolve and its refusals included — leaves the guard
+        // armed, which is what makes I6 true for a capture refused after the
+        // user has already spoken. Everything below fails into the turn's own
+        // Retry chip instead.
+        await PendingRetryGuard.disarm(retryGuardToken)
 
         // Stamp the active-conversation pointer NOW — before the (possibly
         // minutes-long) converse hop — so a process kill mid-converse still

@@ -42,6 +42,20 @@ struct ConversationLibraryView: View {
     /// Cached custom roster, for resolving picker labels without an actor hop.
     /// Host-owned (`ContentView.customGateways`).
     let customGateways: [CustomGateway]
+    /// The default-gateway statement for this device, or nil when there is nothing
+    /// honest to say. Host-owned (`ContentView.visibleDefaultGatewayNotice`) —
+    /// already filtered by this session's dismissal, and resolved in the SAME
+    /// snapshot turn as `configuredRefs`, so the banner and the picker can never
+    /// describe different rosters.
+    ///
+    /// NO `GatewayFixRoute` consumer belongs in this view. `consume()` is one-shot
+    /// read-and-clear, and this view's host (`ContentView`, iPad branch) already
+    /// carries the `.onReceive` + `.onAppear` pair plus the `.fullScreenCover` that
+    /// actually lands the route. A second consumer under the same host is a race
+    /// whose loser silently drops the request.
+    let defaultGatewayNotice: DefaultGatewayNotice?
+    let onOpenPersonalAIFromNotice: () -> Void
+    let onDismissDefaultGatewayNotice: () -> Void
     /// Session-local gateway-picker selection for the NEXT new conversation.
     /// Bound through to the host (`ContentView.pickerSelectedRef`), whose
     /// `sendTurn` mint reads it. Writing the binding from the picker changes the
@@ -199,6 +213,21 @@ struct ConversationLibraryView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
+                // The DETAIL column, not the sidebar: the sidebar lists
+                // conversations that already exist, and this sentence is about the
+                // NEXT one. Same padding + transition as the iPhone placement in
+                // `ContentView.phoneLayout`, so the two shells read as one app.
+                if let notice = defaultGatewayNotice {
+                    DefaultGatewayNoticeBanner(
+                        notice: notice,
+                        onOpenPersonalAI: onOpenPersonalAIFromNotice,
+                        onDismiss: onDismissDefaultGatewayNotice
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
                 threadContent
             }
 

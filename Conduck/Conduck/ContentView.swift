@@ -146,6 +146,17 @@ struct ContentView: View {
     @State private var didCompleteInitialConfiguredLoad = false
     /// Drives the transient "synced from your other device" banner.
     @State private var showSyncedBanner = false
+    /// The default-gateway statement for THIS device, recomputed from the same
+    /// `newChatPickerSnapshot` turn the picker seed already takes — one actor turn,
+    /// one answer, so the banner and the picker can never describe different
+    /// rosters. nil = nothing honest to say.
+    @State private var defaultGatewayNotice: DefaultGatewayNotice?
+    /// The notice the user waved off THIS SESSION, keyed to what it was ABOUT
+    /// (`.broken(ref)` / `.noDefaultChosen`) rather than to a bare Bool, so
+    /// forgetting one gateway and breaking another still speaks up. Session-scoped
+    /// on purpose: persisting a dismissal would need a storage key for a state that
+    /// fixes itself the moment the user acts.
+    @State private var dismissedGatewayNoticeKey: DefaultGatewayNotice.DismissalKey?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -171,6 +182,9 @@ struct ContentView: View {
                 backendTitle: backendTitle,
                 configuredRefs: configuredRefs,
                 customGateways: customGateways,
+                defaultGatewayNotice: visibleDefaultGatewayNotice,
+                onOpenPersonalAIFromNotice: { openPersonalAIFromNotice() },
+                onDismissDefaultGatewayNotice: { dismissDefaultGatewayNotice() },
                 selectedRef: $pickerSelectedRef,
                 canPickBackend: canPickBackend,
                 onPickBackend: { userPickedRefForNewChat = true },
@@ -242,6 +256,10 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
                 Task { await refreshConfiguredFlag() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
+                consumeGatewayFixRoute()
+            }
+            .onAppear { consumeGatewayFixRoute() }
         } else {
             phoneLayout
         }
@@ -424,6 +442,22 @@ struct ContentView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
+                    // Third of three, and the order is the argument: the retry
+                    // card is about a recording that already exists and outranks
+                    // everything, and the synced banner auto-dismisses after ~3s
+                    // (`presentSyncedBanner()`), so it belongs above a notice that
+                    // stays on screen until the user acts on it or waves it off.
+                    if let notice = visibleDefaultGatewayNotice {
+                        DefaultGatewayNoticeBanner(
+                            notice: notice,
+                            onOpenPersonalAI: { openPersonalAIFromNotice() },
+                            onDismiss: { dismissDefaultGatewayNotice() }
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
                     threadContent
                 }
             }
@@ -598,6 +632,10 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
                 Task { await refreshConfiguredFlag() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
+                consumeGatewayFixRoute()
+            }
+            .onAppear { consumeGatewayFixRoute() }
             #if os(iOS)
             .onChange(of: detailVM?.isAwaitingReply) { old, new in
                 handleInFlightHaptic(from: old, to: new)
@@ -780,6 +818,90 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Default-gateway notice
+
+    /// The resolved notice minus anything the user waved off this session.
+    private var visibleDefaultGatewayNotice: DefaultGatewayNotice? {
+        guard let notice = defaultGatewayNotice else { return nil }
+        if let key = notice.dismissalKey, key == dismissedGatewayNoticeKey { return nil }
+        return notice
+    }
+
+    /// Wave the notice off. The two SESSION states park their identity in
+    /// `dismissedGatewayNoticeKey`; `.adopted` has no key because acknowledging
+    /// the STORED record is what dismisses it — that acknowledgment survives a
+    /// relaunch, and clearing it lets the slot fall through to a broken-default or
+    /// no-default notice when the pointer is unhappy again.
+    private func dismissDefaultGatewayNotice() {
+        guard let notice = defaultGatewayNotice else { return }
+        if let key = notice.dismissalKey {
+            withAnimation { dismissedGatewayNoticeKey = key }
+        } else {
+            Task {
+                await SettingsManager.shared.acknowledgeDefaultAdoptionNotice()
+                await refreshGatewayRoster()
+            }
+        }
+    }
+
+    /// Land on Settings → Personal AI, which shows BOTH doors: pick a different
+    /// gateway, or finish setting up the named one. Same `settingsRoute == nil`
+    /// double-tap guard as `openGuidedSetupFromEmptyState()` — a second tap would
+    /// mint a fresh route UUID mid-presentation.
+    ///
+    /// The guard is INSIDE the body rather than around the declaration (the shape
+    /// `openGuidedSetupFromEmptyState` takes) because the banner that calls this
+    /// renders in the cross-platform `phoneLayout` stack; `settingsRoute` is the
+    /// iOS-only presentation state.
+    private func openPersonalAIFromNotice() {
+        #if os(iOS)
+        guard settingsRoute == nil else { return }
+        settingsRoute = SettingsRoute(category: .personalAI)
+        #endif
+    }
+
+    /// Land a headless fix request (`GatewayFixRoute.request()`) on
+    /// Settings → Personal AI.
+    ///
+    /// `consumeIfStillBroken()` is one-shot read-and-clear, so this is called from
+    /// BOTH an `.onReceive` of `.openGatewayFixRoute` and an `.onAppear`: a warm
+    /// app hears the post, and a cold launch is asked BEFORE this view mounts and
+    /// misses the post entirely. Both of this file's layout branches carry the
+    /// pair, because only one of the two is ever mounted at a time.
+    ///
+    /// It re-reads the default before navigating and drops a request whose
+    /// problem is already solved — gateway definitions sync and a Keychain that
+    /// has become readable can make the same pointer sendable with no pointer
+    /// write at all. `MainWindowView` lands the same request through the same
+    /// call, so the two roots cannot disagree about when the route still stands.
+    ///
+    /// THE GUARD COMES BEFORE THE CLAIM. `settingsRoute` drives `.sheet(item:)` /
+    /// `.fullScreenCover(item:)` keyed on `route.id`, so assigning a fresh route
+    /// over a presented one tears the surface down and takes any half-typed
+    /// bearer token with it — the same reason `openPersonalAIFromNotice()` and
+    /// `openGuidedSetupFromEmptyState()` guard. And `consumeIfStillBroken()` is a
+    /// one-shot read-and-clear, so claiming first and guarding second would SPEND
+    /// the route and navigate nowhere. A route left unclaimed here is DEFERRED,
+    /// not dropped: Settings is already on screen, which is where it wanted to
+    /// send the user, and `handleSettingsDismiss()` runs this again when that
+    /// surface goes away — so a user who accepts a refusal's offer from inside
+    /// Settings → Voice still lands on Personal AI when they tap Done.
+    private func consumeGatewayFixRoute() {
+        Task {
+            #if os(iOS)
+            guard settingsRoute == nil else { return }
+            #endif
+            guard await GatewayFixRoute.consumeIfStillBroken() else { return }
+            #if os(iOS)
+            // Re-checked after the suspension: a sibling may have presented
+            // Settings while the default was being re-read, and it presents the
+            // same category, so dropping the spent route disturbs nothing.
+            guard settingsRoute == nil else { return }
+            settingsRoute = SettingsRoute(category: .personalAI)
+            #endif
+        }
+    }
+
     // MARK: - Lifecycle
 
     private func initialLoad() async {
@@ -874,6 +996,14 @@ struct ContentView: View {
             currentConversationID = await resolveInitialConversationID()
             syncDetailVM()
         }
+        // A fix route that arrived while a Settings surface was up was left ARMED
+        // rather than spent — the presentation guard refuses to assign a fresh
+        // route over a presented sheet. Nothing else re-runs the claim, so a user
+        // who accepted a refusal's offer to continue in the app while sitting in
+        // Settings → Voice would tap Done and land nowhere. Re-consume here; the
+        // claim is one-shot, so an unarmed route is a no-op. `MainWindowView`'s
+        // `onDone` is the macOS twin.
+        consumeGatewayFixRoute()
     }
 
     /// Refresh the pending-retry card's presence AND its arming error code
@@ -946,6 +1076,15 @@ struct ContentView: View {
 
         configuredRefs = refs
         customGateways = snapshot.badgeRoster
+        // ABOVE the guard, deliberately: the default pointer is a property of the
+        // DEVICE, not of the chat on screen. Below the guard this would freeze at
+        // whatever it said the last time the user stood on the empty state, so a
+        // default that broke while a thread was open would never be mentioned.
+        defaultGatewayNotice = DefaultGatewayNotice.resolve(
+            resolution: snapshot.resolution,
+            roster: snapshot.badgeRoster,
+            pendingAdoption: snapshot.pendingAdoptionNotice
+        )
         // Inside a thread the picker is hidden, so the selection is irrelevant.
         guard currentConversationID == nil, !attachmentGatewaySelectionLocked else { return refs }
         // A hand-pick outranks the seed until this chat is minted or the user

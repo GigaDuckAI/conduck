@@ -1,6 +1,28 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "watch.capture.defaultGatewayNotSetUp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up. Choose which AI new chats use, on your iPhone."
+          }
+        }
+      }
+    },
+    "watch.capture.noDefaultGatewayNamed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose which AI new chats use, on your iPhone."
+          }
+        }
+      }
+    },
     "" : {
 
     },

@@ -111,6 +111,11 @@ struct WatchNoteView: View {
     /// gateway) so a pointer / default-gateway change mid-recording cannot
     /// reroute the turn, then pushes `.capture(target)` and auto-records inside
     /// the (possibly draft) thread.
+    ///
+    /// The resolution can also be a REFUSAL — the default gateway is not one
+    /// this Watch can send to — in which case nothing is pushed and nothing is
+    /// recorded. The refusal arrives as a value, so the ORDER stays here where
+    /// it belongs: a live turn and the master switch both outrank it.
     private func drainCoordinatorIfNeeded() {
         guard coordinator.consumePending() else { return }
         // Resolve existing-vs-new + the gateway ref NOW (trigger time), incl.
@@ -120,9 +125,16 @@ struct WatchNoteView: View {
         // routing verdict itself is pure (`HeadlessDrainDecision`, unit-
         // tested) — this method only executes its side effects.
         Task { @MainActor in
-            let target = await recordingService.resolveHeadlessCaptureTarget()
+            let resolution = await recordingService.resolveHeadlessCaptureTarget()
+            // A refusal has no target. `.new` with an empty ref can never
+            // produce `.directStart` (that arm needs `.existing` matching the
+            // displayed thread), so passing it asks the ladder only the
+            // question we actually need from it: does a LIVE turn, or the
+            // master switch, outrank this press? Reusing `HeadlessDrainDecision`
+            // rather than re-testing `state` inline keeps one copy of the
+            // ordering rule — two copies would drift.
             let verdict = HeadlessDrainDecision.make(
-                target: target,
+                target: resolution.captureTarget ?? .new(backendRef: ""),
                 displayedConversationID: conversationViewModel.selectedConversationID,
                 state: recordingService.state,
                 watchEnabled: settingsReader.isWatchEnabled()
@@ -131,6 +143,36 @@ struct WatchNoteView: View {
                 "state": recordingService.state.phaseKind,
                 "hasDisplayed": conversationViewModel.selectedConversationID != nil
             ])
+            if case .refused(let message) = resolution {
+                switch verdict {
+                case .refuse:
+                    // A genuinely live turn still owns the machine. Same haptic
+                    // + log as the ordinary refusal — the gateway problem waits
+                    // for the next press.
+                    WKInterfaceDevice.current().play(.failure)
+                    WatchLog.note(.capture, "actionbtn.refused", ["state": recordingService.state.phaseKind])
+
+                case .disabledError:
+                    // The master switch outranks the gateway: with Conduck
+                    // turned off for Watch, "pick a different AI" is not the
+                    // user's next step.
+                    // xcstrings
+                    recordingService.state = .error(
+                        message: String(localized: "Conduck is turned off for Apple Watch. Enable it in iPhone Settings.")
+                    )
+
+                case .directStart, .pushAndStart:
+                    // The only two arms that would have armed the mic. Refuse
+                    // instead: no route push, no draft thread, nothing
+                    // recorded. The log carries the phase kind only — never the
+                    // ref, the URL or anything token-shaped.
+                    WKInterfaceDevice.current().play(.failure)
+                    WatchLog.note(.capture, "actionbtn.gatewayRefused", ["state": recordingService.state.phaseKind])
+                    recordingService.state = .error(message: message)
+                }
+                return
+            }
+            guard let target = resolution.captureTarget else { return }
             switch verdict {
             case .refuse:
                 // A genuinely LIVE turn (arming / recording / uploading /

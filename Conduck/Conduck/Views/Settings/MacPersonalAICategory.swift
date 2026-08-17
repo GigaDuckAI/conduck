@@ -90,13 +90,21 @@ struct MacPersonalAICategory: View {
                 case .defaultChooser:
                     DefaultGatewayPicker(
                         rows: viewModel.personalAIRows,
+                        // `viewModel.setDefaultRemoteAgentRef` routes through
+                        // `SettingsManager.applyUserChosenDefault` — the canonical
+                        // user-choice writer, which also retires the sticky
+                        // last-used pointer and acknowledges any pending adoption
+                        // notice. Never call `SettingsManager.setDefaultRemoteAgentRef`
+                        // from here.
                         onActivate: { ref in
                             Task {
                                 await viewModel.setDefaultRemoteAgentRef(ref)
                                 self.route = nil
                             }
                         },
-                        onSetUp: { ref in self.route = .configure(ref) }
+                        onSetUp: { ref in self.route = .configure(ref) },
+                        brokenDefaultName: viewModel.defaultSelectorBrokenName,
+                        needsDefaultChoice: viewModel.defaultSelectorNeedsChoice
                     )
                 case .configure(let ref):
                     // The editor supplies its own `bufferedEditorChrome` macOS
@@ -131,34 +139,92 @@ struct MacPersonalAICategory: View {
     /// The "Default for new chats → <gateway>" selector at the top, the one
     /// canonical place to choose the gateway new conversations start on (mirrors
     /// the Voice STT/TTS selectors). Tapping opens the chooser.
+    @ViewBuilder
     private var defaultSelector: some View {
-        SettingsCard {
-            Button {
-                route = .defaultChooser
-            } label: {
-                DefaultGatewaySelectorRow(
-                    defaultName: viewModel.defaultSelectorDisplayName,
-                    needsSetup: viewModel.defaultSelectorNeedsSetup
-                )
+        // Two spellings of ONE card rather than a footer that renders an empty
+        // view: `SettingsCard` pads a non-nil footer slot by `footerGap`, so an
+        // empty one leaves 6pt of dead air under the card. Everything but the
+        // footer is shared.
+        if let footer = defaultSelectorFooter {
+            SettingsCard {
+                defaultSelectorRow
+            } header: {
+                defaultSelectorHeader
+            } footer: {
+                Text(footer)
             }
-            // 64 when the value is two lines, matching the allowance
-            // `PersonalAIConnectSection` documents for a 31pt two-line block
-            // (31 + 16 + 16). The 48pt default would leave it ~8.5pt of air.
-            .settingsCardRowButton(
-                minHeight: viewModel.defaultSelectorNeedsSetup ? 64 : SettingsCardMetrics.rowMinHeight
-            )
-        } header: {
-            // Header, not row — see the iOS twin in `PersonalAISettingsView`. On
-            // macOS the tip also carries `.help(…)`, so hovering surfaces the same
-            // text without a click.
-            HStack(spacing: 0) {
-                Text(LocalizedStringResource(
-                    "settings.personalAI.newChats.header",
-                    defaultValue: "New chats use"
-                ))
-                InfoTipButton(tip: GatewayFieldTips.defaultForNewChats)
+        } else {
+            SettingsCard {
+                defaultSelectorRow
+            } header: {
+                defaultSelectorHeader
             }
         }
+    }
+
+    private var defaultSelectorRow: some View {
+        Button {
+            route = .defaultChooser
+        } label: {
+            DefaultGatewaySelectorRow(
+                // "Not chosen yet" rather than a name when no default is stored:
+                // the compatibility shim projects to the built-in fallback there,
+                // which may itself be configured, so a name would claim a choice
+                // the user never made. Expressed through its OWN flag because
+                // `defaultSelectorNeedsSetup` must stay byte-identical.
+                defaultName: DefaultGatewayNotice.selectorValue(
+                    needsChoice: viewModel.defaultSelectorNeedsChoice,
+                    displayName: viewModel.defaultSelectorDisplayName
+                ),
+                needsSetup: viewModel.defaultSelectorFlagsBroken
+            )
+        }
+        // 64 when the value is two lines, matching the allowance
+        // `PersonalAIConnectSection` documents for a 31pt two-line block
+        // (31 + 16 + 16). The 48pt default would leave it ~8.5pt of air.
+        // Keyed on `defaultSelectorFlagsBroken`, the same flag that draws the
+        // second line: the nothing-chosen state is a ONE-line value ("Not chosen
+        // yet") and must not take the allowance.
+        .settingsCardRowButton(
+            minHeight: viewModel.defaultSelectorFlagsBroken ? 64 : SettingsCardMetrics.rowMinHeight
+        )
+    }
+
+    // Header, not row — see the iOS twin in `PersonalAISettingsView`. On
+    // macOS the tip also carries `.help(…)`, so hovering surfaces the same
+    // text without a click.
+    private var defaultSelectorHeader: some View {
+        HStack(spacing: 0) {
+            Text(LocalizedStringResource(
+                "settings.personalAI.newChats.header",
+                defaultValue: "New chats use"
+            ))
+            InfoTipButton(tip: GatewayFieldTips.defaultForNewChats)
+        }
+    }
+
+    /// The footer under the selector, or nil when the default is unremarkable.
+    /// Broken first — a named gateway is the more specific fact — then the
+    /// nothing-chosen state. Twin of `PersonalAISettingsView.defaultSelectorFooter`;
+    /// the two must stay in lockstep.
+    ///
+    /// Two sentences only: the chooser one tap away already carries the
+    /// per-conversation invariant ("Existing chats keep the one they started on")
+    /// in `DefaultGatewayPicker`'s own footer.
+    private var defaultSelectorFooter: String? {
+        if let name = viewModel.defaultSelectorBrokenName {
+            return String(localized: LocalizedStringResource(
+                "settings.personalAI.default.broken.footer.mac",
+                defaultValue: "\(name) isn't set up on this Mac, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up \(name)."
+            ))
+        }
+        if viewModel.defaultSelectorNeedsChoice {
+            return String(localized: LocalizedStringResource(
+                "settings.personalAI.default.noChoice.footer.mac",
+                defaultValue: "Nothing that starts a chat from outside this Mac knows which gateway to use. Pick one and new chats will start on it."
+            ))
+        }
+        return nil
     }
 
     // MARK: - Gateway list

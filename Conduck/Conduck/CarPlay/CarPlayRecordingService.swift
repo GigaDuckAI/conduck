@@ -1005,10 +1005,14 @@ final class CarPlayRecordingService {
                 boundRef = RemoteAgentRef(rawString: rawBackend ?? "")
                 guard let resolved = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "") else {
                     // Unknown raw OR unconfigured bound backend (Decision B — no
-                    // silent reroute). Speak the not-configured error + end.
+                    // silent reroute). This thread is BOUND to its gateway, so
+                    // the line names the CHAT, not the default: "set up your
+                    // personal AI" is false for a driver with five working
+                    // gateways, and offering to re-point would break the
+                    // per-conversation binding. Starting a new chat is the exit.
                     // xcstrings
                     endSession(
-                        speak: String(localized: "Set up your personal AI on iPhone first.")
+                        speak: String(localized: "This chat's AI isn't set up on your iPhone. Start a new chat to use another one.")
                     )
                     return
                 }
@@ -1018,7 +1022,7 @@ final class CarPlayRecordingService {
                 if snapshot.authScheme.requiresToken, (snapshot.token?.isEmpty ?? true) {
                     // xcstrings
                     endSession(
-                        speak: String(localized: "Set up your personal AI on iPhone first.")
+                        speak: String(localized: "This chat's AI isn't set up on your iPhone. Start a new chat to use another one.")
                     )
                     return
                 }
@@ -1030,18 +1034,30 @@ final class CarPlayRecordingService {
                 // NEVER reads the global default here so a CarPlay gateway switch
                 // can't leak to the phone/iPad/Mac. Fallback to the device-local
                 // default only if (defensively) no ref was stashed.
-                let defaultRef: RemoteAgentRef
-                if let sessionDefaultRef {
-                    defaultRef = sessionDefaultRef
-                } else {
-                    defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
-                }
+                // ONE resolve for this branch — it supplies both the device-local
+                // fallback pointer and whether that pointer is a placeholder.
+                let deviceVerdict = await SettingsManager.shared.resolveDefaultGateway()
+                let defaultRef: RemoteAgentRef = sessionDefaultRef ?? deviceVerdict.ref
                 boundRef = defaultRef
+                // The roster, fetched ONCE for this branch, so a refusal can name
+                // the gateway the driver actually chose — including a custom
+                // they have since retired, which the roster still resolves.
+                let mintRoster = await SettingsManager.shared.gatewayBadgeRoster()
+                // A pointer the APP parked after a Forget is a placeholder, not a
+                // gateway anyone picked, so a refusal about it drops the name and
+                // speaks the unnamed sentence — the same collapse the phone, the
+                // wrist and the headless lanes make. Scoped to the pointer the
+                // verdict describes: a driver's own in-car pick is a choice, and
+                // keeps its name even while the phone's default is parked.
+                let mintName: String? =
+                    (deviceVerdict.pointerIsParked && defaultRef == deviceVerdict.ref)
+                    ? nil
+                    : RemoteAgentRefMetadata.displayName(for: defaultRef, customs: mintRoster)
                 guard let resolved = await SettingsManager.shared.remoteAgentSnapshot(for: defaultRef) else {
-                    // xcstrings
-                    endSession(
-                        speak: String(localized: "Set up your personal AI on iPhone first.")
-                    )
+                    // NEW chat, so the default IS the problem and can be named.
+                    // The chooser is one tap away on the screen the driver is
+                    // already looking at, which is what the phrase points at.
+                    speakErrorAndEnd(.remoteAgentDefaultNeedsSetup(gatewayName: mintName))
                     return
                 }
                 snapshot = resolved
@@ -1050,10 +1066,7 @@ final class CarPlayRecordingService {
                 // WITHOUT minting a stray empty thread. `.none` (keyless) mints on
                 // URL alone (fail closed: keyless never inferred from a nil token).
                 if snapshot.authScheme.requiresToken, (snapshot.token?.isEmpty ?? true) {
-                    // xcstrings
-                    endSession(
-                        speak: String(localized: "Set up your personal AI on iPhone first.")
-                    )
+                    speakErrorAndEnd(.remoteAgentDefaultNeedsSetup(gatewayName: mintName))
                     return
                 }
                 token = snapshot.token ?? ""
@@ -1310,6 +1323,19 @@ final class CarPlayRecordingService {
         case .sttTooManyRequests:
             // xcstrings
             phrase = String(localized: "Too many requests — try again in a moment.")
+        case .remoteAgentDefaultNeedsSetup(let name):
+            // Driver-safety rule the certificate arms below already state: say
+            // which problem it is, then stop. A driver cannot act on a vague
+            // line and must not be invited to fiddle with a phone — so this
+            // points at the CarPlay list, which is already on the screen in
+            // front of them, rather than at the iPhone.
+            if let name {
+                // xcstrings
+                phrase = String(localized: "Your default AI, \(name), isn't set up. Choose another from the list.")
+            } else {
+                // xcstrings
+                phrase = String(localized: "Conduck doesn't know which AI to use. Choose one from the list.")
+            }
         case .remoteAgentNotConfigured:
             // xcstrings
             phrase = String(localized: "Set up your personal AI on iPhone first.")

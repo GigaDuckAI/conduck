@@ -24,18 +24,41 @@
 import Foundation
 
 /// Everything the new-chat picker needs, sampled in ONE `SettingsManager` actor
-/// turn. Read piecemeal these four values can disagree with each other: a refresh
+/// turn. Read piecemeal these values can disagree with each other: a refresh
 /// that samples the default, suspends, and resumes after Settings re-pointed it
 /// would seed a gateway the user had already moved away from.
 struct NewChatPickerSnapshot: Sendable {
-    /// Gateways that are fully set up right now, in stable picker order.
+    /// Gateways that are fully set up right now, in stable picker order. The
+    /// SAME array `resolution` was classified against, not a second read.
     let configuredRefs: [RemoteAgentRef]
-    /// Roster backing the gateway badges (monogram + colour).
+    /// Roster backing the gateway badges (monogram + colour). Unions retired
+    /// customs, so a forgotten gateway still resolves to a real name.
     let badgeRoster: [CustomGateway]
-    /// This device's "Default for new chats".
+    /// This device's "Default for new chats" — exactly `resolution.ref`, kept as
+    /// its own field so the seed ladder and its callers need no rewrite. Like
+    /// that projection, it may name a gateway `resolution` forbids sending on.
     let defaultRef: RemoteAgentRef
     /// The gateway the last conversation here started on, if any.
     let lastUsedRef: RemoteAgentRef?
+    /// The full eight-way verdict for this device's default, from the SAME turn.
+    /// Anything that MINTS reads this, never `defaultRef` alone.
+    let resolution: DefaultGatewayResolution
+    /// A repair this device performed and has not yet told the user about.
+    let pendingAdoptionNotice: DefaultGatewayAdoptionNotice?
+
+    /// True when the stored pointer is one the APP parked rather than one the
+    /// user chose — the Forget re-point parks on a built-in when several
+    /// gateways survive, so the user chooses their next one instead of
+    /// inheriting it. A surface that names the default must drop the name here:
+    /// the user never picked this gateway, and calling it "your default AI" one
+    /// step after they forgot a different one is an accusation about a choice
+    /// they did not make.
+    ///
+    /// READ THROUGH `resolution`, never stored beside it. A stored twin is a
+    /// second fact that can be sampled from a different moment, or filled in
+    /// with the wrong value by a caller building a snapshot by hand; derived, it
+    /// is the same fact the verdict already carries.
+    var defaultPointerIsParked: Bool { resolution.pointerIsParked }
 }
 
 enum NewChatGatewaySeed {
@@ -50,6 +73,13 @@ enum NewChatGatewaySeed {
     /// The final fallback returns `persistedDefault` even though it is not in
     /// `configured` — reached only when NOTHING is configured, where the picker is
     /// hidden anyway and the caller needs a non-optional value to hold.
+    ///
+    /// This ladder may still land on `configured.first` when NO default has been
+    /// chosen at all (`DefaultGatewayResolution.selectionRequired`), and that is
+    /// correct: a pre-selection is a highlighted row, not a decision, and the
+    /// surfaces say separately that no default is chosen. Do not "fix" it by
+    /// teaching the ladder about the resolution — a picker with nothing
+    /// highlighted is worse than one highlighted row the user can change.
     static func resolve(
         configured: [RemoteAgentRef],
         lastUsed: RemoteAgentRef?,

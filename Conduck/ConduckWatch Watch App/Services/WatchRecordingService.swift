@@ -1,5 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Conduck — the wrist's capture + converse state machine.
+//
+// Two facts govern everything below.
+//
+// 1. A HEADLESS trigger (Action Button / ControlWidget) resolves WHERE the turn
+//    lands at trigger time, BEFORE the microphone arms — so a pointer or
+//    default-gateway change mid-recording can never reroute a turn, and a
+//    gateway the wrist cannot send to refuses without ever recording. Refusing
+//    late is expensive in a way the user feels: they have already spoken, the
+//    audio is captured, and STT has usually already been billed.
+// 2. Resolution is a VALUE, never a state write. `resolveHeadlessCaptureTarget`
+//    runs BEFORE the liveness ladder in `WatchNoteView.drainCoordinatorIfNeeded`,
+//    so a resolver that assigned `state` itself could stomp a live turn. The
+//    caller owns the ordering; the resolver only answers the question.
+//
+// The wrist never substitutes a working gateway for one that cannot send. The
+// iPhone deliberately couriers its REAL default even when that default is
+// broken, because swapping in a different server would move a wrist capture
+// onto an agent the user never chose. Both sides hold that line on purpose.
+
 import AVFoundation
 import SwiftUI
 import WatchConnectivity
@@ -53,6 +73,51 @@ enum WatchCaptureTarget: Hashable {
     /// A brand-new conversation to be minted lazily, bound to `backendRef`
     /// (a `RemoteAgentRef` rawString captured at trigger time).
     case new(backendRef: String)
+}
+
+/// The trigger-time verdict for a HEADLESS capture: a target to record into,
+/// or a refusal to show without ever arming the microphone.
+///
+/// A refusal is a VALUE, not a state write. The drain ladder in
+/// `WatchNoteView.drainCoordinatorIfNeeded` orders three facts that can all be
+/// true at once — a live turn owns the machine, the master switch is off, the
+/// default gateway cannot send — and only the last of them may write `state`.
+/// A resolver that set `.error` itself would run BEFORE that ladder and could
+/// stomp a `.waiting` turn's thinking view, or orphan a hot mic on a
+/// `.recording` machine (`stopRecording` guards `state == .recording`, so
+/// nothing could ever stop it). `HeadlessDrainDecision.disabledError`'s own doc
+/// comment records that exact hazard for the master switch; this carries the
+/// message so the same ordering holds for the gateway.
+///
+/// "NO DEFAULT CHOSEN" IS A DISTINCT READING, and the envelope says so. The
+/// `defaultBackendRef` slot is required non-empty, so when the iPhone has no
+/// stored pointer it carries the compatibility fallback — which may itself be
+/// configured on the wrist. The companion `defaultBackendChosen` flag is what
+/// keeps the wrist from reading that fallback as a choice and sending every
+/// headless capture to a gateway the user never picked, binding each new
+/// conversation to it for good (I1). The wrist refuses with the unnamed sentence
+/// instead; the phone is where the choice is made.
+enum WatchHeadlessCaptureResolution: Equatable {
+    case capture(WatchCaptureTarget)
+    /// Refused before the mic. `message` is the user-facing sentence, already
+    /// resolved (name looked up from the couriered roster).
+    case refused(message: String)
+
+    /// The target, or nil when this is a refusal. Lets the caller consult the
+    /// drain ladder for its ORDER without special-casing the refusal arm.
+    var captureTarget: WatchCaptureTarget? {
+        if case .capture(let target) = self { return target }
+        return nil
+    }
+}
+
+/// A gateway refusal raised BEFORE anything is minted or appended, carrying the
+/// sentence the user should read. A plain `AppError` cannot: the honest message
+/// names the gateway, and `AppError`'s cases are shared with surfaces that must
+/// not be renamed from the wrist.
+struct WatchGatewayRefusal: Error, LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 @Observable
@@ -435,22 +500,156 @@ final class WatchRecordingService {
     }
 
     /// Trigger-time resolution for a HEADLESS capture (Action Button /
-    /// ControlWidget): continue the quick-lane thread iff the per-device
-    /// pointer is TTL-fresh AND that thread still exists AND it is still bound
-    /// to the CURRENT default gateway. The default-gateway re-check is
-    /// mirrored from the resolver's pointer branch — the headless path
-    /// resolves at trigger time and PINS, and the bound branch deliberately
-    /// never re-checks (a pinned thread routes to its persisted ref verbatim),
-    /// so without this mirror a re-pointed default would be ignored. Any miss
-    /// → a `.new` draft bound to the default.
-    func resolveHeadlessCaptureTarget() async -> WatchCaptureTarget {
+    /// ControlWidget). Answers with a target to record into, or a refusal to
+    /// show without arming the microphone — and NEVER writes `state` (the
+    /// caller owns the ordering; see `WatchHeadlessCaptureResolution`).
+    ///
+    /// THE POINTER BRANCH RUNS FIRST, and the gateway gate only after it misses.
+    /// A capture that CONTINUES a live quick-lane thread never touches the
+    /// default pointer — the send resolver appends to the thread's own sealed
+    /// ref — so no verdict about the default may refuse it. The phone reached the
+    /// same conclusion for the same reason: `CheckNetworkIntent` and
+    /// `ConverseIntent` both ask `SharedInboxRouting.liveQuickCaptureCanContinue`
+    /// before they look at the default's verdict.
+    ///
+    /// The rule itself: continue the quick-lane thread iff the per-device pointer
+    /// is TTL-fresh AND that thread still exists AND it is still bound to the
+    /// CURRENT default gateway AND that gateway is one this Watch can send to.
+    /// The default-gateway re-check is mirrored from the resolver's pointer
+    /// branch — the headless path resolves at trigger time and PINS, and the
+    /// bound branch deliberately never re-checks (a pinned thread routes to its
+    /// persisted ref verbatim), so without this mirror a re-pointed default would
+    /// be ignored. Any miss → the gateway gate, then a `.new` draft bound to the
+    /// default.
+    ///
+    /// The membership term is what keeps I1 intact: a thread bound to a gateway
+    /// that is NOT set up here still falls through to the gate and still earns
+    /// its refusal. Nothing is ever rerouted; cloning is the user's exit.
+    func resolveHeadlessCaptureTarget() async -> WatchHeadlessCaptureResolution {
         let reader = WatchSettingsReader.shared
+        // ONE `configuredBackendRefs()` read per press. It costs a Keychain
+        // read per ref, and one press is the budget — `WatchNoteView` pays the
+        // same cost at Ask time for the same reason (see `askGatewayRefs`).
+        let configured = reader.configuredBackendRefs()
         if let pointerID = reader.resolveActiveConversationID(),
            let record = try? await store.fetchConversation(id: pointerID),
-           record.backend == reader.defaultBackendRef {
-            return .existing(pointerID)
+           Self.liveCaptureCanContinue(pointerBackend: record.backend,
+                                       defaultBackendRef: reader.defaultBackendRef,
+                                       configured: configured) {
+            return .capture(.existing(pointerID))
         }
-        return .new(backendRef: reader.defaultBackendRef)
+        if let refusal = headlessGatewayRefusal(configured: configured) {
+            return .refused(message: refusal)
+        }
+        return .capture(.new(backendRef: reader.defaultBackendRef))
+    }
+
+    /// Whether a headless capture taken RIGHT NOW would land on a thread this
+    /// Watch can actually send on — the wrist's SIBLING of the phone's
+    /// `SharedInboxRouting.liveQuickCaptureCanContinue`.
+    ///
+    /// A SIBLING RATHER THAN A CALL because `SharedInboxRouting` is compiled into
+    /// the iOS app target and the Watch app is a separate target that links none
+    /// of it; there is no shared module between them to host one copy. So the
+    /// two are kept honest by construction instead: this is a pure function over
+    /// three values, and `WatchCaptureGuardTests` enumerates the same four device
+    /// states its phone-side twin is enumerated over in `GigaActionPreflightTests`.
+    /// Change one and the other's table has to change with it.
+    ///
+    /// Term by term against the phone:
+    ///   - `resolveQuickCaptureConversation`'s TTL + row-exists checks are the
+    ///     caller's `resolveActiveConversationID()` + `fetchConversation(id:)`;
+    ///   - its `record.backend == effective.rawString` is `pointerBackend ==
+    ///     defaultBackendRef`;
+    ///   - `resolveExistingRow`'s snapshot-resolves-and-carries-a-token check is
+    ///     `configured.contains`, because `configuredBackendRefs()` is built from
+    ///     the same `remoteAgentConfig(for:)` map the converse hop routes on.
+    ///
+    /// An EMPTY `configured` set answers false, which hands the caller to the
+    /// gate and its existing ambiguous-reading sentence (I3) — refusing under a
+    /// Keychain blackout persists nothing and deletes nothing.
+    static func liveCaptureCanContinue(
+        pointerBackend: String,
+        defaultBackendRef: String,
+        configured: [String]
+    ) -> Bool {
+        guard pointerBackend == defaultBackendRef else { return false }
+        return configured.contains(pointerBackend)
+    }
+
+    /// The sentence a headless turn must show instead of recording, or nil when
+    /// the default gateway is a member of `configured` and the turn may
+    /// proceed. `configured` is passed in so the caller's single
+    /// `configuredBackendRefs()` read serves both questions.
+    ///
+    /// IT IS A GATE ON THE MINT, and both callers reach it only after the
+    /// pointer branch has missed. A turn that continues an existing thread routes
+    /// on that thread's own sealed ref and is none of this function's business.
+    ///
+    /// Three arms, and the distinctions between them are the whole point:
+    ///
+    /// - EMPTY configured set → the existing "set up on iPhone" sentence, with
+    ///   its existing meaning. An empty set on the wrist is ALSO what a phone
+    ///   that has not broadcast yet looks like, and what a cold-launched wrist
+    ///   looks like before hydration completes, so the honest reading is "set
+    ///   this up", not "your default is broken".
+    /// - NON-EMPTY configured set and the iPhone reports NO CHOSEN DEFAULT → the
+    ///   unnamed refusal. There is nothing to name: the couriered ref is the
+    ///   iPhone's compatibility fallback, and when that fallback happens to be
+    ///   configured here the membership test below would wave the turn through to
+    ///   a gateway the user never picked — sealing the new conversation to it
+    ///   permanently (I1). Checked BEFORE membership for exactly that reason.
+    /// - NON-EMPTY configured set with the default missing from it → the named
+    ///   refusal. The iPhone has working gateways; this one is not among them,
+    ///   and picking a different default is one tap away.
+    ///
+    /// I3 posture: an empty configured set is an AMBIGUOUS reading, because
+    /// secrets are `kSecAttrAccessibleAfterFirstUnlock` and a headless read
+    /// before first unlock sees every gateway as unconfigured. Refusing here is
+    /// safe under that ambiguity precisely because it is NON-DESTRUCTIVE — it
+    /// persists nothing, deletes nothing, and repeats the sentence the user
+    /// would have seen anyway. The routing read is the SAME map
+    /// `remoteAgentConfig(for:)` consults at converse time, so refusing early
+    /// can never lose a turn that would otherwise have succeeded; it only saves
+    /// a recording and an STT round-trip.
+    ///
+    /// The name comes from the couriered roster, never from a URL and never
+    /// from a raw ref (I5). `gatewayBadgeRoster` (not `customGateways`) unions
+    /// RETIRED badges, so a custom the user just forgot on the iPhone still
+    /// resolves to its real name instead of a generic label. When even that
+    /// falls back to `genericCustomName` there is no honest name to print, so
+    /// the sentence drops the name rather than guessing.
+    private func headlessGatewayRefusal(configured: [String]) -> String? {
+        let reader = WatchSettingsReader.shared
+        let defaultRef = reader.defaultBackendRef
+        let chosen = reader.hasChosenDefaultBackend
+        if chosen, configured.contains(defaultRef) { return nil }
+        guard !configured.isEmpty else {
+            // xcstrings — the EXISTING key, reused verbatim. Reached whether or
+            // not a default was chosen: with nothing configured the reading is
+            // ambiguous (I3) and this is the sentence that fits either way.
+            return String(localized: "Set up your personal AI on iPhone first.")
+        }
+        guard chosen else {
+            // Nothing to name — the iPhone has gateways and no chosen default.
+            return String(localized: LocalizedStringResource(
+                "watch.capture.noDefaultGatewayNamed",
+                defaultValue: "Choose which AI new chats use, on your iPhone."
+            ))  // xcstrings
+        }
+        let name: String? = RemoteAgentRef(rawString: defaultRef).map {
+            RemoteAgentRefMetadata.displayName(for: $0, customs: reader.gatewayBadgeRoster)
+        }
+        if let name, name != RemoteAgentRefMetadata.genericCustomName {
+            return String(localized: LocalizedStringResource(
+                "watch.capture.defaultGatewayNotSetUp",
+                defaultValue: "\(name) isn't set up. Choose which AI new chats use, on your iPhone."
+            ))  // xcstrings
+        }
+        return String(localized: LocalizedStringResource(
+            "watch.capture.noDefaultGatewayNamed",
+            defaultValue: "Choose which AI new chats use, on your iPhone."
+        ))  // xcstrings
     }
 
     // MARK: - Bound-conversation entry points (composer)
@@ -1597,6 +1796,7 @@ final class WatchRecordingService {
             }
             clearInFlight()
             let message = (error as? AppError)?.errorDescription
+                ?? (error as? WatchGatewayRefusal)?.message
                 ?? String(localized: "Couldn't reach your personal AI. Try again.")  // xcstrings
             state = .error(message: message)
         }
@@ -1670,6 +1870,11 @@ final class WatchRecordingService {
         // CRITICAL: do NOT consume the in-app-Ask hint here — the always-new
         // flow's hint must survive a parallel bound send untouched.
         if let boundID = pendingConversationID {
+            // NO GATEWAY GATE HERE, deliberately: an EXISTING conversation is
+            // locked to the gateway it was created with. One whose bound
+            // gateway is missing keeps its current refusal, its current copy
+            // and its binding — the wrist never reroutes, rescues or
+            // substitutes a configured ref for it.
             if let record = try await store.fetchConversation(id: boundID) {
                 // Verdict rides the pin: an EXPLICIT composer / deferred-drain
                 // pin must NOT touch the quick lane (the pointer is
@@ -1719,8 +1924,23 @@ final class WatchRecordingService {
                 }
             }
         }
-        // Mint a new conversation bound to the default ref.
+        // Mint a new conversation bound to the default ref — but only if the
+        // wrist can actually send there. This arm is reached by the
+        // deferred-relay drain and by a relaunched background-STT process whose
+        // one-shot Ask hint is already gone: paths where the audio exists but
+        // the pre-record gate never ran. Refusing BEFORE `createConversation`
+        // is what keeps a broken default from leaving an orphan thread behind.
+        //
+        // Gated ONLY when something is configured. An EMPTY configured set is
+        // the ambiguous reading (I3 — a Keychain blackout looks exactly like a
+        // fresh install), so it falls through, mints, and lets the existing
+        // `remoteAgentConfig(for:)` gate below show the existing "set up on
+        // iPhone" sentence.
         let defaultRef = WatchSettingsReader.shared.defaultBackendRef
+        let configured = WatchSettingsReader.shared.configuredBackendRefs()
+        if !configured.isEmpty, let refusal = headlessGatewayRefusal(configured: configured) {
+            throw WatchGatewayRefusal(message: refusal)
+        }
         let record = try await store.createConversation(backend: defaultRef)
         WatchSettingsReader.shared.recordActiveConversation(record.id)
         mintedConversationID = record.id

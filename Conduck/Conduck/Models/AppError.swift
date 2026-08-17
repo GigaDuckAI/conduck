@@ -6,7 +6,9 @@
 // Application error taxonomy with gappy numeric error codes
 // (1-7, 9-11, 14-15, 20-23, 99) — the gaps are intentional, frozen for
 // Shortcuts user-facing continuity. Gappy slots (8, 13, 16, 17) are filled
-// and (24, 25) appended with the `stt*` taxonomy.
+// and (24, 25) appended with the `stt*` taxonomy. The live range runs 1-74 with
+// 27 a permanently reserved gap, plus the 99 catch-all; every emitted code
+// round-trips through `from(errorCode:message:)`.
 //
 // No `rateLimitExceeded(usage:)`, `previewRateLimitExceeded(remaining:)`,
 // `receiptVerificationFailed`, `invalidTransactionID`, `llmUnavailable`,
@@ -274,6 +276,24 @@ enum AppError: LocalizedError {
     // negative, and even metrics could not prove the gateway didn't execute.
     case remoteAgentNotEstablished                 // 73 — no connection was established
 
+    // The default pointer can't take a NEW chat (74). Three things this case is,
+    // and each one is the reason it is not code 12:
+    //
+    //   1. Code 12 asserts "No personal AI gateway is configured", which is FALSE
+    //      the moment any other gateway on this device works. The measured case
+    //      is a restored iPad with five verified gateways being told none were
+    //      set up, with no way to tell which sentence was the lie.
+    //   2. It fires ONLY on the MINT path for a NEW conversation. A conversation
+    //      already BOUND to a dead gateway keeps throwing 12, unchanged: routing
+    //      is per-conversation, and 74 there would read as an invitation to
+    //      re-point a thread the app must never re-point. Clone to switch.
+    //   3. `gatewayName` is a DISPLAY NAME from
+    //      `RemoteAgentRefMetadata.displayName(for:customs:)` — never a URL,
+    //      never a raw ref. It is OPTIONAL for the same reason 71's `status` is:
+    //      a live throw fills it, and a failure reconstructed from a bare wire
+    //      code cannot, so the name degrades to ABSENT rather than to a guess.
+    case remoteAgentDefaultNeedsSetup(gatewayName: String?)  // 74 — the default pointer can't take a new chat
+
     // Catch-all (99)
     case unknown(Error)
 
@@ -382,6 +402,20 @@ enum AppError: LocalizedError {
             return String(localized: "remoteAgent.error.serviceUnavailable", defaultValue: "A server involved in this connection is temporarily unavailable.")
         case .remoteAgentNotEstablished:
             return String(localized: "remoteAgent.error.notEstablished", defaultValue: "Conduck couldn't open a connection to your gateway.")
+        case .remoteAgentDefaultNeedsSetup(let gatewayName):
+            // Two keys, not one interpolation: a 74 reconstructed off the wire
+            // carries no name, and "Your default AI, , isn't set up" is a defect.
+            // Cause only — the remedy lives in `recoverySuggestion`, because
+            // `descriptionWithRecovery` concatenates the pair and a remedy baked
+            // into both halves would ship twice.
+            if let gatewayName {
+                return String(localized: "remoteAgent.error.defaultNeedsSetup", defaultValue: "Your default AI, \(gatewayName), isn't set up on this device.")
+            }
+            // Serves THREE readings and has to be true for all of them: a broken
+            // default whose name could not be resolved, a device with no default
+            // chosen at all, and a 74 rebuilt from a bare code. Hence "doesn't
+            // know which AI to use" rather than naming a fault.
+            return String(localized: "remoteAgent.error.defaultNeedsSetup.unnamed", defaultValue: "Conduck doesn't know which AI to use for new chats.")
         case .remoteAgentCertMismatch:
             // Each `*CertMismatch` line names the SERVER whose key disagreed;
             // the remedy is shared and lives in `recoverySuggestion`. Never
@@ -541,6 +575,19 @@ enum AppError: LocalizedError {
             return String(localized: "stt.error.decodingFailure.recovery", defaultValue: "If this persists, the provider may have changed its API.")
         case .remoteAgentNotConfigured:
             return String(localized: "remoteAgent.error.notConfigured.recovery", defaultValue: "Open Settings → Personal AI and add a URL and bearer token.")
+        case .remoteAgentDefaultNeedsSetup:
+            // An EXPLICIT arm, never `default:`: the generic "Try again."
+            // `descriptionWithRecovery` deliberately drops would leave the one
+            // surface that renders a single line with nothing to act on.
+            //
+            // Says "AI", never "gateway", matching the shipped
+            // `UnconfiguredCopy.DefaultNeedsSetup` strings the empty state uses.
+            // Never mentions a bearer token — 12's recovery does, which is wrong
+            // for a keyless gateway anyway and doubly wrong here, where the
+            // problem is WHICH AI, not a missing credential. The first clause
+            // defuses the panic the false "nothing is configured" banner caused,
+            // before asking the user for anything.
+            return String(localized: "remoteAgent.error.defaultNeedsSetup.recovery", defaultValue: "Your other AIs still work. Open Settings → Personal AI and pick one for new chats.")
         case .remoteAgentUnreachable:
             // `.v2`: 19 is now the UNCERTAIN bucket. The codes that prove a
             // connection never opened moved to 73, and a genuinely offline
@@ -714,6 +761,11 @@ enum AppError: LocalizedError {
              .audioProcessingFailed, .sttDecodingFailure,
              .appleSpeechModelNotInstalled, .appleSpeechLanguageUnsupported,
              .remoteAgentNotConfigured, .remoteAgentAuthFailed,
+             // 74 sits beside 12 for the same reason: retrying the same bytes
+             // against the same dead pointer reaches the same verdict. The audio
+             // is still worth keeping — see `shouldPreserveForRetry`, where 74 is
+             // the deliberate exception — but the loop must not spin on it.
+             .remoteAgentDefaultNeedsSetup,
              .remoteAgentCertMismatch, .remoteAgentInvalidResponse,
              .remoteAgentVisionUnsupported, .remoteAgentImageTooLarge,
              .remoteAgentModelUnavailable, .remoteAgentContextTooLong,
@@ -791,6 +843,15 @@ enum AppError: LocalizedError {
     var shouldPreserveForRetry: Bool {
         switch self {
         case .persistentNetworkFailure, .sttProviderUnreachable, .sttServerError:
+            return true
+        // The deliberate exception to the "transient upstream only" rule above.
+        // 74 is a user-side problem and `isRetryable` is false for it, but the
+        // audio is bit-for-bit valid, the fix is one tap, and after that tap the
+        // SAME bytes succeed. Preserving is what lets `ConverseIntent`'s
+        // `shouldPreserveForRetry` arm keep the recording armed instead of
+        // disarming it — otherwise a broken default silently eats the words the
+        // user already spoke.
+        case .remoteAgentDefaultNeedsSetup:
             return true
         default:
             return false
@@ -910,6 +971,12 @@ enum AppError: LocalizedError {
         case 71: return .remoteAgentUnexpectedStatus(status: nil)
         case 72: return .remoteAgentServiceUnavailable
         case 73: return .remoteAgentNotEstablished
+        // 74 reconstructs WITHOUT its gateway name, on 71's exact reasoning: the
+        // wire and the persisted row carry one Int and nothing else, and
+        // `message` is untrusted relay text that must never be parsed back into
+        // user copy. Absent name → the unnamed variant, which is written to be
+        // true on its own.
+        case 74: return .remoteAgentDefaultNeedsSetup(gatewayName: nil)
         case 99: return .apiFailure(message: message ?? "")       // unknown(Error) — Error not reconstructible
         default:
             return .apiFailure(message: message ?? "")
@@ -1006,6 +1073,7 @@ extension AppError: CustomNSError {
         case .remoteAgentUnexpectedStatus: return 71
         case .remoteAgentServiceUnavailable: return 72
         case .remoteAgentNotEstablished: return 73
+        case .remoteAgentDefaultNeedsSetup: return 74
         case .unknown: return 99
         }
     }

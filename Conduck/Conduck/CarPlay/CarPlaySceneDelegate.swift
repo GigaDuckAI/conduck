@@ -274,6 +274,16 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// Action-Button/menu-bar thread) NOR the global default. The voice template
     /// is presented modally and the session starts INSIDE the `presentTemplate`
     /// completion (g1 audio race).
+    ///
+    /// PRE-FLIGHT before the modal. Whatever the destination turns out to be, it
+    /// is decided BEFORE `ensureVoicePresented` — so a refusal simply never
+    /// presents the voice template, and the g1 audio-race contract (beginSession
+    /// inside the present completion) is untouched. A driver who cannot be sent
+    /// anywhere hears why and is left on the chooser, one tap from the fix, on
+    /// the screen already in front of them. The NEW-chat rule itself lives in
+    /// `newChatPlan(resolution:configured:override:effectiveRef:)`, a pure static
+    /// the test suite can drive without a CarPlay scene; this body only performs
+    /// what that plan decided.
     private func startSession(service: CarPlayRecordingService, conversationID: UUID?) {
         guard case .idle = service.state, !service.sessionActive else { return }
         Task { @MainActor in
@@ -283,7 +293,89 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // Existing-conversation routing (reads `Conversation.backend`) ignores
             // this. Captured at session start so a chooser change mid-session can't
             // retarget a live session.
-            let defaultRef = await self.effectiveCarPlayRef()
+            var defaultRef = await self.effectiveCarPlayRef()
+
+            if let conversationID {
+                // EXISTING chat: the thread is BOUND to its gateway. Apply the
+                // same two conditions the send path applies (a snapshot must
+                // resolve, and a `.bearer` scheme must have a non-empty token)
+                // and REFUSE on failure — never reroute, never re-point. The
+                // driver's exit is a new chat, which the picker already offers.
+                let bound = try? await ConversationStore.shared.fetchConversation(id: conversationID)
+                let snapshot = await SettingsManager.shared
+                    .remoteAgentSnapshot(forConversationBackend: bound?.backend ?? "")
+                let tokenMissing = snapshot.map {
+                    $0.authScheme.requiresToken && ($0.token?.isEmpty ?? true)
+                } ?? true
+                if tokenMissing {
+                    // xcstrings
+                    CarPlaySpeechService.shared.speak(
+                        String(localized: "This chat's AI isn't set up on your iPhone. Start a new chat to use another one.")
+                    ) { }
+                    return
+                }
+            } else {
+                // NEW chat: the DEFAULT is the destination, so its verdict
+                // decides. One snapshot turn feeds every branch below.
+                let snap = await SettingsManager.shared.newChatPickerSnapshot()
+                let plan = Self.newChatPlan(
+                    resolution: snap.resolution,
+                    configured: snap.configuredRefs,
+                    override: self.sessionDefaultRefOverride,
+                    effectiveRef: defaultRef
+                )
+                switch plan {
+                case .proceed(let ref, let adopt):
+                    defaultRef = ref
+                    if adopt {
+                        // The resolver already proved the Keychain readable and
+                        // cleared the pending-bearer-candidate gate, so the
+                        // in-car adoption inherits exactly the same proof as
+                        // everywhere else. SESSION-LOCAL, like every other
+                        // CarPlay gateway decision: this drive only, never the
+                        // phone's global default.
+                        self.sessionDefaultRefOverride = ref
+                        self.refreshPicker()
+                    }
+                case .chooseInstead(let broken, let candidates, let current):
+                    // An override that reached here is no longer a member of the
+                    // configured set, so it must stop titling the switcher and
+                    // stop being this drive's target.
+                    if self.sessionDefaultRefOverride != nil {
+                        self.sessionDefaultRefOverride = nil
+                        self.refreshPicker()
+                    }
+                    if let broken {
+                        // Name the broken one, then put the chooser on screen so
+                        // the fix is one tap where the driver is already looking.
+                        let name = RemoteAgentRefMetadata.displayName(for: broken, customs: snap.badgeRoster)
+                        // xcstrings
+                        CarPlaySpeechService.shared.speak(
+                            String(localized: "Your default AI, \(name), isn't set up. Choose another from the list.")
+                        ) { }
+                    } else {
+                        // Nothing to name — no default has been chosen at all.
+                        // xcstrings
+                        CarPlaySpeechService.shared.speak(
+                            String(localized: "Conduck doesn't know which AI to use. Choose one from the list.")
+                        ) { }
+                    }
+                    self.presentGatewayChooser(configured: candidates,
+                                               current: current,
+                                               customs: snap.badgeRoster)
+                    return
+                case .setUpOnPhone:
+                    // xcstrings
+                    CarPlaySpeechService.shared.speak(
+                        String(localized: "Set up your personal AI on iPhone first.")
+                    ) { }
+                    return
+                }
+            }
+            // Freeze the ref before it crosses into the present completion — the
+            // session's target is decided by now, and a captured mutable would
+            // let a later statement re-aim a session already starting.
+            let sessionRef = defaultRef
             // Re-sync the trailing Mute/Unmute button to the (reset) `isMicMuted`
             // state BEFORE presenting the voice template. `endSession` clears
             // `isMicMuted=false`, but a session that ended WHILE muted left the
@@ -298,7 +390,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 // presentTemplate completion — calling it before CarPlay
                 // finishes attaching the voice modal races AVAudioSession
                 // .setActive (engine.start() FourCC '!obj' / 560947818).
-                service?.beginSession(conversationID: conversationID, defaultRef: defaultRef)
+                service?.beginSession(conversationID: conversationID, defaultRef: sessionRef)
             }
         }
     }
@@ -528,6 +620,103 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             }
 
             template.updateSections(sections)
+        }
+    }
+
+    /// The gateway a CarPlay session may adopt as its SESSION-LOCAL override, or
+    /// nil when the drive must use the effective ref it already had.
+    ///
+    /// Only `.adopted` and `.bootstrapped` qualify, and nothing else ever does.
+    /// Those are the two verdicts where the resolver has already PERSISTED a
+    /// pointer after proving the Keychain readable and clearing the
+    /// pending-bearer-candidate gate — so the car inherits a decision the device
+    /// already made, rather than making one of its own behind the wheel. Every
+    /// other verdict either needs no change (`.usable`), needs the driver to
+    /// choose (`.brokenDefault`, `.selectionRequired`), or must be left strictly
+    /// alone (`.nothingConfigured`, `.setupUnfinished`, `.readingUnreliable`).
+    ///
+    /// A pure `static` on purpose, and not inlined in `startSession`: the
+    /// authoritative suite runs on the iOS Simulator with no CarPlay scene to
+    /// drive, so a rule written inside the delegate's `Task { @MainActor }` is
+    /// never exercised by a test. `GatewayGate`'s header makes exactly this
+    /// argument for exactly this reason.
+    static func sessionOverrideRef(for resolution: DefaultGatewayResolution) -> RemoteAgentRef? {
+        switch resolution {
+        case .adopted(let ref, _): return ref
+        case .bootstrapped(let ref): return ref
+        case .usable, .brokenDefault, .selectionRequired,
+             .nothingConfigured, .setupUnfinished, .readingUnreliable:
+            return nil
+        }
+    }
+
+    /// What a NEW CarPlay chat does, decided from the device verdict, the
+    /// configured roster and the gateway the driver picked for THIS drive.
+    enum NewChatPlan: Equatable {
+        /// Mint on `ref`. `adoptAsSessionOverride` is true only when the ref
+        /// comes from a resolver repair the car is inheriting, in which case the
+        /// switcher title has to be re-rendered.
+        case proceed(ref: RemoteAgentRef, adoptAsSessionOverride: Bool)
+        /// Speak, then put the chooser on screen. `broken` is non-nil only when a
+        /// stored pointer can be honestly named as the thing that is wrong.
+        case chooseInstead(broken: RemoteAgentRef?, candidates: [RemoteAgentRef], current: RemoteAgentRef)
+        /// There is nothing to choose from. Speak and stop.
+        case setUpOnPhone
+    }
+
+    /// The NEW-chat rule, whole, as a pure function.
+    ///
+    /// A SESSION OVERRIDE WINS OVER THE DEVICE VERDICT, and that is the point of
+    /// the first branch. The device verdict describes the PHONE's stored pointer;
+    /// the override is the gateway the driver just picked from this car's own
+    /// chooser, which lists nothing but configured refs and deliberately never
+    /// writes the phone's default. Without this branch the refusals below are a
+    /// closed loop: the only exit they offer is the chooser, and taking it
+    /// changes nothing they read, so a driver whose phone default is broken (or
+    /// unchosen) could not start a chat for the whole drive.
+    ///
+    /// Membership of `configured` is the gate, which is the same test `.usable`
+    /// applies — so an override for a gateway forgotten on the phone mid-drive
+    /// falls back to the verdict rather than routing somewhere that cannot send
+    /// (I2 stays fail-closed). `.nothingConfigured` / `.setupUnfinished` need no
+    /// special case: `configured` is empty there, so no override survives the
+    /// membership test.
+    ///
+    /// A pure `static` for the same reason `sessionOverrideRef` is one — the
+    /// authoritative suite runs on the iOS Simulator with no CarPlay scene, so a
+    /// rule written inside the delegate's `Task { @MainActor }` is never
+    /// exercised by a test.
+    static func newChatPlan(
+        resolution: DefaultGatewayResolution,
+        configured: [RemoteAgentRef],
+        override: RemoteAgentRef?,
+        effectiveRef: RemoteAgentRef
+    ) -> NewChatPlan {
+        if let override, configured.contains(override) {
+            return .proceed(ref: override, adoptAsSessionOverride: false)
+        }
+        if let adopted = sessionOverrideRef(for: resolution), adopted != effectiveRef {
+            return .proceed(ref: adopted, adoptAsSessionOverride: true)
+        }
+        switch resolution {
+        case .brokenDefault(let broken, let candidates, let pointerIsParked):
+            // `broken` is spoken aloud, so a pointer the APP parked after a
+            // Forget must not travel: the driver never chose that gateway, and
+            // hearing it named as the thing that is wrong is an accusation about
+            // a choice they did not make. `current` still carries it, because the
+            // chooser needs a row to check even when nothing may be blamed. The
+            // phone, the wrist and the headless lanes make the same collapse.
+            return .chooseInstead(broken: pointerIsParked ? nil : broken,
+                                  candidates: candidates, current: broken)
+        case .selectionRequired(let candidates):
+            return .chooseInstead(broken: nil, candidates: candidates, current: resolution.ref)
+        case .nothingConfigured, .setupUnfinished:
+            return .setUpOnPhone
+        case .usable, .adopted, .bootstrapped, .readingUnreliable:
+            // `.readingUnreliable` proceeds because refusing on a reading we
+            // cannot trust would strand a driver whose gateways are all fine
+            // behind a Keychain that has not opened yet.
+            return .proceed(ref: effectiveRef, adoptAsSessionOverride: false)
         }
     }
 

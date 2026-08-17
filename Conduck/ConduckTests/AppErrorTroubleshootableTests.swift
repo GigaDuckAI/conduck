@@ -63,6 +63,13 @@ final class AppErrorTroubleshootableTests: XCTestCase {
             ("sttProviderUnreachable",      .sttProviderUnreachable),
             ("noInternetConnection",        .noInternetConnection),
             ("ttsUnauthorized",             .ttsUnauthorized),
+            // 74 is the sibling of code 12, which is troubleshootable — and
+            // Diagnostics genuinely helps here: it renders the per-gateway
+            // incomplete rows naming exactly what the default is missing. A
+            // deny-list entry would make the two configuration verdicts
+            // disagree about whether the screen can help with the same problem.
+            ("remoteAgentDefaultNeedsSetup", .remoteAgentDefaultNeedsSetup(gatewayName: "OpenClaw")),
+            ("remoteAgentDefaultNeedsSetup/unnamed", .remoteAgentDefaultNeedsSetup(gatewayName: nil)),
         ]
         for kase in troubleshootable {
             XCTAssertTrue(kase.error.isTroubleshootable,

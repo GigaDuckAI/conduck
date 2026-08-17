@@ -31,6 +31,14 @@
 // Late-completing work that outlives the view harmlessly mutates a no-longer-
 // observed runner — no generation token needed.
 //
+// The checklist leads with a default-vs-reality row that joins the configured set
+// to the default pointer, because the screen holds both halves of that question
+// and only the join answers it. Half-configured gateways are triaged so that only
+// the ones something actually points at reach `attentionCount`; the rest are
+// demoted to a quiet leftover list held OUTSIDE `checks` — the same device this
+// header already explains for `fileLanes`, used here for counting rather than for
+// privacy.
+//
 // Privacy: every value that reaches a check `title`/`detail` or `copyBlock()` is
 // allowlisted — provider KIND / archetype, counts, enum names, taxonomy-derived
 // fixes. NEVER a URL, token, key, fingerprint, custom gateway name, endpoint
@@ -405,6 +413,18 @@ final class DiagnosticsRunner {
     /// Settings list that marked none of them.
     private(set) var incompleteGatewayDisplay: [GatewayDisplayEntry] = []
 
+    /// The default-vs-reality verdict, UI-only. Nil when the screen emits no default
+    /// row at all (see the verdict map in `performLocalReadsAndRebuild`). Carries the
+    /// real gateway NAMES, which the `connection.defaultGateway` row's own
+    /// title/detail must never hold.
+    private(set) var defaultGatewayStanding: DefaultGatewayStandingState?
+
+    /// Half-configured gateways DEMOTED out of the attention count — nothing points
+    /// at them, nothing is bound to them. Rendered as a quiet, glyph-free block at the
+    /// foot of Connection with an inline Forget. Outside `checks` on purpose: they are
+    /// tidying, not findings.
+    private(set) var leftoverGateways: [LeftoverGatewayEntry] = []
+
     /// Config signatures captured on the last rebuild — the guard that decides
     /// whether a live re-derive may CARRY a prior probe/test result. Provider (or
     /// key-presence) change ⇒ the STT/TTS test rows RESET rather than keep a
@@ -480,6 +500,11 @@ final class DiagnosticsRunner {
     private var factGatewayKinds: [String] = []
     private var factCustomGatewayCount = 0
     private var factPartialGatewayCount = 0
+    /// The default-vs-reality verdict as an allowlist-safe token plus a CLOSED
+    /// verdict vocabulary — a locked `RemoteAgentBackend` raw value or the anonymous
+    /// `custom-gateway#N` ordinal, NEVER a display name and never a URL (I5).
+    private var factDefaultGateway = "unknown"
+    private var factLeftoverGatewayCount = 0
     private var factAuthBearerCount = 0
     private var factAuthNoneCount = 0
     /// Phase-D silent-failure facts (allowlisted primitives). Low Power Mode
@@ -543,6 +568,15 @@ final class DiagnosticsRunner {
     /// view coupling can't fork on a typo.
     static let watchCheckID = "sync.watch"
 
+    /// The default-vs-reality row's frozen check id — shared with the view's dedicated
+    /// slot so the runner/view coupling can't fork on a typo.
+    ///
+    /// Deliberately NOT under the `connection.gateway.` prefix: `buildIncompleteGatewayRows`,
+    /// the view's two ForEach filters and `testLeftoverGatewayReplacesTheNoneRowWithItsOwnNamedRow`
+    /// all key on that prefix to mean "one gateway's own row". This row is about a
+    /// CAPABILITY — which gateway a new chat gets — not one gateway's health.
+    static let defaultGatewayCheckID = "connection.defaultGateway"
+
     // MARK: - Init
 
     init(
@@ -587,6 +621,10 @@ final class DiagnosticsRunner {
     /// front of Connection. MUST be called BEFORE the Diagnostics category is
     /// shown so the focused card is present on the first paint (setting it while
     /// the screen is visible would insert the card mid-layout — the flicker).
+    ///
+    /// On a REBUILD the default-vs-reality row leads Connection and the focused
+    /// gateway row follows it, because the lane's health (which gateway every new
+    /// chat mints on) outranks one gateway's.
     func setFocus(ref: RemoteAgentRef?, code: Int) {
         focusedRef = ref
         focusedErrorCode = code
@@ -635,7 +673,25 @@ final class DiagnosticsRunner {
         let inventory = await manager.remoteAgentInventory()
         let refs = inventory.configuredRefs
         let customGateways = inventory.customGateways
-        let defaultRef = await manager.defaultRemoteAgentRef()
+        // The default-pointer half, in ONE actor turn of its own — the resolution,
+        // the projected ref and any pending adoption notice all describe the same
+        // moment. Reading `defaultRemoteAgentRef()` beside this snapshot would be a
+        // THIRD gateway read and would reintroduce exactly the skew the comment
+        // above closed, so there is only this one.
+        //
+        // Which source wins where, because both snapshots carry a configured set:
+        //   - `inventory` wins for per-gateway STRUCTURE — `refs`, `incompleteRefs`,
+        //     `customGateways`, the ordinals, the file lanes. Those are projections
+        //     of ONE classification pass, and splitting configured from incomplete
+        //     across two turns is the precise bug this function already closed.
+        //   - `pickerSnap` wins for the DEFAULT-POINTER questions only: `resolution`,
+        //     `defaultRef`, `pendingAdoptionNotice`. Its `badgeRoster` is left
+        //     unused — `inventory.customGateways` names gateways from the same
+        //     moment as the rows and the ordinals.
+        // Consequently `anyConfigured` is `!refs.isEmpty` everywhere below, so the
+        // demotion gate and the red/amber colour gate can never disagree.
+        let pickerSnap = await manager.newChatPickerSnapshot()
+        let defaultRef = pickerSnap.defaultRef
         let sttSnapshot = await manager.activeSTTSnapshot()
         let ttsSnapshot = await manager.activeTTSSnapshot()
         let storedKeys = await manager.presetIDsWithStoredKey()
@@ -694,6 +750,38 @@ final class DiagnosticsRunner {
         if focusedNeedsOwnRow, let focusedRef {
             incompleteRefs.removeAll { $0 == focusedRef }
         }
+
+        // Which gateways have a conversation bound to them — the third reliance
+        // signal. A distinct-attribute dictionary fetch, read-only, no egress, same
+        // tier as the share-inbox and pending-retry reads below. A FAILED fetch
+        // yields the empty set, which can only ever DEMOTE a built-in that is
+        // neither the default nor a custom; it can never hide a broken default,
+        // because that arm is `defaultRef`-driven.
+        let boundBackends = (try? await ConversationStore.shared.distinctBackends()) ?? []
+
+        // Split the half-configured gateways into the ones something relies on
+        // (they earn a row and a place in `attentionCount`) and the ones that are
+        // merely leftover tidying.
+        let triage = Self.triageIncompleteGateways(
+            incomplete: incompleteRefs,
+            defaultRef: defaultRef,
+            boundBackendRawStrings: boundBackends,
+            focusedRef: focusedRef,
+            anyConfigured: !refs.isEmpty
+        )
+        var rowRefs = triage.reliedOn
+
+        // I3: the reading itself cannot be trusted — at least one gateway meets
+        // every non-Keychain requirement and is waiting only on a token that does
+        // not read back. No accusatory finding may be minted on that verdict, so
+        // the incomplete rows keep their ids, statuses and colours but say the
+        // NON-accusatory thing instead. The verdict is about the device's
+        // readability as a whole, which is why it re-words every incomplete row
+        // rather than singling the pointer out.
+        let readingUnreliable: Bool = {
+            if case .readingUnreliable = pickerSnap.resolution { return true }
+            return false
+        }()
 
         // Phase-D silent-failure reads — all local + cheap (dir listing /
         // metadata decode / volume capacity), no network, no prompt.
@@ -1015,7 +1103,14 @@ final class DiagnosticsRunner {
         // `custom-gateway#2` tag — an ordinal larger than the count it appears to
         // belong to, which reads as a bug to whoever is helping the user.
         factCustomGatewayCount = customGateways.count
+        // `partial=` deliberately counts ALL incomplete refs, demoted ones
+        // included, so a support reader sees both the total and what the screen
+        // quieted down. A demoted gateway also loses its `[warn]` checklist line,
+        // so `leftover=` has to carry what the row no longer does.
         factPartialGatewayCount = incompleteRefs.count
+        factLeftoverGatewayCount = triage.leftover.count
+        factDefaultGateway = "\(Self.gatewayReportToken(defaultRef, customOrdinals: customOrdinals)) "
+            + Self.defaultGatewayVerdict(resolution: pickerSnap.resolution, notice: pickerSnap.pendingAdoptionNotice)
         factAuthBearerCount = authSchemes.filter { $0 == RemoteAgentAuthScheme.bearer }.count
         factAuthNoneCount = authSchemes.filter { $0 == RemoteAgentAuthScheme.none }.count
         factUbiquityPresent = ubiquityPresent
@@ -1109,7 +1204,6 @@ final class DiagnosticsRunner {
         // gateways in the identical order it reads their status from — and every
         // `fileLanes.ref` is a subset of these refs, so a lane can never orphan.
         let sortedGateways = sortedGatewayRefs(refs: refs, defaultRef: defaultRef)
-        built.append(contentsOf: buildGatewayRows(sorted: sortedGateways, customOrdinals: customOrdinals))
         let newGatewayDisplayOrder = sortedGateways.map { entry in
             GatewayDisplayEntry(
                 ref: entry.ref,
@@ -1117,6 +1211,34 @@ final class DiagnosticsRunner {
                 connectionCheckID: Self.connectionCheckID(for: entry.ref)
             )
         }
+
+        // The default-vs-reality verdict, built BEFORE the gateway rows so its row
+        // can lead Connection — both on screen and in `copyBlock()`'s checklist.
+        // The lane it describes (new chats, the Action Button, Control Center,
+        // CarPlay, the wrist) outranks any single gateway's health.
+        let newStanding = Self.makeDefaultGatewayStanding(
+            resolution: pickerSnap.resolution,
+            notice: pickerSnap.pendingAdoptionNotice,
+            displayOrder: newGatewayDisplayOrder,
+            customGateways: customGateways,
+            customOrdinals: customOrdinals
+        )
+        if let newStanding, newStanding.kind == .broken, let broken = pickerSnap.resolution.brokenRef {
+            // The default row is strictly more informative than the broken
+            // gateway's own incomplete row — it names the CONSEQUENCE and carries
+            // the fix — and running both would count one outage plus its cause as
+            // two findings. Only for `.broken`: under `.notChosen` the projected
+            // ref is a compatibility fallback rather than a user choice (removing
+            // its row would silently delete a correct row for a built-in the user
+            // really did half-configure), and under `.autoAdopted` `brokenRef` is
+            // the REPLACED gateway, whose incomplete row still offers the repair
+            // the passed standing row does not.
+            rowRefs.removeAll { $0 == broken }
+        }
+        if let newStanding {
+            built.append(buildDefaultGatewayRow(standing: newStanding))
+        }
+        built.append(contentsOf: buildGatewayRows(sorted: sortedGateways, customOrdinals: customOrdinals))
 
         // No-send-able-gateway rows — make the all-green-but-broken Connection
         // section honest. `configuredRemoteAgentRefs()` is fail-closed, so an empty
@@ -1139,7 +1261,11 @@ final class DiagnosticsRunner {
                 category: .connection,
                 tier: .autoRead,
                 status: .failed(code: AppError.remoteAgentNotConfigured.errorCode),
-                detail: String(localized: "diagnostics.connection.gateway.focused.missing.detail", defaultValue: "This gateway isn't set up on this device — finish adding it in Settings, or Clone the conversation to a configured gateway."),
+                // Scoped ACCOUNT-WIDE, not device-local: `rawStoredString` reads the
+                // App Group and then iCloud KVS, `getRemoteAgentModel` dual-reads
+                // the same way, and the token query carries `kSecAttrSynchronizable`.
+                // "On this device" told the user their other devices were fine.
+                detail: String(localized: "diagnostics.connection.gateway.focused.missing.detail.accountWide", defaultValue: "Setup isn't finished for this gateway, so it can't send — finish it in Personal AI, or Clone the conversation to a gateway that works."),
                 role: .focused, reportLabel: nil
             ))
         } else if refs.isEmpty, incompleteRefs.isEmpty {
@@ -1166,12 +1292,17 @@ final class DiagnosticsRunner {
         // and it names neither, so "open them in Settings" points nowhere. Per-ref
         // rows make the header count the gateways by construction and give each
         // one a name the user can act on.
+        //
+        // Fed `rowRefs`, not `incompleteRefs`: a DEMOTED gateway (nothing points at
+        // it, nothing is bound to it) gets no row and no place in `attentionCount`.
+        // The on-screen name list below narrows from the same array, in lockstep.
         built.append(contentsOf: buildIncompleteGatewayRows(
-            refs: incompleteRefs,
+            refs: rowRefs,
             customOrdinals: customOrdinals,
-            anyConfigured: !refs.isEmpty
+            anyConfigured: !refs.isEmpty,
+            unreadable: readingUnreliable
         ))
-        let newIncompleteDisplay = incompleteRefs.map { ref in
+        let newIncompleteDisplay = rowRefs.map { ref in
             GatewayDisplayEntry(
                 ref: ref,
                 displayName: Self.gatewayDisplayName(ref, customGateways: customGateways, ordinal: customOrdinals[ref]),
@@ -1414,11 +1545,22 @@ final class DiagnosticsRunner {
         fileLaneUploadOnly = newFileLaneUploadOnly
         gatewayDisplayOrder = newGatewayDisplayOrder
         incompleteGatewayDisplay = newIncompleteDisplay
+        defaultGatewayStanding = newStanding
+        leftoverGateways = triage.leftover.map { ref in
+            LeftoverGatewayEntry(
+                ref: ref,
+                displayName: Self.gatewayDisplayName(ref, customGateways: customGateways, ordinal: customOrdinals[ref])
+            )
+        }
         // The global conclusion when the per-gateway rows have replaced the
         // "No Personal AI configured" row: nothing here can send. Rendered as a
         // section FOOTER, deliberately outside `checks`, so it explains the
         // situation without minting a finding of its own on top of the rows that
         // already name each repairable gateway.
+        //
+        // Reads the RAW `incompleteRefs`, not `rowRefs`: this fires only when
+        // `refs.isEmpty`, where triage demotes nothing at all, so the two arrays
+        // are identical here — and saying `incompleteRefs` keeps that visible.
         showsNoSendableGatewayNotice = refs.isEmpty && (!incompleteRefs.isEmpty || focusedNeedsOwnRow)
         fileLaneSignatures = newFileLaneSignatures
         gatewaySignatures = newGatewaySignatures
@@ -2485,7 +2627,12 @@ final class DiagnosticsRunner {
         lines.append("TTS: \(factTTSArchetype)")
 
         let kinds = factGatewayKinds.isEmpty ? "none" : factGatewayKinds.joined(separator: ", ")
-        lines.append("Gateways: \(kinds) · customs=\(factCustomGatewayCount) · partial=\(factPartialGatewayCount)")
+        lines.append("Gateways: \(kinds) · customs=\(factCustomGatewayCount) · partial=\(factPartialGatewayCount) · leftover=\(factLeftoverGatewayCount)")
+        // The joined fact the report could not previously state: which gateway a
+        // NEW chat mints on, and whether that pointer actually names something that
+        // can send. An anonymous token plus a closed verdict vocabulary — never a
+        // display name, never a URL.
+        lines.append("Default: \(factDefaultGateway)")
         lines.append("Auth: bearer×\(factAuthBearerCount), none×\(factAuthNoneCount)")
         // Per-gateway file lanes — backend KIND (or anonymous `custom-gateway#N`
         // ordinal) + bools + probe-state name only; NEVER a name/URL.
@@ -2645,10 +2792,16 @@ final class DiagnosticsRunner {
     /// Titles stay GENERIC for the same reason as `buildGatewayRows`: `copyBlock()`
     /// reads `check.title`, so a user's own gateway name must never live here. The
     /// real name reaches the screen through `incompleteGatewayDisplay`.
+    ///
+    /// `unreadable` carries the I3 verdict (`.readingUnreliable`): the device
+    /// cannot trust what it just read, so the row states that instead of telling
+    /// the user to finish a setup that may already be finished. Ids, statuses and
+    /// colours are identical either way — only the sentence changes.
     private func buildIncompleteGatewayRows(
         refs: [RemoteAgentRef],
         customOrdinals: [RemoteAgentRef: Int],
-        anyConfigured: Bool
+        anyConfigured: Bool,
+        unreadable: Bool
     ) -> [DiagnosticCheck] {
         refs.map { ref in
             let title: String
@@ -2669,12 +2822,25 @@ final class DiagnosticsRunner {
                 // Names no specific missing field ON PURPOSE. A nil Keychain read
                 // means "no token OR the Keychain wouldn't open right now", and a
                 // URL that hasn't synced yet is indistinguishable from one that
-                // never existed. "Setup isn't finished here" is the strongest claim
-                // the storage can actually support.
-                detail: String(
-                    localized: "diagnostics.connection.gateway.incomplete.detail",
-                    defaultValue: "Setup isn't finished on this device — open it in Personal AI to finish, or forget it."
-                ),
+                // never existed. "Setup isn't finished" is the strongest claim the
+                // storage can actually support.
+                //
+                // ACCOUNT-WIDE, never "on this device": `rawStoredString` reads the
+                // App Group and THEN iCloud KVS, `getRemoteAgentModel` dual-reads
+                // the same way, and the token query carries
+                // `kSecAttrSynchronizable` — only the cert fingerprint is
+                // App-Group-only. A device-local claim told the user their other
+                // devices were fine and mis-prepared them for the Forget button
+                // beside it, which erases the gateway from every one of them.
+                detail: unreadable
+                    ? String(
+                        localized: "diagnostics.connection.gateway.incomplete.detail.unreadable",
+                        defaultValue: "Conduck can't read this gateway's saved details right now. That usually means iCloud hasn't finished syncing them to this device — check back in a moment."
+                    )
+                    : String(
+                        localized: "diagnostics.connection.gateway.incomplete.detail.accountWide",
+                        defaultValue: "Setup was started but never finished, so this gateway can't send. Finish it in Personal AI — or forget it, which removes its saved details from every device signed in to your iCloud."
+                    ),
                 role: nil,
                 reportLabel: ref.customID != nil
                     ? "custom-gateway#\(customOrdinals[ref] ?? 0)"
@@ -2778,6 +2944,261 @@ final class DiagnosticsRunner {
             if out.count == keeping { break }
         }
         return out
+    }
+
+    // MARK: - Default-vs-reality: triage, standing, row
+
+    /// Split half-configured gateways into the ones something RELIES ON (they earn a
+    /// row and a place in `attentionCount`) and the ones that are merely leftover.
+    ///
+    /// Four reliance signals, each with its reason:
+    ///   • the DEFAULT — new chats, GigaAction, Control Center, CarPlay and every
+    ///     headless capture mint on it, so a broken one is a live outage;
+    ///   • a CUSTOM — `remoteAgentInventory()` only enumerates ROSTER customs, so an
+    ///     incomplete custom is by construction one the user created, named and can
+    ///     still see in Personal AI;
+    ///   • a BOUND conversation — bindings are permanent and are never silently
+    ///     rerouted, so that thread is dead until the gateway is fixed or the chat is
+    ///     Cloned. That is the definition of relying on something;
+    ///   • the FOCUSED ref — defensive: the user arrived from that gateway's failure,
+    ///     so the screen owes them a row about it whatever else is true.
+    ///
+    /// The ruling: a BUILT-IN with residue matching none of those has not earned the
+    /// word attention. Built-ins exist on every install whether anyone wants them, and
+    /// their slots fill from a half-finished visit to the editor (the auth-scheme slot
+    /// is written unconditionally at the top of every save attempt) or from a peer's
+    /// abandoned attempt arriving over KVS. Evidence there proves someone once opened
+    /// a screen, not that anything depends on the gateway.
+    ///
+    /// And NOTHING IS DEMOTED WHEN NOTHING CAN SEND: with no send-able gateway a
+    /// half-finished one is the closest thing to a working setup, and "finish this
+    /// one" is the best instruction the screen can give — the same argument
+    /// `buildIncompleteGatewayRows` already makes for going red at zero.
+    static func triageIncompleteGateways(
+        incomplete: [RemoteAgentRef],
+        defaultRef: RemoteAgentRef,
+        boundBackendRawStrings: Set<String>,
+        focusedRef: RemoteAgentRef?,
+        anyConfigured: Bool
+    ) -> (reliedOn: [RemoteAgentRef], leftover: [RemoteAgentRef]) {
+        guard anyConfigured else { return (incomplete, []) }
+        var reliedOn: [RemoteAgentRef] = []
+        var leftover: [RemoteAgentRef] = []
+        for ref in incomplete {
+            let relied = ref == defaultRef
+                || ref == focusedRef
+                || ref.customID != nil
+                || boundBackendRawStrings.contains(ref.rawString)
+            if relied { reliedOn.append(ref) } else { leftover.append(ref) }
+        }
+        return (reliedOn, leftover)
+    }
+
+    /// Map the eight-way resolution onto the four-way display standing — or onto
+    /// NOTHING, for every verdict that has a better story of its own.
+    ///
+    /// The three silent verdicts (`.nothingConfigured`, `.readingUnreliable`,
+    /// `.setupUnfinished`) share one reason: nothing can send, so the default
+    /// pointer is not why the device is stuck. `connection.gateway.none`, or one
+    /// named red row per half-configured gateway plus the section footer, already
+    /// tells that story — and emitting this row too would count one outage plus its
+    /// cause as two findings, the exact arithmetic `buildIncompleteGatewayRows` was
+    /// written to avoid. `.readingUnreliable` additionally forbids an accusation
+    /// outright (I3): the reading, not the pointer, is what is broken.
+    ///
+    /// The park re-reads one verdict rather than adding a fifth standing: a
+    /// `.brokenDefault` whose pointer the APP parked is `.notChosen`, because
+    /// there is no default to call broken — only a placeholder written one step
+    /// after the user forgot a different gateway. Naming it would put "X is your
+    /// default for new chats" on screen about a choice the user never made. The
+    /// chat banner, the Settings selector and the headless lanes make the same
+    /// collapse, and the flag rides inside `resolution` so none of them can hold
+    /// the verdict without it.
+    static func makeDefaultGatewayStanding(
+        resolution: DefaultGatewayResolution,
+        notice: DefaultGatewayAdoptionNotice?,
+        displayOrder: [GatewayDisplayEntry],
+        customGateways: [CustomGateway],
+        customOrdinals: [RemoteAgentRef: Int]
+    ) -> DefaultGatewayStandingState? {
+        func name(_ ref: RemoteAgentRef) -> String {
+            gatewayDisplayName(ref, customGateways: customGateways, ordinal: customOrdinals[ref])
+        }
+        // The display order wins for ORDER and NAME (it is the inventory's, matching
+        // the rows on screen); the resolution wins for MEMBERSHIP (it is the
+        // authority on what can send).
+        let candidates = displayOrder.filter { resolution.candidates.contains($0.ref) }
+
+        switch resolution {
+        case .usable(let ref):
+            // A pending notice whose adopted gateway IS this pointer means the
+            // repair happened and has not been described yet — the row says so
+            // once, then reverts to `.ready` when the notice is acknowledged.
+            if let notice, notice.adoptedRef == ref {
+                return DefaultGatewayStandingState(
+                    kind: .autoAdopted, defaultName: name(ref), defaultRef: ref,
+                    candidates: candidates, replacedName: notice.previousName
+                )
+            }
+            return DefaultGatewayStandingState(
+                kind: .ready, defaultName: name(ref), defaultRef: ref,
+                candidates: candidates, replacedName: nil
+            )
+
+        case .adopted(let ref, let replacing):
+            // Both gateways are named from the notice's CAPTURED names where one
+            // exists: the replaced gateway may be a custom that is already gone, and
+            // a live lookup would render it as a bare numbered fallback.
+            let replaced = (notice?.previousRef == replacing ? notice?.previousName : nil) ?? name(replacing)
+            return DefaultGatewayStandingState(
+                kind: .autoAdopted,
+                defaultName: (notice?.adoptedRef == ref ? notice?.adoptedName : nil) ?? name(ref),
+                defaultRef: ref, candidates: candidates, replacedName: replaced
+            )
+
+        case .bootstrapped(let ref):
+            // Nothing the user chose was overridden, so nothing is announced.
+            return DefaultGatewayStandingState(
+                kind: .ready, defaultName: name(ref), defaultRef: ref,
+                candidates: candidates, replacedName: nil
+            )
+
+        case .brokenDefault(let broken, _, let pointerIsParked):
+            // The two snapshots have skewed completely: offering an empty picker is
+            // worse than saying nothing for one rebuild, and the next rebuild is a
+            // settings-post away.
+            guard !candidates.isEmpty else { return nil }
+            // A parked pointer takes the no-name copy, and NO name goes with it —
+            // `.notChosen` carries an empty `defaultName` by contract, and its
+            // copy names none.
+            guard !pointerIsParked else {
+                return DefaultGatewayStandingState(
+                    kind: .notChosen, defaultName: "", defaultRef: broken,
+                    candidates: candidates, replacedName: nil
+                )
+            }
+            return DefaultGatewayStandingState(
+                kind: .broken, defaultName: name(broken), defaultRef: broken,
+                candidates: candidates, replacedName: nil
+            )
+
+        case .selectionRequired:
+            guard !candidates.isEmpty else { return nil }
+            // NO name: `resolution.ref` here is the built-in compatibility fallback,
+            // not a user choice, and naming it would invent a default the user never
+            // picked. The copy for this case names none.
+            return DefaultGatewayStandingState(
+                kind: .notChosen, defaultName: "", defaultRef: resolution.ref,
+                candidates: candidates, replacedName: nil
+            )
+
+        case .nothingConfigured, .readingUnreliable, .setupUnfinished:
+            return nil
+        }
+    }
+
+    /// The default-vs-reality row: does the pointer new chats mint on actually name a
+    /// gateway that can send? Title and detail are GENERIC and report-safe — the real
+    /// names live in `defaultGatewayStanding`, which the view reads instead.
+    ///
+    /// RED, not amber, and deliberately against this section's other colour grammar:
+    /// `buildIncompleteGatewayRows` goes amber when a sibling works because ONE
+    /// gateway among several is unwell. This row is not about a gateway; it is about
+    /// a LANE — new chats, the Action Button, Control Center, CarPlay, the wrist —
+    /// and that lane is one hundred percent down with no picker anywhere in it to
+    /// route around the failure. Amber sitting under five green gateway rows is
+    /// precisely the weight that let this hide for months.
+    private func buildDefaultGatewayRow(standing: DefaultGatewayStandingState) -> DiagnosticCheck {
+        let status: DiagnosticStatus
+        let detail: String
+        switch standing.kind {
+        case .ready:
+            status = .passed
+            detail = String(
+                localized: "diagnostics.connection.defaultGateway.ok",
+                defaultValue: "New chats and GigaAction start on your default gateway."
+            )
+        case .autoAdopted:
+            status = .passed
+            detail = String(
+                localized: "diagnostics.connection.defaultGateway.adopted",
+                defaultValue: "Conduck switched your default because the old one isn't set up here."
+            )
+        case .broken:
+            status = .failed(code: AppError.remoteAgentNotConfigured.errorCode)
+            detail = String(
+                localized: "diagnostics.connection.defaultGateway.broken",
+                defaultValue: "Your default gateway can't send, so new chats and GigaAction won't go anywhere. Choose a gateway that works, or finish setting the default one up in Personal AI."
+            )
+        case .notChosen:
+            status = .failed(code: AppError.remoteAgentNotConfigured.errorCode)
+            detail = String(
+                localized: "diagnostics.connection.defaultGateway.notChosen",
+                defaultValue: "Conduck doesn't know which AI new chats should use, so new chats and GigaAction won't go anywhere. Choose one in Personal AI."
+            )
+        }
+        return DiagnosticCheck(
+            id: Self.defaultGatewayCheckID,
+            // The SAME words as the Personal AI selector row
+            // (`settings.personalAI.default.selector.label`), so the user recognises
+            // the setting they chose.
+            title: String(
+                localized: "diagnostics.connection.defaultGateway",
+                defaultValue: "Default for new chats"
+            ),
+            category: .connection,
+            tier: .autoRead,
+            status: status,
+            detail: detail,
+            role: nil,
+            reportLabel: nil
+        )
+    }
+
+    /// Anonymous report token for a gateway — the locked `RemoteAgentBackend` raw
+    /// value, or the anonymous `custom-gateway#N` ordinal the rest of the report
+    /// already uses. Never a display name, never a URL (I5).
+    static func gatewayReportToken(_ ref: RemoteAgentRef, customOrdinals: [RemoteAgentRef: Int]) -> String {
+        switch ref {
+        case .builtin(let backend): return backend.rawValue
+        case .custom: return "custom-gateway#\(customOrdinals[ref] ?? 0)"
+        }
+    }
+
+    /// The default's verdict for the copy block, drawn from a CLOSED seven-word
+    /// vocabulary — `ok`, `ok(auto-adopted)`, `broken(candidates=N)`,
+    /// `not-chosen(candidates=N)`, `none-configured`, `unreadable`,
+    /// `setup-unfinished`. A closed vocabulary is what makes the allowlist
+    /// enforceable by construction: there is no branch here that can emit anything
+    /// derived from user text.
+    static func defaultGatewayVerdict(
+        resolution: DefaultGatewayResolution,
+        notice: DefaultGatewayAdoptionNotice?
+    ) -> String {
+        switch resolution {
+        case .usable(let ref):
+            return notice?.adoptedRef == ref ? "ok(auto-adopted)" : "ok"
+        case .adopted:
+            return "ok(auto-adopted)"
+        case .bootstrapped:
+            return "ok"
+        case .brokenDefault(_, let candidates, let pointerIsParked):
+            // A parked pointer reports as not-chosen, matching the standing row
+            // this token sits under: a report that called the placeholder broken
+            // while the row above it said nothing was chosen would describe two
+            // different devices.
+            return pointerIsParked
+                ? "not-chosen(candidates=\(candidates.count))"
+                : "broken(candidates=\(candidates.count))"
+        case .selectionRequired(let candidates):
+            return "not-chosen(candidates=\(candidates.count))"
+        case .nothingConfigured:
+            return "none-configured"
+        case .readingUnreliable:
+            return "unreadable"
+        case .setupUnfinished:
+            return "setup-unfinished"
+        }
     }
 
     static func customOrdinals(_ refs: [RemoteAgentRef]) -> [RemoteAgentRef: Int] {
