@@ -3,24 +3,58 @@
 // Conduck
 // ReplySanitizer.swift
 //
-// Shared text-to-speech preparation. Agent replies arrive as Markdown (the
-// gateway's upstream LLM renders ` **bold** `, fenced code, links, lists,
-// headings, emoji). Feeding raw Markdown into `AVSpeechSynthesizer` makes it
-// read literal asterisks, backticks, URLs, and emoji aloud — jarring on
-// hands-busy surfaces. `ReplySanitizer.spoken(_:)` strips the markup while
-// keeping the human-meaningful inner text, so every speaking surface
-// (CarPlay · macOS auto-speak · Watch) shares ONE canonical strip.
+// Shared preparation of UNTRUSTED remote text — agent replies from the user's
+// gateway, transcripts from a BYO speech-to-text endpoint — for the surfaces
+// that speak or render it. Three entry points, three jobs:
+//
+//   • `spoken(_:)` — the TTS strip. Agent replies arrive as Markdown (the
+//     gateway's upstream LLM renders ` **bold** `, fenced code, links, lists,
+//     headings, emoji). Feeding raw Markdown into `AVSpeechSynthesizer` makes
+//     it read literal asterisks, backticks, URLs, and emoji aloud — jarring on
+//     hands-busy surfaces. The strip removes the markup while keeping the
+//     human-meaningful inner text, so every speaking surface (CarPlay · macOS
+//     auto-speak · Watch) shares ONE canonical strip. Control and bidi scalars
+//     go with it: nothing in that class has a spoken form.
+//   • `linkCollapsed(_:)` — the glance transform for surfaces that show the
+//     WHOLE reply: `[label](target)` → `label`, every other construct verbatim.
+//   • `displayLine(_:maxLength:fallback:)` — the display PROJECTION for LABEL
+//     surfaces (notification bodies, conversation titles, list rows, CarPlay
+//     rows, VoiceOver labels). See "two policies" below.
 //
 // This is intentionally pure Foundation (no `AVFoundation`, no platform
 // import) so it compiles into every target — including the watchOS app —
 // and is trivially unit-testable. It transforms text only; it does not
 // synthesize speech.
 //
-// Scope: a pragmatic Markdown-for-speech strip, NOT a spec-complete Markdown
-// parser. It handles the constructs LLM replies actually emit. Order matters:
-// fenced code blocks are replaced first (so their inner backticks/asterisks
-// aren't mistaken for inline markup), then line-level prefixes, then inline
-// spans, then emoji, then whitespace collapse.
+// Scope of the Markdown work: a pragmatic Markdown-for-speech strip, NOT a
+// spec-complete Markdown parser. It handles the constructs LLM replies actually
+// emit. Order matters: control and bidi scalars go first (so none can sit
+// inside a construct the later passes are trying to match), then fenced code
+// blocks (so their inner backticks/asterisks aren't mistaken for inline
+// markup), then line-level prefixes, then inline spans, then emoji, then
+// whitespace collapse.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// TWO POLICIES FOR HOSTILE SCALARS — REJECT FOR IDENTITY, PROJECT FOR CONTENT
+//
+// One class of scalars (C0 · DEL · C1 · the bidi mark / embedding / override /
+// isolate families · U+2028 · U+2029) is answered two opposite ways in this app,
+// and the split is the design, not an inconsistency:
+//
+//   IDENTITY — an imported gateway's name or model override.
+//   `PairingPayload.sanitizedDisplayText` REFUSES the whole payload. Those
+//   strings are typed once at an interactive ingress and then persisted AS the
+//   gateway's identity; silently rewriting one would make the imported gateway
+//   differ from what the operator read in their own terminal, which is the exact
+//   confusion that check exists to prevent. A code the real wizard minted never
+//   carries these, so rejection costs an honest user nothing.
+//
+//   CONTENT — a reply, a transcript. `displayLine` PROJECTS it: never refused,
+//   never rewritten in storage. The canonical text stays byte-exact for history
+//   and for outbound replay (rewriting it would corrupt the conversation the
+//   user sends back to the agent), and refusing to render it would hand a
+//   hostile gateway a way to blank the UI. The hostility is answered at the
+//   render, once, and only for that render.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // UNTRUSTED INPUT — COST BOUNDS ARE LOAD-BEARING
@@ -53,7 +87,8 @@
 
 import Foundation
 
-/// Strips Markdown from an agent reply so it reads naturally through TTS.
+/// Prepares untrusted remote text for speech (`spoken`) and for rendering
+/// (`linkCollapsed`, `displayLine`). Never mutates what is stored.
 enum ReplySanitizer {
 
     // MARK: - Cost bounds
@@ -99,19 +134,28 @@ enum ReplySanitizer {
     ///
     /// Transformations (in application order):
     ///   0. Input bounded to `maxSpokenInputCount` (see Cost Bounds).
-    ///   1. Fenced code blocks ```` ```…``` ```` → the literal "[code block]".
-    ///   2. Line-level prefixes per line: heading `#`…, blockquote `> `,
+    ///   1. Control and bidi scalars: every scalar in `isStrippedControlScalar`
+    ///      → removed; U+2028 / U+2029 → a line feed. None of them has a spoken
+    ///      form, and running this FIRST keeps one from sitting inside a
+    ///      Markdown construct the later passes are trying to match.
+    ///   2. Fenced code blocks ```` ```…``` ```` → the literal "[code block]".
+    ///   3. Line-level prefixes per line: heading `#`…, blockquote `> `,
     ///      and leading list markers (`- `, `* `, `+ `, `1. `).
-    ///   3. Inline spans: `[label](url)` → `label`; `` `code` `` → `code`;
+    ///   4. Inline spans: `[label](url)` → `label`; `` `code` `` → `code`;
     ///      `**bold**` / `__bold__` / `*italic*` / `_italic_` → inner text.
-    ///   4. Emoji (any scalar with the `Emoji_Presentation` property, plus
+    ///   5. Emoji (any scalar with the `Emoji_Presentation` property, plus
     ///      common zero-width joiners / variation selectors) → removed.
-    ///   5. Whitespace collapse: trailing spaces trimmed per line, runs of
+    ///   6. Whitespace collapse: trailing spaces trimmed per line, runs of
     ///      blank lines collapsed to a single blank line, leading/trailing
     ///      whitespace of the whole string trimmed.
+    ///
+    /// Tabs and line feeds SURVIVE step 1 — `SpeechSegmenter` reads the line
+    /// structure for sentence pacing, so flattening it here would run
+    /// paragraphs together in the synthesizer.
     static func spoken(_ text: String) -> String {
         var working = boundedSpokenInput(text)
 
+        working = strippingControlScalars(from: working)
         working = replaceFencedCodeBlocks(in: working)
         working = stripLinePrefixes(in: working)
         working = stripInlineSpans(in: working)
@@ -139,6 +183,195 @@ enum ReplySanitizer {
         collapseMarkdownLinks(in: text)
     }
 
+    // MARK: - Display projection
+
+    /// The ONE scalar `displayLine` ever emits for a run of whitespace or a
+    /// break: a plain space. Every other whitespace form (NBSP, the fixed-width
+    /// spaces, the ideographic space) collapses into it, so a label cannot be
+    /// padded into a false layout.
+    nonisolated private static let displaySeparatorScalar: Unicode.Scalar = " "
+
+    /// The scalar the speech strip substitutes for U+2028 / U+2029.
+    nonisolated private static let lineFeedScalar: Unicode.Scalar = "\n"
+
+    /// Project untrusted CONTENT into ONE safe display line, capped, with a
+    /// fallback for the empty result. This is the primitive every LABEL surface
+    /// uses for agent reply text or a BYO-endpoint transcript: notification
+    /// bodies, persisted conversation titles, list rows, CarPlay rows,
+    /// VoiceOver labels.
+    ///
+    /// PROJECTION, NEVER REJECTION, AND NEVER A REWRITE OF WHAT IS STORED. The
+    /// canonical reply/transcript stays byte-exact — this returns a DERIVED
+    /// string for one rendering. (The opposite policy, outright refusal, is
+    /// correct for IDENTITY fields and lives in
+    /// `PairingPayload.sanitizedDisplayText`; the file header explains the
+    /// split.)
+    ///
+    /// What one pass over the grapheme clusters does:
+    ///   • CR, LF, CR LF, TAB, U+2028 and U+2029 → a single space. They carry
+    ///     layout a one-line label cannot honor, and DELETING them would fuse
+    ///     the words on either side into one.
+    ///   • Every other C0 control, DEL, and the whole C1 block → removed, along
+    ///     with the bidi marks, embeddings, overrides and isolates (U+200E /
+    ///     U+200F, U+202A–U+202E, U+2066–U+2069). An unterminated RLO renders
+    ///     everything after it in reverse, which is the classic label-spoof
+    ///     primitive; C0 carries the ESC that opens an ANSI sequence.
+    ///   • Runs of whitespace collapse to one space; both ends are trimmed.
+    ///
+    /// RIGHT-TO-LEFT TEXT IS NOT TOUCHED. What goes are the explicit FORMATTING
+    /// controls, never RTL script: Arabic, Hebrew, Persian and Urdu content
+    /// passes through byte-for-byte, and the system's own bidi algorithm lays it
+    /// out from the characters themselves. Stripping the script instead would
+    /// silently render those languages as mojibake
+    /// (`ReplySanitizerDisplayLineTests` pins it).
+    ///
+    /// `maxLength` caps the result in user-perceived characters, and it is a
+    /// PARAMETER rather than something the caller applies afterwards because the
+    /// ORDER is load-bearing: truncating FIRST can cut between a bidi opener and
+    /// its terminator and leave the opener governing everything the label still
+    /// shows. Taking the cap here makes that ordering impossible to get wrong.
+    /// The cut is hard (no word backoff, no ellipsis), never splits a grapheme
+    /// cluster, and never leaves the line ending in whitespace; the result is
+    /// never longer than `maxLength`. Pass `.max` for uncapped; a `maxLength` of
+    /// zero or less yields the fallback.
+    ///
+    /// `fallback` is returned verbatim — it is app-owned text, so it is neither
+    /// projected nor capped — whenever the projection comes out empty. Without
+    /// it a reply of nothing but control scalars is a BLANK notification, which
+    /// reads to the user as a bug in Conduck rather than as a bad reply.
+    ///
+    /// Markdown is NOT touched here. A surface that also wants `[label](target)`
+    /// collapsed composes, links first and cap last —
+    /// `displayLine(linkCollapsed(reply), maxLength: …, fallback: …)` — because
+    /// the reverse order lets the cap slice a link in half and leave raw markup
+    /// on screen.
+    ///
+    /// COST: one linear pass, and it stops the moment the cap is filled. Nothing
+    /// is materialized into an intermediate collection, so a capped call over a
+    /// multi-megabyte hostile reply allocates only the short line it returns —
+    /// the constraint the rest of this file exists to honor, and the reason the
+    /// cap could not be a separate second pass.
+    nonisolated static func displayLine(
+        _ text: String,
+        maxLength: Int,
+        fallback: String
+    ) -> String {
+        var output = String.UnicodeScalarView()
+        var emitted = 0            // display characters already appended
+        var pendingSpace = false   // a collapsed whitespace run awaiting content
+
+        for character in text {
+            guard emitted < maxLength else { break }
+
+            // Classify the cluster once. `hasContent` is what decides whether it
+            // occupies a character of the budget at all.
+            var hasBreak = false        // → separator
+            var hasRemoved = false      // → deleted
+            var hasWhitespace = false   // survives, and is whitespace
+            var hasContent = false      // survives, and is not whitespace
+            for scalar in character.unicodeScalars {
+                if isDisplayBreakScalar(scalar) {
+                    hasBreak = true
+                } else if isStrippedControlScalar(scalar) {
+                    hasRemoved = true
+                } else if scalar.properties.isWhitespace {
+                    hasWhitespace = true
+                } else {
+                    hasContent = true
+                }
+            }
+
+            guard hasContent else {
+                // Whitespace and breaks defer to the next content cluster (which
+                // is what collapses the run, and what trims both ends for free).
+                // A cluster that was ONLY removed scalars contributes nothing at
+                // all — it must not invent a word boundary the sender never sent.
+                if hasBreak || hasWhitespace { pendingSpace = true }
+                continue
+            }
+
+            if pendingSpace {
+                pendingSpace = false
+                if emitted > 0 {
+                    // Spending the last of the budget on a separator would end
+                    // the line in whitespace. Stop instead: the trim is part of
+                    // the projection, not a post-pass a caller could skip.
+                    guard emitted + 1 < maxLength else { break }
+                    output.append(displaySeparatorScalar)
+                    emitted += 1
+                }
+            }
+
+            if hasBreak || hasRemoved {
+                // A cluster mixing content with a break/removed scalar. Every
+                // scalar in both classes has Grapheme_Cluster_Break = Control, so
+                // it stands alone in practice (CR LF being the one pair, and both
+                // halves map to the same separator) — handled anyway so the
+                // classification above, not the grapheme segmenter, is what
+                // decides which scalars reach the screen.
+                for scalar in character.unicodeScalars {
+                    if isDisplayBreakScalar(scalar) || isStrippedControlScalar(scalar) { continue }
+                    output.append(scalar)
+                }
+                if hasBreak { pendingSpace = true }
+            } else {
+                output.append(contentsOf: character.unicodeScalars)
+            }
+            emitted += 1
+        }
+
+        return output.isEmpty ? fallback : String(output)
+    }
+
+    // MARK: - Untrusted-scalar classification
+
+    /// Scalars removed outright wherever untrusted text is rendered or spoken:
+    /// the C0 controls, DEL, the C1 block, and the bidi mark / embedding /
+    /// override / isolate families. Same denylist as
+    /// `PairingPayload.isDisplayHostile`, which answers it by rejecting instead.
+    ///
+    /// TAB, LF, CR, U+2028 and U+2029 are deliberately EXCLUDED: every caller
+    /// MAPS those to something (a space for a one-line label, a line feed for
+    /// speech pacing) rather than deleting them, because deleting a separator
+    /// fuses the words on either side. Callers therefore test for their own
+    /// break set BEFORE this predicate.
+    ///
+    /// Scans by scalar, never by `Character`: a grapheme cluster can hide a
+    /// control behind its base character (`"a\u{0000}"` is ONE `Character`), so
+    /// a Character-level test would pass it straight through.
+    nonisolated private static func isStrippedControlScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        // C0 minus TAB (0x09) / LF (0x0A) / CR (0x0D), plus DEL and the C1
+        // block. C0 carries the ESC that starts an ANSI sequence; C1 is the
+        // 8-bit form of the same set and is equally terminal-actionable.
+        case 0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F, 0x7F, 0x80...0x9F:
+            return true
+        // Bidi marks / embeddings / overrides / isolates: LRM, RLM, LRE, RLE,
+        // PDF, LRO, RLO, and the isolate family. RLO in particular reverses
+        // everything after it, so a reply can render as text the user never
+        // received. NOT the RTL scripts themselves — Arabic and Hebrew
+        // characters are untouched.
+        case 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Scalars `displayLine` turns into a single space: the tab, the line
+    /// breaks, and LINE / PARAGRAPH SEPARATOR. On a one-line label they all
+    /// resolve to "the words either side are separate" and nothing more, and
+    /// U+2028 / U+2029 break a label into extra rendered rows exactly the way LF
+    /// does.
+    nonisolated private static func isDisplayBreakScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x09, 0x0A, 0x0D, 0x2028, 0x2029:
+            return true
+        default:
+            return false
+        }
+    }
+
     // MARK: - 0. Input bound
 
     /// Clamp the full strip's input to `maxSpokenInputCount`, cutting on the
@@ -155,7 +388,46 @@ enum ReplySanitizer {
         return String(head)
     }
 
-    // MARK: - 1. Fenced code blocks
+    // MARK: - 1. Control and bidi scalars
+
+    /// Drop every `isStrippedControlScalar` and turn U+2028 / U+2029 into a line
+    /// feed. Nothing in that class has a spoken form — the synthesizer would
+    /// either skip it or, for the separators, run two paragraphs together — and
+    /// removing it here means no later pass can be fooled by a control scalar
+    /// hidden inside a Markdown construct.
+    ///
+    /// TAB, LF and CR pass through untouched: `collapseWhitespace` and
+    /// `SpeechSegmenter` both read that line structure for sentence pacing.
+    ///
+    /// Bails allocation-free on the reply that needs nothing changed, which is
+    /// every honest one.
+    nonisolated private static func strippingControlScalars(from text: String) -> String {
+        guard text.unicodeScalars.contains(where: {
+            isStrippedControlScalar($0) || isSpokenParagraphSeparator($0)
+        }) else {
+            return text
+        }
+
+        var output = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            if isStrippedControlScalar(scalar) { continue }
+            if isSpokenParagraphSeparator(scalar) {
+                output.append(lineFeedScalar)
+                continue
+            }
+            output.append(scalar)
+        }
+        return String(output)
+    }
+
+    /// LINE / PARAGRAPH SEPARATOR — the two break scalars the speech strip keeps
+    /// as breaks rather than spaces, so a reply that uses them for paragraphing
+    /// keeps its pacing.
+    nonisolated private static func isSpokenParagraphSeparator(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value == 0x2028 || scalar.value == 0x2029
+    }
+
+    // MARK: - 2. Fenced code blocks
 
     /// Replace ```` ```lang\n…\n``` ```` (and `~~~` fences) with "[code block]".
     /// Matched non-greedily, multiline, dot-matches-newline so the body spans
@@ -199,7 +471,7 @@ enum ReplySanitizer {
         return count
     }
 
-    // MARK: - 2. Line-level prefixes
+    // MARK: - 3. Line-level prefixes
 
     /// Strip per-line Markdown prefixes (headings, blockquotes, list markers).
     /// Applied line-by-line so a `#`/`-`/`>` mid-sentence is never touched.
@@ -230,7 +502,7 @@ enum ReplySanitizer {
         return cleaned.joined(separator: "\n")
     }
 
-    // MARK: - 3. Inline spans
+    // MARK: - 4. Inline spans
 
     /// Strip inline Markdown spans, keeping inner text. Order: links first
     /// (so a `[text](url)` isn't mangled by emphasis/code passes), then inline
@@ -376,7 +648,7 @@ enum ReplySanitizer {
         return String(output)
     }
 
-    // MARK: - 4. Emoji
+    // MARK: - 5. Emoji
 
     /// Remove emoji and their joiners/modifiers. A scalar is dropped when it
     /// carries the Unicode `Emoji_Presentation` property (the
@@ -406,7 +678,7 @@ enum ReplySanitizer {
         }
     }
 
-    // MARK: - 5. Whitespace collapse
+    // MARK: - 6. Whitespace collapse
 
     /// Trim trailing whitespace per line, collapse 2+ consecutive blank lines
     /// into one, and trim the whole string. Single newlines (intra-paragraph)

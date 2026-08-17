@@ -27,9 +27,25 @@ import Foundation
 /// via `PBXFileSystemSynchronizedBuildFileExceptionSet` (intentional —
 /// pulling that file in would drag the iOS-specific `STTClient` actor
 /// into the Watch binary).
+///
+/// It mirrors the TRANSCRIPT BOUNDARY too, and must: `STTResponseDecoder` and
+/// the JSON-family decoders compile into this target and resolve against THIS
+/// struct, and the wrist's foreground (`WatchNetworkClient`) and background
+/// (`WatchAudioUploader`) lanes both end here. Both definitions delegate to the
+/// one shared rule in `STTTranscript`, so the two targets cannot drift.
 struct STTResponse: Sendable {
+    /// Transcribed text, already normalized (see `STTTranscript.normalized`).
     let text: String
+
     let language: String?
+
+    /// The only way to build an `STTResponse` — see the phone-side twin.
+    /// `nonisolated` because the Watch background-session delegate constructs
+    /// one off the main actor.
+    nonisolated init(text: String, language: String?) {
+        self.text = STTTranscript.normalized(text)
+        self.language = language
+    }
 }
 
 enum WatchNetworkClient {

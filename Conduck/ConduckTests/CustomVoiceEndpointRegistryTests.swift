@@ -38,6 +38,7 @@ final class CustomVoiceEndpointRegistryTests: XCTestCase {
         let kvs = TestStores.kvs
         for key in [
             Constants.customVoiceEndpointsRegistryKey,
+            Constants.customVoiceEndpointMigratedUUIDKey,
             Constants.sttActivePresetIDKVSKey,
             Constants.ttsActiveProviderIDKVSKey,
             Constants.customSTTURLKey,

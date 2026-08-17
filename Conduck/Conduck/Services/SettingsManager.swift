@@ -685,6 +685,39 @@ actor SettingsManager {
 
     // MARK: - Active STT Preset
 
+    /// The active-STT pointer id this build is willing to honour, or nil when it
+    /// resolves to no vendor row.
+    ///
+    /// ONE choke point for every site that can adopt a pointer ANOTHER DEVICE
+    /// wrote — `performInitialSync()`, the `handleICloudChange` mirror, and the
+    /// iCloud fallback arm of `getActivePresetID()`. Each of those alone is
+    /// enough to make an unresolvable id the active provider, so the rule cannot
+    /// live in only one of them.
+    ///
+    /// The threat is concrete: a peer still running the pre-roster build writes
+    /// the bare legacy `custom-openai` id, whose singleton `stt.custom.*` slots
+    /// and synchronizable Keychain key this device may still hold. Honouring it
+    /// would have `activeSTTSnapshot()` POST recorded audio and a bearer token to
+    /// a config no Settings screen can show or edit. FAILING CLOSED on an id this
+    /// build does not recognise is the correct direction for a routing decision:
+    /// the caller falls back to Apple, and the user can always pick again.
+    ///
+    /// Judged against `customVoiceEndpointsAcrossStores()` so a roster that has
+    /// not finished mirroring locally still admits its own pointer.
+    ///
+    /// The LOCAL App-Group value is deliberately NOT judged here: it is written
+    /// only by this device's own `setActivePresetID` and by the gated mirrors
+    /// above, and `migrateCustomVoiceEndpoint()` must still read a pre-roster
+    /// device's own `custom-openai` pointer to repoint it onto endpoint #1.
+    private func admissibleSTTPresetID(_ candidate: String?) -> String? {
+        guard let candidate, !candidate.isEmpty else { return nil }
+        guard VoiceVendorRegistry.vendor(
+            forSTTPresetID: candidate,
+            customEndpoints: customVoiceEndpointsAcrossStores()
+        ) != nil else { return nil }
+        return candidate
+    }
+
     /// Returns the current active STT preset ID. Reads App Groups
     /// `defaults` first (hydrated by the dual-write setter + the KVS
     /// observer), then iCloud KVS if available (preserves existing KVS-only
@@ -692,14 +725,18 @@ actor SettingsManager {
     /// ("apple-on-device"). The `defaults` fallback fixes the provider-
     /// selection flicker for users signed out of iCloud / on unprovisioned
     /// dev builds, where KVS writes silently dropped.
+    ///
+    /// The iCloud arm — the one a fresh device or a reinstall reads, where no
+    /// local value masks it — is gated by `admissibleSTTPresetID`, so a pointer
+    /// a peer wrote that this build cannot resolve reads as Apple rather than
+    /// becoming the active provider.
     func getActivePresetID() -> String {
         if let local = defaults.string(forKey: Constants.sttActivePresetIDKVSKey),
            !local.isEmpty {
             return local
         }
         if iCloudAvailable,
-           let stored = iCloudStore.string(forKey: Constants.sttActivePresetIDKVSKey),
-           !stored.isEmpty {
+           let stored = admissibleSTTPresetID(iCloudStore.string(forKey: Constants.sttActivePresetIDKVSKey)) {
             return stored
         }
         return Constants.sttActivePresetIDDefault
@@ -736,11 +773,22 @@ actor SettingsManager {
     /// failing provider) and any preset that resolves to an in-process transport.
     /// nil when the user has no cloud STT key configured → the caller falls back
     /// to "Open Voice Settings". Read-only Keychain enumeration (never throws).
+    ///
+    /// GATED ON A RENDERABLE VENDOR ROW. The enumeration source is the KEYCHAIN,
+    /// which can hold accounts the vendor catalog does not list — the legacy
+    /// singleton `custom-openai` slot above all, which the roster migration
+    /// COPIES rather than moves. Recovering onto one of those would POST recorded
+    /// audio and a bearer token to an endpoint the user can neither see nor edit
+    /// in Settings, so an id `VoiceVendorRegistry` cannot resolve is skipped. The
+    /// roster is read once and passed down, so every candidate is judged against
+    /// the same instant's vendor list.
     func firstConfiguredCloudSTTPresetID() -> String? {
+        let endpoints = customVoiceEndpoints()
         for id in presetIDsWithStoredKey() where id != "apple-on-device" {
-            if STTProvider.lookup(id: id).transport != .inProcess {
-                return id
-            }
+            guard STTProvider.lookup(id: id).transport != .inProcess,
+                  VoiceVendorRegistry.vendor(forSTTPresetID: id, customEndpoints: endpoints) != nil
+            else { continue }
+            return id
         }
         return nil
     }
@@ -1488,6 +1536,27 @@ actor SettingsManager {
         return []
     }
 
+    /// The roster as BOTH stores currently describe it — the durable list plus
+    /// any endpoint that so far exists only in the iCloud copy.
+    ///
+    /// For `admissibleSTTPresetID`, which gates the active-STT pointer on roster
+    /// membership. One KVS push can carry a peer's new endpoint AND the pointer
+    /// that activates it, and the roster JSON is mirrored later in that same
+    /// pass, so gating on the durable list alone would refuse a legitimate
+    /// pointer for exactly the push that introduces it. Reads the iCloud copy
+    /// UNGATED by `iCloudAvailable` on purpose: every caller has already
+    /// established that the store is live — an inbound change notification, a
+    /// sync that guards on availability, or an `iCloudAvailable` read arm.
+    private func customVoiceEndpointsAcrossStores() -> [CustomVoiceEndpoint] {
+        let local = customVoiceEndpoints()
+        guard let data = iCloudStore.data(forKey: Constants.customVoiceEndpointsRegistryKey),
+              let synced = try? JSONDecoder().decode([CustomVoiceEndpoint].self, from: data) else {
+            return local
+        }
+        let known = Set(local.map(\.id))
+        return local + synced.filter { !known.contains($0.id) }
+    }
+
     /// One endpoint by id, or nil if absent (deleted / never created).
     func customVoiceEndpoint(id: UUID) -> CustomVoiceEndpoint? {
         customVoiceEndpoints().first { $0.id == id }
@@ -1520,9 +1589,26 @@ actor SettingsManager {
     /// endpoint was the active STT or TTS pointer, fall that pointer back to
     /// APPLE (stricter than the gateway fallback — a custom voice endpoint has
     /// no built-in sibling to inherit, and Apple is the universal default).
+    ///
+    /// Deleting the endpoint the LEGACY singleton config was migrated INTO also
+    /// retires that legacy config: the bare `stt.custom.*` / `tts.custom.model`
+    /// slots in BOTH stores, the per-device cert pin, and the synchronizable
+    /// `stt.apiKey.custom-openai` item. `migrateCustomVoiceEndpoint()` COPIES
+    /// rather than moves — a half-upgraded peer device must still find the legacy
+    /// item — and this is the only collector for that copy. It has to exist: the
+    /// bare `custom-openai` id has no vendor row, so no Settings screen can show
+    /// or remove what it still describes, while `activeSTTSnapshot()` resolves
+    /// that URL and key whenever the active pointer names the bare id. An
+    /// explicit delete is also the only moment where erasing it is unambiguously
+    /// what the user asked for, which is load-bearing here: the Keychain item is
+    /// SYNCHRONIZABLE, so its deletion reaches every device on the account.
     func deleteCustomVoiceEndpoint(id: UUID) {
         let sttPresetID = STTProvider.customEndpointID(for: id)
         let ttsProviderID = TTSProvider.customEndpointID(for: id)
+        // Decide BEFORE the roster write below. On a device that migrated on a
+        // build predating the ownership stamp, the verdict seeds itself from
+        // roster endpoint #1 — and the write below removes the row it reads.
+        let ownsLegacyConfig = isMigratedLegacyVoiceEndpoint(id)
 
         // Clear the per-uuid non-secret slots.
         setCustomSTTURL(nil, for: id)
@@ -1541,11 +1627,104 @@ actor SettingsManager {
         list.removeAll { $0.id == id }
         persistCustomVoiceEndpoints(list)
 
+        // Collect this endpoint's whole per-uuid key family — anything the
+        // dedicated setters above don't own. Runs AFTER the roster write, the
+        // same order `deleteCustomGateway` uses, so peers see the roster shrink
+        // and the slots vanish in one consistent sequence.
+        purgeVoiceEndpointOwnedSlots(for: id)
+
+        if ownsLegacyConfig {
+            retireLegacyCustomVoiceConfig()
+        }
+
         // Fall the active pointers back to Apple if they pointed at this endpoint.
         if getActivePresetID() == sttPresetID {
             setActivePresetID(Constants.sttActivePresetIDDefault)   // apple-on-device
         }
         if getActiveTTSProviderID() == ttsProviderID {
+            setActiveTTSProviderID(Constants.ttsActiveProviderIDDefault)   // apple-tts
+        }
+    }
+
+    /// Whether `uuid` names the endpoint `migrateCustomVoiceEndpoint()` copied
+    /// the legacy singleton config into.
+    ///
+    /// Ownership comes from the uuid the migration STAMPED, never from a URL
+    /// match: a user may legitimately add a SECOND endpoint on the same
+    /// self-hosted box (different key, different model — the base URL is all a
+    /// comparison could see), and a false TRUE would delete a synchronizable
+    /// Keychain item off every one of the user's devices for an endpoint that
+    /// never owned it. The peer that loses `stt.apiKey.custom-openai` that way is
+    /// exactly the half-upgraded device the copy-not-move migration protects, and
+    /// nothing on THIS device would show the damage.
+    private func isMigratedLegacyVoiceEndpoint(_ uuid: UUID) -> Bool {
+        migratedLegacyVoiceEndpointID() == uuid
+    }
+
+    /// The uuid of the endpoint that owns the legacy singleton config, or nil
+    /// when nothing does.
+    ///
+    /// Answers nil while there is no legacy `stt.custom.url` left to own, and nil
+    /// while no migration has claimed one — the conservative direction both ways:
+    /// an unclaimed legacy copy simply stays in place, invisible and unreachable
+    /// the moment the active pointer stops naming the bare id.
+    ///
+    /// A device that migrated on a build predating the stamp carries the flag
+    /// with no uuid. Endpoint #1 is the one that migration minted (it persists
+    /// the roster before anything else can append to it), so adopt it once and
+    /// persist the answer. Reading the roster is also what runs a pending
+    /// migration, which stamps the uuid itself — hence the roster read first.
+    private func migratedLegacyVoiceEndpointID() -> UUID? {
+        guard getCustomSTTURL() != nil else { return nil }
+        let roster = customVoiceEndpoints()
+        if let raw = defaults.string(forKey: Constants.customVoiceEndpointMigratedUUIDKey),
+           let stamped = UUID(uuidString: raw) {
+            return stamped
+        }
+        guard defaults.bool(forKey: Constants.customVoiceEndpointMigratedKey),
+              let first = roster.first else { return nil }
+        defaults.set(first.id.uuidString, forKey: Constants.customVoiceEndpointMigratedUUIDKey)
+        return first.id
+    }
+
+    /// Erase the legacy SINGLETON custom-endpoint config — the pre-roster
+    /// `stt.custom.*` / `tts.custom.model` slots from BOTH stores, the
+    /// App-Group-only cert pin, and the synchronizable `stt.apiKey.custom-openai`
+    /// Keychain item.
+    ///
+    /// Called from `deleteCustomVoiceEndpoint(id:)` ONLY, and only for the
+    /// endpoint the migration copied this config into — never at migration time,
+    /// where the copy is what lets a peer device still running the pre-roster
+    /// build complete its own migration.
+    ///
+    /// The bare active pointers fall back to Apple alongside, because the ids
+    /// they name (`custom-openai` / `custom-openai-tts`) resolve to no vendor row:
+    /// left in place they would point the transcribe path at a config that no
+    /// longer exists rather than at a provider the user can see.
+    private func retireLegacyCustomVoiceConfig() {
+        for key in [
+            Constants.customSTTURLKey,
+            Constants.customSTTModelKey,
+            Constants.customSTTAuthSchemeKey,
+            Constants.customTTSModelKey
+        ] {
+            defaults.removeObject(forKey: key)
+            iCloudStore.removeObject(forKey: key)
+        }
+        // Per-device pin — App Groups only, never KVS (see
+        // `setCustomSTTCertFingerprint(_:)`), so there is no KVS leg to remove.
+        defaults.removeObject(forKey: Constants.customSTTCertFingerprintKey)
+        // The ownership stamp goes with the config it named. The migration flag
+        // itself STAYS — the migration really did run, and re-running it would
+        // mint a duplicate endpoint from whatever it found.
+        defaults.removeObject(forKey: Constants.customVoiceEndpointMigratedUUIDKey)
+
+        try? clearAPIKey(forPresetID: STTProvider.customOpenAICompat.id)
+
+        if getActivePresetID() == STTProvider.customOpenAICompat.id {
+            setActivePresetID(Constants.sttActivePresetIDDefault)   // apple-on-device
+        }
+        if getActiveTTSProviderID() == TTSProvider.customOpenAITTS.id {
             setActiveTTSProviderID(Constants.ttsActiveProviderIDDefault)   // apple-tts
         }
     }
@@ -1623,6 +1802,13 @@ actor SettingsManager {
         if existing.first(where: { $0.id == uuid }) == nil {
             persistCustomVoiceEndpoints(existing + [endpoint])
         }
+
+        // Stamp WHICH endpoint now owns the legacy singleton config, so the one
+        // delete that may retire it (`deleteCustomVoiceEndpoint`) identifies its
+        // owner by uuid instead of by a URL match a second endpoint on the same
+        // self-hosted box would also satisfy. Idempotent on a retried pass — the
+        // persisted roster keeps the uuid stable.
+        defaults.set(uuid.uuidString, forKey: Constants.customVoiceEndpointMigratedUUIDKey)
 
         // Copy the non-secret slots into the per-uuid slots (idempotent).
         setCustomSTTURL(legacyURL, for: uuid)
@@ -3937,16 +4123,30 @@ actor SettingsManager {
 
     /// The Watch-specific default override, or `nil` = "Follow iPhone". Stored
     /// App-Group-LOCAL on the iPhone — NEVER iCloud KVS (it must not leak to
-    /// iPad/Mac, which own their own device-local defaults). **Self-heals:** a
-    /// stored override whose gateway is no longer configured is dropped here and
-    /// reported as nil, so the Watch never inherits a not-configured default.
+    /// iPad/Mac, which own their own device-local defaults).
+    ///
+    /// **SELF-HEALS BY IGNORING, NOT REMOVING** — the policy
+    /// `lastUsedRemoteAgentRef()` documents, for the same reason. An override
+    /// whose gateway is not currently send-able is reported absent, which is all
+    /// the broadcast envelope needs: a ref that never leaves this method never
+    /// reaches the wire, so the Watch still cannot inherit a not-configured
+    /// default. The stored string stays.
+    ///
+    /// Deleting it here would be irreversible and wrong. `configuredRemoteAgentRefs()`
+    /// fails CLOSED on an unreadable Keychain — the reading on a device restored
+    /// from backup before iCloud Keychain has delivered — and this override is
+    /// App-Group-only, never synced, and recreated by nothing. One blackout would
+    /// therefore reroute every wrist capture to the phone's default permanently.
+    /// Retaining the string instead lets the override return by itself the moment
+    /// the token lands. Intent-driven removals stay at their sources, where the
+    /// user really did ask: `GatewayForget` calls
+    /// `clearWatchDefaultOverrideIfPointing(at:)` for EITHER kind of ref, and
+    /// `deleteCustomGateway` clears it eagerly for the custom path it also serves
+    /// from the Settings row delete.
     func watchDefaultOverrideRef() -> RemoteAgentRef? {
         guard let raw = defaults.string(forKey: Constants.remoteAgentWatchDefaultBackendKey),
-              let ref = RemoteAgentRef(rawString: raw) else {
-            return nil
-        }
-        guard configuredRemoteAgentRefs().contains(ref) else {
-            defaults.removeObject(forKey: Constants.remoteAgentWatchDefaultBackendKey)
+              let ref = RemoteAgentRef(rawString: raw),
+              configuredRemoteAgentRefs().contains(ref) else {
             return nil
         }
         return ref
@@ -4029,9 +4229,10 @@ actor SettingsManager {
     /// nothing — the pointer is rewritten on every accepted mint, and the seed site
     /// range-checks it anyway — while a restored backup whose gateway URL is still
     /// downloading from iCloud KVS reads as evidence-free on first launch and would
-    /// lose the pointer permanently, never recovering once KVS lands. This is a
-    /// deliberate divergence from `watchDefaultOverrideRef()`, which deletes only
-    /// because it feeds a broadcast envelope that must not carry a dead ref.
+    /// lose the pointer permanently, never recovering once KVS lands.
+    /// `watchDefaultOverrideRef()` holds the same line for the same reason — a
+    /// ref withheld from the broadcast envelope never reaches the wire, so
+    /// reporting it absent already protects the wrist without erasing anything.
     /// Intent-driven removals happen at their source instead: `clearRemoteAgent`,
     /// `setDefaultRemoteAgentRef`, and a confirmed inbound deletion.
     ///
@@ -4106,6 +4307,24 @@ actor SettingsManager {
     func clearLastUsedRemoteAgentRefIfPointing(at ref: RemoteAgentRef) {
         guard defaults.string(forKey: Constants.remoteAgentLastUsedBackendKey) == ref.rawString else { return }
         clearLastUsedRemoteAgentRef()
+    }
+
+    /// Clear a Watch default override that names `ref`, leaving any other value
+    /// intact. The intent-driven removal `watchDefaultOverrideRef()` deliberately
+    /// withholds: that reader ignores-but-retains, because a fail-closed verdict
+    /// on an unreadable Keychain is not evidence the user wants the override
+    /// gone. A Forget is.
+    ///
+    /// BUILT-IN refs are what make this load-bearing. `openclaw` / `hermes` /
+    /// `openrouter` are stable, REUSED strings, so an override left behind by a
+    /// forgotten built-in comes back to life the moment the user sets that lane
+    /// up again — pointing at whatever server they configure next — and every
+    /// wrist capture silently follows it. `deleteCustomGateway` owns the same
+    /// clear for the custom branch, where it must also cover the Settings-row
+    /// delete.
+    func clearWatchDefaultOverrideIfPointing(at ref: RemoteAgentRef) {
+        guard defaults.string(forKey: Constants.remoteAgentWatchDefaultBackendKey) == ref.rawString else { return }
+        setWatchDefaultOverrideRef(nil)
     }
 
     /// Everything the new-chat gateway picker needs, read in ONE actor turn.
@@ -4232,14 +4451,100 @@ actor SettingsManager {
     private func persistedCustomGateways() -> [CustomGateway] {
         if let data = defaults.data(forKey: Constants.customGatewaysRegistryKey),
            let list = try? JSONDecoder().decode([CustomGateway].self, from: data) {
-            return list
+            return list.map { Self.withAdmissibleDisplayName($0) }
         }
         if iCloudAvailable,
            let data = iCloudStore.data(forKey: Constants.customGatewaysRegistryKey),
            let list = try? JSONDecoder().decode([CustomGateway].self, from: data) {
-            return list
+            return list.map { Self.withAdmissibleDisplayName($0) }
         }
         return []
+    }
+
+    /// Ceiling for a roster name this device did not type, counted in
+    /// `Character`s — 3× the 40-CHARACTER bound `SettingsViewModel.saveRemoteAgent`
+    /// truncates every local save to, so no name a Conduck build can persist is
+    /// anywhere near it while a kilobyte of text arriving through a store is
+    /// still trimmed.
+    ///
+    /// The unit matters: a grapheme cluster legitimately spans many scalars (a
+    /// ZWJ emoji runs 4+, a Devanagari conjunct with a vowel sign the same), so
+    /// 40 Characters of ordinary emoji, Devanagari or Thai already exceed 120
+    /// SCALARS. A scalar ceiling here would therefore condemn names the app
+    /// itself saved.
+    private static let maxStoredGatewayNameCharacters = 120
+
+    /// The roster record with a name a UI can safely render.
+    ///
+    /// A gateway definition reaches this device from iCloud KVS and from the
+    /// Watch courier as well as from the editor, and only the pairing-import path
+    /// validates what it carries. The name then goes to notification titles, list
+    /// rows and VoiceOver labels, where a bidi override reorders the sentence
+    /// around it and a control scalar forges extra lines.
+    ///
+    /// TWO RULES, because the two failures are not alike:
+    ///
+    ///  * A name carrying a RENDERING-CONTROL scalar falls back to the generic
+    ///    fixed copy — the SAME label a gateway with no roster entry already
+    ///    resolves to. Nothing of such a string can be salvaged, and no
+    ///    legitimate name contains one.
+    ///  * An OVER-LONG name is TRUNCATED, never replaced. Length alone is not
+    ///    evidence of hostility, so a real name must survive the encounter.
+    ///
+    /// Either way the record is otherwise untouched. Dropping it would delete
+    /// routing the user configured over a bad label, which is the worse failure:
+    /// the conversations bound to that gateway would start refusing.
+    ///
+    /// The scalar scan reads `unicodeScalars`, NOT `Character` — a grapheme
+    /// cluster hides a control scalar behind its base character (`"a\u{0000}"` is
+    /// ONE `Character`), so a Character-level scan would pass the hostile string
+    /// straight through. The denylist is deliberately the same one
+    /// `PairingPayload` applies to an imported name; keep the two in step,
+    /// because both strings end up in the same labels. The LENGTH rule counts
+    /// `Character`s instead — the unit the local save's own cap uses and the unit
+    /// a reader sees.
+    ///
+    /// The roster WRITE paths read through this resolver, so a correction also
+    /// lands in storage the next time the roster is persisted for any reason —
+    /// including a write triggered by an edit to a DIFFERENT gateway. That is why
+    /// only the two cases above may rewrite a name: the string a hostile-scalar
+    /// fallback replaces was never renderable, and no name this app can persist
+    /// reaches the truncation bound.
+    private static func withAdmissibleDisplayName(_ gateway: CustomGateway) -> CustomGateway {
+        if gateway.name.unicodeScalars.contains(where: isDisplayHostileScalar) {
+            var renamed = gateway
+            renamed.name = RemoteAgentRefMetadata.genericCustomName
+            return renamed
+        }
+        if gateway.name.count > maxStoredGatewayNameCharacters {
+            var trimmed = gateway
+            trimmed.name = String(gateway.name.prefix(maxStoredGatewayNameCharacters))
+            return trimmed
+        }
+        return gateway
+    }
+
+    /// Scalars barred from a stored display string. A denylist of
+    /// *rendering-control* scalars, never an allowlist of scripts — gateway names
+    /// are legitimately non-ASCII, and over-rejecting them is the worse failure.
+    private static func isDisplayHostileScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        // C0 controls + DEL + C1 controls: the ESC that starts an ANSI sequence
+        // and the CR/LF that forge extra lines, plus the 8-bit form of the set.
+        case 0x00...0x1F, 0x7F, 0x80...0x9F:
+            return true
+        // Bidi marks / embeddings / overrides / isolates. RLO in particular
+        // reverses everything after it, so a hostile name can render as the one
+        // the user expects — the classic display-spoof primitive.
+        case 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069:
+            return true
+        // LINE / PARAGRAPH SEPARATOR — break single-line labels the way LF does,
+        // letting one name occupy several rendered rows.
+        case 0x2028, 0x2029:
+            return true
+        default:
+            return false
+        }
     }
 
     /// One custom gateway by id, or nil if absent (deleted / never created).
@@ -4298,10 +4603,11 @@ actor SettingsManager {
         clearAuxiliaryRemoteAgentSlots(for: ref)
 
         // Drop a Watch override that pointed at the deleted gateway so the next
-        // broadcast couriers a valid Watch-effective default (self-heal in
-        // `watchDefaultOverrideRef()` also covers this lazily; clear eagerly here
-        // so the `persistCustomGateways` post below re-broadcasts the corrected
-        // value). Demotes the wrist to "Follow iPhone".
+        // broadcast couriers a valid Watch-effective default. `watchDefaultOverrideRef()`
+        // would already withhold it lazily, but that reader retains the string on
+        // purpose; a Forget is the statement of intent that earns the removal, and
+        // clearing it HERE lets the `persistCustomGateways` post below re-broadcast
+        // the corrected value. Demotes the wrist to "Follow iPhone".
         if defaults.string(forKey: Constants.remoteAgentWatchDefaultBackendKey) == ref.rawString {
             defaults.removeObject(forKey: Constants.remoteAgentWatchDefaultBackendKey)
         }
@@ -5306,7 +5612,7 @@ actor SettingsManager {
             // configured, else the iPhone's device-local default) — NOT the
             // iPhone's own default. The wrist follows the iPhone unless the user
             // set a Watch-specific gateway from the iPhone (the Watch keeps no
-            // settings UI). `watchDefaultOverrideRef()` self-heals a dangling
+            // settings UI). `watchDefaultOverrideRef()` withholds a dangling
             // override, so this never couriers a not-configured ref.
             defaultBackendRef: watchDefault.ref.rawString,
             timestamp: now,
@@ -5777,9 +6083,17 @@ actor SettingsManager {
         // first device's choice), mirrored into App Groups `defaults` so the
         // durable local read in `getActivePresetID()` is hydrated on first
         // launch. Identity sync is owned by `UserIdentityManager`, not us.
+        //
+        // Only what `admissibleSTTPresetID` resolves is mirrored — this runs on
+        // EVERY launch, on a device whose local store may be empty, so it is the
+        // widest of the three pointer-adoption paths. An unresolvable id is left
+        // where it is rather than pushed over: the local value is not evidence
+        // that the peer's choice is wrong, only that this build cannot render it.
         if let iCloudPreset = iCloudStore.string(forKey: Constants.sttActivePresetIDKVSKey),
            !iCloudPreset.isEmpty {
-            defaults.set(iCloudPreset, forKey: Constants.sttActivePresetIDKVSKey)
+            if let admissible = admissibleSTTPresetID(iCloudPreset) {
+                defaults.set(admissible, forKey: Constants.sttActivePresetIDKVSKey)
+            }
         } else if let localPreset = defaults.string(forKey: Constants.sttActivePresetIDKVSKey),
                   !localPreset.isEmpty {
             iCloudStore.set(localPreset, forKey: Constants.sttActivePresetIDKVSKey)
@@ -6172,6 +6486,23 @@ actor SettingsManager {
         }
     }
 
+    /// The voice-endpoint twin of `purgeGatewayOwnedSlots(for:)`: remove every
+    /// per-uuid key belonging to a deleted custom voice endpoint, from BOTH
+    /// stores. Called by `deleteCustomVoiceEndpoint(id:)`, i.e. under the same
+    /// rule — the uuid is certain and the user asked for the removal.
+    ///
+    /// `customPrefixed: false` because these families suffix as the BARE uuid;
+    /// the gateway families carry `custom_` first. The delete's own setters
+    /// already clear the families they name one by one; this is the backstop for
+    /// a family they miss, which is the same gap `purgeGatewayOwnedSlots` closes
+    /// on the gateway side.
+    private func purgeVoiceEndpointOwnedSlots(for uuid: UUID) {
+        for key in perUUIDKeys(for: uuid, prefixes: Self.voiceEndpointOwnedKeyPrefixes, customPrefixed: false) {
+            defaults.removeObject(forKey: key)
+            iCloudStore.removeObject(forKey: key)
+        }
+    }
+
     // MARK: - KVS Observation
 
     /// Handle an external change to the ubiquitous store. Wired in `init` via
@@ -6244,14 +6575,24 @@ actor SettingsManager {
         // reflects the cloud value — matches the `sttPreferredLanguageKVSKey`
         // block above. Surfaces the change so observers (e.g.,
         // PhoneSessionManager re-broadcast) react.
+        //
+        // The incoming id must RESOLVE TO A VENDOR ROW — the shared
+        // `admissibleSTTPresetID` gate, which this path shares with
+        // `performInitialSync()` and the iCloud arm of `getActivePresetID()`.
+        // Mirroring an unresolvable id verbatim would hand a config no screen can
+        // show the microphone with no tap on this device at all; refusing leaves
+        // the local pointer standing.
         if changedKeys.contains(Constants.sttActivePresetIDKVSKey) {
             if let value = iCloudStore.string(forKey: Constants.sttActivePresetIDKVSKey),
                !value.isEmpty {
-                defaults.set(value, forKey: Constants.sttActivePresetIDKVSKey)
+                if let admissible = admissibleSTTPresetID(value) {
+                    defaults.set(admissible, forKey: Constants.sttActivePresetIDKVSKey)
+                    didChange = true
+                }
             } else {
                 defaults.removeObject(forKey: Constants.sttActivePresetIDKVSKey)
+                didChange = true
             }
-            didChange = true
         }
 
         // Mirror a remote on-device Apple engine-mode change into App Groups

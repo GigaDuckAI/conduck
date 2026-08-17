@@ -8,6 +8,12 @@
 // actor boundary and into `@MainActor` SwiftUI view models. The defensive
 // `init(managedObject:)` (KVC + nil-coalescing) tolerates the all-optional
 // Core Data model required by `NSPersistentCloudKitContainer`.
+//
+// `displayTitle` is the one DERIVED member here, and it is a render-time
+// projection: the stored strings it reads are untrusted (a title snippet
+// derived from a transcript, possibly synced in from another device) so it
+// answers them through `ReplySanitizer.displayLine` on the way out rather than
+// rewriting anything in the store.
 
 import Foundation
 import CoreData
@@ -134,15 +140,33 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
     /// `titleSnippet` → generic fallback. Centralizes the ladder both
     /// `WatchConversationListView` and `WatchConversationThreadView` use, so no
     /// per-row message fetch is needed on the wrist.
+    ///
+    /// Each stored rung is PROJECTED at read time, never merely trimmed. The
+    /// snippet is derived from a user transcript that can come from a BYO speech
+    /// endpoint, and one synced in from another device carries whatever that
+    /// transcript carried — an unterminated bidi override in it renders the whole
+    /// row backwards. Answering it at the render leaves storage canonical, so
+    /// history already on the device needs no rewrite to be safe.
     var displayTitle: String {
-        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !title.isEmpty {
+        if let title = Self.projectedTitleRung(title) {
             return title
         }
-        if let snippet = titleSnippet?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !snippet.isEmpty {
+        if let snippet = Self.projectedTitleRung(titleSnippet) {
             return snippet
         }
         return String(localized: "New conversation")  // xcstrings
+    }
+
+    /// One rung of the `displayTitle` ladder: an untrusted stored string reduced
+    /// to a safe display line, or nil when it carries nothing renderable.
+    ///
+    /// Nil rather than the generic title is why this passes `fallback: ""`: a
+    /// `title` of nothing but formatting controls must fall THROUGH to the
+    /// snippet, not short-circuit the ladder and hide a good snippet behind "New
+    /// conversation".
+    private static func projectedTitleRung(_ text: String?) -> String? {
+        guard let text else { return nil }
+        let line = ReplySanitizer.displayLine(text, maxLength: .max, fallback: "")
+        return line.isEmpty ? nil : line
     }
 }

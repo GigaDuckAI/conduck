@@ -782,6 +782,17 @@
         }
       }
     },
+    "remoteAgent.notification.reply.emptyBody" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI replied. Open Conduck to read it."
+          }
+        }
+      }
+    },
     "remoteAgent.notification.reply.title" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13789,6 +13800,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Test connection sends a one-second clip through your server."
+          }
+        }
+      }
+    },
+    "settings.stt.custom.stt.instructionNotice" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "What this endpoint transcribes becomes the instruction your AI acts on with its tools — and on CarPlay, Apple Watch, or a Shortcut it's sent without you reading it first."
           }
         }
       }

@@ -89,16 +89,22 @@ enum GeminiSTT: STTJSONBodyFactory {
         let joined = parts
             .compactMap { $0.text }
             .joined()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if joined.isEmpty {
+        // Gemini does not echo detected language — `language: nil`.
+        //
+        // Built BEFORE the emptiness verdict so the verdict reads the text
+        // AFTER `STTResponse.init` normalizes it through `STTTranscript` (which
+        // trims the outer whitespace too): a transcript of nothing but
+        // bidi/control scalars is non-empty raw and empty here.
+        let response = STTResponse(text: joined, language: nil)
+
+        if response.text.isEmpty {
             // Present-but-empty transcript = no usable speech, not a shape
             // failure. Surfaced uniformly with the other providers.
             throw AppError.noSpeechDetected
         }
 
-        // Gemini does not echo detected language — `language: nil`.
-        return STTResponse(text: joined, language: nil)
+        return response
     }
 }
 

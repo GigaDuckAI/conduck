@@ -61,6 +61,7 @@ final class CustomVoiceEndpointMigrationTests: XCTestCase {
         let kvs = TestStores.kvs
         for key in [
             Constants.customVoiceEndpointMigratedKey,
+            Constants.customVoiceEndpointMigratedUUIDKey,
             Constants.customVoiceEndpointsRegistryKey,
             Constants.customSTTURLKey,
             Constants.customSTTModelKey,

@@ -447,14 +447,14 @@ final class AppleRelayPendingQueue {
     ///
     /// Clears the relay-deferral toast (its promise — "your transcript will
     /// arrive" — was just kept; provenance-gated inside the service so an
-    /// unrelated error is never stomped), surfaces the transcript via local
+    /// unrelated error is never stomped), confirms the transcription via local
     /// notification (the recording UI has long since dismissed by the time a
     /// queued relay completes), then dispatches the converse hop so the
     /// transcribed ask actually reaches the agent — mirroring the live
     /// `runRelay` → `startConverseHop` chain.
     private func completeEntry(_ entry: Entry, text: String) async {
         WatchLog.note(.queue, "queue.complete", ["id": WatchLog.shortID(entry.requestID ?? "")])
-        postTranscriptNotification(text: text)
+        postTranscriptNotification()
         // Claim already deleted the queue-owned audio; belt-and-braces for a
         // degraded entry whose clip never made it into the owned directory.
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: entry.audioFilePath))
@@ -648,12 +648,31 @@ final class AppleRelayPendingQueue {
 
     // MARK: - Notifications
 
-    private func postTranscriptNotification(text: String) {
+    /// Confirm that a queued relay finally transcribed, and that its ask is on
+    /// its way to the agent.
+    ///
+    /// FIXED COPY — the transcript itself never reaches this body, for two
+    /// independent reasons:
+    ///   • It is UNTRUSTED text from a BYO speech endpoint, and a notification
+    ///     body is an OS-owned, app-branded surface that persists in
+    ///     Notification Center and mirrors to the paired iPhone's lock screen.
+    ///     Bidi controls in it would make the displayed order disagree with the
+    ///     string, which is the classic label-spoof primitive.
+    ///   • Showing it would not be a meaningful confirmation anyway.
+    ///     `completeEntry` dispatches the converse hop in the same beat, so
+    ///     there is no window in which the user could read the transcript and
+    ///     act on it — this banner reports what happened, it does not offer a
+    ///     decision. The canonical transcript reaches the thread as the user
+    ///     turn, where it is readable and editable-by-resend.
+    ///
+    /// (The reply notification takes the opposite route: agent reply text IS
+    /// the point of that banner, so it is projected through
+    /// `ReplySanitizer.displayLine` rather than replaced.)
+    private func postTranscriptNotification() {
         let content = UNMutableNotificationContent()
         content.title = String(localized: "Conduck")
-        content.body = text.isEmpty
-            ? String(localized: "Transcription complete.")
-            : text
+        // xcstrings
+        content.body = String(localized: "Transcription complete. Sending to your AI.")
         content.sound = .default
         let req = UNNotificationRequest(
             identifier: UUID().uuidString,

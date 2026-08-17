@@ -7,6 +7,14 @@
 // decode for multipart-family responses. Both shapes project to the
 // uniform `STTResponse(text:, language:)` so downstream code is wire-
 // agnostic.
+//
+// TRANSCRIPT NORMALIZATION DOES NOT LIVE HERE, on purpose. JSON-family
+// providers and the in-process Apple runner never reach this file, so a
+// normalization added here would cover some providers and read as if it
+// covered all of them. It happens once, for every route, inside
+// `STTResponse.init` — see `STTTranscript`. What this file owns is the
+// "no speech" verdict, and it takes that verdict on the CONSTRUCTED response
+// so it sees the normalized text.
 
 import Foundation
 
@@ -67,9 +75,16 @@ enum STTResponseDecoder {
         // to the same surfaced `noSpeechDetected`. Without this, the multipart
         // family (Mistral/OpenAI/ElevenLabs/custom-openai) silently returned ""
         // and the caller dead-ended (no error, no UI).
-        guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        //
+        // The verdict is taken on the CONSTRUCTED response, never on `rawText`:
+        // `STTResponse.init` normalizes (and trims) through `STTTranscript`, and
+        // a body of nothing but bidi/control scalars is non-empty raw yet empty
+        // after normalization. Reading `rawText` here would let that one land as
+        // a blank user turn instead of a "no speech" verdict.
+        let response = STTResponse(text: rawText, language: language)
+        guard !response.text.isEmpty else {
             throw AppError.noSpeechDetected
         }
-        return STTResponse(text: rawText, language: language)
+        return response
     }
 }

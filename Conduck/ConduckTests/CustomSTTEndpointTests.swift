@@ -57,6 +57,7 @@ final class CustomSTTEndpointTests: XCTestCase {
             Constants.customSTTAuthSchemeKey,
             Constants.customTTSModelKey,
             Constants.customVoiceEndpointMigratedKey,
+            Constants.customVoiceEndpointMigratedUUIDKey,
             Constants.customVoiceEndpointsRegistryKey,
         ] {
             defaults.removeObject(forKey: key)

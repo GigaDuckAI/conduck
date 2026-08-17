@@ -210,6 +210,17 @@
         }
       }
     },
+    "remoteAgent.notification.reply.emptyBody" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI replied. Open Conduck to read it."
+          }
+        }
+      }
+    },
     "remoteAgent.notification.reply.title" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2719,13 +2730,13 @@
         }
       }
     },
-    "Transcription complete." : {
+    "Transcription complete. Sending to your AI." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Transcription complete."
+            "value" : "Transcription complete. Sending to your AI."
           }
         }
       }

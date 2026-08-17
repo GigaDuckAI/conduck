@@ -616,6 +616,21 @@ enum Constants {
     /// `remoteAgentMultiGatewayMigratedKey`.
     static let customVoiceEndpointMigratedKey = "customVoiceEndpointMigrated"
 
+    /// App Groups key holding the `uuidString` of the roster endpoint the
+    /// one-time migration copied the LEGACY singleton config into — the one
+    /// endpoint whose deletion also retires the bare `stt.custom.*` slots and the
+    /// synchronizable `stt.apiKey.custom-openai` Keychain item.
+    ///
+    /// Ownership is STAMPED, never inferred from a URL match: two endpoints may
+    /// legitimately share one self-hosted base URL (different key, different
+    /// model), and naming the wrong owner deletes a synchronizable Keychain item
+    /// off every device on the account — including a peer still on the pre-roster
+    /// build, which the copy-not-move migration exists to protect.
+    ///
+    /// App-Group LOCAL, never KVS, matching `customVoiceEndpointMigratedKey`:
+    /// each device runs its own migration and may mint its own endpoint uuid.
+    static let customVoiceEndpointMigratedUUIDKey = "customVoiceEndpointMigratedUUID"
+
     // MARK: - Remote Agent (Personal AI gateway)
     //
     // Network-layer + storage-key constants for the OpenClaw / Hermes
@@ -1871,6 +1886,23 @@ enum Constants {
     /// Current KVS schema version. Increment only when adding new keys; never
     /// branch on this value.
     static let kvsSchemaVersion = 1
+
+    // MARK: - Notifications
+
+    /// Display characters kept in a reply notification's body, on every surface
+    /// that posts one (iOS/macOS background landing, the wrist).
+    ///
+    /// The body is the untrusted agent reply, so the cut is taken INSIDE
+    /// `ReplySanitizer.displayLine` rather than by the caller: projecting first
+    /// and cutting last is what stops a truncation from severing a bidi opener
+    /// from its terminator. `nonisolated` because the iOS poster runs in a
+    /// process the background URLSession event relaunched, off the main actor.
+    ///
+    /// The value is a ceiling, not a target — the system already elides a
+    /// notification body to two or three lines on a lock screen and to one on a
+    /// watch face. What it bounds is how much of a multi-megabyte reply the
+    /// projection ever has to walk before a banner can be built.
+    nonisolated static let replyNotificationBodyCharacterCount = 200
 
     // MARK: - App Information
 

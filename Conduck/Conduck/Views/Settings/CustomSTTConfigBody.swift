@@ -28,6 +28,14 @@
 //   - Advanced — the optional manual cert-fingerprint pin, a `DisclosureGroup`
 //     on iOS and a hand-rolled expander on macOS (see `advancedSection`).
 //
+// The Speech-to-Text footer carries the transcription disclosure: a configured
+// endpoint's output IS the user's instruction to an agent that may hold tools,
+// and the hands-free surfaces (CarPlay, Watch, Shortcuts) dispatch that
+// instruction unread. Auto-dispatch is the design, not a defect, so the honest
+// place to say it is configuration time — which is why the line is plain footer
+// copy: no icon, no colour, no confirmation step, nothing that reads as a
+// warning about a behaviour the user is choosing.
+//
 // Privacy invariants (same as the gateway body):
 //   - The API key never leaves the editor-local `pendingKey` buffer (seeded into /
 //     committed from `SecretEntrySheet`'s transient `draft`); cleared after a save
@@ -265,10 +273,21 @@ struct CustomSTTConfigBody: View {
         } header: {
             Text(LocalizedStringResource("settings.voice.section.speechToText", defaultValue: "Speech-to-Text"))
         } footer: {
-            Text(LocalizedStringResource(
-                "settings.stt.custom.stt.footer",
-                defaultValue: "Test connection sends a one-second clip through your server."
-            ))
+            // Two footer lines, stacked explicitly rather than left as two loose
+            // subviews: the macOS card lays its footer slot out with zero
+            // spacing, so an own `VStack` is what gives the second line its
+            // gap on both platforms.
+            VStack(alignment: .leading, spacing: 6) {
+                Text(LocalizedStringResource(
+                    "settings.stt.custom.stt.footer",
+                    defaultValue: "Test connection sends a one-second clip through your server."
+                ))
+                // The transcription disclosure — see the file header.
+                Text(LocalizedStringResource(
+                    "settings.stt.custom.stt.instructionNotice",
+                    defaultValue: "What this endpoint transcribes becomes the instruction your AI acts on with its tools — and on CarPlay, Apple Watch, or a Shortcut it's sent without you reading it first."
+                ))
+            }
         }
     }
 

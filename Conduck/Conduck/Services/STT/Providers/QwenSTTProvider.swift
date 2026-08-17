@@ -94,9 +94,17 @@ enum QwenSTT: STTJSONBodyFactory {
         let joined = parts
             .compactMap { $0.text }
             .joined()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if joined.isEmpty {
+        // DashScope does not echo back a detected language; the `language`
+        // hint we sent in `parameters` is not surfaced on the response.
+        //
+        // Built BEFORE the emptiness verdict so the verdict reads the text
+        // AFTER `STTResponse.init` normalizes it through `STTTranscript` (which
+        // trims the outer whitespace too): a transcript of nothing but
+        // bidi/control scalars is non-empty raw and empty here.
+        let response = STTResponse(text: joined, language: nil)
+
+        if response.text.isEmpty {
             // Present-but-empty transcript = no usable speech, surfaced
             // uniformly with the other providers (even though Qwen is parked /
             // unregistered, keep its empty path consistent so a future re-list
@@ -104,9 +112,7 @@ enum QwenSTT: STTJSONBodyFactory {
             throw AppError.noSpeechDetected
         }
 
-        // DashScope does not echo back a detected language; the `language`
-        // hint we sent in `parameters` is not surfaced on the response.
-        return STTResponse(text: joined, language: nil)
+        return response
     }
 }
 

@@ -78,15 +78,20 @@ enum OpenRouterSTT: STTJSONBodyFactory {
         } catch {
             throw AppError.sttDecodingFailure
         }
-        let text = (payload.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
+        // OpenRouter's transcription response does not echo a detected language.
+        //
+        // Built BEFORE the emptiness verdict so the verdict reads the text
+        // AFTER `STTResponse.init` normalizes it through `STTTranscript` (which
+        // trims the outer whitespace too): a transcript of nothing but
+        // bidi/control scalars is non-empty raw and empty here.
+        let response = STTResponse(text: payload.text ?? "", language: nil)
+        guard !response.text.isEmpty else {
             // A 2xx with no usable transcript — "no speech detected", not a
             // shape failure. Surfaced uniformly across providers rather than
             // silently swallowing the user's audio.
             throw AppError.noSpeechDetected
         }
-        // OpenRouter's transcription response does not echo a detected language.
-        return STTResponse(text: text, language: nil)
+        return response
     }
 }
 

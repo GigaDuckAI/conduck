@@ -217,6 +217,16 @@ Every spoken reply passes through a single point in the code with exactly-once c
 
 **A substitution is never allowed to be silent.** When the built-in voice stands in for a failed cloud one, it is announced on the message it affected and recorded in a small ring of recent speech outcomes held on the device, which never syncs and never leaves it. That ring is how the diagnostics screen can later tell a user why their chosen voice was not the one they heard — without it, the fallback would look like the feature simply not working.
 
+### A transcription provider speaks for the user
+
+The words a speech provider returns are treated as the user's own. Nothing in the client re-checks them against what was said, and on the hands-free surfaces — CarPlay, the Watch, the headless quick capture — the transcript is dispatched without a review step. In the app the transcript lands in the composer to be read and edited before it sends, but that is an editing affordance, not a security check.
+
+**Why:** a hands-free surface exists so the user does not have to read anything, and a confirmation step deletes the feature it is attached to. More to the point, the client is not where that limit can be enforced. Conduck grants an agent no authority; it sends text. What an agent may then do — touch files, run commands, reach the network — is configured on the user's own gateway, and that is the only place a restriction actually binds. A confirmation in the client would guard a door the authority does not pass through.
+
+The consequence follows from the decision and is stated rather than hidden: a speech provider that is hostile or compromised can put words in the user's mouth, and those words reach an agent that may hold tools. Nothing about such a transcript is malformed — ordinary prose carries it — so no amount of sanitising addresses it. On-device transcription is the default, so a user who changes nothing never takes this on, and a user who configures their own endpoint is told at that point what its output becomes.
+
+**Rejected: requiring review before a transcript reaches a tool-capable agent.** It would have to fire on exactly the surfaces that cannot show anything — a car, a wrist mid-run, a headless capture — and it would land hardest on the user who runs their own speech endpoint precisely to keep audio off other people's servers. That user is who the design is for, and a rule that degrades their experience while leaving a hosted provider untouched has it backwards.
+
 ### Where the app lands and where a capture goes are separate settings
 
 One preference governs what you see when the app cold-launches. A different one governs which conversation a headless quick capture appends to. They are independent axes and are deliberately not merged.

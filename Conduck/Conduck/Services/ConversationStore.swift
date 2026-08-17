@@ -3207,28 +3207,66 @@ actor ConversationStore {
 
     // MARK: - Title snippet
 
+    /// Characters kept in the stored snippet before an ellipsis is appended.
+    static let titleSnippetMaxLength = 60
+
+    /// Characters the truncation probe asks for BEYOND `titleSnippetMaxLength`.
+    /// TWO, not one: the projection collapses a whitespace run into a separator
+    /// that spends a character of the budget, and it refuses to end a line on that
+    /// separator — so a one-character probe can be swallowed whole by a space at
+    /// the boundary and come back exactly at the cap, indistinguishable from text
+    /// that simply ended there. The ellipsis then goes missing from a snippet that
+    /// really was cut, and the row claims a complete first line the user never
+    /// sent. Two characters buy one CONTENT character past the cap whenever the
+    /// projection has one, and a constant margin keeps the scan bounded however
+    /// long the untrusted input is.
+    private static let titleSnippetProbeMargin = 2
+
     /// Derive a list-row title from a message body: first non-empty line,
-    /// whitespace-trimmed, capped at ~60 characters (with an ellipsis when cut).
-    /// Returns nil when the text is empty / whitespace-only (an attachment-only
-    /// turn) so the caller skips the write and a later text turn can fill it.
+    /// projected to one safe display line, capped at `titleSnippetMaxLength`
+    /// (with an ellipsis when cut). Returns nil when the text is empty,
+    /// whitespace-only, or projects away to nothing — an attachment-only turn,
+    /// or a line of pure formatting controls — so the caller skips the write and
+    /// a later text turn can fill it.
+    ///
+    /// THE PROJECTION RUNS BEFORE THE CAP, and that order is the point. This
+    /// snippet is derived from the user's own transcript, which can arrive from a
+    /// BYO speech endpoint, so it is untrusted content:
+    /// `ReplySanitizer.displayLine` removes the control and bidi scalars that
+    /// would otherwise reorder or blank a headline, and cutting first can land
+    /// between a bidi opener and its terminator, leaving the opener governing
+    /// everything the row still shows. Only this derived field is projected — the
+    /// message text itself stays byte-exact. Rows written before this projection
+    /// existed (and rows synced in from another device) are answered again at the
+    /// render boundary, so history needs no rewrite.
     ///
     /// CROSS-TARGET: lives here (the store is a Watch membership exception) so
     /// both the write path and the backfill share one definition. Deliberately
     /// NOT `MessageRowFormatters.firstLineFallback` — that helper is a DISPLAY
-    /// fallback (first line even when blank, 80-char cap) while this is a
-    /// STORED denormalization (first NON-EMPTY line, 60-char cap, nil when the
-    /// turn has no text so a later turn can fill it). Both types are Watch
+    /// fallback (first line even when blank, `maxHeadlineLength` cap) while this
+    /// is a STORED denormalization (first NON-EMPTY line, a shorter cap, nil when
+    /// the turn has no text so a later turn can fill it). Both types are Watch
     /// members, so the split is about semantics, not target membership.
     static func snippet(from text: String) -> String? {
         let firstLine = text
             .split(whereSeparator: \.isNewline)
-            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }?
-            .trimmingCharacters(in: .whitespaces)
-        guard let firstLine, !firstLine.isEmpty else { return nil }
-        let cap = 60
-        if firstLine.count <= cap { return firstLine }
-        let truncated = firstLine.prefix(cap).trimmingCharacters(in: .whitespaces)
-        return truncated + "…"
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map(String.init)
+        guard let firstLine else { return nil }
+        // A fixed `titleSnippetProbeMargin` past the cap is all it takes to know
+        // the line was cut, and asking for no more keeps the scan bounded however
+        // long the untrusted input is.
+        let projected = ReplySanitizer.displayLine(
+            firstLine, maxLength: titleSnippetMaxLength + titleSnippetProbeMargin, fallback: ""
+        )
+        guard !projected.isEmpty else { return nil }
+        guard projected.count > titleSnippetMaxLength else { return projected }
+        // Second pass over an ALREADY-projected string, so it is a pure cap —
+        // and it is what keeps the head from ending in whitespace.
+        let head = ReplySanitizer.displayLine(
+            projected, maxLength: titleSnippetMaxLength, fallback: ""
+        )
+        return head + "…"
     }
 
     /// One-time iOS backfill so the founder's EXISTING conversations also get a

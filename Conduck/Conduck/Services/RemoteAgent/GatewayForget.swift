@@ -4,9 +4,10 @@
 // GatewayForget.swift
 //
 // The ONE Forget. Everything a gateway leaves behind, removed in the one order
-// that is safe: file lane first, badge retired, last-used cleared, customs
-// routed through `deleteCustomGateway`, auxiliary slots cleared, the default
-// re-pointed, the Watch teardown latch armed, the active session cleared.
+// that is safe: file lane first, badge retired, last-used cleared, the Watch
+// default override dropped, customs routed through `deleteCustomGateway`,
+// auxiliary slots cleared, the default re-pointed, the Watch teardown latch
+// armed, the active session cleared.
 //
 // The order is not cosmetic. The file lane goes first because
 // `revokeFileTransferReadiness` writes `available=false` to iCloud KVS, and that
@@ -63,6 +64,18 @@ enum GatewayForget {
         // failed-save rollback for a brand-new draft, and clearing there would
         // discard a perfectly good pointer whenever an unrelated save failed.
         await SettingsManager.shared.clearLastUsedRemoteAgentRefIfPointing(at: ref)
+
+        // The Watch default override obeys the same rule, for the same reason,
+        // and needs the same both-kinds treatment. `watchDefaultOverrideRef()`
+        // ignores-but-retains a dangling override on purpose (a fail-closed
+        // Keychain read is not evidence of intent), so nothing else drops it —
+        // and a reused built-in ref would bring it back to life against a
+        // DIFFERENT server the next time the user configures that lane, routing
+        // every wrist capture there silently. The custom branch below clears it
+        // again inside `deleteCustomGateway`, which owns that clear because it is
+        // also reached from the Settings row delete; this call is what covers the
+        // built-in branch.
+        await SettingsManager.shared.clearWatchDefaultOverrideIfPointing(at: ref)
 
         if case .custom(let id) = ref {
             // Freeze the badge FIRST — the roster entry about to be deleted is

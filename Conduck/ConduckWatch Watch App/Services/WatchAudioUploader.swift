@@ -959,7 +959,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// shape: decode `choices[0].message.content`, append the AGENT reply to the
     /// `ConversationStore`, bump the active-conversation pointer (IMPLICIT
     /// turns only, per the metadata's `stampsActiveConversation` verdict),
-    /// post a local notification (≤200 char) + `.success` haptic, and report
+    /// post a local reply notification + `.success` haptic, and report
     /// the last-successful-turn timestamp to iPhone on success.
     ///
     /// Cleanup: a single `defer` removes the body tmp file on EVERY path
@@ -1160,8 +1160,8 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                 // call `reportSuccessfulTurn()` itself or the phone undercounts.
                 WatchSessionManager.shared.reportSuccessfulTurn()
 
-                // Local reply notification (≤200 char body). In a multi-gateway
-                // setup (≥2 configured) the title names the bound gateway so the
+                // Local reply notification. In a multi-gateway setup (≥2
+                // configured) the title names the bound gateway so the
                 // wrist banner says which agent answered; else the generic string.
                 //
                 // The SHORT form: a notification title on a watch face is a single
@@ -1180,9 +1180,24 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                         customs: WatchSettingsReader.shared.customGateways
                     )
                 }()
+                // The body is the agent's reply — untrusted text on an OS-owned,
+                // app-branded surface that persists in Notification Center and
+                // mirrors to the paired iPhone's lock screen. `displayLine`
+                // projects it to one line with no control or bidi scalars and
+                // takes the cut ITSELF: cutting first can sever a bidi opener
+                // from its terminator and leave the opener governing everything
+                // the banner still shows. The stored reply is untouched.
                 postNotification(
                     title: replyTitle,
-                    body: String(reply.prefix(200)),
+                    body: ReplySanitizer.displayLine(
+                        reply,
+                        maxLength: Constants.replyNotificationBodyCharacterCount,
+                        // A reply of nothing but control scalars projects to
+                        // empty, and a BLANK banner reads as a bug in Conduck
+                        // rather than as a bad reply.
+                        fallback: String(localized: "remoteAgent.notification.reply.emptyBody",
+                                         defaultValue: "Your AI replied. Open Conduck to read it.")
+                    ),
                     conversationID: cid,
                     backendRef: metadata?.backendRawValue
                 )

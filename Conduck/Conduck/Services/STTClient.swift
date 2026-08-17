@@ -20,6 +20,16 @@
 //     bearer-vs-headerName distinction (ElevenLabs `xi-api-key`, Gemini
 //     `x-goog-api-key`) lives in the provider table, not here.
 //
+// Transcript boundary (load-bearing):
+//   - `STTResponse` is declared here and normalizes its `text` at
+//     construction via `STTTranscript`. Every provider route ends in that
+//     initializer — the multipart decoder, each JSON-family decoder, the
+//     in-process Apple runner, the background lane, and the Watch's own
+//     lanes — so a transcript from an untrusted BYO endpoint is well-formed
+//     before it can reach a display surface, the conversation store, or the
+//     wire. Do NOT normalize in a decoder instead: the `.inProcess` dispatch
+//     below returns without touching one.
+//
 // Privacy invariants (load-bearing — see the spec.md "Privacy & Security" section):
 //   - The API key is NEVER logged, printed, or surfaced in error messages.
 //   - When logging errors, redact the `Authorization` / custom-auth header.
@@ -42,14 +52,29 @@ import AVFoundation
 import Speech
 #endif
 
-/// Result of a successful STT round-trip. Provider-agnostic shape.
+/// Result of a successful STT round-trip. Provider-agnostic shape, and the
+/// TRANSCRIPT BOUNDARY: `text` is normalized at construction, so no provider
+/// route — network or in-process — can put raw remote text into the composer,
+/// the store, or the wire. See `STTTranscript` for why the boundary is this
+/// type rather than any one decoder.
 struct STTResponse: Sendable {
-    /// Transcribed text.
+    /// Transcribed text, already normalized (see `STTTranscript.normalized`).
+    /// There is no accessor for the un-normalized form: the raw string is
+    /// consumed by the initializer and never stored.
     let text: String
 
     /// Detected (or echoed back) language code, if the provider returned one.
     /// May be nil for providers that don't return language metadata.
     let language: String?
+
+    /// The only way to build an `STTResponse`, which is what makes the
+    /// normalization uniform. `nonisolated` because the background-session
+    /// delegate (`BackgroundSTT`, off the main actor by contract) constructs
+    /// one on its own queue.
+    nonisolated init(text: String, language: String?) {
+        self.text = STTTranscript.normalized(text)
+        self.language = language
+    }
 }
 
 /// Speech-to-text client. Provider-agnostic — dispatches on the `STTProvider`

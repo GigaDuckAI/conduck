@@ -14,6 +14,14 @@
 // picker shows a SHORT identifier (title or first-user-turn snippet) + a
 // relative date — NEVER readable conversation content. `derive` produces only
 // that short label; it must never surface the agent reply or a full thread.
+//
+// The snippet's source is the user's own first turn, which can arrive from a BYO
+// speech endpoint, and the row it lands in is read at a glance from a driver's
+// seat. So the label is PROJECTED through `ReplySanitizer.displayLine` before it
+// is capped — control and bidi scalars gone, breaks and whitespace runs
+// collapsed to one space, RTL script untouched. Projecting before the cap is the
+// load-bearing order: cutting first can leave a bidi opener with no terminator,
+// governing everything still on the row.
 
 import Foundation
 
@@ -25,19 +33,23 @@ enum CarPlayConversationLabel {
     /// rather than a sentence the driver is tempted to read.
     static let maxSnippetLength = 40
 
-    /// Derive the picker row label: `title` (trimmed, non-empty) ?? a snippet
+    /// Derive the picker row label: `title` (projected, non-empty) ?? a snippet
     /// of the first user turn ?? "New Conversation".
     ///
     /// - The first-user-turn snippet is the first line of the user's opening
-    ///   message, whitespace-collapsed and capped at `maxSnippetLength` (with
-    ///   an ellipsis when truncated). First *user* turn — never the agent reply
-    ///   (entitlement: no readable agent content on CarPlay).
+    ///   message, projected to one display line and capped at `maxSnippetLength`
+    ///   (with an ellipsis when truncated). First *user* turn — never the agent
+    ///   reply (entitlement: no readable agent content on CarPlay).
     /// - "New Conversation" is the floor: a freshly-minted conversation with no
-    ///   title and no turns yet still renders a stable, non-empty row.
+    ///   title and no turns yet — and one whose stored strings project away to
+    ///   nothing — still renders a stable, non-empty row.
     static func derive(title: String?, firstUserTurnText: String?) -> String {
-        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !title.isEmpty {
-            return title
+        if let title {
+            // Projected, not merely trimmed — the projection subsumes the trim.
+            // Uncapped, because a human/server title is a whole identifier and
+            // the car's own row truncation is the only budget it has to meet.
+            let projected = ReplySanitizer.displayLine(title, maxLength: .max, fallback: "")
+            if !projected.isEmpty { return projected }
         }
         if let snippet = snippet(from: firstUserTurnText) {
             return snippet
@@ -48,25 +60,29 @@ enum CarPlayConversationLabel {
     }
 
     /// Collapse a raw first-user-turn string into a single-line, length-capped
-    /// snippet. Returns nil when the input is nil / empty after trimming.
+    /// snippet. Returns nil when the input is nil, blank, or projects away to
+    /// nothing (a line of pure formatting controls), so `derive` falls through to
+    /// its floor rather than rendering a blank row.
     static func snippet(from text: String?) -> String? {
         guard let text else { return nil }
         // First line only (a multi-line dictation reads as one thought here).
         let firstLine = text
             .components(separatedBy: .newlines)
             .first ?? text
-        // Collapse internal whitespace runs to single spaces.
-        let collapsed = firstLine
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        guard !collapsed.isEmpty else { return nil }
-        guard collapsed.count > maxSnippetLength else { return collapsed }
-        let cutoff = collapsed.index(collapsed.startIndex, offsetBy: maxSnippetLength)
-        // Trim a trailing partial word + space, then append an ellipsis.
-        let truncated = String(collapsed[..<cutoff])
-            .trimmingCharacters(in: .whitespaces)
-        return truncated + "…"
+        // ONE character past the cap is all it takes to know the line was cut,
+        // and asking for no more keeps the scan bounded however long the
+        // untrusted input is.
+        let projected = ReplySanitizer.displayLine(
+            firstLine, maxLength: maxSnippetLength + 1, fallback: ""
+        )
+        guard !projected.isEmpty else { return nil }
+        guard projected.count > maxSnippetLength else { return projected }
+        // Second pass over an ALREADY-projected string, so it is a pure cap —
+        // and it is what keeps the head from ending on a dangling space.
+        let head = ReplySanitizer.displayLine(
+            projected, maxLength: maxSnippetLength, fallback: ""
+        )
+        return head + "…"
     }
 
     /// Format a conversation's `lastActivityAt` as a short relative date for

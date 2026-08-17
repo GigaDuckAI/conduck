@@ -1176,19 +1176,38 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         return RemoteAgentRefMetadata.shortDisplayName(for: ref, customs: customs)
     }
 
-    /// Post the reply notification (≤200-char body) whose tap deep-links to
-    /// the conversation. userInfo carries the conversationID for the
-    /// `NotificationDelegate` deep-link.
+    /// Post the reply notification whose tap deep-links to the conversation.
+    /// userInfo carries the conversationID for the `NotificationDelegate`
+    /// deep-link.
     ///
     /// `static` + internal (not `private`) for the same reason
     /// `postFailureNotification` is: the macOS in-app reply path has no
     /// background delegate to land through, so `MenuBarCoordinator` posts this
     /// exact notification itself rather than replicating its copy, identifier
     /// and sound policy.
+    ///
+    /// The body is the agent's reply, which is untrusted text on an OS-owned,
+    /// app-branded surface: it persists in Notification Center, mirrors to the
+    /// paired Watch, and renders on a locked screen. So it goes through
+    /// `ReplySanitizer.displayLine` — one line, no control or bidi scalars, cut
+    /// to `Constants.replyNotificationBodyCharacterCount`. The cut is the
+    /// projection's own parameter rather than a `prefix` around it because
+    /// cutting FIRST can drop a bidi terminator and leave its opener governing
+    /// everything the banner still shows. The stored reply is untouched — this
+    /// is a derived string for one banner.
     static func postReplyNotification(_ reply: String, conversationID: UUID, backendRawValue: String?) async {
         let content = UNMutableNotificationContent()
         content.title = await Self.replyNotificationTitle(backendRawValue: backendRawValue)
-        content.body = String(reply.prefix(200))
+        content.body = ReplySanitizer.displayLine(
+            reply,
+            maxLength: Constants.replyNotificationBodyCharacterCount,
+            // A reply of nothing but control scalars projects to empty. A BLANK
+            // banner reads as a bug in Conduck rather than as a bad reply, so
+            // the fallback states the fact the banner exists to carry and sends
+            // the user to the thread, where the canonical text still lives.
+            fallback: String(localized: "remoteAgent.notification.reply.emptyBody",
+                             defaultValue: "Your AI replied. Open Conduck to read it.")
+        )
         // One chime per BURST, not one per reply — three agents answering within
         // 30 s produce three banners and one sound. The window is App-Group
         // state, because on iOS this method runs in a process the background

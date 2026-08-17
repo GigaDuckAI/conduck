@@ -10,8 +10,6 @@
 		05B2153A756F4FC80B13778C /* WatchNotificationPrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B93B045C08A26D6489E3498 /* WatchNotificationPrivacyTests.swift */; };
 		069650C8AC0F675681F58C58 /* WatchRecordingLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5777E15559EA6B1951DE08 /* WatchRecordingLifecycleTests.swift */; };
 		0810000C9526DF4B5A80B517 /* WatchFileLaneReturnCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57D97EB749763DF8E3A5BC86 /* WatchFileLaneReturnCapabilityTests.swift */; };
-		63C0DE110000000000000032 /* WatchSTTKeyBlackoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */; };
-		63C0DE110000000000000042 /* WatchRelayQueueRetryabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */; };
 		1263D93A1706BD55172ED31F /* WatchSettingsApplyAndQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A801C634B327CE22742C2AB /* WatchSettingsApplyAndQueueTests.swift */; };
 		221BB6745DA7B0E378D997C5 /* ConduckWatchSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87595BE862314620EF226B1 /* ConduckWatchSmokeTests.swift */; };
 		3B3369FEAAD168D055C48147 /* TaskDeadlineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 346CBAB7BF95F11E04B690E2 /* TaskDeadlineTests.swift */; };
@@ -26,6 +24,8 @@
 		63A29F842F7D7570001E7E52 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = 63CC00022F6A1B0A00A00002 /* KeyboardShortcuts */; };
 		63C0DE110000000000000012 /* WatchConversePinResolutionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000011 /* WatchConversePinResolutionTests.swift */; };
 		63C0DE110000000000000022 /* WatchOutboxMintGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000021 /* WatchOutboxMintGateTests.swift */; };
+		63C0DE110000000000000032 /* WatchSTTKeyBlackoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */; };
+		63C0DE110000000000000042 /* WatchRelayQueueRetryabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */; };
 		63FA00032F6A1B0A00A00003 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 63FA00022F6A1B0A00A00002 /* FluidAudio */; };
 		63ST00032F6A1B0A00ST0003 /* ShareTargetFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */; };
 		63TX00032F6A1B0A00TX0003 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 63TX00022F6A1B0A00TX0002 /* Textual */; };
@@ -139,8 +139,6 @@
 		4A801C634B327CE22742C2AB /* WatchSettingsApplyAndQueueTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchSettingsApplyAndQueueTests.swift; sourceTree = "<group>"; };
 		50484C38EFB50AF68146AA9B /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		57D97EB749763DF8E3A5BC86 /* WatchFileLaneReturnCapabilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchFileLaneReturnCapabilityTests.swift; sourceTree = "<group>"; };
-		63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchSTTKeyBlackoutTests.swift; sourceTree = "<group>"; };
-		63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchRelayQueueRetryabilityTests.swift; sourceTree = "<group>"; };
 		5A317365301218A5EE4D2D9B /* WatchArmActivationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchArmActivationTests.swift; sourceTree = "<group>"; };
 		5C2EE5C9F3DEA04EE0F93679 /* WatchHeadlessDrainDecisionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchHeadlessDrainDecisionTests.swift; sourceTree = "<group>"; };
 		630432BC2FB7593700994EC0 /* Conduck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Conduck.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -152,6 +150,8 @@
 		631B3F212FD060FC00E01924 /* ConduckShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ConduckShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		63C0DE110000000000000011 /* WatchConversePinResolutionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConversePinResolutionTests.swift; sourceTree = "<group>"; };
 		63C0DE110000000000000021 /* WatchOutboxMintGateTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchOutboxMintGateTests.swift; sourceTree = "<group>"; };
+		63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchSTTKeyBlackoutTests.swift; sourceTree = "<group>"; };
+		63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchRelayQueueRetryabilityTests.swift; sourceTree = "<group>"; };
 		63C0F1D12F6A1B0A00C0F1D1 /* Identity.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Identity.xcconfig; sourceTree = "<group>"; };
 		63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareTargetFilter.swift; path = ConduckShareExtensionMac/ShareTargetFilter.swift; sourceTree = SOURCE_ROOT; };
 		63WC00012F6A1B0A00WC0001 /* WebPageCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WebPageCapture.swift; path = ConduckShareExtensionMac/WebPageCapture.swift; sourceTree = SOURCE_ROOT; };
@@ -257,6 +257,7 @@
 				Services/STT/STTProvider.swift,
 				Services/STT/STTResponseDecoder.swift,
 				Services/STT/STTStatusMap.swift,
+				Services/STT/STTTranscript.swift,
 				Services/TTS/SpeakEngine.swift,
 				Services/TTS/SpeechChunkQueue.swift,
 				Services/TTS/SpeechLanguageDetector.swift,
