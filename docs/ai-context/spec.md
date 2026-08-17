@@ -231,6 +231,20 @@ A failed send surfaces to the user as a tappable Try Again. Nothing re-sends in 
 
 **Why the two differ:** re-sending a turn spends the user's own model budget a second time, and the agent may act on the world twice. Re-sending audio costs one cheap transcription call. The asymmetry is intentional.
 
+### A key that reads back as nothing has two meanings, and the app never assumes which
+
+Secrets are stored so that they become readable after the device's first unlock. Between a restart and that unlock, a key that is present and correct reads back exactly as an empty slot does. So no lane asks the store for a key's *value* and infers from a blank answer; every lane asks for the read's *status*, and only the store reporting that the item does not exist counts as proof the user has none. A read that fails for any other reason — locked, denied, unreadable, or never attempted — is the store declining to answer, and is treated as such.
+
+The two readings get two different sentences and two different fates. Provable absence says the key is missing and points at where to add one; that verdict is final, and a capture refused on it is discarded, because repeating it cannot succeed. An unanswered read says only that the key could not be read, invites the user to unlock and try again, and is retryable — so the capture is kept.
+
+**Why the distinction is worth the second read:** the alternative tells a user with a perfectly good key that they never set one up, on a device where the remedy shown does nothing, and throws away what they just said in the process. Both halves are wrong, and the wrong half the user notices is the lost recording.
+
+**A capture refused after the user has spoken is kept wherever the surface has somewhere to keep it.** In the app and on the wrist that is a preserved recording or a queued entry with a visible retry. On CarPlay there is no such place, and none is invented: that refusal loses the capture, so it earns its keep by being true and by leaving the driver able to simply say it again. Where preservation is claimed it must be real — the promise that a recording is saved is made only by the surfaces that can see the bytes landed, never by the code that merely attempted to write them.
+
+**The wrist queue decides what is permanent by asking whether the error is retryable**, not by matching particular failures, because an entry deleted on a recoverable error takes the user's words with it. Entries are still bounded — they expire by age and by count — and the expiry notice claims no cause, since a queued capture can reach the iPhone every time and still be refused there.
+
+**Every sentence names the device that actually failed.** A watch showing a phone's failure says so; the same words rendered on the wrist, on the paired phone's lock screen and in the car have to be unambiguous on each, so a bare "this device" is never enough where two devices are involved.
+
 ### A conversation row distinguishes working, answered, and failed
 
 Every row in the conversation list resolves to an activity — a turn is in flight, a reply is waiting unseen, the last turn failed, or nothing is happening — rather than every row rendering alike and sort order carrying the whole story. Dispatching several agents at once is an ordinary way to use this app, and recency alone cannot say which of them came back: sort order carries *how recently* a conversation changed and never in which direction, so a thread that rises because a reply landed is otherwise indistinguishable from one that rises because the user sent something.
