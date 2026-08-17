@@ -29,14 +29,18 @@
 // shows the STORED default and the next chat may legitimately start elsewhere.
 //
 // The amber check answers "which one is currently CHOSEN", never "which one
-// works" — so an unconfigured row that happens to be the stored default carries
-// it too. A chooser that shows no selection at all leaves the user unable to tell
-// which gateway the screen is even about, which is precisely the state a device
-// whose default is not set up here lands in. The row still says "Set up…" and
-// still deep-links, so both facts stay legible at once.
+// works" — so a row the user CHOSE keeps it even when that gateway is not set up
+// here, which is precisely the state a device whose default broke lands in. A
+// chooser that showed no selection there would leave the user unable to tell
+// which gateway the screen is even about; the row still says "Set up…" and still
+// deep-links, so both facts stay legible at once. When NOTHING has been chosen —
+// no pointer stored, or one the app parked after a Forget — no row is checked at
+// all (`SettingsViewModel.personalAIRows` clears it rather than decorate a
+// gateway the user never picked), and the leading callout is what says what the
+// screen is about.
 //
 // A leading callout names the trouble when there is any: the stored default
-// cannot send here (`brokenDefaultName`), or no default has been chosen at all
+// cannot send here (`brokenDefaultName`), or nothing has been chosen
 // (`needsDefaultChoice`). Both are optional and default to off, so the
 // iPhone-hosted Apple Watch chooser and the headless Fix sheet mount this view
 // unchanged.
@@ -134,7 +138,9 @@ struct DefaultGatewayPicker: View {
     /// gateway, or finish setting this one up. Defaulted so the Watch chooser and
     /// the headless Fix sheet need no change.
     var brokenDefaultName: String? = nil
-    /// True when no default is stored at all and the device may not guess one.
+    /// True when NOTHING has been chosen — either no default is stored at all and
+    /// the device may not guess one, or a pointer is stored but the app parked it
+    /// on the user's behalf after a Forget. Renders the no-name callout.
     var needsDefaultChoice: Bool = false
 
     private var navTitle: LocalizedStringResource {
@@ -172,9 +178,11 @@ struct DefaultGatewayPicker: View {
             // The trouble, named, as the FIRST thing on the screen — above even
             // the Watch's "Follow iPhone" option, because it is the reason the
             // user is here. A named broken gateway wins over "nothing chosen":
-            // it is the more specific fact. The two are mutually exclusive by
-            // construction — a name is supplied only for a STORED pointer, and
-            // "nothing chosen" means none is stored.
+            // it is the more specific fact. The two are mutually exclusive because
+            // the caller derives the name from the same predicate that "nothing
+            // chosen" clears (`defaultSelectorBrokenName` off
+            // `defaultSelectorFlagsBroken`), so the `else` is belt-and-braces
+            // rather than the thing keeping them apart.
             if let brokenDefaultName {
                 Section {
                     AmberCallout(
@@ -301,7 +309,9 @@ struct DefaultGatewayPicker: View {
             } label: {
                 HStack(spacing: 12) {
                     // The check follows the CHOSEN gateway, not the working one —
-                    // see the file header. An unconfigured default still wears it.
+                    // see the file header. An unconfigured default wears it when
+                    // the user chose it; nothing is checked at all when nothing
+                    // has been chosen — see `SettingsViewModel.personalAIRows`.
                     leadingCheck(row.isDefault)
                     Text(row.displayName)
                         .foregroundStyle(AppColors.textSecondary)
@@ -351,7 +361,9 @@ struct DefaultGatewayPicker: View {
             } label: {
                 HStack(spacing: 12) {
                     // The check follows the CHOSEN gateway, not the working one —
-                    // see the file header. An unconfigured default still wears it.
+                    // see the file header. An unconfigured default wears it when
+                    // the user chose it; nothing is checked at all when nothing
+                    // has been chosen — see `SettingsViewModel.personalAIRows`.
                     leadingCheck(row.isDefault)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.displayName)

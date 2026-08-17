@@ -322,18 +322,13 @@ struct MainWindowView: View {
                     initialCategory: $settingsInitialCategory,
                     initialFocus: settingsInitialFocus,
                     onDone: {
+                        // Clearing `showingSettings` is ALL this has to do about a
+                        // deferred gateway fix route: the `.onChange(of:
+                        // showingSettings)` reaction below re-runs the claim on
+                        // every close, this one included. Nothing to add here.
                         showingSettings = false
                         settingsInitialCategory = nil
                         settingsInitialFocus = nil
-                        // A fix route that arrived while Settings was up was left
-                        // ARMED rather than spent — the presentation guard refuses
-                        // to tear down a mounted editor. Nothing else re-runs the
-                        // claim, so a user who accepted a refusal's offer to
-                        // continue in the app while sitting in Settings → Voice
-                        // would tap Done and land nowhere. Re-consume here; the
-                        // claim is one-shot, so an unarmed route is a no-op.
-                        // `ContentView.handleSettingsDismiss()` is the iOS twin.
-                        consumeGatewayFixRoute()
                     },
                     guidedHost: $guidedHost
                 )
@@ -408,6 +403,20 @@ struct MainWindowView: View {
         }
         // Opening the full-window settings overlay leaves the chat — clear the
         // transient composer feedback so a stale banner isn't waiting on return.
+        //
+        // CLOSING it is where a deferred gateway fix route gets collected. A route
+        // that arrived while Settings was up was left ARMED, not spent — the
+        // presentation guard in `consumeGatewayFixRoute` refuses to tear down a
+        // mounted editor — so something has to re-run the claim once the surface is
+        // gone. It rides the STATE CHANGE rather than any one close path because
+        // this window has several: Done clears the flag in `onDone`, while a reply
+        // deep-link and ⌘N clear it through `leaveSettingsForConversationAction()`
+        // — and the next one added will not remember to call anything. Reacting to
+        // the flag covers all of them by construction. The claim is one-shot, so
+        // an unarmed route is a no-op, and this is the root's ONLY re-consume
+        // site — a second one is the drift this arrangement exists to end. iOS
+        // needs no twin reaction: its Settings surface is a sheet/cover whose
+        // `onDismiss` (`ContentView.handleSettingsDismiss()`) fires on every exit.
         .onChange(of: showingSettings) { _, shown in
             if shown {
                 windowRecorder.dismissError()
@@ -416,6 +425,8 @@ struct MainWindowView: View {
                 // so no `onDisappear` fires for the pane. The composer that
                 // would claim a drop is gone; discard rather than strand.
                 cancelDropWork()
+            } else {
+                consumeGatewayFixRoute()
             }
         }
         // The destination a drop was stamped for has gone away. Discard it —
@@ -860,9 +871,12 @@ struct MainWindowView: View {
     /// an explicit fix request in favour of a deferred category the user asked
     /// for first and less specifically.
     ///
-    /// A route left unclaimed here is not lost: both roots re-run this on
-    /// dismissal, so accepting a refusal's offer while Settings is open still
-    /// lands the user on Personal AI when they leave.
+    /// A route left unclaimed here is not lost: both roots re-run the claim once
+    /// their Settings surface goes away, so accepting a refusal's offer while
+    /// Settings is open still lands the user on Personal AI when they leave. This
+    /// root collects it from `.onChange(of: showingSettings)` — the flag itself,
+    /// not any single close path, because Done, a reply deep-link and ⌘N all clear
+    /// it. iOS collects it from the sheet's own `onDismiss`.
     private func consumeGatewayFixRoute(settingsJustOpened: Bool = false) {
         Task {
             guard settingsJustOpened || !showingSettings else { return }

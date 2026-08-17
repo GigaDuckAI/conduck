@@ -1054,9 +1054,16 @@ final class CarPlayRecordingService {
                     ? nil
                     : RemoteAgentRefMetadata.displayName(for: defaultRef, customs: mintRoster)
                 guard let resolved = await SettingsManager.shared.remoteAgentSnapshot(for: defaultRef) else {
-                    // NEW chat, so the default IS the problem and can be named.
-                    // The chooser is one tap away on the screen the driver is
-                    // already looking at, which is what the phrase points at.
+                    // NEW chat, so the default IS the problem — named when the
+                    // driver or the user chose it, UNNAMED when the pointer is the
+                    // placeholder the app parked (see `mintName` above; a nil
+                    // there speaks "Conduck doesn't know which AI to use"). This
+                    // is the one surface where the sentence is heard rather than
+                    // read, so do not simplify `mintName` into a plain
+                    // `displayName(for:customs:)` — that blames the driver aloud
+                    // for a gateway nobody picked. The chooser is one tap away on
+                    // the screen they are already looking at, which is what both
+                    // phrasings point at.
                     speakErrorAndEnd(.remoteAgentDefaultNeedsSetup(gatewayName: mintName))
                     return
                 }

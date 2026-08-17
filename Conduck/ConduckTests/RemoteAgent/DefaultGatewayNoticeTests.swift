@@ -392,4 +392,134 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
         XCTAssertFalse(vm.personalAIRows.contains { $0.isDefault },
                        "No row carries the chosen check when nothing has been chosen.")
     }
+
+    // MARK: - The Keychain blackout
+
+    /// The rule itself, over every verdict. `.readingUnreliable` is the ONE the
+    /// selector may not speak about; the other seven either say nothing anyway or
+    /// are trustworthy readings the screen must keep reporting.
+    func testOnlyAnUntrustworthyReadingSilencesTheSelector() {
+        let openclaw = RemoteAgentRef.builtin(.openclaw)
+        let hermes = RemoteAgentRef.builtin(.hermes)
+
+        XCTAssertFalse(SettingsViewModel.selectorMaySpeak(for: .readingUnreliable(pointer: openclaw)),
+                       "A locked Keychain reads a healthy gateway as gone; the selector may not accuse it.")
+
+        for speakable: DefaultGatewayResolution in [
+            .usable(openclaw),
+            .adopted(ref: hermes, replacing: openclaw),
+            .bootstrapped(hermes),
+            .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false),
+            .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: true),
+            .selectionRequired(candidates: [openclaw, hermes]),
+            .nothingConfigured(pointer: openclaw),
+            .setupUnfinished(pointer: openclaw)
+        ] {
+            XCTAssertTrue(SettingsViewModel.selectorMaySpeak(for: speakable),
+                          "\(speakable) is a reading the screen can trust — silencing it hides real trouble. "
+                          + "Only the untrustworthy one is gated here; `selectorNeedsChoice` handles the rest.")
+        }
+    }
+
+    /// The restore-from-backup window, and the shape the raw membership predicate
+    /// gets wrong in the OPPOSITE direction to the test above: the pointer names a
+    /// gateway that is perfectly well set up, on a device that cannot read its
+    /// token back yet.
+    ///
+    /// `configuredRemoteAgentRefs()` fails CLOSED, so during a Keychain blackout
+    /// it reports a `.bearer` gateway as "not a member" and the membership
+    /// predicate answers "broken". `.readingUnreliable`'s own contract forbids
+    /// every surface from acting on that reading, and the chat banner,
+    /// Diagnostics, the headless lanes and CarPlay all keep the silence — this
+    /// screen is the one the user actually opens during the window, so its
+    /// accusation ("<name> isn't set up on this iPhone") is the one that lands,
+    /// beside an invitation to re-type a token that is seconds from arriving.
+    ///
+    /// Driven through the REAL resolver, and it writes NO secret: the blackout
+    /// shape is reproducible with keyless writes alone, which is the same reason
+    /// `HeadlessGatewayPreflightTests` builds it that way.
+    func testAnUnreadableKeychainIsNeverReportedAsABrokenDefault() async throws {
+        TestStores.removeAll()
+        await SettingsManager.shared.resetRemoteAgentMigrationLatchForTesting()
+        defer { TestStores.removeAll() }
+
+        // The one gateway that CAN send is keyless, so nothing in the configured
+        // set proves the Keychain open…
+        let hermes = RemoteAgentRef.builtin(.hermes)
+        await SettingsManager.shared.setRemoteAgentURL(
+            try XCTUnwrap(URL(string: "https://hermes.example.test:8642")), for: .hermes
+        )
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.none, for: hermes)
+        // …and the stored default is a `.bearer` gateway with a URL and no token
+        // that reads back. Indistinguishable, from inside the app, from a device
+        // whose iCloud Keychain has not finished delivering.
+        let openclaw = RemoteAgentRef.builtin(.openclaw)
+        await SettingsManager.shared.setRemoteAgentURL(
+            try XCTUnwrap(URL(string: "https://openclaw.example.test:18789")), for: .openclaw
+        )
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.bearer, for: openclaw)
+        await SettingsManager.shared.setDefaultRemoteAgentBackend(.openclaw)
+
+        let vm = SettingsViewModel()
+        await vm.refreshRemoteAgentState()
+
+        XCTAssertEqual(vm.defaultGatewayResolution, .readingUnreliable(pointer: openclaw),
+                       "Control: the device must genuinely be in the blackout state.")
+        XCTAssertEqual(vm.defaultRemoteAgentRef, openclaw,
+                       "Control: the projection is the stored pointer, so a name here would name it.")
+        XCTAssertFalse(vm.configuredRemoteAgentRefSet.isEmpty,
+                       "Control: something IS configured, which is what stops the empty-set guard covering this.")
+        XCTAssertFalse(vm.defaultSelectorNeedsChoice,
+                       "Control: a stored, unparked pointer is a CHOICE, so the nothing-chosen exclusion does not cover this.")
+
+        XCTAssertTrue(vm.defaultSelectorNeedsSetup,
+                      "The raw membership predicate is byte-identical and still answers its own question — it is asserted verbatim elsewhere.")
+        XCTAssertFalse(vm.defaultSelectorFlagsBroken,
+                       "A reading the resolver has declared untrustworthy may not draw the ⚠ + \"Needs setup\" line.")
+        XCTAssertNil(vm.defaultSelectorBrokenName,
+                     "…and above all may not NAME the gateway: the footer and the picker callout both key on this.")
+    }
+
+    /// THE CONTROL for the test above, differing in exactly one fact: a second
+    /// gateway is configured with a token that DOES read back, which proves the
+    /// Keychain open and takes the resolver off its blackout arm. The same broken
+    /// pointer must then be flagged and named — the silence is scoped to the
+    /// untrustworthy reading, not extended to every unconfigured default.
+    ///
+    /// Writes a secret, so it skips where the store is unavailable; the blackout
+    /// test above deliberately does not, and never skips.
+    func testAProvenReadableKeychainStillFlagsAndNamesABrokenDefault() async throws {
+        TestStores.removeAll()
+        await SettingsManager.shared.resetRemoteAgentMigrationLatchForTesting()
+        defer { TestStores.removeAll() }
+
+        let hermes = RemoteAgentRef.builtin(.hermes)
+        await SettingsManager.shared.setRemoteAgentURL(
+            try XCTUnwrap(URL(string: "https://hermes.example.test:8642")), for: .hermes
+        )
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.bearer, for: hermes)
+        do {
+            try await SettingsManager.shared.setRemoteAgentToken("tok-h", for: .hermes)
+        } catch {
+            throw XCTSkip("Secret-store write unavailable on this host (\(error)).")
+        }
+
+        let openclaw = RemoteAgentRef.builtin(.openclaw)
+        await SettingsManager.shared.setRemoteAgentURL(
+            try XCTUnwrap(URL(string: "https://openclaw.example.test:18789")), for: .openclaw
+        )
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.bearer, for: openclaw)
+        await SettingsManager.shared.setDefaultRemoteAgentBackend(.openclaw)
+
+        let vm = SettingsViewModel()
+        await vm.refreshRemoteAgentState()
+
+        XCTAssertEqual(vm.defaultGatewayResolution,
+                       .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false),
+                       "Control: with the Keychain proven readable this is an ordinary broken default.")
+        XCTAssertTrue(vm.defaultSelectorFlagsBroken,
+                      "The gateway the user chose really cannot send here, and the row has to say so.")
+        XCTAssertEqual(vm.defaultSelectorBrokenName, vm.defaultRemoteAgentDisplayName,
+                       "…and the footer names it, exactly as before this silence rule existed.")
+    }
 }

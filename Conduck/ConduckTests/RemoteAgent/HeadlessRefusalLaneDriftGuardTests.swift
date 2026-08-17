@@ -244,6 +244,7 @@ enum RefusalLaneSource {
     enum Failure: Error, CustomStringConvertible {
         case missingFile(String)
         case missingFunction(name: String, path: String)
+        case missingClosure(token: String, path: String)
 
         var description: String {
             switch self {
@@ -251,6 +252,8 @@ enum RefusalLaneSource {
                 return "Missing \(path) — update this guard's path derivation."
             case .missingFunction(let name, let path):
                 return "No `func \(name)` in \(path) — update this guard."
+            case .missingClosure(let token, let path):
+                return "No trailing closure after `\(token)` in \(path) — update this guard."
             }
         }
     }
@@ -286,6 +289,27 @@ enum RefusalLaneSource {
         guard let declaration = source.range(of: "func \(name)("),
               let opening = source.range(of: "{", range: declaration.upperBound..<source.endIndex) else {
             throw Failure.missingFunction(name: name, path: path)
+        }
+        var index = opening.upperBound
+        let start = index
+        var depth = 1
+        while index < source.endIndex, depth > 0 {
+            if source[index] == "{" { depth += 1 }
+            if source[index] == "}" { depth -= 1 }
+            index = source.index(after: index)
+        }
+        return String(source[start..<index])
+    }
+
+    /// The brace-matched TRAILING CLOSURE attached to `token` — a view modifier
+    /// such as `.onChange(of: showingSettings)`. The sibling of
+    /// `body(ofFunction:)`, and needed for the same reason: a SwiftUI root is one
+    /// 1,500-line expression, so an unscoped `contains` is satisfied by any
+    /// unrelated statement anywhere in it.
+    static func trailingClosure(after token: String, in source: String, path: String) throws -> String {
+        guard let anchor = source.range(of: token),
+              let opening = source.range(of: "{", range: anchor.upperBound..<source.endIndex) else {
+            throw Failure.missingClosure(token: token, path: path)
         }
         var index = opening.upperBound
         let start = index
@@ -440,11 +464,38 @@ final class GatewayFixRouteLandingDriftGuardTests: XCTestCase {
                           "The guard has to precede the write, or it guards nothing.")
     }
 
+    private static let macRootPath = "Conduck/Views/Conversation/MainWindowView.swift"
+
+    /// The macOS property as a PURE predicate over source, so the negative control
+    /// below drives the same code the real check does: the re-consume must sit in
+    /// the arm `.onChange(of: showingSettings)` takes when Settings has just gone
+    /// AWAY. Scoped to that closure, and to its `else`, because the root calls
+    /// `consumeGatewayFixRoute()` from elsewhere too (the `.openGatewayFixRoute`
+    /// receiver) — a bare `contains` over the file would pass on any shape.
+    private static func macRootReconsumesFromTheStateChange(_ source: String) -> Bool {
+        guard let reaction = try? RefusalLaneSource.trailingClosure(
+            after: ".onChange(of: showingSettings)", in: source, path: macRootPath),
+            let elseAt = reaction.range(of: "} else {")?.upperBound else { return false }
+        return reaction[elseAt...].contains("consumeGatewayFixRoute()")
+    }
+
     /// An armed-but-unpresentable route is not lost, it is DEFERRED — and a
     /// deferral nobody ever collects is the same as a drop. Both roots leave the
     /// route armed when a Settings surface is already up, so both must re-run the
-    /// claim when that surface goes away. Written identically on the two roots,
-    /// because the last two rounds' bugs were both one root doing half of this.
+    /// claim when that surface goes away. Each does it in the one place its own
+    /// surface makes TOTAL, and the two surfaces differ:
+    ///
+    ///   - iOS presents Settings as a sheet / cover, whose `onDismiss` fires on
+    ///     every exit path there. One callback, all exits.
+    ///
+    ///   - macOS is a full-window mode swap driven by `showingSettings`, and it has
+    ///     no single dismissal callback. `onDone` is one close path;
+    ///     `leaveSettingsForConversationAction()` — a reply deep-link, ⌘N — is
+    ///     another that clears the flag without going near it. So the claim rides
+    ///     the STATE, which covers every close path the root has and every one
+    ///     added later.
+    ///
+    /// Both previous rounds' bugs were one root doing half of this.
     func testBothRootsReconsumeTheRouteWhenSettingsGoesAway() throws {
         // iOS: the sheet's own dismissal handler.
         let iOSPath = "Conduck/ContentView.swift"
@@ -455,19 +506,92 @@ final class GatewayFixRouteLandingDriftGuardTests: XCTestCase {
                       "\(iOSPath): `handleSettingsDismiss` never re-runs the claim, so a user who accepts a "
                       + "refusal's offer while sitting in Settings taps Done and lands nowhere.")
 
-        // macOS: the mode swap's `onDone` closure. Not a `func`, so it is scoped
-        // by its own brace-matched literal rather than `body(ofFunction:)`.
-        let macPath = "Conduck/Views/Conversation/MainWindowView.swift"
-        let macSource = try RefusalLaneSource.source(at: macPath)
-        let onDone = try XCTUnwrap(
-            macSource.range(of: "onDone: {"),
-            "\(macPath): the Settings host no longer takes an `onDone` closure; update this guard."
-        )
-        let closeAt = try XCTUnwrap(
-            macSource.range(of: "},", range: onDone.upperBound..<macSource.endIndex)?.lowerBound)
-        XCTAssertTrue(macSource[onDone.upperBound..<closeAt].contains("consumeGatewayFixRoute()"),
-                      "\(macPath): the `onDone` closure never re-runs the claim, so the macOS root drops "
-                      + "the deferred route its iOS twin collects. Both roots or neither.")
+        // macOS: the state reaction, not any one close path.
+        let macSource = try RefusalLaneSource.source(at: Self.macRootPath)
+        XCTAssertTrue(Self.macRootReconsumesFromTheStateChange(macSource),
+                      "\(Self.macRootPath): `.onChange(of: showingSettings)` does not re-run the claim on "
+                      + "the close arm, so the macOS root drops the deferred route its iOS twin collects. "
+                      + "Both roots or neither.")
+    }
+
+    /// …and riding the state is not a stylistic preference, it is what makes the
+    /// coverage TOTAL. This root closes Settings from more than one place, and the
+    /// path that is easy to forget is the one a user actually takes after
+    /// accepting a headless refusal's offer: tapping the reply notification, which
+    /// goes through `leaveSettingsForConversationAction()` and never touches
+    /// `onDone`. That function must stay free of the claim — a second call site is
+    /// the drift this whole guard exists about, and the reaction already covers it.
+    func testTheMacRootsReconsumeCoversEveryClosePathRatherThanEnumeratingThem() throws {
+        let source = try RefusalLaneSource.source(at: Self.macRootPath)
+
+        // The `@State` declaration initialises to the same literal and is not a
+        // close path, so it is taken out before counting — left in, this would
+        // read as two paths on a root that had only one.
+        let paths = source.replacingOccurrences(of: "var showingSettings = false",
+                                                with: "var showingSettings")
+        let closes = paths.components(separatedBy: "showingSettings = false").count - 1
+        XCTAssertGreaterThanOrEqual(closes, 2,
+                                    "\(Self.macRootPath): with a single close path a per-call-site "
+                                    + "re-consume would be equivalent, and this guard would be asserting "
+                                    + "nothing. It is not — update this guard if that ever changes.")
+
+        let leaveBody = try RefusalLaneSource.body(
+            ofFunction: "leaveSettingsForConversationAction", in: source, path: Self.macRootPath)
+        XCTAssertTrue(leaveBody.contains("showingSettings = false"),
+                      "Control: this really is a second close path, or the count above proves nothing.")
+        XCTAssertFalse(leaveBody.contains("consumeGatewayFixRoute"),
+                       "The claim belongs to the state reaction alone. Two sites is how the roots drifted "
+                       + "apart in the first place, and the second one always gets forgotten.")
+    }
+
+    /// Rule 0 for the macOS half. The old shape kept the re-consume in `onDone`,
+    /// which reads as coverage in a diff and is invisible to any check that merely
+    /// asks whether the file mentions the claim — so the predicate is driven over
+    /// both shapes, and must separate them.
+    func testTheMacReconsumeCheckDistinguishesTheStateReactionFromAnOnDoneCall() {
+        let driftedShape = """
+        .onChange(of: showingSettings) { _, shown in
+            if shown {
+                windowRecorder.dismissError()
+                cancelDropWork()
+            }
+        }
+        MacSettingsView(onDone: {
+            showingSettings = false
+            consumeGatewayFixRoute()
+        })
+        """
+        XCTAssertFalse(Self.macRootReconsumesFromTheStateChange(driftedShape),
+                       "Control: a root that only re-consumes from `onDone` must FAIL this check — it "
+                       + "strands the route on every other close path, and it mentions the claim, so "
+                       + "presence alone can never distinguish it.")
+
+        let currentShape = """
+        .onChange(of: showingSettings) { _, shown in
+            if shown {
+                windowRecorder.dismissError()
+                cancelDropWork()
+            } else {
+                consumeGatewayFixRoute()
+            }
+        }
+        """
+        XCTAssertTrue(Self.macRootReconsumesFromTheStateChange(currentShape),
+                      "Control: the compliant shape must pass, or the check is unsatisfiable.")
+
+        let emptyElse = """
+        .onChange(of: showingSettings) { _, shown in
+            if shown {
+                cancelDropWork()
+            } else {
+                voiceRecovery = nil
+            }
+        }
+        consumeGatewayFixRoute()
+        """
+        XCTAssertFalse(Self.macRootReconsumesFromTheStateChange(emptyElse),
+                       "Control: an `else` that does something else, with the claim loose in the body, "
+                       + "must not satisfy a check about where the claim IS.")
     }
 
     /// The macOS window root opens Settings itself immediately before consuming

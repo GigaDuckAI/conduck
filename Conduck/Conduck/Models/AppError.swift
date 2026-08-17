@@ -6,7 +6,7 @@
 // Application error taxonomy with gappy numeric error codes
 // (1-7, 9-11, 14-15, 20-23, 99) — the gaps are intentional, frozen for
 // Shortcuts user-facing continuity. Gappy slots (8, 13, 16, 17) are filled
-// and (24, 25) appended with the `stt*` taxonomy. The live range runs 1-74 with
+// and (24, 25) appended with the `stt*` taxonomy. The live range runs 1-75 with
 // 27 a permanently reserved gap, plus the 99 catch-all; every emitted code
 // round-trips through `from(errorCode:message:)`.
 //
@@ -294,6 +294,20 @@ enum AppError: LocalizedError {
     //      code cannot, so the name degrades to ABSENT rather than to a guess.
     case remoteAgentDefaultNeedsSetup(gatewayName: String?)  // 74 — the default pointer can't take a new chat
 
+    // The STT key slot could not be READ (75), which is not the same fact as
+    // there being no key in it — and code 23 asserts the second one. Keys are
+    // stored `kSecAttrAccessibleAfterFirstUnlock`, so on a device that has
+    // rebooted and not yet been unlocked every slot answers the same way an
+    // empty slot does. Telling that user "No STT API key set" is a false
+    // statement about a device that is correctly configured, and it points them
+    // at a settings screen where they would find their key already there.
+    //
+    // The two are separable because `SettingsManager.apiKeyReadResult` returns
+    // the TYPED `APIKeyReadResult`: `errSecItemNotFound` is provable absence
+    // (23), and every other non-success status — plus a success carrying an
+    // undecodable payload — is this code. Nothing infers absence from a nil.
+    case sttKeyUnreadable                                    // 75 — the Keychain could not answer for the STT key
+
     // Catch-all (99)
     case unknown(Error)
 
@@ -363,6 +377,15 @@ enum AppError: LocalizedError {
             return String(localized: "audio.error.tooLarge", defaultValue: "Recording too long. Keep it under 5 minutes.")
         case .sttMissingAPIKey:
             return String(localized: "stt.error.missingKey", defaultValue: "No STT API key set. Open Conduck → Settings to add one.")
+        case .sttKeyUnreadable:
+            // Says what is TRUE (the key could not be read) and never what is
+            // merely likely (that there is no key). Carries its own instruction
+            // in the cause line, like `.sttMissingAPIKey` does, because the lane
+            // that raises it is a Shortcut, which renders `errorDescription`
+            // alone and has no second slot for a remedy. The recording claim is
+            // the one `ConverseIntent` guarantees: this refusal is raised with
+            // `PendingRetryGuard` still armed.
+            return String(localized: "stt.error.keyUnreadable", defaultValue: "Couldn't read your STT API key. If this device just restarted, unlock it and try again — your recording is saved.")
 
         // New tail
         case .audioProcessingFailed:
@@ -561,6 +584,12 @@ enum AppError: LocalizedError {
             return String(localized: "api.error.failure.recovery", defaultValue: "Should be back in a minute or two.")
         case .sttMissingAPIKey:
             return String(localized: "stt.error.missingKey.recovery", defaultValue: "Open Settings → STT API Key to add one.")
+        case .sttKeyUnreadable:
+            // An EXPLICIT arm rather than the generic "Try again.": the fix is a
+            // specific act (unlock the device) that a bare retry invitation does
+            // not name, and the surfaces that render one line would otherwise
+            // drop the remedy entirely.
+            return String(localized: "stt.error.keyUnreadable.recovery", defaultValue: "Unlock this device, then open Conduck and retry.")
         case .audioInvalid:
             return String(localized: "audio.error.invalid.recovery", defaultValue: "Record new audio.")
         case .audioMicBusy:
@@ -748,6 +777,14 @@ enum AppError: LocalizedError {
              // balance to spend, and 429 doesn't bill. Retry stays an explicit
              // user tap, never a loop (`maxAttempts` 1 below).
              .remoteAgentOutOfCredits, .remoteAgentRateLimited,
+             // 75 belongs beside 52/57 on the same test: what refused is state
+             // OUTSIDE the request — a Keychain that has not been unlocked yet —
+             // and it clears on its own the moment the user unlocks the device,
+             // at which point the identical bytes succeed. Calling it terminal
+             // would deny the retry its own copy instructs the user to make.
+             // Never a loop: `maxAttempts` leaves it at 1, so the retry is the
+             // user's tap and nothing spins against a locked Keychain.
+             .sttKeyUnreadable,
              .ttsProviderUnreachable, .ttsEmptyAudio, .ttsRateLimited,
              .fileTransferUploadFailed, .fileTransferUnreachable,
              .fileTransferServerError:
@@ -852,6 +889,14 @@ enum AppError: LocalizedError {
         // disarming it — otherwise a broken default silently eats the words the
         // user already spoke.
         case .remoteAgentDefaultNeedsSetup:
+            return true
+        // 75 for 74's reason: the bytes are bit-for-bit valid, the fix is an
+        // unlock rather than a re-record, and the SAME bytes succeed afterwards.
+        // `ConverseIntent` does not depend on this — it refuses a blackout above
+        // its catch chain, where no disarm can reach the recording at all — so
+        // this arm is what makes the answer right for any OTHER lane that
+        // decides preservation from the taxonomy.
+        case .sttKeyUnreadable:
             return true
         default:
             return false
@@ -977,6 +1022,7 @@ enum AppError: LocalizedError {
         // user copy. Absent name → the unnamed variant, which is written to be
         // true on its own.
         case 74: return .remoteAgentDefaultNeedsSetup(gatewayName: nil)
+        case 75: return .sttKeyUnreadable
         case 99: return .apiFailure(message: message ?? "")       // unknown(Error) — Error not reconstructible
         default:
             return .apiFailure(message: message ?? "")
@@ -1074,6 +1120,7 @@ extension AppError: CustomNSError {
         case .remoteAgentServiceUnavailable: return 72
         case .remoteAgentNotEstablished: return 73
         case .remoteAgentDefaultNeedsSetup: return 74
+        case .sttKeyUnreadable: return 75
         case .unknown: return 99
         }
     }

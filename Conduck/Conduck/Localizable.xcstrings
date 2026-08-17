@@ -1,6 +1,28 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "stt.error.keyUnreadable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again — your recording is saved."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unlock this device, then open Conduck and retry."
+          }
+        }
+      }
+    },
     "settings.root.personalAI.noDefaultYet" : {
       "extractionState" : "manual",
       "localizations" : {

@@ -27,7 +27,7 @@
 // configured backend. The user turn is appended BEFORE the converse hop so the
 // store is the source of truth even if the reply never lands.
 //
-// DESTINATION PRE-FLIGHT, and its honest limit. This intent receives
+// PRE-FLIGHT, and its honest limit. This intent receives
 // `audioFile: IntentFile` — the recording has ALREADY happened, inside the
 // system Record Audio action — so a check here can only fail FASTER, never
 // before the microphone. It exists for users who hand-built their own shortcut
@@ -35,12 +35,25 @@
 // lands before the mic are `CheckNetworkIntent` (first action of the bundled
 // shortcut), CarPlay, the menu bar and the Watch.
 //
-// It asks its question in the SAME ORDER `SharedInboxRouting.resolveOrMint`
-// asks it — live quick-capture pointer first, this device's "Default for new
-// chats" only when there is no live pointer — through the same helper
-// `CheckNetworkIntent` uses. That order is load-bearing here rather than merely
-// tidy: this check runs AFTER the microphone, so a refusal it invents that the
-// pre-flight already waved through costs the user words they have spoken.
+// Two things are checked, both of them AFTER `PendingRetryGuard.arm` and
+// OUTSIDE the `do`, so a refusal reaches no disarm and the recording stays in
+// the retry lane (I6):
+//
+//   THE SPEECH-TO-TEXT KEY, through `STTKeyReadiness`, which keeps the two
+//   readings of a nil key apart. `.notConfigured` is provable absence and
+//   raises code 23; `.unreadable` is a Keychain that could not answer — the
+//   before-first-unlock case this whole lane runs in — and raises code 75,
+//   whose copy says the key could not be READ rather than claiming there
+//   isn't one (I3). Neither reading is allowed to spend an STT call, and
+//   neither is allowed to cost the user their recording.
+//
+//   THE DESTINATION, asked in the SAME ORDER `SharedInboxRouting.resolveOrMint`
+//   asks it — live quick-capture pointer first, this device's "Default for new
+//   chats" only when there is no live pointer — through the same helper
+//   `CheckNetworkIntent` uses. That order is load-bearing here rather than
+//   merely tidy: this check runs AFTER the microphone, so a refusal it invents
+//   that the pre-flight already waved through costs the user words they have
+//   spoken.
 //
 // RETRY-GUARD SPAN, and why it is not the STT hop. Ordering the two checks
 // identically closes a RULE gap; it cannot close a TIME gap. A quick-capture
@@ -48,13 +61,14 @@
 // `SessionContinuationPolicy` window while the user is still speaking, so the
 // post-mic resolve reaches the default's verdict after the pre-flight waved the
 // capture through — and refuses. I6 says a refusal that arrives after the user
-// has spoken must leave the audio in the retry lane, so the guard stays armed
-// across BOTH the STT hop and the destination resolve, and disarms at the one
-// point the spoken words stop depending on it: `runConverseHop`'s
-// `appendMessage`, where the transcript becomes a durable row. Everything that
-// can fail after that append (assembly, dispatch) leaves a turn in the thread
-// with its own Retry affordance, so keeping the recording too would only
-// duplicate it.
+// has spoken must leave the audio in the retry lane, so the guard is armed
+// before the FIRST thing that can refuse — the key check — and stays armed
+// across the destination resolve and the STT hop, disarming at the one point
+// the spoken words stop depending on it: `runConverseHop`'s `appendMessage`,
+// where the transcript becomes a durable row. Everything that can fail after
+// that append (assembly, dispatch) is wrapped by the hop's own catch, which
+// marks the turn failed and posts the failure notification — so the thread
+// carries a Retry chip and keeping the recording too would only duplicate it.
 //
 // Title / description / parameter labels carry `// xcstrings` markers.
 
@@ -130,21 +144,6 @@ struct ConverseIntent: AppIntent {
         let snapshot = await SettingsManager.shared.activeSTTSnapshot()
         let preferredLanguage = await SettingsManager.shared.getPreferredLanguage()
 
-        // Fail fast if the user hasn't pasted a key yet. Surfacing the
-        // typed error in Shortcuts is more useful than a 401 from the
-        // upstream provider. In-process providers (Apple on-device)
-        // need no key — the runner's TCC check substitutes. The BYO
-        // custom endpoint with `.none` auth (keyless local server) also needs
-        // no key.
-        let apiKey: String
-        if snapshot.provider.transport == .inProcess || snapshot.customConfig?.auth == STTAuthScheme.none {
-            apiKey = ""
-        } else if let key = snapshot.apiKey, !key.isEmpty {
-            apiKey = key
-        } else {
-            throw AppError.sttMissingAPIKey
-        }
-
         // Extract audio data from the Shortcut-provided IntentFile.
         let originalAudioData = audioFile.data
 
@@ -199,6 +198,46 @@ struct ConverseIntent: AppIntent {
             audio: originalAudioData,
             metadata: pendingMetadata
         )
+
+        // Pre-flight the KEY, on the same terms and for the same reason as the
+        // destination below: AFTER `arm` and OUTSIDE the `do`, so neither verdict
+        // reaches a disarm and the recording survives either way (I6). It sits
+        // above the destination check only because it is the cheaper question.
+        //
+        // The two verdicts are NOT the same fact, and separating them is the
+        // whole point of doing this through `STTKeyReadiness` rather than
+        // `snapshot.apiKey == nil`. Keys are stored
+        // `kSecAttrAccessibleAfterFirstUnlock`: on a rebooted, not-yet-unlocked
+        // iPhone — precisely the Action-Button-from-the-lock-screen case — a key
+        // that is present and correct reads back as nothing. Code 23 asserts the
+        // slot is empty and sends the user to a settings screen where they will
+        // find their key already sitting there; code 75 says only what is true,
+        // that the key could not be read, and names the unlock that fixes it.
+        // `.notConfigured` is the only reading that PROVES absence, so it is the
+        // only one that earns 23 — and it is also the reading `CheckNetworkIntent`
+        // refuses before the microphone, which is why a capture that gets this far
+        // with no key at all is one the user built their own shortcut for.
+        let keyReadiness = await STTKeyReadiness.resolve(
+            presetID: snapshot.presetID,
+            snapshotKey: snapshot.apiKey,
+            provider: snapshot.provider,
+            customConfig: snapshot.customConfig
+        )
+        let apiKey: String
+        switch keyReadiness {
+        case .ready(let key):
+            apiKey = key
+        case .notConfigured:
+            // Dropping the temp file is safe for the reason the destination arms
+            // give below: `PendingRetryStore` already holds its own App Group
+            // copy, and the in-app retry path re-writes a fresh temp file from
+            // those bytes.
+            try? FileManager.default.removeItem(at: audioFileURL)
+            throw AppError.sttMissingAPIKey
+        case .unreadable:
+            try? FileManager.default.removeItem(at: audioFileURL)
+            throw AppError.sttKeyUnreadable
+        }
 
         // Pre-flight the DESTINATION before spending an STT call. Placed AFTER
         // `arm` and OUTSIDE the `do` on purpose: Shortcuts already recorded the
@@ -263,9 +302,13 @@ struct ConverseIntent: AppIntent {
         // True from the moment the spoken words exist as text. Until the user
         // turn is stored, the preserved recording is the ONLY copy of what the
         // user said, so the catch chain below may not clear the retry lane on
-        // any failure past this point (I6). Before it, a bad-input verdict —
-        // silence, a bad key, an oversized clip — still disarms, because the
-        // same bytes cannot succeed on a second attempt.
+        // any failure past this point (I6). Before it, a verdict about the BYTES
+        // — silence, audio the provider can't process, a key the provider
+        // REJECTS — still disarms, because the same bytes cannot succeed on a
+        // second attempt. The two verdicts about the key SLOT are not in that
+        // set and never reach this chain: both are refused above, outside the
+        // `do`, because a key that is added or a device that is unlocked makes
+        // the same recording succeed.
         var transcriptCaptured = false
 
         do {
@@ -363,8 +406,8 @@ struct ConverseIntent: AppIntent {
 
         } catch let error as AppError {
             // Known-bad-input errors (audio_too_large, audioInvalid,
-            // sttAuthFailed, sttMissingAPIKey, sttQuotaExceeded, etc.) —
-            // same audio won't recover by retrying, so disarm.
+            // sttAuthFailed, sttQuotaExceeded, etc.) — same audio won't recover
+            // by retrying, so disarm.
             //
             // `transcriptCaptured` is what keeps that rule from reaching past
             // the microphone. Every code that lands here once the words ARE
@@ -491,8 +534,16 @@ struct ConverseIntent: AppIntent {
         // Saved" notification and clear the store. Everything above this line —
         // the destination resolve and its refusals included — leaves the guard
         // armed, which is what makes I6 true for a capture refused after the
-        // user has already spoken. Everything below fails into the turn's own
-        // Retry chip instead.
+        // user has already spoken.
+        //
+        // What makes the trade below sound is not the append alone but the
+        // `do`/`catch` further down: EVERY remaining step that can throw is
+        // inside it, and its catch flips the turn to `failed` (Retry chip) and
+        // posts the failure notification. Nothing between here and there
+        // throws. Move a throwing statement out of that `do` and this disarm
+        // becomes a silent 30-minute `sending` spinner — the recording deleted,
+        // no chip, no notification, and nothing but the launch-time
+        // `sweepStaleSendingUserTurns` to end it.
         await PendingRetryGuard.disarm(retryGuardToken)
 
         // Stamp the active-conversation pointer NOW — before the (possibly
@@ -506,32 +557,38 @@ struct ConverseIntent: AppIntent {
         // pointer exists for (explicit surfaces never stamp).
         await SettingsManager.shared.recordActiveConversation(conversationID)
 
-        // Assemble the conversation's prior turns (EXCLUDING the just-appended
-        // user turn) for the request context via the shared assembler — which
-        // also resolves prior-turn image bytes (this headless surface was
-        // image-blind before) + the bound ref's image-history policy.
-        // `RemoteAgentClient.assembleMessages` appends the new user turn +
-        // applies the trim policy. Throwing posture unchanged (a store failure
-        // here propagates exactly like the previous `fetchMessages` throw).
-        let priorTurns = try await ConversationHistoryAssembler.assemble(
-            conversationID: conversationID,
-            excludingUserMessageID: userTurn.id,
-            excludingNewUserText: userText,
-            boundRef: routed.ref,
-            dispatchFileLaneID: dispatchFileLane?.durableLaneID
-        )
-
-        // Converse over the background session. FIRE-AND-FORGET: dispatch over
-        // the background session and return. The delegate records the reply +
-        // fires the completion/failure notification independently of this
-        // process, so the Shortcut need not wait — and the delegate is also the
-        // authoritative status flipper for the `sending` turn appended above.
+        // Assemble the history, then converse over the background session.
+        // FIRE-AND-FORGET: dispatch over the background session and return. The
+        // delegate records the reply + fires the completion/failure notification
+        // independently of this process, so the Shortcut need not wait — and the
+        // delegate is also the authoritative status flipper for the `sending`
+        // turn appended above.
         //
-        // PRE-DISPATCH failures (body/metadata encode, file write) throw BEFORE
-        // any background task exists — no delegate will ever resolve the turn,
-        // so flip it to `failed` here (Retry chip) before rethrowing to
-        // Shortcuts.
+        // BOTH steps sit inside this `do` because the delegate that resolves a
+        // `sending` turn only exists once a background task does. Everything
+        // before that dispatch — the assembler's Core Data reads, the body /
+        // metadata encode, the file write — throws with no task in flight and no
+        // delegate that will ever come back to the turn, so the catch below is
+        // the ONLY thing that can fail it. Assembly is a real instance of that,
+        // not a theoretical one: `ConversationHistoryAssembler.assemble` fetches
+        // the thread's prior turns, and a fault it cannot resolve (an unmigrated
+        // relationship, a protected-data read on a locked device) leaves the user
+        // turn spinning `sending` on every device until the launch-time
+        // `sweepStaleSendingUserTurns` notices it — up to
+        // `ConversationActivityResolver.staleSendingGrace` later, with no Retry
+        // chip and no notification in between.
+        //
+        // The assembler also resolves prior-turn image bytes + the bound ref's
+        // image-history policy; `RemoteAgentClient.assembleMessages` then appends
+        // the new user turn and applies the trim policy.
         do {
+            let priorTurns = try await ConversationHistoryAssembler.assemble(
+                conversationID: conversationID,
+                excludingUserMessageID: userTurn.id,
+                excludingNewUserText: userText,
+                boundRef: routed.ref,
+                dispatchFileLaneID: dispatchFileLane?.durableLaneID
+            )
             try await BackgroundRemoteAgent.shared.send(
                 backend: snapshot.backend,
                 ref: snapshot.ref,
@@ -557,9 +614,17 @@ struct ConverseIntent: AppIntent {
         } catch {
             // Exact flip — only THIS turn failed to dispatch; a concurrent
             // sibling in the same conversation must keep its own lifecycle.
-            // Pre-dispatch throw (fire-and-forget enqueue) → no gateway verdict:
-            // persist the taxonomy code so the inline row explains the failure,
-            // wire code / history fact structurally absent.
+            // Pre-dispatch throw (assembly, or the fire-and-forget enqueue) → no
+            // gateway verdict: persist the taxonomy code so the inline row
+            // explains the failure, wire code / history fact structurally
+            // absent. An untyped throw — which a Core Data fault out of the
+            // assembler is — has no taxonomy code of its own and takes
+            // `.remoteAgentUnreachable`'s, so the row reads as a delivery
+            // failure rather than a store one. That is imprecise and it is the
+            // right trade: the code chosen has to be one whose `isRetryable`
+            // draws the Retry chip, because the recording is already gone and
+            // the chip is the user's only way back to the words they typed or
+            // spoke.
             await ConversationStore.shared.failTurn(
                 messageID: userTurn.id,
                 classification: .init(

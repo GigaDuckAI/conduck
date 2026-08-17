@@ -2061,18 +2061,28 @@ final class SettingsViewModel {
     /// every DISPLAY site reads, as opposed to `defaultSelectorNeedsSetup`, which
     /// is the raw membership question and is asserted verbatim elsewhere.
     ///
-    /// The nothing-chosen state is excluded, and that exclusion is the whole
-    /// reason this exists. With nothing stored, `defaultRemoteAgentRef` is the
+    /// TWO states are excluded, and the exclusions are the whole reason this
+    /// exists — the membership question alone accuses the user in both.
+    ///
+    /// NOTHING CHOSEN. With nothing stored, `defaultRemoteAgentRef` is the
     /// compatibility projection — the built-in fallback — and when that fallback
     /// is not itself configured the membership question answers "broken" about a
     /// gateway the user never picked and may never have opened. "Not chosen yet"
     /// is the honest reading there, and the row, footer and callout all say it.
+    ///
+    /// READING UNRELIABLE. The set the membership question is asked against is
+    /// fail-closed, so a Keychain that does not read back reports a perfectly
+    /// well-configured default as "not a member". `selectorMaySpeak(for:)` is
+    /// where that is refused.
     var defaultSelectorFlagsBroken: Bool {
-        defaultSelectorNeedsSetup && !defaultSelectorNeedsChoice
+        defaultSelectorNeedsSetup
+            && !defaultSelectorNeedsChoice
+            && Self.selectorMaySpeak(for: defaultGatewayResolution)
     }
 
     /// The broken default's display name, or nil when the default is fine,
-    /// nothing is configured, or nothing has been chosen.
+    /// nothing is configured, nothing has been chosen, or the reading cannot be
+    /// trusted.
     ///
     /// Derived FROM `defaultSelectorFlagsBroken` rather than computed beside it,
     /// so the picker callout and the selector footer can never name a gateway the
@@ -2110,6 +2120,41 @@ final class SettingsViewModel {
     static func selectorNeedsChoice(for resolution: DefaultGatewayResolution) -> Bool {
         if case .selectionRequired = resolution { return true }
         return resolution.pointerIsParked
+    }
+
+    /// Whether this screen may say anything ACCUSATORY about the default at all —
+    /// the `.readingUnreliable` silence rule, stated where the display predicate
+    /// can read it.
+    ///
+    /// `defaultSelectorNeedsSetup` asks membership of a fail-closed set, and a
+    /// Keychain that does not read back answers "not a member" about a gateway
+    /// that is perfectly well set up. On a device restored from backup, whose
+    /// definitions have synced ahead of its iCloud Keychain tokens, that reading
+    /// turns the ⚠ + "Needs setup" line and the "<name> isn't set up on this
+    /// iPhone" footer into an accusation made by a locked device — and an
+    /// invitation to re-enter a token that is seconds from arriving.
+    ///
+    /// Every other surface already refuses the same reading: the verdict's own
+    /// doc forbids a banner, a Diagnostics finding, a repair or a persist on it,
+    /// and the chat banner, Diagnostics, the headless lanes and CarPlay all fall
+    /// through silently. This screen is the one the user actually opens during the
+    /// window, so the same silence has to be stated here, beside the predicate
+    /// that would otherwise break it.
+    ///
+    /// DISPLAY ONLY. `defaultSelectorNeedsSetup` stays byte-identical — it is the
+    /// raw membership question and is asserted verbatim elsewhere — so what this
+    /// gates is the flag, the name and the footer derived from them, never the
+    /// stored pointer or anything a send reads.
+    ///
+    /// A pure static for the reason `selectorNeedsChoice` is one: the resolution
+    /// is `private(set)` behind an actor hop, so the rule is the part a test can
+    /// hold.
+    static func selectorMaySpeak(for resolution: DefaultGatewayResolution) -> Bool {
+        switch resolution {
+        case .readingUnreliable: return false
+        case .usable, .adopted, .bootstrapped, .brokenDefault, .selectionRequired,
+             .nothingConfigured, .setupUnfinished: return true
+        }
     }
 
     /// Compact "Personal AI" summary for a Settings summary row — the SINGLE
@@ -3509,9 +3554,12 @@ final class SettingsViewModel {
     /// `SettingsManager.repointDefaultAfterForget(of:)`, the one rule both Forget
     /// paths share. A SINGLE surviving send-able gateway is adopted and recorded
     /// so the user is told; two or more park the pointer on a built-in, so the
-    /// user chooses their next gateway rather than inheriting one. A later send
-    /// to a parked default surfaces `remoteAgentNotConfigured`, which is the
-    /// honest answer for a pointer nobody has chosen yet.
+    /// user chooses their next gateway rather than inheriting one. A picker-less
+    /// lane that later meets that parked pointer refuses with
+    /// `remoteAgentDefaultNeedsSetup` and NO name — the user never chose that
+    /// gateway, so it cannot be blamed by name. Never `remoteAgentNotConfigured`:
+    /// that code asserts nothing at all is configured, and a park happens only
+    /// when two or more survivors exist.
     ///
     /// Active-conversation pointer: same refined rule as
     /// `validateAndSaveRemoteAgent` — clear the GLOBAL pointer ONLY when the

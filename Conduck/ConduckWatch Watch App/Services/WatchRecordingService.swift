@@ -1358,6 +1358,31 @@ final class WatchRecordingService {
                 return
             }
             if let appError = error as? AppError,
+               case .sttKeyUnreadable = appError {
+                // The iPhone could not READ its voice key — typically because
+                // its Keychain has not been unlocked since a reboot, which is
+                // the case the code exists for. A DEFERRAL, on exactly the terms
+                // the timeout above takes, and NOT the "other AppError" arm
+                // below: that arm claims the entry, which deletes the queued
+                // audio, and this capture is one an unlock makes succeed. So the
+                // entry stays queued for a later drain, the phone-side verdict
+                // was never cached (75 is retryable, and
+                // `AppleSpeechRelayCoordinator.shouldCacheVerdict` memoizes
+                // settled verdicts only), and the words the user spoke on this
+                // wrist survive the refusal (I3, I6).
+                //
+                // Tagged as a deferral for the same reason the timeout is: when
+                // the drain finally lands the transcript, the toast's promise —
+                // that the recording is saved — has been kept, so it must not
+                // linger.
+                state = .error(message: terminalSTTMessage(for: appError))
+                lastErrorIsRelayDeferral = true
+                compressedAudioData = nil
+                compressedAudioFormat = nil
+                WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+                return
+            }
+            if let appError = error as? AppError,
                case .appleSpeechModelNotInstalled = appError {
                 // iPhone responded but the model isn't installed — no point
                 // keeping the entry queued (the next attempt fails the same
@@ -1414,8 +1439,15 @@ final class WatchRecordingService {
     /// Both STT legs reach this: the relay leg carries a verdict the iPhone
     /// reached on a custom voice endpoint (`AppleSpeechRelayCoordinator` rebuilds
     /// it from the relayed `errorCode`), the upload leg one this watch reached
-    /// itself. Only the STT lane's cases appear — the converse hop is
+    /// itself — from the foreground client, or from the background uploader's
+    /// pre-task refusals when the hand-off in `fallbackSTTToBackgroundUpload`
+    /// throws. Only the STT lane's cases appear — the converse hop is
     /// non-throwing and funnels its own failures through `WatchAudioUploader`.
+    ///
+    /// "Terminal" describes the ATTEMPT, not the capture: `.sttKeyUnreadable`
+    /// reaches this banner with the words still saved — on the upload leg as the
+    /// on-disk capture (`canRetry` true), on the relay leg as the still-queued
+    /// entry a later drain re-fires — and its copy says so.
     ///
     /// The two pinned forms say "your gateway" while a custom voice endpoint is a
     /// different server, the same trade the wheel takes: naming the wrong server
@@ -1429,6 +1461,17 @@ final class WatchRecordingService {
             return WatchNetworkFailureCopy.certificatePinMismatchMessage
         case .some(.sttCustomCertKeyUnpinnable):
             return WatchNetworkFailureCopy.certificateKeyUnpinnableMessage
+        case .some(.sttKeyUnreadable):
+            // The CAUSE LINE ONLY — the one case whose `errorDescription`
+            // already carries its own remedy ("unlock it and try again"), so
+            // `descriptionWithRecovery` would tell this wrist to unlock twice.
+            // The dropped half also names the wrong device: it says "open
+            // Conduck", and on this surface Conduck is what the user is looking
+            // at. What survives is the sentence that matters here — the key
+            // could not be READ, and the recording is still on disk, which is
+            // true because this verdict is retryable and never reaches the
+            // capture-deleting arm in `runSTTUpload`.
+            return AppError.sttKeyUnreadable.errorDescription ?? ""
         default:
             // CAUSE AND REMEDY, not the cause alone. The reachable set here is
             // mostly TERMINAL (`.sttAuthFailed`, `.sttMissingAPIKey`,
@@ -1584,9 +1627,28 @@ final class WatchRecordingService {
             compressedAudioFormat = nil
             WatchRecordingCoordinator.shared.isRecordingFlowActive = false
         } catch {
-            // xcstrings
+            // The hand-off itself failed, so no task exists and nothing will
+            // delete `recordingFileURL` — which is exactly right: the capture
+            // stays on disk and `canRetry` stays true, so the user's words
+            // survive this refusal (I6).
+            //
+            // A TYPED throw gets its own sentence rather than the generic one.
+            // The reachable set here is the uploader's own pre-task refusals —
+            // a key slot that is empty (23) or unreadable (75), a provider with
+            // no JSON body factory, an `.inProcess` provider that can't run on
+            // this watch — and for a Keychain blackout in particular the generic
+            // "please try again" invites the retry that will fail identically,
+            // while code 75's own copy names the unlock that actually fixes it.
+            // `terminalSTTMessage` is the same funnel the sibling refusal in
+            // `runSTTUpload` uses, so one cause reads one way on this wrist. An
+            // untyped throw (a temp-file write) keeps the generic line.
             WatchLog.error(.stt, "stt.fallback.failed", ["turn": turnTag, "code": (error as NSError).code])
-            state = .error(message: String(localized: "Could not send recording. Please try again."))
+            if let appError = error as? AppError {
+                state = .error(message: terminalSTTMessage(for: appError))
+            } else {
+                // xcstrings
+                state = .error(message: String(localized: "Could not send recording. Please try again."))
+            }
             WatchRecordingCoordinator.shared.isRecordingFlowActive = false
         }
     }

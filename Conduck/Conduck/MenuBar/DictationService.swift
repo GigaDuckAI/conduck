@@ -199,18 +199,37 @@ final class DictationService: RecordingExclusivityAuthority {
             // resolved in one actor hop so a concurrent preset switch can't
             // produce a key/provider mismatch on retry.
             let snapshot = await SettingsManager.shared.activeSTTSnapshot()
-            // In-process providers (Apple on-device) need no key. The
-            // BYO custom endpoint with `.none` auth (keyless local server) also
-            // needs no key.
+            // The key question through `STTKeyReadiness` — in-process providers
+            // (Apple on-device) and the keyless (`.none` auth) BYO endpoint need
+            // no key, and both arms live inside its `requiresKey`.
+            //
+            // A nil `snapshot.apiKey` is ambiguous, and on THIS path the wrong
+            // reading is worse than a wrong sentence: the saved recording is
+            // already in `PendingRetryStore`, and telling the user their key is
+            // missing with `isRetryable: false` retires the only affordance that
+            // reaches those words. `.unreadable` keeps the retry live because an
+            // unlock makes the identical bytes succeed (I3, I6). Neither arm
+            // clears the store.
             let apiKey: String
-            if snapshot.provider.transport == .inProcess || snapshot.customConfig?.auth == STTAuthScheme.none {
-                apiKey = ""
-            } else if let key = snapshot.apiKey, !key.isEmpty {
+            switch await STTKeyReadiness.resolve(
+                presetID: snapshot.presetID,
+                snapshotKey: snapshot.apiKey,
+                provider: snapshot.provider,
+                customConfig: snapshot.customConfig
+            ) {
+            case .ready(let key):
                 apiKey = key
-            } else {
+            case .notConfigured:
                 state = .error(
                     message: AppError.sttMissingAPIKey.localizedDescription,
                     isRetryable: false
+                )
+                return
+            case .unreadable:
+                lastError = .sttKeyUnreadable
+                state = .error(
+                    message: AppError.sttKeyUnreadable.descriptionWithRecovery,
+                    isRetryable: AppError.sttKeyUnreadable.isRetryable
                 )
                 return
             }
@@ -407,24 +426,54 @@ final class DictationService: RecordingExclusivityAuthority {
         // ATOMIC snapshot: (presetID, apiKey, provider) in
         // one actor hop. Passed through to processTranscription so the
         // provider resolved here is the SAME preset whose key we read.
+        let preferredLanguage = await SettingsManager.shared.getPreferredLanguage()
         let snapshot = await SettingsManager.shared.activeSTTSnapshot()
-        // In-process providers (Apple on-device) need no key. The BYO
-        // custom endpoint with `.none` auth (keyless local server) also needs
-        // no key.
+        // The key question through `STTKeyReadiness` — in-process providers
+        // (Apple on-device) and the keyless (`.none` auth) BYO endpoint need no
+        // key, and both arms live inside its `requiresKey`.
+        //
+        // This refusal lands AFTER the microphone, so the two readings of a nil
+        // key differ in what they cost the user. Code 23 is terminal and this
+        // path preserves nothing, which is right for an empty slot — the same
+        // bytes fail again until a key is entered, and the store's one slot is
+        // better spent on a capture that can succeed. A blackout is the opposite
+        // case: the bytes are valid, the fix is an unlock, so the capture goes
+        // into `PendingRetryStore` through the lane's own reactive save and the
+        // popover keeps a live Retry (I3, I6).
+        //
+        // `preferredLanguage` is resolved above rather than below so the
+        // preserved metadata carries the SAME language hint the transcribe call
+        // would have used; a retry that silently dropped it could come back in
+        // the wrong language.
         let apiKey: String
-        if snapshot.provider.transport == .inProcess || snapshot.customConfig?.auth == STTAuthScheme.none {
-            apiKey = ""
-        } else if let key = snapshot.apiKey, !key.isEmpty {
+        switch await STTKeyReadiness.resolve(
+            presetID: snapshot.presetID,
+            snapshotKey: snapshot.apiKey,
+            provider: snapshot.provider,
+            customConfig: snapshot.customConfig
+        ) {
+        case .ready(let key):
             apiKey = key
-        } else {
+        case .notConfigured:
             lastError = .sttMissingAPIKey
             state = .error(
                 message: AppError.sttMissingAPIKey.localizedDescription,
                 isRetryable: false
             )
             return
+        case .unreadable:
+            await preserveForRetry(
+                error: .sttKeyUnreadable,
+                audioData: audioData,
+                preferredLanguage: preferredLanguage
+            )
+            lastError = .sttKeyUnreadable
+            state = .error(
+                message: AppError.sttKeyUnreadable.descriptionWithRecovery,
+                isRetryable: AppError.sttKeyUnreadable.isRetryable
+            )
+            return
         }
-        let preferredLanguage = await SettingsManager.shared.getPreferredLanguage()
 
         // Stage to a temp file URL — STTClient.transcribe owns lifecycle via
         // defer-remove, so this method does not need to clean up post-call.
@@ -495,24 +544,11 @@ final class DictationService: RecordingExclusivityAuthority {
             onTranscript(trimmed)
 
         } catch let error as AppError {
-            if error.shouldPreserveForRetry {
-                // Audio bytes preserved for in-app retry. PendingRetryStore.save
-                // owns the App-Groups file write; we record metadata only.
-                let pendingURL = FileManager.default
-                    .containerURL(forSecurityApplicationGroupIdentifier: Constants.appGroupID)?
-                    .appendingPathComponent("pending_retry_audio.m4a") ?? audioFileURL
-                try? await PendingRetryStore.shared.save(
-                    audioData: audioData,
-                    metadata: PendingRetryMetadata(
-                        id: UUID(),
-                        createdAt: Date(),
-                        audioFileURL: pendingURL,
-                        preferredLanguage: preferredLanguage,
-                        attemptCount: 1,
-                        lastErrorCode: error.errorCode
-                    )
-                )
-            }
+            await preserveForRetry(
+                error: error,
+                audioData: audioData,
+                preferredLanguage: preferredLanguage
+            )
             lastError = error
             // Cause AND remedy, for the reason the retry path above states —
             // this is the FIRST-attempt twin of that sink and the two must not
@@ -528,6 +564,42 @@ final class DictationService: RecordingExclusivityAuthority {
     }
 
     // MARK: - Helpers
+
+    /// The ONE place this service hands a capture to the retry lane, so the
+    /// pre-flight key refusal and the STT failure below it cannot preserve on
+    /// different terms. No-ops unless the taxonomy says these bytes can succeed
+    /// on a second attempt (`shouldPreserveForRetry`).
+    ///
+    /// `PendingRetryStore.save` owns the App-Groups file write; the metadata's
+    /// `audioFileURL` is bookkeeping only — the store derives the real path from
+    /// the SAME container, so when the container is unavailable the save would
+    /// throw regardless of what path travelled in the metadata. Hence the early
+    /// return rather than a fallback URL that could never be used.
+    ///
+    /// Best-effort by design: a save failure is logged inside the store and the
+    /// caller still surfaces the original error, because swapping in a storage
+    /// error would tell the user the wrong thing about why their capture stopped.
+    private func preserveForRetry(
+        error: AppError,
+        audioData: Data,
+        preferredLanguage: String?
+    ) async {
+        guard error.shouldPreserveForRetry else { return }
+        guard let pendingURL = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: Constants.appGroupID)?
+            .appendingPathComponent("pending_retry_audio.m4a") else { return }
+        try? await PendingRetryStore.shared.save(
+            audioData: audioData,
+            metadata: PendingRetryMetadata(
+                id: UUID(),
+                createdAt: Date(),
+                audioFileURL: pendingURL,
+                preferredLanguage: preferredLanguage,
+                attemptCount: 1,
+                lastErrorCode: error.errorCode
+            )
+        )
+    }
 
     /// Mic-authority view for the exclusivity bus. Only `.recording` counts —
     /// during `.processing` the mic is already released, so speaking is fine.

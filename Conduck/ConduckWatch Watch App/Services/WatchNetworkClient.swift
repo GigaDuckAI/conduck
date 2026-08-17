@@ -43,15 +43,33 @@ enum WatchNetworkClient {
     ///
     /// Timeout 60s — generous for the Watch wrist-down scenario where the
     /// app stays foregrounded ~2 minutes after the wrist drops.
+    ///
+    /// `secrets` is the Keychain seam, defaulted to the process store — present
+    /// so the two refusal arms below (both of which throw before a single byte
+    /// leaves) can be driven in a test without a signed Keychain.
     static func uploadSTT(
         request: WatchSTTRequest,
-        provider: STTProvider
+        provider: STTProvider,
+        secrets: any SecretStore = SettingsDependencies.processDefault.secrets
     ) async throws -> STTResponse {
-        // Auth — fail fast if the iPhone has never broadcast the STT key for
-        // this preset. Per-preset Keychain lookup (`forPresetID:`) so the key
-        // matches the provider we're about to call.
-        guard let apiKey = WatchIdentityResolver.getSTTAPIKey(forPresetID: provider.id) else {
+        // Auth — fail fast, and say which failure it was. Per-preset Keychain
+        // lookup (`forPresetID:`) so the key matches the provider we're about to
+        // call, and TYPED so a locked Keychain is not reported as an empty one:
+        // this watch stores the key `kSecAttrAccessibleAfterFirstUnlock`, so
+        // before the first unlock after a reboot a perfectly good key reads back
+        // as nothing. Code 23 asserts the slot is empty and is TERMINAL, which
+        // on this lane deletes the recording the user just made
+        // (`WatchRecordingService.runSTTUpload`); code 75 says only that the key
+        // could not be READ, and is retryable, which is what routes the same
+        // capture to the background fallback with the audio intact (I3, I6).
+        let apiKey: String
+        switch WatchIdentityResolver.sttAPIKeyReadResult(forPresetID: provider.id, secrets: secrets) {
+        case .present(let key):
+            apiKey = key
+        case .missing:
             throw AppError.sttMissingAPIKey
+        case .unreadable:
+            throw AppError.sttKeyUnreadable
         }
 
         // Pre-flight size guard — local check avoids burning a round-trip

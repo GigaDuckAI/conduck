@@ -1401,13 +1401,41 @@ struct ContentView: View {
         // preset switch AND dead-ended Apple on-device / keyless custom
         // endpoints on "No STT API key set" (no key is needed for either).
         let snapshot = await SettingsManager.shared.activeSTTSnapshot()
+        // The key question through `STTKeyReadiness`, which keeps the two
+        // readings of a nil key apart — the Apple / keyless-endpoint arms live
+        // inside its `requiresKey`, so this is one call and not three branches.
+        // A nil `snapshot.apiKey` means an empty slot OR a Keychain that could
+        // not answer, and this card is exactly where the difference bites: the
+        // "no key set" sentence sends a user whose key is merely unreadable to a
+        // settings screen where they will find it already there, while their
+        // preserved recording sits behind a card that says the wrong thing about
+        // why it hasn't sent. Neither arm clears `PendingRetryStore`, so the
+        // words survive either way (I3, I6).
         let apiKey: String
-        if snapshot.provider.transport == .inProcess || snapshot.customConfig?.auth == STTAuthScheme.none {
-            apiKey = ""
-        } else if let key = snapshot.apiKey, !key.isEmpty {
+        switch await STTKeyReadiness.resolve(
+            presetID: snapshot.presetID,
+            snapshotKey: snapshot.apiKey,
+            provider: snapshot.provider,
+            customConfig: snapshot.customConfig
+        ) {
+        case .ready(let key):
             apiKey = key
-        } else {
+        case .notConfigured:
             presentRetryError(String(localized: "No STT API key set. Open Settings to add one."))  // xcstrings
+            return
+        case .unreadable:
+            // Re-keyed and surfaced exactly as the STT `catch` below does it, so
+            // the card explains the failure the user is looking at NOW and its
+            // Troubleshoot chip points at the right code. 75 is retryable, so the
+            // banner is not sticky and the Retry affordance stays live — which is
+            // the honest affordance here, because an unlock makes the identical
+            // bytes succeed.
+            pendingRetryErrorCode = AppError.sttKeyUnreadable.errorCode
+            pendingRetryIsRetryable = AppError.sttKeyUnreadable.isRetryable
+            presentRetryError(
+                AppError.sttKeyUnreadable.descriptionWithRecovery,
+                sticky: !AppError.sttKeyUnreadable.isRetryable
+            )
             return
         }
 
