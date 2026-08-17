@@ -898,7 +898,11 @@ final class CarPlayRecordingService {
         // Qwen override applies on the in-car surface too. The BYO custom
         // endpoint (`customConfig`) is not cached for CarPlay at V1.
         let cachedCustomModel = CarPlaySettings.shared.customModel
-        let provider = STTProvider.lookup(id: CarPlaySettings.shared.activePresetID)
+        // Bound ONCE, then reused for both the provider lookup and the key
+        // re-read below, so the live Keychain read can only ever name the preset
+        // this turn resolved.
+        let cachedPresetID = CarPlaySettings.shared.activePresetID
+        let provider = STTProvider.lookup(id: cachedPresetID)
 
         // BYO custom endpoint — excluded on CarPlay at V1 (no `customConfig`
         // is cached here, so the transcribe would throw
@@ -913,17 +917,53 @@ final class CarPlayRecordingService {
             return
         }
 
-        // In-process providers (Apple on-device) need no key — the runner's
-        // TCC check substitutes. Cloud providers require a key.
+        // The key question through `STTKeyReadiness`, the same helper every other
+        // refusal lane uses — in-process providers (Apple on-device, authorised
+        // by TCC) need no key at all and that arm lives inside its `requiresKey`,
+        // so this is one call and not two branches. `customConfig` is nil because
+        // a dynamic-endpoint preset returned above; for every preset that reaches
+        // here `requiresKey` ignores it.
+        //
+        // RE-RESOLVED at capture time, not read off the cache. `CarPlaySettings`
+        // lives for the whole process and refreshes only at launch and on a
+        // settings change, so a launch that happened before first unlock caches a
+        // nil that no unlock ever clears — and the driver would hear "add your
+        // STT key" for every capture of the drive, with the key sitting correctly
+        // on the phone in their pocket. `resolve` short-circuits on a usable
+        // cached key, so the happy path still never enters the Keychain from
+        // CarPlay scene context (the stall this cache exists to avoid); only the
+        // path that is about to refuse pays for a live read.
+        let readiness = await STTKeyReadiness.resolve(
+            presetID: cachedPresetID,
+            snapshotKey: cachedKey,
+            provider: provider,
+            customConfig: nil
+        )
         let apiKey: String
-        if provider.transport == .inProcess {
-            apiKey = ""
-        } else if let key = cachedKey, !key.isEmpty {
+        switch readiness {
+        case .ready(let key):
             apiKey = key
-        } else {
+        case .notConfigured:
+            // PROVABLE absence — the only reading this sentence is true of.
             // xcstrings
             endSession(
                 speak: String(localized: "Add your STT key in Conduck on your iPhone.")
+            )
+            return
+        case .unreadable:
+            // The Keychain could not answer. Never "add your key": the driver
+            // may well have one, and telling them to go and add it while they
+            // are driving is both false and useless. Says what to do instead,
+            // and names the device — CarPlay runs on the iPhone, so the phone in
+            // the dock or the pocket is what has to be unlocked.
+            //
+            // The capture itself is lost either way: CarPlay has no preservation
+            // mechanism at all — no `PendingRetryStore` write, no queue — so
+            // "try again" means speak again, which is exactly what the driver
+            // can do once the phone is unlocked.
+            // xcstrings
+            endSession(
+                speak: String(localized: "Couldn't read your STT key. Unlock your iPhone and try again.")
             )
             return
         }

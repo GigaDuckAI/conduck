@@ -13,8 +13,8 @@ import XCTest
 
 final class DiagnosticsExplainerTests: XCTestCase {
 
-    /// Every live AppError code (1–62 minus the reserved 27 gap, plus 99).
-    private let allCodes: [Int] = Array(1...62).filter { $0 != 27 } + [99]
+    /// Every live AppError code (1–75 minus the reserved 27 gap, plus 99).
+    private let allCodes: [Int] = Array(1...75).filter { $0 != 27 } + [99]
 
     // MARK: - explain(code:)
 
@@ -70,6 +70,20 @@ final class DiagnosticsExplainerTests: XCTestCase {
             let slug = DiagnosticsExplainer.slug(forCode: code)
             XCTAssertFalse(slug.isEmpty, "code \(code) has an empty slug")
             XCTAssertFalse(slug.contains(" "), "slug for code \(code) should be kebab (no spaces): \(slug)")
+        }
+    }
+
+    /// The fallback is for codes that do not exist, not for codes nobody got
+    /// round to naming. `"code 75 (error-75)"` in a pasted report is a slug that
+    /// tells the reader nothing, and it is exactly what a live code with no
+    /// table row produces — silently, since the assertion above only checks the
+    /// string is non-empty and space-free, which `"error-75"` also is.
+    func testNoLiveCodeFallsBackToTheOpaqueSlug() {
+        for code in allCodes {
+            XCTAssertNotEqual(DiagnosticsExplainer.slug(forCode: code), "error-\(code)",
+                              "code \(code) has no row in `codeSlugs`, so the copyable report names it "
+                              + "`error-\(code)` — a marker that carries none of the meaning the slug exists "
+                              + "to carry.")
         }
     }
 

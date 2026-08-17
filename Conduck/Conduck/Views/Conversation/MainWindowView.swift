@@ -108,6 +108,23 @@ struct MainWindowView: View {
     /// `.openSettingsWindow` bus, and the menu-bar "Settings…" item (via the
     /// coordinator's `pendingShowSettings` flag for the window-was-closed case).
     @State private var showingSettings = false
+
+    /// Set for exactly ONE `showingSettings` transition: the close that
+    /// `leaveSettingsForConversationAction()` performs because a NEWER, explicit
+    /// conversation action arrived (a reply notification's deep link, ⌘N).
+    ///
+    /// The state reaction below collects a deferred gateway fix route on every
+    /// close, which is what makes that collection total. But a route describes a
+    /// STATE ("your default needs setup"), not an appointment, while the deep link
+    /// is a fresh, explicit request for specific content — so on that one
+    /// transition the route must not be cashed in, or Settings re-presents on top
+    /// of the thread the user just asked for. The route stays ARMED: it is skipped,
+    /// never spent, and lands on the next ordinary close (Done) or the next
+    /// `.openGatewayFixRoute` post.
+    ///
+    /// A one-shot flag rather than a second close path, so totality survives: any
+    /// close that does not set it still collects by default.
+    @State private var settingsClosedForConversationAction = false
     /// Backing VM for the Settings sheet — one instance for the window's
     /// lifetime so its live edits/pills are coherent (NOT re-minted per open).
     @State private var settingsVM = SettingsViewModel()
@@ -417,6 +434,13 @@ struct MainWindowView: View {
         // site — a second one is the drift this arrangement exists to end. iOS
         // needs no twin reaction: its Settings surface is a sheet/cover whose
         // `onDismiss` (`ContentView.handleSettingsDismiss()`) fires on every exit.
+        //
+        // ONE transition is skipped, and skipping is not spending: a close caused
+        // by a NEWER conversation action leaves the route armed for the next
+        // ordinary close. Collecting there would replace the very thread the user
+        // just tapped a notification to reach. See
+        // `settingsClosedForConversationAction`; `ContentView.handleDeepLink` is
+        // the iOS twin.
         .onChange(of: showingSettings) { _, shown in
             if shown {
                 windowRecorder.dismissError()
@@ -426,7 +450,11 @@ struct MainWindowView: View {
                 // would claim a drop is gone; discard rather than strand.
                 cancelDropWork()
             } else {
-                consumeGatewayFixRoute()
+                if settingsClosedForConversationAction {
+                    settingsClosedForConversationAction = false
+                } else {
+                    consumeGatewayFixRoute()
+                }
             }
         }
         // The destination a drop was stamped for has gone away. Discard it —
@@ -486,9 +514,17 @@ struct MainWindowView: View {
     /// the conversation — but ONLY when no buffered editor is dirty, so the action
     /// can't silently discard unsaved edits. In the dirty case Settings stays up
     /// (the conversation change still applies underneath, visible on Done).
+    ///
+    /// Marks the close as conversation-driven so the state reaction skips its
+    /// deferred-route collection for this one transition — the caller is about to
+    /// select the thread the user asked for, and re-opening Settings over it would
+    /// answer a newer, explicit request with an older, ambient one. The claim
+    /// itself stays out of this function: a second call site is the drift the state
+    /// reaction exists to end.
     private func leaveSettingsForConversationAction() {
         guard showingSettings else { return }
         if !settingsVM.editorHasUnsavedChanges {
+            settingsClosedForConversationAction = true
             showingSettings = false
             settingsInitialCategory = nil
             settingsInitialFocus = nil
@@ -877,6 +913,10 @@ struct MainWindowView: View {
     /// root collects it from `.onChange(of: showingSettings)` — the flag itself,
     /// not any single close path, because Done, a reply deep-link and ⌘N all clear
     /// it. iOS collects it from the sheet's own `onDismiss`.
+    ///
+    /// The one transition that collects nothing is a close a NEWER conversation
+    /// action caused (`settingsClosedForConversationAction`). The route is skipped
+    /// there rather than spent, so the next ordinary close still lands it.
     private func consumeGatewayFixRoute(settingsJustOpened: Bool = false) {
         Task {
             guard settingsJustOpened || !showingSettings else { return }

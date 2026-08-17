@@ -49,8 +49,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // WHAT THIS GUARD CHECKS (on comment-stripped source)
 //
-//   Rule 1 — `perform()` never disarms unconditionally. Its one disarm is gated
-//     on the words NOT yet existing as text.
+//   Rule 1 — `perform()` never disarms unconditionally. It holds exactly TWO:
+//     the provable-absence refusal's own, taken inline in that arm because code
+//     23 preserves nothing and the store's single slot is better spent on a
+//     capture that can succeed; and the catch chain's, gated on the words NOT
+//     yet existing as text. The blackout arm sitting beside the first one
+//     disarms nothing — an unlock makes those exact bytes send.
 //
 //   Rule 2 — the disarm that does run sits BELOW the destination resolve and
 //     BELOW the store append, so every refusal on the way is still armed.
@@ -74,35 +78,132 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
 
     // MARK: - Rule 1 — the pre-transcript gate
 
-    /// A bad-input verdict (silence, an oversized clip, a missing key) may still
-    /// clear the lane, because the same bytes cannot succeed twice. A verdict
-    /// about the DESTINATION may not, because the same bytes succeed as soon as
-    /// the user fixes what it names. `transcriptCaptured` is the line between
-    /// them, and it has to be the gate on the disarm rather than a comment about
-    /// one.
-    func testPerformOnlyDisarmsBeforeTheWordsExistAsText() throws {
+    /// A bad-input verdict (silence, an oversized clip) may still clear the lane,
+    /// because the same bytes cannot succeed twice. A verdict about the
+    /// DESTINATION may not, because the same bytes succeed as soon as the user
+    /// fixes what it names. `transcriptCaptured` is the line between them, and
+    /// it has to be the gate on the catch chain's disarm rather than a comment
+    /// about one.
+    ///
+    /// `perform()` holds exactly TWO disarms, and they are not interchangeable:
+    ///
+    ///   1. the PROVABLE-ABSENCE refusal (code 23), taken INLINE in its own arm
+    ///      above the `do`. Code-specific and deliberate:
+    ///      `sttMissingAPIKey.shouldPreserveForRetry` is false, and
+    ///      `PendingRetryStore` is a single overwriting slot, so a capture that
+    ///      cannot succeed until a key is entered may not hold it against one
+    ///      that can. Its twin, the blackout arm, must NOT disarm — those bytes
+    ///      succeed the moment the device is unlocked.
+    ///
+    ///   2. the CATCH CHAIN's, gated on the words not yet existing as text.
+    ///
+    /// A THIRD is how the unconditional post-STT disarm arrived, and it deleted
+    /// the user's recording on every destination refusal.
+    func testPerformDisarmsOnProvableAbsenceAndOtherwiseOnlyBeforeTheWordsExist() throws {
         let source = try RefusalLaneSource.source(at: Self.intentPath)
         let body = try RefusalLaneSource.body(ofFunction: "perform", in: source, path: Self.intentPath)
 
         let disarms = body.components(separatedBy: "PendingRetryGuard.disarm").count - 1
-        XCTAssertEqual(disarms, 1,
-                       "`perform()` must hold exactly ONE disarm. A second one is how the unconditional "
-                       + "post-STT disarm arrived, and it deleted the user's recording on every "
-                       + "destination refusal.")
+        XCTAssertEqual(disarms, 2,
+                       "`perform()` must hold exactly TWO disarms — the provable-absence refusal's and "
+                       + "the catch chain's. A third is how the unconditional post-STT disarm arrived, "
+                       + "and it deleted the user's recording on every destination refusal.")
+
+        XCTAssertEqual(
+            Self.armSpendsTheGuard(arm: "case .notConfigured:",
+                                   throwToken: "throw AppError.sttMissingAPIKey",
+                                   in: body),
+            true,
+            "The provable-absence arm no longer disarms, so code 23 parks a capture that can never be "
+            + "sent in `PendingRetryStore`'s single slot — evicting a recoverable one and scheduling a "
+            + "'Recording Saved' notification whose retry fails the same way."
+        )
+        XCTAssertEqual(
+            Self.armSpendsTheGuard(arm: "case .unreadable:",
+                                   throwToken: "throw AppError.sttKeyUnreadable",
+                                   in: body),
+            false,
+            "The BLACKOUT arm must never disarm. Those bytes are bit-for-bit valid and an unlock makes "
+            + "them succeed; deleting them is the original defect wearing the fix's clothes (I6)."
+        )
 
         let gateAt = try XCTUnwrap(
             body.range(of: "if !transcriptCaptured {")?.lowerBound,
-            "`perform()`'s disarm is no longer gated on the transcript not existing yet. Ungated, every "
-            + "destination verdict — code 12 included — clears the retry lane and the spoken words are "
-            + "gone (I6)."
+            "`perform()`'s catch-chain disarm is no longer gated on the transcript not existing yet. "
+            + "Ungated, every destination verdict — code 12 included — clears the retry lane and the "
+            + "spoken words are gone (I6)."
         )
-        let disarmAt = try XCTUnwrap(body.range(of: "PendingRetryGuard.disarm")?.lowerBound)
-        XCTAssertLessThan(gateAt, disarmAt, "The gate has to precede the disarm, or it gates nothing.")
+        let firstDisarm = try XCTUnwrap(body.range(of: "PendingRetryGuard.disarm"))
+        let secondDisarm = try XCTUnwrap(
+            body.range(of: "PendingRetryGuard.disarm", range: firstDisarm.upperBound..<body.endIndex),
+            "Only one disarm found where the count above says two; the matcher and the count disagree."
+        )
+        XCTAssertLessThan(firstDisarm.lowerBound, gateAt,
+                          "The absence arm's disarm belongs ABOVE the `do`, in the refusal it is about — "
+                          + "below the gate it would be the catch chain's, which cannot tell 23 from 75.")
+        XCTAssertLessThan(gateAt, secondDisarm.lowerBound,
+                          "The gate has to precede the catch chain's disarm, or it gates nothing.")
 
         // …and the flag must actually be raised, or the gate is always open.
         XCTAssertTrue(body.contains("transcriptCaptured = true"),
                       "Nothing sets the flag, so `!transcriptCaptured` is permanently true and the gate "
                       + "is decorative.")
+    }
+
+    /// Rule 1's control for the absence disarm — the regression this pins, and
+    /// the overshoot that would be worse than it. Driven through the SAME
+    /// matcher the check above uses, so a matcher broken by a formatting change
+    /// fails here rather than quietly reporting the arms are as they should be.
+    func testTheAbsenceDisarmCheckDistinguishesTheMissingAndOvershotShapes() {
+        let neitherArmDisarms = """
+        case .notConfigured:
+            try? FileManager.default.removeItem(at: audioFileURL)
+            throw AppError.sttMissingAPIKey
+        case .unreadable:
+            try? FileManager.default.removeItem(at: audioFileURL)
+            throw AppError.sttKeyUnreadable
+        """
+        let bothArmsDisarm = """
+        case .notConfigured:
+            await PendingRetryGuard.disarm(guardToken)
+            throw AppError.sttMissingAPIKey
+        case .unreadable:
+            await PendingRetryGuard.disarm(guardToken)
+            throw AppError.sttKeyUnreadable
+        """
+        let compliant = """
+        case .notConfigured:
+            await PendingRetryGuard.disarm(guardToken)
+            try? FileManager.default.removeItem(at: audioFileURL)
+            throw AppError.sttMissingAPIKey
+        case .unreadable:
+            try? FileManager.default.removeItem(at: audioFileURL)
+            throw AppError.sttKeyUnreadable
+        """
+
+        XCTAssertEqual(Self.armSpendsTheGuard(arm: "case .notConfigured:",
+                                              throwToken: "throw AppError.sttMissingAPIKey",
+                                              in: neitherArmDisarms), false,
+                       "Control: the shape that shipped really did leave 23 armed — a terminal refusal "
+                       + "holding the store's one slot — so the check must fail on it.")
+        XCTAssertEqual(Self.armSpendsTheGuard(arm: "case .unreadable:",
+                                              throwToken: "throw AppError.sttKeyUnreadable",
+                                              in: bothArmsDisarm), true,
+                       "Control: the overshoot really does spend the guard on the blackout arm, so the "
+                       + "`false` assertion above is not vacuous.")
+        XCTAssertEqual(Self.armSpendsTheGuard(arm: "case .notConfigured:",
+                                              throwToken: "throw AppError.sttMissingAPIKey",
+                                              in: compliant), true,
+                       "Control: the compliant shape must pass both halves, or the checks are "
+                       + "unsatisfiable.")
+        XCTAssertEqual(Self.armSpendsTheGuard(arm: "case .unreadable:",
+                                              throwToken: "throw AppError.sttKeyUnreadable",
+                                              in: compliant), false)
+        XCTAssertNil(Self.armSpendsTheGuard(arm: "case .notConfigured:",
+                                            throwToken: "throw AppError.sttMissingAPIKey",
+                                            in: "case .unreadable: throw AppError.sttKeyUnreadable"),
+                     "Control: a missing arm must read as nil, not as a quiet `false` that would let a "
+                     + "deleted arm pass the `false` assertion.")
     }
 
     /// The flag is raised only once the transcript has been validated non-empty
@@ -399,6 +500,22 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
     }
 
     // MARK: - Source shape helpers
+
+    /// Whether the switch arm opening at `arm` spends the retry guard before it
+    /// reaches `throwToken`. Scoped to the arm rather than to the whole function
+    /// because the two key arms sit adjacent and an unscoped `contains` cannot
+    /// tell which of them holds the disarm — which is the entire distinction
+    /// being asserted.
+    ///
+    /// Returns nil when the arm or its throw is absent, so a DELETED arm reads
+    /// as "cannot tell" instead of quietly satisfying a `false` expectation.
+    private static func armSpendsTheGuard(arm: String, throwToken: String, in body: String) -> Bool? {
+        guard let start = body.range(of: arm)?.upperBound,
+              let end = body.range(of: throwToken, range: start..<body.endIndex)?.lowerBound else {
+            return nil
+        }
+        return body[start..<end].contains("PendingRetryGuard.disarm")
+    }
 
     /// The `do` block that ENCLOSES `anchor`, brace-matched from the nearest
     /// `do {` above it, plus everything after its closing brace (where its

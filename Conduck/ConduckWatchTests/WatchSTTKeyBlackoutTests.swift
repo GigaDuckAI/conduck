@@ -242,9 +242,15 @@ final class WatchSTTKeyBlackoutTests: XCTestCase {
                        "A blackout gets code 75's cause line — which already carries its own remedy, so the "
                        + "wrist is not told to unlock twice, nor to 'open Conduck' while it is looking at "
                        + "Conduck.")
-        XCTAssertTrue(blackoutBanner.contains("your recording is saved"),
-                      "The sentence promises the capture survives. That promise is only true because 75 is "
-                      + "retryable and never reaches the deleting arm (I6).")
+        XCTAssertTrue(blackoutBanner.lowercased().contains("unlock"),
+                      "75 earns its own code by naming the act that fixes it. A blackout sentence with no "
+                      + "unlock in it is code 23's sentence in different words.")
+        XCTAssertFalse(blackoutBanner.contains("recording is saved"),
+                       "The SHARED sentence may not promise the capture survived. Several lanes raise 75 "
+                       + "and not all can verify it — `ConverseIntent`'s `PendingRetryGuard.arm` takes a "
+                       + "`.completeFileProtection` write that can fail in this very window. The promise "
+                       + "belongs to the surfaces that can check it: here, the on-disk capture asserted "
+                       + "in `driveUpload` and the live Retry it keeps alive (I6).")
 
         // The other reading, same lane: a provably empty slot.
         _ = TestStores.secrets.delete([

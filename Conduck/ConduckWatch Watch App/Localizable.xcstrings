@@ -1,6 +1,28 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "stt.error.keyUnreadable.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again."
+          }
+        }
+      }
+    },
+    "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive."
+          }
+        }
+      }
+    },
     "stt.error.keyUnreadable" : {
       "extractionState" : "manual",
       "localizations" : {

@@ -106,6 +106,25 @@ struct ContentView: View {
     }
     @State private var settingsRoute: SettingsRoute? = nil
     #endif
+
+    /// Set for exactly ONE Settings dismissal: the one `handleDeepLink` causes
+    /// when a tapped reply notification tears the surface down to show a thread.
+    ///
+    /// `handleSettingsDismiss()` collects a deferred gateway fix route on every
+    /// dismissal, which is what makes that collection total. But a route describes
+    /// a STATE ("your default needs setup"), not an appointment, while the deep
+    /// link is a fresh, explicit request for specific content — so on that one
+    /// dismissal the route must not be cashed in, or Settings re-presents on top
+    /// of the thread the user just asked for. The route is SKIPPED, never spent,
+    /// and lands on the next ordinary Done or the next `.openGatewayFixRoute` post.
+    ///
+    /// A one-shot marker rather than a second collection site, so totality
+    /// survives: any dismissal that does not set it still collects by default.
+    /// `MainWindowView.settingsClosedForConversationAction` is the macOS twin.
+    /// Declared outside the iOS-only block so `handleSettingsDismiss` needs no
+    /// platform fork; nothing sets it on macOS, where this view is not the root.
+    @State private var settingsClosedForConversationAction = false
+
     @State private var showingList: Bool = false
     /// Set by the conversation-list's bottom "Settings" row: the list sheet
     /// dismisses first, then its `onDismiss` presents Settings (two sheets can't
@@ -1001,9 +1020,19 @@ struct ContentView: View {
         // route over a presented sheet. Nothing else re-runs the claim, so a user
         // who accepted a refusal's offer to continue in the app while sitting in
         // Settings → Voice would tap Done and land nowhere. Re-consume here; the
-        // claim is one-shot, so an unarmed route is a no-op. `MainWindowView`'s
-        // `onDone` is the macOS twin.
-        consumeGatewayFixRoute()
+        // claim is one-shot, so an unarmed route is a no-op.
+        // `MainWindowView`'s `.onChange(of: showingSettings)` is the macOS twin.
+        //
+        // ONE dismissal collects nothing: the one a NEWER conversation action
+        // caused — `handleDeepLink` tearing this surface down to show a tapped
+        // reply. A route describes a STATE, not an appointment, so it must not
+        // outrank an explicit request for specific content. Skipping SPENDS
+        // nothing: the route stays armed for the next ordinary Done.
+        if settingsClosedForConversationAction {
+            settingsClosedForConversationAction = false
+        } else {
+            consumeGatewayFixRoute()
+        }
     }
 
     /// Refresh the pending-retry card's presence AND its arming error code
@@ -1126,6 +1155,19 @@ struct ContentView: View {
               let id = UUID(uuidString: idString) else { return }
         showingList = false
         #if os(iOS)
+        // A newer, EXPLICIT request for content. Tearing the Settings surface down
+        // fires its `onDismiss`, which is where a deferred gateway fix route gets
+        // collected — and collecting it there would re-present Settings on top of
+        // the very thread the user tapped a notification to reach. Mark the close
+        // so `handleSettingsDismiss()` skips that one collection; the route is
+        // skipped, never spent, so the next ordinary Done still lands it.
+        //
+        // Only when a surface is actually up: set unconditionally, the marker
+        // survives a deep link that dismissed nothing and then swallows an
+        // unrelated later close. `MainWindowView` is the macOS twin, where
+        // `leaveSettingsForConversationAction`'s `guard showingSettings` does the
+        // same job.
+        if settingsRoute != nil { settingsClosedForConversationAction = true }
         settingsRoute = nil
         #endif
         currentConversationID = id
@@ -1432,8 +1474,16 @@ struct ContentView: View {
             // bytes succeed.
             pendingRetryErrorCode = AppError.sttKeyUnreadable.errorCode
             pendingRetryIsRetryable = AppError.sttKeyUnreadable.isRetryable
+            // The CAUSE LINE ONLY, not `descriptionWithRecovery`. 75 is the one
+            // code whose cause line already carries its own remedy ("unlock it
+            // and try again"), so appending `recoverySuggestion` tells this user
+            // to unlock twice — and its second half ("open Conduck and retry")
+            // is addressed to someone who is NOT in the app, while this card is
+            // rendered inside it, beside a live Retry button. The same choice
+            // the wrist makes for the same sentence, and the same one
+            // `DictationService` makes on macOS.
             presentRetryError(
-                AppError.sttKeyUnreadable.descriptionWithRecovery,
+                AppError.sttKeyUnreadable.errorDescription ?? "",
                 sticky: !AppError.sttKeyUnreadable.isRetryable
             )
             return

@@ -5,8 +5,10 @@
 //
 // Every lane that can refuse a capture because the speech-to-text API key
 // "isn't there" must first establish WHICH of the two facts it is looking at,
-// and the two must not produce the same sentence or the same fate for the
-// user's words.
+// and the two must not produce the same sentence. Where the lane has a retry
+// mechanism at all, they must not produce the same fate for the user's words
+// either — CarPlay is the one registered lane with none, and its row says so
+// rather than implying a preservation it cannot perform.
 //
 // THE DEFECT. `SettingsManager.activeSTTSnapshot()` hands back
 // `apiKey: String?`, and that nil collapses "the slot is empty" into "the
@@ -43,8 +45,11 @@
 //   4. A NEGATIVE CONTROL for the guard, driven over synthetic sources in the
 //      old collapsed shape and the new typed one.
 //   5. An EXHAUSTIVENESS rule: a file that RAISES code 23 and is not
-//      registered here fails the suite, so a seventh lane cannot join
-//      silently.
+//      registered here fails the suite, so a further lane cannot join silently.
+//      "Raises" covers the enum TOKENS and the hand-rolled absence COPY,
+//      because a lane can assert an empty slot without ever touching
+//      `AppError` — CarPlay spoke the claim aloud out of a `String(localized:)`
+//      and was invisible to a token-only rule for exactly that reason.
 //
 // `RefusalLaneSource` (comment stripping, function-body scoping, container
 // path) is shared with `HeadlessRefusalLaneDriftGuardTests` — the sibling guard
@@ -233,6 +238,27 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
              blackoutArm: ".sttKeyUnreadable",
              preservation: nil,
              note: "iOS retry card"),
+        // CarPlay, and the one lane with NO retry mechanism of any kind. The
+        // refusal is SPOKEN and it lands after the microphone: the on-disk
+        // recording is deleted at the top of `processRecording`, the compressed
+        // bytes live only in memory, and this surface has no `PendingRetryStore`
+        // write and no queue to hand them to. `preservation` is therefore nil
+        // because there is nothing to hand them TO, not because the lane refuses
+        // before the mic — a known architectural gap, recorded here rather than
+        // papered over. What this row pins is the half that is fixable: which
+        // fact the refusal claims, and that the driver hears something true.
+        //
+        // It also reaches its verdict LIVE rather than from `CarPlaySettings`'s
+        // process-lifetime cache, which is what stops a nil cached at launch —
+        // before first unlock, when every slot reads empty — from telling the
+        // driver they have no key for the rest of the drive.
+        Lane(path: "Conduck/CarPlay/CarPlayRecordingService.swift",
+             function: "processRecording",
+             typedRead: "STTKeyReadiness.resolve",
+             absenceArm: "Add your STT key",
+             blackoutArm: "Unlock your iPhone and try again",
+             preservation: nil,
+             note: "CarPlay in-car capture"),
     ]
 
     /// Every lane resolves through a typed read and carries both arms, and the
@@ -270,7 +296,7 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
                                 + "the retry lane (I6).")
             }
         }
-        XCTAssertEqual(Self.lanes.count, 8, "Eight registered lanes; the loop must have walked all of them.")
+        XCTAssertEqual(Self.lanes.count, 9, "Nine registered lanes; the loop must have walked all of them.")
     }
 
     /// The wrist relay leg is the one lane whose words live in a DURABLE QUEUE
@@ -299,6 +325,22 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         XCTAssertLessThan(blackoutAt, genericArmAt,
                           "The blackout arm must return BEFORE the catch-all arm, whose claim deletes the "
                           + "queued recording.")
+
+        // …and the sentence it shows is the RELAY leg's own, not the shared one.
+        // `terminalSTTMessage` renders code 75's copy, which says "this device" —
+        // and on the wrist that device is the watch, which the user has just
+        // recorded on and which is therefore unlocked. The Keychain that blacked
+        // out on this leg is the iPHONE's, so a wrist sent to unlock itself does
+        // the one thing that cannot help, once per idle-edge re-fire.
+        let armEnd = try XCTUnwrap(
+            body.range(of: "return", range: blackoutAt..<body.endIndex)?.upperBound,
+            "The blackout arm no longer returns; re-scope this check.")
+        let blackoutArm = String(body[blackoutAt..<armEnd])
+        XCTAssertTrue(blackoutArm.contains("relayKeyUnreadableMessage"),
+                      "The relay blackout arm must take its own wrist sentence, which names the iPHONE.")
+        XCTAssertFalse(blackoutArm.contains("terminalSTTMessage"),
+                       "`terminalSTTMessage` serves the UPLOAD leg, where the unreadable slot is this "
+                       + "watch's own. On the relay leg its 'this device' names the wrong device.")
         XCTAssertEqual(body.components(separatedBy: "lastErrorIsRelayDeferral = true").count - 1, 2,
                        "Exactly two deferral arms: the reply-wait timeout and the blackout. A blackout that "
                        + "stopped setting the flag has taken the claim shape instead — or its toast will "
@@ -368,20 +410,40 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
 
     // MARK: - 5. Exhaustiveness — a seventh lane cannot join silently
 
+    /// What counts as RAISING code 23 — the enum TOKENS, and the hand-rolled
+    /// absence COPY.
+    ///
+    /// The tokens deliberately exclude the `case .sttMissingAPIKey:` switches
+    /// that merely map an existing verdict to copy or a diagnostic row: those
+    /// decide nothing about the Keychain and adding one is not a new lane.
+    ///
+    /// The copy shapes exist because a lane does not need the enum to make the
+    /// claim. CarPlay reached its verdict from a collapsed nil and SPOKE code
+    /// 23's assertion out of a `String(localized:)`, so every token above walked
+    /// straight past it — a refusal that asserts an empty slot in its own words
+    /// is still a refusal that asserts an empty slot. Matching the shipped
+    /// sentences is narrow, and narrow is the point: it fires on the claim, not
+    /// on the subject.
+    private static let raiseShapes = [
+        "throw AppError.sttMissingAPIKey",
+        ".error(.sttMissingAPIKey)",
+        ".failure(.sttMissingAPIKey)",
+        "= .sttMissingAPIKey",
+        "AppError.sttMissingAPIKey.localizedDescription",
+        "No STT API key set",
+        "Add your STT key",
+    ]
+
+    /// Shared by the sweep and its control, so a shape list that stops matching
+    /// fails the control rather than quietly reporting a clean sweep. Takes
+    /// COMMENT-STRIPPED source: prose about a sentence is not the sentence.
+    private static func raisesCode23(inStripped source: String) -> Bool {
+        raiseShapes.contains { source.contains($0) }
+    }
+
     /// Any shipping file that RAISES code 23 must be a registered lane (or the
-    /// declaration itself). Matching only the RAISE shapes — throw, state
-    /// assignment, `Result.failure`, direct copy render — deliberately excludes
-    /// the `case .sttMissingAPIKey:` switches that merely map an existing
-    /// verdict to copy or a diagnostic row: those decide nothing about the
-    /// Keychain and adding one is not a new lane.
+    /// declaration itself).
     func testEveryFileThatRaisesCode23IsARegisteredLane() throws {
-        let raiseShapes = [
-            "throw AppError.sttMissingAPIKey",
-            ".error(.sttMissingAPIKey)",
-            ".failure(.sttMissingAPIKey)",
-            "= .sttMissingAPIKey",
-            "AppError.sttMissingAPIKey.localizedDescription",
-        ]
         // The lanes above, plus the two the previous round fixed — the bundled
         // Shortcut's pre-flight and GigaAction itself, both pinned in detail by
         // `HeadlessRetryGuardSpanTests` and `STTKeyReadinessTests`.
@@ -402,20 +464,71 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
             guard !path.contains("Tests/") else { continue }
             guard path != "Conduck/Models/AppError.swift" else { continue }
             let source = RefusalLaneSource.stripComments(try String(contentsOf: url, encoding: .utf8))
-            guard raiseShapes.contains(where: { source.contains($0) }) else { continue }
+            guard Self.raisesCode23(inStripped: source) else { continue }
             guard !registered.contains(path) else { continue }
             unregistered.append(path)
         }
         XCTAssertTrue(unregistered.isEmpty,
                       "New site(s) raising code 23 with no row in this guard: \(unregistered). Code 23 "
                       + "asserts the key slot is EMPTY; a lane that raises it from a collapsed nil says "
-                      + "that on a device whose Keychain is merely locked. Register the lane and give it a "
-                      + "blackout arm.")
+                      + "that on a device whose Keychain is merely locked — whether it raises the enum or "
+                      + "just speaks the sentence. Register the lane and give it a blackout arm.")
 
         for path in registered {
             XCTAssertTrue(FileManager.default.fileExists(atPath: container.appendingPathComponent(path).path),
                           "Registered path \(path) no longer exists — a stale row exempts nothing and hides "
                           + "a lane that moved.")
         }
+    }
+
+    /// The exhaustiveness rule's control, driven through the SAME matcher the
+    /// sweep uses. Three halves, and all three are load-bearing:
+    ///
+    ///   • the hand-rolled spoken refusal must be CAUGHT — it is the shape that
+    ///     hid an eighth lane behind a token-only rule;
+    ///   • a switch that merely maps an existing verdict to copy must NOT be —
+    ///     widening into those would flag half the app and the rule would be
+    ///     turned off;
+    ///   • prose ABOUT the sentence must not stand in for the sentence.
+    func testTheRaiseShapesSeeAHandRolledRefusalAndStillIgnoreAMapping() {
+        let handRolled = """
+        if let key = cachedKey, !key.isEmpty { apiKey = key } else {
+            endSession(speak: String(localized: "Add your STT key in Conduck on your iPhone."))
+            return
+        }
+        """
+        let tokensOnly = [
+            "throw AppError.sttMissingAPIKey",
+            ".error(.sttMissingAPIKey)",
+            ".failure(.sttMissingAPIKey)",
+            "= .sttMissingAPIKey",
+            "AppError.sttMissingAPIKey.localizedDescription",
+        ]
+        XCTAssertFalse(tokensOnly.contains { handRolled.contains($0) },
+                       "Control: the shape that shipped names no `AppError` at all, which is exactly why a "
+                       + "token-only rule reported a clean sweep while a lane spoke code 23's claim aloud.")
+        XCTAssertTrue(Self.raisesCode23(inStripped: handRolled),
+                      "The widened shapes must catch a hand-rolled absence sentence, or the same lane hides "
+                      + "again behind the same trick.")
+
+        let mapsAnExistingVerdict = """
+        switch error {
+        case .sttMissingAPIKey:
+            phrase = fallbackPhrase
+        case .sttAuthFailed:
+            phrase = rejectedPhrase
+        }
+        """
+        XCTAssertFalse(Self.raisesCode23(inStripped: mapsAnExistingVerdict),
+                       "Control: a mapping decides nothing about the Keychain. A rule that flagged these "
+                       + "would fire everywhere and stop being read.")
+
+        let prose = RefusalLaneSource.stripComments("""
+        // Speaks "Add your STT key in Conduck on your iPhone." when the slot is provably empty.
+        apiKey = key
+        """)
+        XCTAssertFalse(Self.raisesCode23(inStripped: prose),
+                       "Control: a header that DESCRIBES the sentence must not register as a lane that "
+                       + "says it.")
     }
 }

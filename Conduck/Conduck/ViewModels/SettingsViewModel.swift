@@ -2128,11 +2128,28 @@ final class SettingsViewModel {
     ///
     /// `defaultSelectorNeedsSetup` asks membership of a fail-closed set, and a
     /// Keychain that does not read back answers "not a member" about a gateway
-    /// that is perfectly well set up. On a device restored from backup, whose
-    /// definitions have synced ahead of its iCloud Keychain tokens, that reading
-    /// turns the ⚠ + "Needs setup" line and the "<name> isn't set up on this
-    /// iPhone" footer into an accusation made by a locked device — and an
-    /// invitation to re-enter a token that is seconds from arriving.
+    /// that is perfectly well set up. That reading turns the ⚠ + "Needs setup"
+    /// line and the "<name> isn't set up on this iPhone" footer into an accusation
+    /// made by a locked device — and an invitation to re-enter a token that is
+    /// seconds from arriving.
+    ///
+    /// THE STATE THAT ACTUALLY REACHES THIS GATE, because only one can. The gate
+    /// changes nothing unless `defaultSelectorNeedsSetup` is already true, which
+    /// needs a NON-EMPTY configured set — so `resolveDefaultGateway`'s
+    /// zero-configured arm (`zeroConfiguredVerdict`, which can also answer
+    /// `.readingUnreliable`) never gets here: the membership question's own
+    /// empty-set guard has answered false long before. The one producer left is
+    /// the stored-pointer arm, and it fires only when EVERY gateway that can send
+    /// is keyless — `isKeychainProvenReadable` looks for a configured ref with an
+    /// auth scheme, so a keyless-only roster proves nothing about the Keychain —
+    /// while the stored default itself carries an auth scheme and stored evidence
+    /// but no token that reads back.
+    ///
+    /// Concretely: a self-hosted gateway on a trusted network with auth off is
+    /// working here, the default the user actually chose is a token-authenticated
+    /// one, and nothing on the device proves whether that token is gone or merely
+    /// unreadable this moment. Both readings are live, so the screen commits to
+    /// neither.
     ///
     /// Every other surface already refuses the same reading: the verdict's own
     /// doc forbids a banner, a Diagnostics finding, a repair or a persist on it,
@@ -2141,10 +2158,20 @@ final class SettingsViewModel {
     /// window, so the same silence has to be stated here, beside the predicate
     /// that would otherwise break it.
     ///
-    /// DISPLAY ONLY. `defaultSelectorNeedsSetup` stays byte-identical — it is the
-    /// raw membership question and is asserted verbatim elsewhere — so what this
-    /// gates is the flag, the name and the footer derived from them, never the
-    /// stored pointer or anything a send reads.
+    /// DISPLAY ONLY, and EVERY accusatory display: reached through
+    /// `defaultSelectorFlagsBroken`, which is what the selector's ⚠, the footer,
+    /// the picker callout, the Personal AI list's default row and the Settings
+    /// root's "Default needs setup" summary all read. `defaultSelectorNeedsSetup`
+    /// stays byte-identical — it is the raw membership question and is asserted
+    /// verbatim elsewhere — and nothing here touches the stored pointer or
+    /// anything a send reads.
+    ///
+    /// It does NOT gate a gateway's own readiness mark. `RemoteAgentReadiness`
+    /// already names an unreadable Keychain as one of the things `.incomplete`
+    /// covers, and its copy claims no missing field — so a row that says "setup
+    /// incomplete on this device" is reporting what it can see, not accusing the
+    /// default. Suppressing it would replace an honest hedge with a false clean
+    /// bill of health, and would hide genuinely half-finished gateways too.
     ///
     /// A pure static for the reason `selectorNeedsChoice` is one: the resolution
     /// is `private(set)` behind an actor hop, so the rule is the part a test can
@@ -2178,12 +2205,18 @@ final class SettingsViewModel {
                 defaultValue: "No default yet"
             ))
         }
-        // A STORED default outside the configured set breaks BOTH halves of the
-        // summary below: it names a gateway that cannot send, and `count - 1`
-        // then subtracts a gateway that was never in the set, hiding a working
-        // one. The honest one-line answer for that state is the state itself —
-        // the same wording the selector and the gateway rows use, one tap away.
-        guard configured.contains(defaultRemoteAgentRef) else {
+        // A STORED default outside the configured set names a gateway that cannot
+        // send, and the honest one-line answer for that state is the state itself
+        // — the same wording the selector and the gateway rows use, one tap away.
+        //
+        // Read through `defaultSelectorFlagsBroken`, NOT through a second spelling
+        // of the membership question: this row and the Personal AI screen it opens
+        // must reach the same verdict, and the flag is where the silence rule
+        // lives. Under `.readingUnreliable` it answers false, so this row falls
+        // through to the ordinary name+count while the screen below it is silent
+        // too — rather than announcing "Default needs setup" about a gateway a
+        // locked device merely cannot read.
+        guard !defaultSelectorFlagsBroken else {
             // Its OWN wording, not the row-level "Needs setup": on this row the
             // subject is the whole Personal AI section, and a bare "Needs setup"
             // there would read as "nothing works" on a device where four other
@@ -2195,7 +2228,11 @@ final class SettingsViewModel {
             ))
         }
         let defaultName = defaultRemoteAgentDisplayName
-        let others = configured.count - 1
+        // Subtract the default only when it IS in the set. On the silenced
+        // blackout path it is not, and `count - 1` would then discount a gateway
+        // that was never counted — hiding a working one behind the very name the
+        // silence just let this row keep.
+        let others = configured.count - (configured.contains(defaultRemoteAgentRef) ? 1 : 0)
         if others <= 0 {
             return defaultName
         }

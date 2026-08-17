@@ -1373,9 +1373,19 @@ final class WatchRecordingService {
                 //
                 // Tagged as a deferral for the same reason the timeout is: when
                 // the drain finally lands the transcript, the toast's promise —
-                // that the recording is saved — has been kept, so it must not
-                // linger.
-                state = .error(message: terminalSTTMessage(for: appError))
+                // that the transcript will arrive — has been kept, so it must
+                // not linger.
+                //
+                // The RELAY leg takes its own sentence rather than
+                // `terminalSTTMessage`'s. That arm renders code 75's shared copy,
+                // which says "this device" — true on the upload leg, where the
+                // slot that could not be read is this watch's own, and false
+                // here: the Keychain that blacked out is the iPHONE's, and this
+                // watch is unlocked because the user just recorded on it. A
+                // wrist told to unlock the device it is wearing does the one
+                // thing that cannot help, and the queued entry re-fires at every
+                // idle edge saying it again.
+                state = .error(message: Self.relayKeyUnreadableMessage)
                 lastErrorIsRelayDeferral = true
                 compressedAudioData = nil
                 compressedAudioFormat = nil
@@ -1422,6 +1432,29 @@ final class WatchRecordingService {
         }
     }
 
+    /// The RELAY leg's Keychain-blackout sentence — the wrist form, naming the
+    /// iPHONE.
+    ///
+    /// The relay leg reaches a 75 that `AppleSpeechRelayCoordinator` raised
+    /// about the iPhone's own Keychain and shipped back as a bare code. Code
+    /// 75's shared copy says "this device", which on this surface reads as the
+    /// watch — a device the user has just recorded on, so it is unlocked and
+    /// unlocking it again does nothing. Naming the iPhone twice rather than
+    /// leaning on a pronoun is deliberate: the sentence is read on a wrist, at a
+    /// glance, and "unlock it" beside two devices is ambiguous exactly where it
+    /// must not be.
+    ///
+    /// It ends on the same promise the reply-wait timeout above it makes ("your
+    /// transcript will arrive") rather than on "try again", because this arm is
+    /// a DEFERRAL: the queue entry is never claimed, so a later drain re-fires
+    /// the same capture and re-recording would only duplicate it. Compact, like
+    /// `WatchNetworkFailureCopy`'s certificate forms and for the same reason —
+    /// the remedy lives on a screen this one cannot reach.
+    // xcstrings
+    private static var relayKeyUnreadableMessage: String {
+        String(localized: "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive.")
+    }
+
     /// Copy for a TERMINAL STT failure surfaced on the wrist: the three
     /// certificate verdicts in their compact wrist form, everything else its own
     /// `descriptionWithRecovery`.
@@ -1445,9 +1478,18 @@ final class WatchRecordingService {
     /// non-throwing and funnels its own failures through `WatchAudioUploader`.
     ///
     /// "Terminal" describes the ATTEMPT, not the capture: `.sttKeyUnreadable`
-    /// reaches this banner with the words still saved — on the upload leg as the
-    /// on-disk capture (`canRetry` true), on the relay leg as the still-queued
-    /// entry a later drain re-fires — and its copy says so.
+    /// reaches this banner with the words still saved as the on-disk capture
+    /// (`canRetry` true), because 75 is retryable and never reaches the
+    /// capture-deleting arm in `runSTTUpload`. The banner does not SAY the
+    /// recording is saved — code 75's shared copy makes no such promise, since
+    /// the surfaces that raise it cannot all verify it — the live Retry
+    /// affordance is what tells the user here.
+    ///
+    /// Its `.sttKeyUnreadable` arm serves the UPLOAD leg only — a relay blackout
+    /// returns earlier in `runRelay`, through `relayKeyUnreadableMessage`,
+    /// because the Keychain that could not answer there belongs to the iPhone
+    /// while "this device" in the shared copy means this watch. Every other
+    /// verdict still reaches this funnel from both legs.
     ///
     /// The two pinned forms say "your gateway" while a custom voice endpoint is a
     /// different server, the same trade the wheel takes: naming the wrong server
@@ -1468,9 +1510,8 @@ final class WatchRecordingService {
             // The dropped half also names the wrong device: it says "open
             // Conduck", and on this surface Conduck is what the user is looking
             // at. What survives is the sentence that matters here — the key
-            // could not be READ, and the recording is still on disk, which is
-            // true because this verdict is retryable and never reaches the
-            // capture-deleting arm in `runSTTUpload`.
+            // could not be READ — and "this device" inside it is correct on this
+            // leg, where the slot that blacked out is this watch's own.
             return AppError.sttKeyUnreadable.errorDescription ?? ""
         default:
             // CAUSE AND REMEDY, not the cause alone. The reachable set here is

@@ -29,6 +29,15 @@ import UserNotifications
 /// process), the audio + notification both persist via App Groups +
 /// `UNUserNotificationCenter`'s system-side queue, giving the user a path
 /// back into the app to retry.
+///
+/// ARMING CAN PARTLY FAIL, and the failure is not cosmetic. `save` writes with
+/// `.completeFileProtection`, so the write is at its least certain in exactly
+/// the window this guard matters most — a device that has rebooted and not been
+/// unlocked, which is also when the Keychain cannot answer for the STT key. A
+/// save that fails leaves NO bytes on disk, so `Token.audioPreserved` reports
+/// it and the deferred notification is not scheduled: a system alert titled
+/// "Recording Saved" offering a retry that has nothing to retry is a worse
+/// outcome than silence.
 enum PendingRetryGuard {
     /// Window before the deferred notification fires. Larger than the
     /// STT-client retry budget (~3 s × 3 attempts + ~120 s timeout) so
@@ -41,27 +50,46 @@ enum PendingRetryGuard {
 
     struct Token: Sendable {
         let notificationID: String
+        /// Whether the audio actually reached `PendingRetryStore`. False means
+        /// the save threw and there are NO bytes to come back for, so nothing
+        /// downstream may promise the user their recording survived.
+        let audioPreserved: Bool
     }
 
     /// Save audio + metadata to `PendingRetryStore` and schedule a deferred
     /// "Recording saved" notification. Caller invokes `disarm` on success or
     /// known-bad-input; leaving the token un-disarmed is intentional for
     /// transient/upstream errors and for the OS-kill path.
+    ///
+    /// A save failure does NOT block the caller's recovery path — the retry
+    /// safety net is nice-to-have, not load-bearing for the user flow — but it
+    /// is reported rather than swallowed, on the token and by withholding the
+    /// notification that would otherwise announce a recording that is not there.
     static func arm(audio: Data, metadata: PendingRetryMetadata) async -> Token {
-        let token = Token(notificationID: notificationIDPrefix + UUID().uuidString)
-        // PendingRetryStore.save is throwing (disk I/O can fail).
-        // Best-effort: log failures but don't block the caller's recovery path —
-        // the retry safety net is nice-to-have, not load-bearing for the user flow.
+        // PendingRetryStore.save is throwing (disk I/O can fail, and a
+        // `.completeFileProtection` write is at its least certain before first
+        // unlock).
+        var preserved = true
         do {
             try await PendingRetryStore.shared.save(audioData: audio, metadata: metadata)
         } catch {
+            preserved = false
             #if DEBUG
             print("🛡️ PendingRetryGuard: save failed (\(error.localizedDescription)) — retry card will not appear")
             #endif
         }
-        await scheduleDeferredNotification(id: token.notificationID)
+        let token = Token(
+            notificationID: notificationIDPrefix + UUID().uuidString,
+            audioPreserved: preserved
+        )
+        // The notification's entire content is a claim about the store ("Recording
+        // Saved" / "Tap to retry your transcription"). With nothing in the store
+        // it is false in both halves, and tapping it reaches an empty retry lane.
+        if preserved {
+            await scheduleDeferredNotification(id: token.notificationID)
+        }
         #if DEBUG
-        print("🛡️ PendingRetryGuard armed (id=\(token.notificationID.suffix(8)))")
+        print("🛡️ PendingRetryGuard armed (id=\(token.notificationID.suffix(8)), preserved=\(preserved))")
         #endif
         return token
     }

@@ -36,16 +36,21 @@
 // shortcut), CarPlay, the menu bar and the Watch.
 //
 // Two things are checked, both of them AFTER `PendingRetryGuard.arm` and
-// OUTSIDE the `do`, so a refusal reaches no disarm and the recording stays in
-// the retry lane (I6):
+// OUTSIDE the `do`, so each verdict is reached with the recording ALREADY
+// preserved and decides its fate itself, rather than inheriting the catch
+// chain's one answer for everything pre-transcript (I6):
 //
 //   THE SPEECH-TO-TEXT KEY, through `STTKeyReadiness`, which keeps the two
 //   readings of a nil key apart. `.notConfigured` is provable absence and
 //   raises code 23; `.unreadable` is a Keychain that could not answer — the
 //   before-first-unlock case this whole lane runs in — and raises code 75,
 //   whose copy says the key could not be READ rather than claiming there
-//   isn't one (I3). Neither reading is allowed to spend an STT call, and
-//   neither is allowed to cost the user their recording.
+//   isn't one (I3). Neither reading spends an STT call. They part company on
+//   the recording, each matching its own `shouldPreserveForRetry`: 75 leaves
+//   the guard armed, because an unlock makes those exact bytes succeed; 23
+//   disarms, because they cannot succeed until a key is entered and
+//   `PendingRetryStore`'s single slot would otherwise be held against a
+//   capture that can.
 //
 //   THE DESTINATION, asked in the SAME ORDER `SharedInboxRouting.resolveOrMint`
 //   asks it — live quick-capture pointer first, this device's "Default for new
@@ -200,9 +205,12 @@ struct ConverseIntent: AppIntent {
         )
 
         // Pre-flight the KEY, on the same terms and for the same reason as the
-        // destination below: AFTER `arm` and OUTSIDE the `do`, so neither verdict
-        // reaches a disarm and the recording survives either way (I6). It sits
-        // above the destination check only because it is the cheaper question.
+        // destination below: AFTER `arm` and OUTSIDE the `do`, so each verdict is
+        // reached with the recording already preserved and neither is swept along
+        // by the catch chain's blanket pre-transcript disarm (I6). What each arm
+        // then does with the preserved bytes is its own decision, taken here. It
+        // sits above the destination check only because it is the cheaper
+        // question.
         //
         // The two verdicts are NOT the same fact, and separating them is the
         // whole point of doing this through `STTKeyReadiness` rather than
@@ -228,13 +236,40 @@ struct ConverseIntent: AppIntent {
         case .ready(let key):
             apiKey = key
         case .notConfigured:
-            // Dropping the temp file is safe for the reason the destination arms
-            // give below: `PendingRetryStore` already holds its own App Group
-            // copy, and the in-app retry path re-writes a fresh temp file from
-            // those bytes.
+            // PROVABLE absence — the one verdict on this lane that spends the
+            // guard rather than leaving it armed, matching
+            // `sttMissingAPIKey.shouldPreserveForRetry == false`. The same bytes
+            // fail identically until a key is entered, and `PendingRetryStore`
+            // is a SINGLE overwriting slot: holding it with a capture that
+            // cannot succeed evicts one that can. The concrete loss — a capture
+            // that failed on preset A with a network error is preserved, the
+            // user switches to keyless preset B and presses the Action Button,
+            // and A's recoverable words are overwritten by these. Disarming also
+            // withdraws the +90 s "Recording Saved" notification, which would
+            // otherwise invite a retry into an empty lane.
+            //
+            // So the temp file goes too: after the disarm nothing holds a copy,
+            // and that is the intended outcome for this reading — not an
+            // oversight. The blackout arm below is the opposite case and stays
+            // armed.
+            await PendingRetryGuard.disarm(guardToken)
             try? FileManager.default.removeItem(at: audioFileURL)
             throw AppError.sttMissingAPIKey
         case .unreadable:
+            // The guard stays ARMED, so this throw leaves the words in the retry
+            // lane and an unlock reaches them. Dropping the temp file is safe on
+            // that footing: `PendingRetryGuard.arm` has already written the App
+            // Group copy the in-app retry re-materialises from — and where that
+            // write failed, keeping a temp file nothing knows about would not
+            // help either.
+            if !guardToken.audioPreserved {
+                // The one place the promise and the reality can part: a refusal
+                // the user can act on, with nothing left to come back to. The
+                // line carries the FACT only — no key, no transcript (I5) — and
+                // ships in Release, because a save that fails before first
+                // unlock is precisely what a DEBUG-only print never shows.
+                RemoteAgentDiagnostics.log.error("ConverseIntent: STT key blackout refused with no preserved capture")
+            }
             try? FileManager.default.removeItem(at: audioFileURL)
             throw AppError.sttKeyUnreadable
         }
@@ -305,10 +340,11 @@ struct ConverseIntent: AppIntent {
         // any failure past this point (I6). Before it, a verdict about the BYTES
         // — silence, audio the provider can't process, a key the provider
         // REJECTS — still disarms, because the same bytes cannot succeed on a
-        // second attempt. The two verdicts about the key SLOT are not in that
-        // set and never reach this chain: both are refused above, outside the
-        // `do`, because a key that is added or a device that is unlocked makes
-        // the same recording succeed.
+        // second attempt. The two verdicts about the key SLOT never reach this
+        // chain: both are refused above, outside the `do`, because they
+        // DISAGREE about the recording and this chain has only one answer for
+        // anything pre-transcript. Each takes its own above instead — 23
+        // disarms there, 75 stays armed.
         var transcriptCaptured = false
 
         do {

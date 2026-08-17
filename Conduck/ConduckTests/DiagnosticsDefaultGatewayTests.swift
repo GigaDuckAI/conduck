@@ -21,6 +21,14 @@
 // process-global in-memory stores are wiped on both edges. Every fixture is then
 // exact rather than ambient — no `XCTSkipIf` on whatever a sibling suite left
 // behind, and no network (the auto-read tier is local by construction).
+//
+// A wipe settles only what a sibling suite has ALREADY written. It cannot settle
+// what one is STILL writing: every `SettingsViewModel()` starts an unstructured
+// load task and registers a `.settingsDidChangeRemotely` observer, both of which
+// resolve the default gateway on `.shared`, and those suites return long before
+// the task drains. So the one case here that needs no runner —
+// `testAParkedPointerStopsBeingParkedOnceItsGatewayCanSend` — drives its own
+// `SettingsManager` over its own store, which no other suite can reach.
 
 import XCTest
 @testable import Conduck
@@ -150,7 +158,7 @@ final class DiagnosticsDefaultGatewayTests: XCTestCase {
     /// step after they forgot a different gateway. It takes the `.notChosen`
     /// standing instead: no name, same red, same Fix.
     func testParkedDefaultReadsAsNotChosenAndNamesNobody() async {
-        await parkThePointerOnTheBuiltInDefault()
+        await parkThePointerOnTheBuiltInDefault(in: defaults, on: .shared)
 
         let runner = await runner()
         let standing = runner.defaultGatewayStanding
@@ -168,21 +176,40 @@ final class DiagnosticsDefaultGatewayTests: XCTestCase {
     /// the parked gateway is not set up here; a user who takes that advice writes
     /// no pointer, so the marker has to retire on its own when the gateway
     /// becomes send-able. Otherwise the pointer reads as app-parked forever.
+    ///
+    /// The only case here that reads its answer from `SettingsManager` without
+    /// building a runner, so it is the only one free to hold its own store — and
+    /// it has to. Its fixture stores a pointer at a custom with nothing left
+    /// behind it, and any resolve landing on `.shared` inside that window deletes
+    /// exactly that pointer (the dangling-custom drop, doing its job).
+    /// `repointDefaultAfterForget` then finds a pointer that no longer names the
+    /// forgotten gateway and returns without parking, which is what the control
+    /// below catches.
     func testAParkedPointerStopsBeingParkedOnceItsGatewayCanSend() async {
-        await parkThePointerOnTheBuiltInDefault()
+        let store = InMemoryDefaultsStore()
+        let manager = SettingsManager(dependencies: .inMemory(
+            defaults: store,
+            ubiquitous: InMemoryUbiquitousStore(),
+            cloudAvailable: true
+        ))
+        await parkThePointerOnTheBuiltInDefault(in: store, on: manager)
 
-        let parked = await SettingsManager.shared.newChatPickerSnapshot()
+        let parked = await manager.newChatPickerSnapshot()
         XCTAssertTrue(parked.defaultPointerIsParked, "Control: the fixture must genuinely park.")
 
         // The user follows the advice and finishes setting that gateway up. No
         // pointer is written — the pointer was already aimed at it.
-        makeSendable(Constants.remoteAgentDefaultBackendDefault)
+        let builtInDefault = RemoteAgentRef.builtin(Constants.remoteAgentDefaultBackendDefault)
+        store.set("https://\(Constants.remoteAgentDefaultBackendDefault.rawValue).example.test",
+                  forKey: Constants.remoteAgentURLKey(for: builtInDefault))
+        store.set(RemoteAgentAuthScheme.none.rawValue,
+                  forKey: Constants.remoteAgentAuthSchemeKey(for: builtInDefault))
 
-        let healed = await SettingsManager.shared.newChatPickerSnapshot()
+        let healed = await manager.newChatPickerSnapshot()
         XCTAssertFalse(healed.defaultPointerIsParked,
                        "The marker's only job is to stop a refusal naming a gateway nobody picked, and a "
                        + "pointer that can send raises no refusal to name anything in.")
-        XCTAssertNil(defaults.string(forKey: Constants.remoteAgentParkedDefaultRefKey),
+        XCTAssertNil(store.string(forKey: Constants.remoteAgentParkedDefaultRefKey),
                      "Cleared outright, so a later breakage cannot resurrect the placeholder reading.")
     }
 
@@ -190,21 +217,28 @@ final class DiagnosticsDefaultGatewayTests: XCTestCase {
     /// survivors, so the re-point parks on `Constants.remoteAgentDefaultBackendDefault`
     /// — a gateway the user never chose and has not set up here. That is the state
     /// both parked cases above need, and it is the real one users reach.
-    private func parkThePointerOnTheBuiltInDefault() async {
+    ///
+    /// Store and manager are passed in rather than reached for, so the runner
+    /// case can stage it on the singleton the runner reads while the case above
+    /// stages the identical state somewhere no other suite can touch.
+    private func parkThePointerOnTheBuiltInDefault(
+        in store: InMemoryDefaultsStore,
+        on manager: SettingsManager
+    ) async {
         var roster: [CustomGateway] = []
         for name in ["Work Box", "Home Box"] {
             let gateway = CustomGateway(id: UUID(), name: name)
             roster.append(gateway)
             let ref = RemoteAgentRef.custom(gateway.id)
-            defaults.set("https://custom.example.test", forKey: Constants.remoteAgentURLKey(for: ref))
-            defaults.set(RemoteAgentAuthScheme.none.rawValue, forKey: Constants.remoteAgentAuthSchemeKey(for: ref))
+            store.set("https://custom.example.test", forKey: Constants.remoteAgentURLKey(for: ref))
+            store.set(RemoteAgentAuthScheme.none.rawValue, forKey: Constants.remoteAgentAuthSchemeKey(for: ref))
         }
         // A custom counts as configured only when it is ALSO on the roster —
         // `configuredRemoteAgentRefs()` walks `customGateways()`, not the slots.
-        defaults.set(try? JSONEncoder().encode(roster), forKey: Constants.customGatewaysRegistryKey)
+        store.set(try? JSONEncoder().encode(roster), forKey: Constants.customGatewaysRegistryKey)
         let goneID = UUID()
-        storeDefaultPointer(.custom(goneID))
-        await SettingsManager.shared.repointDefaultAfterForget(of: .custom(goneID))
+        store.set(RemoteAgentRef.custom(goneID).rawString, forKey: Constants.remoteAgentDefaultBackendKVSKey)
+        await manager.repointDefaultAfterForget(of: .custom(goneID))
     }
 
     /// One outage, one finding. The default row names the CONSEQUENCE and carries

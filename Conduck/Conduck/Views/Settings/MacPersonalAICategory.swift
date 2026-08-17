@@ -309,13 +309,23 @@ struct MacPersonalAICategory: View {
                 Spacer()
                 SettingsStatusMark(
                     configured: configured,
-                    // A default that cannot send counts as incomplete HERE even
-                    // when it holds no stored evidence at all — the state
-                    // `deleteCustomGateway`'s park and a clean peer Forget both
-                    // produce. Without this the selector above says "Needs setup"
-                    // and the very row it sends the user to says nothing.
+                    // A default the selector FLAGS counts as incomplete here even
+                    // when it holds no stored evidence of its own — the state a
+                    // CLEAN peer Forget leaves behind (it clears the synced URL /
+                    // scheme / model slots, so nothing is left to classify the row
+                    // as anything but untouched). Without this the selector says
+                    // "Needs setup" and the very row it sends the user to says
+                    // nothing.
+                    //
+                    // Read off `defaultSelectorFlagsBroken` rather than re-asked
+                    // here, so this row cannot reach a different verdict than the
+                    // selector that sent the user to it — including the silence
+                    // that flag keeps under an untrustworthy Keychain reading.
+                    // (`row.isDefault` is already false whenever the pointer is
+                    // one the app parked, so this term speaks only about a gateway
+                    // the user actually chose.) Twin of the iOS row.
                     incomplete: row.incomplete
-                        || (row.isDefault && !configured && viewModel.hasAnyConfiguredRemoteAgent),
+                        || (row.isDefault && viewModel.defaultSelectorFlagsBroken),
                     // The "Default" caption renders on unconfigured rows too —
                     // a default that cannot send is exactly the row a user has to
                     // find. Suppressed only when NOTHING is configured: the

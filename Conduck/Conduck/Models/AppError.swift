@@ -380,12 +380,25 @@ enum AppError: LocalizedError {
         case .sttKeyUnreadable:
             // Says what is TRUE (the key could not be read) and never what is
             // merely likely (that there is no key). Carries its own instruction
-            // in the cause line, like `.sttMissingAPIKey` does, because the lane
+            // in the cause line, like `.sttMissingAPIKey` does, because one lane
             // that raises it is a Shortcut, which renders `errorDescription`
-            // alone and has no second slot for a remedy. The recording claim is
-            // the one `ConverseIntent` guarantees: this refusal is raised with
-            // `PendingRetryGuard` still armed.
-            return String(localized: "stt.error.keyUnreadable", defaultValue: "Couldn't read your STT API key. If this device just restarted, unlock it and try again — your recording is saved.")
+            // alone and has no second slot for a remedy.
+            //
+            // It makes NO claim about the recording, and the `.v2` key is that
+            // removal. The claim read as a `ConverseIntent` guarantee, but ARMED
+            // is not SAVED: `PendingRetryGuard.arm` reports a `PendingRetryStore`
+            // save failure on its token instead of throwing, and that save is a
+            // `.completeFileProtection` write — least certain in the very window
+            // this code exists for, a device that has rebooted and not been
+            // unlocked. Several lanes raise 75 and not all of them can verify
+            // the promise, so it belongs to the surfaces that can: the deferred
+            // "Recording Saved" notification, which is scheduled only when the
+            // bytes actually landed, and the live Retry affordance the in-app
+            // and wrist banners sit beside.
+            //
+            // Catalog-value-wins rule: a reworded existing key ships the OLD
+            // string, so this is a new key.
+            return String(localized: "stt.error.keyUnreadable.v2", defaultValue: "Couldn't read your STT API key. If this device just restarted, unlock it and try again.")
 
         // New tail
         case .audioProcessingFailed:

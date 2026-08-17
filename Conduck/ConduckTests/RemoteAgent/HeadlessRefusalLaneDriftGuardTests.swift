@@ -322,6 +322,47 @@ enum RefusalLaneSource {
         return String(source[start..<index])
     }
 
+    /// The brace-matched `then` and `else` arms of the `if` opened by `token`
+    /// (which must include the `{`, e.g. `"if shown {"`). Nil when that `if` has
+    /// no PLAIN `else` — an `else if` is deliberately rejected, because an arm
+    /// reached only under a further condition is not the arm a totality guard is
+    /// asserting about.
+    ///
+    /// Anchored on the `if`'s OWN closing brace, never on the first `} else {` in
+    /// the text. A nested if/else inside the `then` arm would otherwise become the
+    /// anchor, and a shape that acted on the wrong transition entirely would read
+    /// as compliant.
+    static func branches(ofIf token: String, in source: String) -> (then: String, else: String)? {
+        guard let opening = source.range(of: token) else { return nil }
+        var index = opening.upperBound
+        let thenStart = index
+        var depth = 1
+        while index < source.endIndex, depth > 0 {
+            if source[index] == "{" { depth += 1 }
+            if source[index] == "}" { depth -= 1 }
+            index = source.index(after: index)
+        }
+        guard depth == 0 else { return nil }
+        let thenArm = String(source[thenStart..<source.index(before: index)])
+
+        let isSpace: (Character) -> Bool = { $0 == " " || $0 == "\n" || $0 == "\t" }
+        let tail = source[index...].drop(while: isSpace)
+        guard tail.hasPrefix("else") else { return nil }
+        let afterElse = tail.dropFirst(4).drop(while: isSpace)
+        guard afterElse.hasPrefix("{") else { return nil }   // rejects `else if`
+
+        var armIndex = afterElse.index(after: afterElse.startIndex)
+        let armStart = armIndex
+        var armDepth = 1
+        while armIndex < afterElse.endIndex, armDepth > 0 {
+            if afterElse[armIndex] == "{" { armDepth += 1 }
+            if afterElse[armIndex] == "}" { armDepth -= 1 }
+            armIndex = afterElse.index(after: armIndex)
+        }
+        guard armDepth == 0 else { return nil }
+        return (thenArm, String(afterElse[armStart..<afterElse.index(before: armIndex)]))
+    }
+
     /// Strip `//` line comments and `/* … */` blocks. String literals are not
     /// modelled: none of these files carries a `//` inside a literal, and the
     /// strict direction of a miss would be a FALSE FAILURE, which someone reads.
@@ -466,18 +507,45 @@ final class GatewayFixRouteLandingDriftGuardTests: XCTestCase {
 
     private static let macRootPath = "Conduck/Views/Conversation/MainWindowView.swift"
 
+    /// The `.onChange(of: showingSettings)` closure's `else` arm — the one the
+    /// root takes when Settings has just gone AWAY. Scoped to that closure because
+    /// the root calls `consumeGatewayFixRoute()` from elsewhere too (the
+    /// `.openGatewayFixRoute` receiver), so a bare `contains` over the file would
+    /// pass on any shape.
+    ///
+    /// Anchored on `if shown {`'s own closing brace via `branches(ofIf:in:)`, not
+    /// on the first `} else {` in the closure: a nested if/else inside the `if
+    /// shown` arm would otherwise become the anchor and let a shape that
+    /// re-consumed on OPEN pass.
+    private static func macRootSettingsClosedArm(_ source: String) -> String? {
+        guard let reaction = try? RefusalLaneSource.trailingClosure(
+            after: ".onChange(of: showingSettings)", in: source, path: macRootPath) else { return nil }
+        return RefusalLaneSource.branches(ofIf: "if shown {", in: reaction)?.else
+    }
+
     /// The macOS property as a PURE predicate over source, so the negative control
     /// below drives the same code the real check does: the re-consume must sit in
     /// the arm `.onChange(of: showingSettings)` takes when Settings has just gone
-    /// AWAY. Scoped to that closure, and to its `else`, because the root calls
-    /// `consumeGatewayFixRoute()` from elsewhere too (the `.openGatewayFixRoute`
-    /// receiver) — a bare `contains` over the file would pass on any shape.
+    /// AWAY.
     private static func macRootReconsumesFromTheStateChange(_ source: String) -> Bool {
-        guard let reaction = try? RefusalLaneSource.trailingClosure(
-            after: ".onChange(of: showingSettings)", in: source, path: macRootPath),
-            let elseAt = reaction.range(of: "} else {")?.upperBound else { return false }
-        return reaction[elseAt...].contains("consumeGatewayFixRoute()")
+        macRootSettingsClosedArm(source)?.contains("consumeGatewayFixRoute()") ?? false
     }
+
+    /// …and the SKIP, as its own pure predicate. The close arm must branch on the
+    /// conversation-action marker, and that branch must CLEAR the marker while
+    /// claiming nothing — a skip that spends the route is the defect, not the fix.
+    private static func macRootSkipsTheCollectOnAConversationClose(_ source: String) -> Bool {
+        guard let closeArm = macRootSettingsClosedArm(source),
+              let arms = RefusalLaneSource.branches(
+                ofIf: "if \(Self.conversationCloseFlag) {", in: closeArm) else { return false }
+        return arms.then.contains("\(Self.conversationCloseFlag) = false")
+            && !arms.then.contains("GatewayFixRoute")
+            && arms.else.contains("consumeGatewayFixRoute()")
+    }
+
+    /// The marker both roots use, spelled once so the two guards below cannot pin
+    /// two different names and call the pair consistent.
+    private static let conversationCloseFlag = "settingsClosedForConversationAction"
 
     /// An armed-but-unpresentable route is not lost, it is DEFERRED — and a
     /// deferral nobody ever collects is the same as a drop. Both roots leave the
@@ -592,6 +660,161 @@ final class GatewayFixRouteLandingDriftGuardTests: XCTestCase {
         XCTAssertFalse(Self.macRootReconsumesFromTheStateChange(emptyElse),
                        "Control: an `else` that does something else, with the claim loose in the body, "
                        + "must not satisfy a check about where the claim IS.")
+
+        // …and the anchor must be `if shown {`'s OWN closing brace. A nested
+        // if/else inside the `if shown` arm is the shape that makes "the first
+        // `} else {` in the closure" wrong: it re-consumes on OPEN, which is the
+        // exact opposite of the rule, and would read as compliant.
+        let nestedInsideTheOpenArm = """
+        .onChange(of: showingSettings) { _, shown in
+            if shown {
+                if settingsVM.editorHasUnsavedChanges {
+                    cancelDropWork()
+                } else {
+                    consumeGatewayFixRoute()
+                }
+            }
+        }
+        """
+        XCTAssertFalse(Self.macRootReconsumesFromTheStateChange(nestedInsideTheOpenArm),
+                       "Control: a claim inside a NESTED else in the `if shown` arm re-consumes on OPEN. "
+                       + "Anchoring on the first `} else {` in the closure would bless it.")
+    }
+
+    // MARK: - …and one transition must NOT collect
+
+    /// A deferred route describes a STATE, not an appointment — so a Settings
+    /// close caused by a NEWER, explicit request for content must not cash it in.
+    /// The user tapped a reply notification (or ⌘N); both roots close Settings and
+    /// select the thread synchronously, and the dismissal reaction then fires
+    /// AFTER the requested conversation is already on screen. Collecting there
+    /// replaces the thread the user asked for with Settings.
+    ///
+    /// The marker is one-shot and the skip SPENDS NOTHING: the route stays armed
+    /// for the next ordinary close (Done) or the next `.openGatewayFixRoute` post.
+    /// That is what keeps this compatible with the totality guard above — every
+    /// close that does not set the marker still collects by default.
+    func testBothRootsSkipTheCollectWhenAConversationActionClosedSettings() throws {
+        // macOS: the state reaction's close arm.
+        let macSource = try RefusalLaneSource.source(at: Self.macRootPath)
+        XCTAssertTrue(Self.macRootSkipsTheCollectOnAConversationClose(macSource),
+                      "\(Self.macRootPath): the close arm no longer skips the collect on a "
+                      + "conversation-driven close, so a tapped reply notification lands on the thread "
+                      + "and is then replaced by Settings.")
+        let leaveBody = try RefusalLaneSource.body(
+            ofFunction: "leaveSettingsForConversationAction", in: macSource, path: Self.macRootPath)
+        let markAt = try XCTUnwrap(
+            leaveBody.range(of: "\(Self.conversationCloseFlag) = true")?.lowerBound,
+            "\(Self.macRootPath): the conversation close no longer marks itself, so the reaction cannot "
+            + "tell it apart from a Done."
+        )
+        let closeAt = try XCTUnwrap(leaveBody.range(of: "showingSettings = false")?.lowerBound)
+        XCTAssertLessThan(markAt, closeAt,
+                          "The marker has to be set BEFORE the flag it describes changes, or the "
+                          + "reaction reads it too late.")
+
+        // iOS: the sheet's own dismissal handler, marked by the deep link.
+        let iOSPath = "Conduck/ContentView.swift"
+        let iOSSource = try RefusalLaneSource.source(at: iOSPath)
+        let dismissBody = try RefusalLaneSource.body(
+            ofFunction: "handleSettingsDismiss", in: iOSSource, path: iOSPath)
+        let arms = try XCTUnwrap(
+            RefusalLaneSource.branches(ofIf: "if \(Self.conversationCloseFlag) {", in: dismissBody),
+            "\(iOSPath): `handleSettingsDismiss` does not branch on the conversation-close marker, so a "
+            + "deep-linked thread is covered by Settings re-presenting over it — the same defect the "
+            + "macOS root carried. Both roots or neither."
+        )
+        XCTAssertTrue(arms.then.contains("\(Self.conversationCloseFlag) = false"),
+                      "\(iOSPath): the marker must be one-shot, or it swallows a later ordinary Done.")
+        XCTAssertFalse(arms.then.contains("GatewayFixRoute"),
+                       "\(iOSPath): the skip must SPEND nothing — a claim here drops the route on the "
+                       + "one transition it was deferred past.")
+        XCTAssertTrue(arms.else.contains("consumeGatewayFixRoute()"),
+                      "\(iOSPath): every other dismissal still has to collect.")
+
+        let deepLinkBody = try RefusalLaneSource.body(
+            ofFunction: "handleDeepLink", in: iOSSource, path: iOSPath)
+        XCTAssertTrue(deepLinkBody.contains("\(Self.conversationCloseFlag) = true"),
+                      "\(iOSPath): `handleDeepLink` tears the Settings surface down itself, so it is what "
+                      + "has to mark the close.")
+        XCTAssertTrue(deepLinkBody.contains("settingsRoute != nil"),
+                      "\(iOSPath): the marker may only be set when a Settings surface is actually up. "
+                      + "Set unconditionally it survives a deep link that dismissed nothing, and then "
+                      + "swallows the next real Done.")
+    }
+
+    /// Rule 0 for the skip. The shape it has to be told apart from is the one this
+    /// root shipped with — an unconditional collect on every close — which passes
+    /// the totality guard and is exactly why presence alone proves nothing.
+    func testTheSkipCheckDistinguishesADeferralFromASpentRoute() {
+        let unconditional = """
+        .onChange(of: showingSettings) { _, shown in
+            if shown {
+                cancelDropWork()
+            } else {
+                consumeGatewayFixRoute()
+            }
+        }
+        """
+        XCTAssertTrue(Self.macRootReconsumesFromTheStateChange(unconditional),
+                      "Control: the old shape is TOTAL, which is why it reads as correct.")
+        XCTAssertFalse(Self.macRootSkipsTheCollectOnAConversationClose(unconditional),
+                       "Control: …and it is the defect — it answers a newer, explicit deep link with an "
+                       + "older, ambient route. The two guards must be orthogonal.")
+
+        let spendsTheRoute = """
+        .onChange(of: showingSettings) { _, shown in
+            if shown {
+                cancelDropWork()
+            } else {
+                if settingsClosedForConversationAction {
+                    settingsClosedForConversationAction = false
+                    consumeGatewayFixRoute()
+                } else {
+                    consumeGatewayFixRoute()
+                }
+            }
+        }
+        """
+        XCTAssertFalse(Self.macRootSkipsTheCollectOnAConversationClose(spendsTheRoute),
+                       "Control: a skip that still claims the route DROPS it — `consumeIfStillBroken` is "
+                       + "one-shot, so the deferral it was owed never happens.")
+
+        let skipsEverything = """
+        .onChange(of: showingSettings) { _, shown in
+            if shown {
+                cancelDropWork()
+            } else {
+                if settingsClosedForConversationAction {
+                    settingsClosedForConversationAction = false
+                } else {
+                    voiceRecovery = nil
+                }
+            }
+        }
+        """
+        XCTAssertFalse(Self.macRootSkipsTheCollectOnAConversationClose(skipsEverything),
+                       "Control: skipping the conversation close is only correct while every OTHER close "
+                       + "still collects.")
+
+        let compliant = """
+        .onChange(of: showingSettings) { _, shown in
+            if shown {
+                cancelDropWork()
+            } else {
+                if settingsClosedForConversationAction {
+                    settingsClosedForConversationAction = false
+                } else {
+                    consumeGatewayFixRoute()
+                }
+            }
+        }
+        """
+        XCTAssertTrue(Self.macRootSkipsTheCollectOnAConversationClose(compliant),
+                      "Control: the compliant shape must pass, or the check is unsatisfiable.")
+        XCTAssertTrue(Self.macRootReconsumesFromTheStateChange(compliant),
+                      "Control: …and it must still satisfy the totality guard. Both, or the fix traded "
+                      + "one defect for the other.")
     }
 
     /// The macOS window root opens Settings itself immediately before consuming

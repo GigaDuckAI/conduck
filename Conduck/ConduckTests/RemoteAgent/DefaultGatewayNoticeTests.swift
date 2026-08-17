@@ -521,5 +521,88 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
                       "The gateway the user chose really cannot send here, and the row has to say so.")
         XCTAssertEqual(vm.defaultSelectorBrokenName, vm.defaultRemoteAgentDisplayName,
                        "…and the footer names it, exactly as before this silence rule existed.")
+
+        let defaultNeedsSetup = String(localized: LocalizedStringResource(
+            "settings.root.personalAI.defaultNeedsSetup",
+            defaultValue: "Default needs setup"
+        ))
+        XCTAssertEqual(vm.personalAISummaryShort, defaultNeedsSetup,
+                       "…and the Settings ROOT row says the same thing as the screen it opens. This is "
+                       + "the control for the blackout case below: the silence is scoped to the "
+                       + "untrustworthy reading, not extended to every unconfigured default.")
+    }
+
+    /// The Settings ROOT row is the FOURTH surface asking the same question, and
+    /// it is the one the user meets first — a "Default needs setup" there sends
+    /// them into a Personal AI screen that has just been silenced, where nothing
+    /// explains the summary that brought them. Two surfaces disagreeing about one
+    /// device is harder to act on than either answer alone.
+    ///
+    /// Same blackout rig as `testAnUnreadableKeychainIsNeverReportedAsABrokenDefault`,
+    /// driven through the REAL resolver and writing no secret.
+    func testTheRootSummaryKeepsTheSameSilenceAsTheScreenItOpens() async throws {
+        TestStores.removeAll()
+        await SettingsManager.shared.resetRemoteAgentMigrationLatchForTesting()
+        defer { TestStores.removeAll() }
+
+        await SettingsManager.shared.setRemoteAgentURL(
+            try XCTUnwrap(URL(string: "https://hermes.example.test:8642")), for: .hermes
+        )
+        let hermes = RemoteAgentRef.builtin(.hermes)
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.none, for: hermes)
+        await SettingsManager.shared.setRemoteAgentURL(
+            try XCTUnwrap(URL(string: "https://openclaw.example.test:18789")), for: .openclaw
+        )
+        let openclaw = RemoteAgentRef.builtin(.openclaw)
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.bearer, for: openclaw)
+        await SettingsManager.shared.setDefaultRemoteAgentBackend(.openclaw)
+
+        let vm = SettingsViewModel()
+        await vm.refreshRemoteAgentState()
+
+        XCTAssertEqual(vm.defaultGatewayResolution, .readingUnreliable(pointer: openclaw),
+                       "Control: the device must genuinely be in the blackout state.")
+        XCTAssertEqual(vm.configuredRemoteAgentRefSet, [hermes],
+                       "Control: exactly one gateway can send, and it is NOT the default — which is what "
+                       + "made the old count subtract a gateway that was never in the set.")
+
+        let defaultNeedsSetup = String(localized: LocalizedStringResource(
+            "settings.root.personalAI.defaultNeedsSetup",
+            defaultValue: "Default needs setup"
+        ))
+        XCTAssertNotEqual(vm.personalAISummaryShort, defaultNeedsSetup,
+                          "The root row may not accuse a default the screen below it has been silenced "
+                          + "about. One device, one answer.")
+        XCTAssertEqual(vm.personalAISummaryShort, "\(vm.defaultRemoteAgentDisplayName) +1",
+                       "The silenced answer still has to be TRUE: the default keeps its name, and the "
+                       + "one gateway that works is counted rather than subtracted away. A bare name "
+                       + "here would hide it.")
+    }
+
+    /// The gateway LIST's default row derives the same accusation, so it has to
+    /// read the same gated flag. Re-asking membership there is what let one screen
+    /// carry a clean selector and a "Needs setup" row about the same gateway.
+    ///
+    /// A source guard because the expression lives inside a SwiftUI `body`: the
+    /// macOS twin is `#if os(macOS)` and this suite never compiles it, and neither
+    /// row is reachable without a mounted hierarchy.
+    func testBothGatewayListsReadTheGatedFlagRatherThanReAskingMembership() throws {
+        let rows = [
+            "Conduck/Views/Settings/PersonalAISettingsView.swift",
+            "Conduck/Views/Settings/MacPersonalAICategory.swift"
+        ]
+        for path in rows {
+            let source = try RefusalLaneSource.source(at: path)
+            XCTAssertTrue(source.contains("row.isDefault && viewModel.defaultSelectorFlagsBroken"),
+                          "\(path): the default row no longer reads the gated flag, so it can reach a "
+                          + "different verdict than the selector that sends the user to it.")
+            XCTAssertFalse(source.contains("row.isDefault && !configured"),
+                           "\(path): the membership question is re-asked here. It answers \"broken\" "
+                           + "about a healthy gateway whenever the Keychain cannot be read, which is "
+                           + "exactly what `selectorMaySpeak` exists to refuse.")
+            XCTAssertTrue(source.contains("SettingsStatusMark("),
+                          "Control: this really is the row that draws the mark, or the assertions above "
+                          + "are checking a ghost.")
+        }
     }
 }

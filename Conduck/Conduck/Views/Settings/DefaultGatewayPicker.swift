@@ -33,11 +33,20 @@
 // here, which is precisely the state a device whose default broke lands in. A
 // chooser that showed no selection there would leave the user unable to tell
 // which gateway the screen is even about; the row still says "Set up…" and still
-// deep-links, so both facts stay legible at once. When NOTHING has been chosen —
-// no pointer stored, or one the app parked after a Forget — no row is checked at
-// all (`SettingsViewModel.personalAIRows` clears it rather than decorate a
-// gateway the user never picked), and the leading callout is what says what the
-// screen is about.
+// deep-links, so both facts stay legible at once.
+//
+// NO row is checked in exactly one state — `defaultSelectorNeedsChoice`, which is
+// "nothing chosen ON A DEVICE THAT HAS SOMETHING TO CHOOSE BETWEEN": either the
+// resolver asked for a pick (`.selectionRequired`, returned only past its
+// zero-configured branch, so working gateways always exist there) or the app
+// parked the pointer after a Forget. `SettingsViewModel.personalAIRows` clears
+// the check rather than decorate a gateway the user never picked, and the leading
+// callout is what says what the screen is about.
+//
+// A device with NOTHING configured is not that state and must not be read as it:
+// the verdict is `.nothingConfigured`, so the compiled-in built-in keeps the
+// check and no callout renders. There is nothing to choose between yet, and the
+// screen that owns that moment is the empty state, not this chooser.
 //
 // A leading callout names the trouble when there is any: the stored default
 // cannot send here (`brokenDefaultName`), or nothing has been chosen
