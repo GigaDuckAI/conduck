@@ -1,1601 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "remoteAgent.error.unexpectedStatus.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI answered with HTTP %lld, which Conduck doesn't recognise."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.unexpectedStatus.unknown.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI answered in a way Conduck doesn't recognise."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.notEstablished.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck couldn't open a connection to your AI."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.imageTooLarge.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "An attached image was too large for your AI."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.endpointUnexpectedResponse.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Something answered, but not like an AI endpoint."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.endpointWrongEnvelope.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Something answered JSON, but not in the shape Conduck needs."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.endpointNotFound.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI provider didn't recognise the route."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.modelRequired.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI needs you to name a model."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.visionUnsupported.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI couldn't use the photo."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.instance.fallback" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "this AI"
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.authFailed.hosted.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "That API key was rejected. Check it in the dashboard for %@, then paste it again."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.authFailed.selfHosted.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The request to %@ was refused. Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.unreachable.hosted.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't reach %@. Check your internet connection, then test again."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.unreachable.selfHosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't reach %@. Check the gateway is running and reachable from this device, then test again."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.timeout.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The test timed out waiting for %@. Test again in a moment."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.timeout.selfHosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The test timed out waiting for %@. Check the gateway is running, then test again."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.serverError.hosted.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't finish the test — %@ had a server error. Test again in a moment."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.serverError.selfHosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't finish the test — %@ returned a server error. Check the gateway logs, then test again."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.invalidResponse.hosted.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reached %@, but its reply wasn't in the shape Conduck needs. Test again."
-          }
-        }
-      }
-    },
-    "remoteAgent.editor.invalidResponse.selfHosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reached %@, but its reply wasn't in the shape Conduck needs. Check it serves an OpenAI-compatible model list, then test again."
-          }
-        }
-      }
-    },
-    "settings.voice.openRouter.reuse.title.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "You've already set up OpenRouter for chat. Reuse that API key for voice?"
-          }
-        }
-      }
-    },
-    "settings.voice.openRouter.reuse.button.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Use my OpenRouter key"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.forgetAlert.title.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Forget %@?"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.forgetAlert.message.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck will erase the saved URL, key, and pin, plus any file-transfer setup for this gateway (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. You'll re-enter them next time."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.forgetAlert.message.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck will erase the saved API key. It's removed from all your devices signed in to iCloud, not just this one. You'll re-enter it next time."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.forgetAlert.message.custom.retained.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck will delete this gateway and its saved URL, key, and pin, plus any file-transfer setup for it (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns. They keep this gateway's colour tag so you can still tell them apart; its name is not kept."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.customGateway.add.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Set up a custom server"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.customGateway.addAtCap.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Set up a custom server (limit reached)"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.customGateway.capHint.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Delete a custom server above to add another."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.testConnection.button.instance" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Test %@"
-          }
-        }
-      }
-    },
-    "settings.fileTransfer.testConnection.button" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Test file server"
-          }
-        }
-      }
-    },
-    "settings.voice.testConnection.button" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Test voice"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.tip.model.message.v3" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Which AI answers you — the exact name your gateway or provider knows it by, such as “llama3”. The connection test fills in the choices it can see."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.model.suggestions.empty.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No models yet — run the connection test to load them."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.customHelp.api.test.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The connection test checks that Conduck can reach this address, authenticate, and read its model list. To exercise the chat wire too, download the script on that machine with %@ and run bash conduck-connect.sh --check-server. After a PASS, the interactive script can continue into setup."
-          }
-        }
-      }
-    },
-    "settings.personalAI.fullAgent.header.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Runs on your own server"
-          }
-        }
-      }
-    },
-    "settings.personalAI.hostedModel.header.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No server needed"
-          }
-        }
-      }
-    },
-    "settings.personalAI.hostedModel.footer.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck talks straight to the provider. No tools, no file transfer."
-          }
-        }
-      }
-    },
-    "settings.personalAI.section.customHeader.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "You supply the address"
-          }
-        }
-      }
-    },
-    "settings.personalAI.row.capability.selfHostedAgent" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your server · tools and files"
-          }
-        }
-      }
-    },
-    "settings.personalAI.row.capability.hostedModel" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No server · chat only"
-          }
-        }
-      }
-    },
-    "settings.personalAI.row.capability.custom" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your address · your model"
-          }
-        }
-      }
-    },
-    "chat.chooseAI.label" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Choose AI"
-          }
-        }
-      }
-    },
-    "Ask Conduck" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Ask Conduck"
-          }
-        }
-      }
-    },
-    "carplay.error.authFailed.speak" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI refused the key. Update it in Conduck on your iPhone."
-          }
-        }
-      }
-    },
-    "carplay.error.serverError.speak" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI had trouble replying. Try again."
-          }
-        }
-      }
-    },
-    "carplay.error.modelRequired.speak" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI needs a model name. Set one in Conduck on your iPhone."
-          }
-        }
-      }
-    },
-    "carplay.error.modelRequired.speak.serverChosen" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your server needs a default model."
-          }
-        }
-      }
-    },
-    "carplay.error.modelUnavailable.speak.serverChosen" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The model your server chose isn't available."
-          }
-        }
-      }
-    },
-    "carplay.error.imageTooLarge.speak" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A photo in this chat was too large for your AI. Start a new voice chat."
-          }
-        }
-      }
-    },
-    "carplay.error.visionUnsupported.speak" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI couldn't use a photo in this chat. Start a new voice chat."
-          }
-        }
-      }
-    },
-    "carplay.error.fileTransferNotConfigured.speak" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "File transfer isn't set up. Check it in Conduck on your iPhone."
-          }
-        }
-      }
-    },
-    "remoteAgent.notification.unreachable.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't reach your AI"
-          }
-        }
-      }
-    },
-    "remoteAgent.notification.failure.title.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No reply from your AI"
-          }
-        }
-      }
-    },
-    "onboarding.gatewayChooser.selfHosted.subtitle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Runs on your own server — tools and file access."
-          }
-        }
-      }
-    },
-    "onboarding.completion.subtitle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Just connect your AI and you can start talking."
-          }
-        }
-      }
-    },
-    "conversations.empty.micHint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Tap the mic on the home screen to start a conversation with your AI."
-          }
-        }
-      }
-    },
-    "intent.converse.description" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Transcribe recorded audio and send it to your configured AI, returning the reply."
-          }
-        }
-      }
-    },
-    "composer.placeholder.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Message your AI"
-          }
-        }
-      }
-    },
-    "quitGuard.single.title.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI is still answering"
-          }
-        }
-      }
-    },
-    "popover.error.destinationBusy.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI is still answering. Your words are kept — press Retry when it finishes."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.none.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No AI configured"
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.none.detail.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Set up your AI in Settings → Personal AI — every request needs one on this device."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.notConfigured.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No AI is configured."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.unreachable.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't reach your AI."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.authFailed.v3" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The request to your AI was refused."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.timeout.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI took too long to respond."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.serverError.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI reported an error."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.invalidResponse.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI returned an unexpected response."
-          }
-        }
-      }
-    },
-    "setup.requiredOnPhone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Set up your AI on iPhone first."
-          }
-        }
-      }
-    },
-    "error.unreachable.retry" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't reach your AI. Try again."
-          }
-        }
-      }
-    },
-    "remoteAgent.notification.reply.emptyBody" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your AI replied. Open Conduck to read it."
-          }
-        }
-      }
-    },
-    "remoteAgent.notification.reply.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reply from your AI"
-          }
-        }
-      }
-    },
-    "settings.certTrust.pinMismatch.refusal.compact.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This server's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.notConfigured.recovery.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Settings → Personal AI and add its address and key."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.notConfigured.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Settings → Personal AI and add your key."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.unreachable.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Check your internet connection, then try again. Conduck can't tell whether the request arrived."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.authFailed.recovery.v3" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.authFailed.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Check your API key in your provider's dashboard, then paste it again."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.timeout.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "It may still be working on this one. Another attempt could repeat the work and the cost."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.serverError.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Try again in a moment."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.invalidResponse.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Try again, or pick a different model."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.visionUnsupported.recovery.modelChoice" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Pick a model that accepts images, or keep chatting with text."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.imageTooLarge.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Try a smaller image."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.modelUnavailable.recovery.serverChosen" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Check the model configured on your server."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.contextTooLong.recovery.serverChosen" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Start a new chat to shorten the history."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.endpointUnexpectedResponse.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Something other than the provider answered. Check the network you're on, then try again."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.endpointNotFound.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The provider didn't recognise that route. Try again in a moment."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.modelRequired.recovery.serverChosen" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Set a default model on your server, then try again."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.modelRequired.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Settings → Personal AI and pick a model."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.unexpectedStatus.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "That came from the provider or the network between you. Try again."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.serviceUnavailable.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The provider or something on the route is unavailable. Try again shortly."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.notEstablished.recovery.hosted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Check your internet connection. The request most likely never left this device."
-          }
-        }
-      }
-    },
-    "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again."
-          }
-        }
-      }
-    },
-    "stt.error.keyUnreadable.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again."
-          }
-        }
-      }
-    },
-    "Couldn't read your STT key. Unlock your iPhone and try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't read your STT key. Unlock your iPhone and try again."
-          }
-        }
-      }
-    },
-    "stt.error.keyUnreadable" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again — your recording is saved."
-          }
-        }
-      }
-    },
-    "stt.error.keyUnreadable.recovery" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unlock this device, then open Conduck and retry."
-          }
-        }
-      }
-    },
-    "settings.root.personalAI.noDefaultYet" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No default yet"
-          }
-        }
-      }
-    },
-    "Check Conduck" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Check Conduck"
-          }
-        }
-      }
-    },
-    "Check Conduck Is Ready" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Check Conduck Is Ready"
-          }
-        }
-      }
-    },
-    "Checks your connection and your default AI before recording, so nothing you say is wasted." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Checks your connection and your default AI before recording, so nothing you say is wasted."
-          }
-        }
-      }
-    },
-    "Conduck doesn't know which AI to use for new chats. Open Conduck to pick one?" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck doesn't know which AI to use for new chats. Open Conduck to pick one?"
-          }
-        }
-      }
-    },
-    "Your default AI, %@, isn't set up on this device. Open Conduck to pick a different one?" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your default AI, %@, isn't set up on this device. Open Conduck to pick a different one?"
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.adopted.action" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Change"
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.adopted.body.ipad" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up on this iPad. Chats you've already started keep the gateway they started on."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.adopted.body.iphone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up on this iPhone. Chats you've already started keep the gateway they started on."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.adopted.body.mac" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up on this Mac. Chats you've already started keep the gateway they started on."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.adopted.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New chats now use %@"
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.action" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose a default"
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "It's your default for new chats, so anything that starts a chat from outside the app has nowhere to go. New chats you start here are fine."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.title.ipad" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up on this iPad."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.title.iphone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up on this iPhone."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.title.mac" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up on this Mac."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.dismiss.a11y" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dismiss"
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.noDefault.action" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pick a gateway"
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.noDefault.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Anything that starts a chat from outside the app doesn't know which one to use. Pick one and new chats will start on it. New chats you start here are fine."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.noDefault.title.ipad" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This iPad doesn't have a default gateway."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.noDefault.title.iphone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This iPhone doesn't have a default gateway."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.noDefault.title.mac" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This Mac doesn't have a default gateway."
-          }
-        }
-      }
-    },
-    "common.cancel" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cancel"
-          }
-        }
-      }
-    },
-    "diagnostics.action.chooseGateway" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose Gateway"
-          }
-        }
-      }
-    },
-    "diagnostics.action.chooseGateway.a11y" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose which gateway new chats use"
-          }
-        }
-      }
-    },
-    "diagnostics.action.forgetGateway" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Forget"
-          }
-        }
-      }
-    },
-    "diagnostics.action.forgetGateway.a11y" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Forget %@"
-          }
-        }
-      }
-    },
-    "diagnostics.connection.leftover.caption" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nothing uses these, and nothing is broken. Forgetting one removes its saved details from every device signed in to your iCloud."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.leftover.header" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Leftover setup"
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.broken.footer.ipad" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ isn't set up on this iPad, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.broken.footer.iphone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ isn't set up on this iPhone, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.broken.footer.mac" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ isn't set up on this Mac, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.noChoice.footer.ipad" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nothing that starts a chat from outside this iPad knows which gateway to use. Pick one and new chats will start on it."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.noChoice.footer.iphone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nothing that starts a chat from outside this iPhone knows which gateway to use. Pick one and new chats will start on it."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.noChoice.footer.mac" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nothing that starts a chat from outside this Mac knows which gateway to use. Pick one and new chats will start on it."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.notChosen" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Not chosen yet"
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.picker.broken.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pick a gateway below to use for new chats, or tap %@ to finish setting it up."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.picker.broken.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up here"
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.picker.noChoice.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pick a gateway below and new chats will start on it."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.picker.noChoice.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No default yet"
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.selector.broken.a11y" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Needs attention"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.forgetAlert.message.leftover" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Conduck will erase the saved URL, token, and pin for this gateway, plus any file-transfer setup. The URL and token are removed from every device signed in to your iCloud; the pin is only on this one."
-          }
-        }
-      }
-    },
-    "popover.error.destinationUnavailable" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This Mac's default AI isn't set up. Your words are kept — choose a default in Settings, then press Retry."
-          }
-        }
-      }
-    },
-    "settings.root.personalAI.defaultNeedsSetup" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Default needs setup"
-          }
-        }
-      }
-    },
-    "unconfigured.defaultNeedsSetup.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "From the menu bar, Conduck sends to this Mac's default AI — and that one isn't set up. Your other AIs still work; pick one of them as the default."
-          }
-        }
-      }
-    },
-    "unconfigured.defaultNeedsSetup.button" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose Default AI"
-          }
-        }
-      }
-    },
-    "unconfigured.defaultNeedsSetup.headline" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your default AI isn't set up"
-          }
-        }
-      }
-    },
     "" : {
 
     },
@@ -1936,6 +341,17 @@
         }
       }
     },
+    "Ask Conduck" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ask Conduck"
+          }
+        }
+      }
+    },
     "Ask your personal AI" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2272,11 +688,286 @@
         }
       }
     },
+    "carplay.error.authFailed.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI refused the key. Update it in Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "carplay.error.fileTransferNotConfigured.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File transfer isn't set up. Check it in Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "carplay.error.imageTooLarge.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A photo in this chat was too large for your AI. Start a new voice chat."
+          }
+        }
+      }
+    },
+    "carplay.error.modelRequired.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI needs a model name. Set one in Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "carplay.error.modelRequired.speak.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your server needs a default model."
+          }
+        }
+      }
+    },
+    "carplay.error.modelUnavailable.speak.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The model your server chose isn't available."
+          }
+        }
+      }
+    },
+    "carplay.error.serverError.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI had trouble replying. Try again."
+          }
+        }
+      }
+    },
+    "carplay.error.visionUnsupported.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI couldn't use a photo in this chat. Start a new voice chat."
+          }
+        }
+      }
+    },
     "Change model or API key" : {
 
     },
     "Change your OpenRouter setup" : {
 
+    },
+    "chat.chooseAI.label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Choose AI"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.body.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this iPad. Chats you've already started keep the gateway they started on."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.body.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this iPhone. Chats you've already started keep the gateway they started on."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.body.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this Mac. Chats you've already started keep the gateway they started on."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.adopted.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New chats now use %@"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a default"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It's your default for new chats, so anything that starts a chat from outside the app has nowhere to go. New chats you start here are fine."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.title.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this iPad."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.title.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this iPhone."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.broken.title.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up on this Mac."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.dismiss.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dismiss"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pick a gateway"
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anything that starts a chat from outside the app doesn't know which one to use. Pick one and new chats will start on it. New chats you start here are fine."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.title.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPad doesn't have a default gateway."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.title.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone doesn't have a default gateway."
+          }
+        }
+      }
+    },
+    "chat.defaultGateway.noDefault.title.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Mac doesn't have a default gateway."
+          }
+        }
+      }
     },
     "chat.title.unconfigured" : {
       "localizations" : {
@@ -2284,6 +975,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Conduck"
+          }
+        }
+      }
+    },
+    "Check Conduck" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check Conduck"
+          }
+        }
+      }
+    },
+    "Check Conduck Is Ready" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check Conduck Is Ready"
           }
         }
       }
@@ -2306,6 +1019,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Checking…"
+          }
+        }
+      }
+    },
+    "Checks your connection and your default AI before recording, so nothing you say is wasted." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checks your connection and your default AI before recording, so nothing you say is wasted."
           }
         }
       }
@@ -2384,6 +1108,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Common Languages"
+          }
+        }
+      }
+    },
+    "common.cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
           }
         }
       }
@@ -2630,6 +1365,17 @@
         }
       }
     },
+    "composer.placeholder.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Message your AI"
+          }
+        }
+      }
+    },
     "composer.send" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2656,6 +1402,20 @@
 
     },
     "Conduck couldn't send what you shared. Try sharing it again." : {
+
+    },
+    "Conduck doesn't know which AI to use for new chats. Open Conduck to pick one?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck doesn't know which AI to use for new chats. Open Conduck to pick one?"
+          }
+        }
+      }
+    },
+    "Conduck doesn't know which AI to use. Choose one from the list." : {
 
     },
     "Conduck Feedback" : {
@@ -2781,6 +1541,17 @@
         }
       }
     },
+    "conversations.empty.micHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap the mic on the home screen to start a conversation with your AI."
+          }
+        }
+      }
+    },
     "conversations.newConversation.help" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2892,9 +1663,6 @@
         }
       }
     },
-    "Couldn't reach your personal AI" : {
-
-    },
     "Couldn't reach your personal AI. Try again." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2902,6 +1670,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Couldn't reach your personal AI. Try again."
+          }
+        }
+      }
+    },
+    "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again."
+          }
+        }
+      }
+    },
+    "Couldn't read your STT key. Unlock your iPhone and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read your STT key. Unlock your iPhone and try again."
           }
         }
       }
@@ -3244,6 +2034,28 @@
         }
       }
     },
+    "diagnostics.action.chooseGateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Gateway"
+          }
+        }
+      }
+    },
+    "diagnostics.action.chooseGateway.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose which gateway new chats use"
+          }
+        }
+      }
+    },
     "diagnostics.action.copied" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -3262,6 +2074,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Copy Diagnostics"
+          }
+        }
+      }
+    },
+    "diagnostics.action.forgetGateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forget"
+          }
+        }
+      }
+    },
+    "diagnostics.action.forgetGateway.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forget %@"
           }
         }
       }
@@ -3317,17 +2151,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Test file-server connection for %@"
-          }
-        }
-      }
-    },
-    "diagnostics.action.testFileServerShort" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Test Connection"
           }
         }
       }
@@ -3497,46 +2320,178 @@
         }
       }
     },
-    "diagnostics.connection.gateway.focused.missing.detail" : {
+    "diagnostics.connection.defaultGateway" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "This gateway isn't set up on this device — finish adding it in Settings, or Clone the conversation to a configured gateway."
+            "value" : "Default for new chats"
           }
         }
       }
     },
-    "diagnostics.connection.gateway.incomplete.detail" : {
+    "diagnostics.connection.defaultGateway.adopted" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Setup isn't finished on this device — open it in Personal AI to finish, or forget it."
+            "value" : "Conduck switched your default because the old one isn't set up here."
           }
         }
       }
     },
-    "diagnostics.connection.gateway.none" : {
+    "diagnostics.connection.defaultGateway.adopted.named" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "No Personal AI configured"
+            "value" : "New chats and GigaAction start on %1$@ — Conduck switched to it because %2$@ isn't set up here."
           }
         }
       }
     },
-    "diagnostics.connection.gateway.none.detail" : {
+    "diagnostics.connection.defaultGateway.broken" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Add your Personal AI gateway in Settings — every request needs one on this device."
+            "value" : "Your default gateway can't send, so new chats and GigaAction won't go anywhere. Choose a gateway that works, or finish setting the default one up in Personal AI."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.broken.named" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is your default for new chats, but it can't send — so new chats and GigaAction won't go anywhere. Choose one of your %2$lld working gateways, or finish setting it up in Personal AI."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.broken.named.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is your default for new chats, but it can't send — so new chats and GigaAction won't go anywhere. Choose %2$@, or finish setting it up in Personal AI."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.notChosen" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck doesn't know which AI new chats should use, so new chats and GigaAction won't go anywhere. Choose one in Personal AI."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.notChosen.named" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck doesn't know which AI new chats should use, so new chats and GigaAction won't go anywhere. Pick one of your %lld gateways."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.notChosen.named.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck doesn't know which AI new chats should use, so new chats and GigaAction won't go anywhere. Pick %@."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.ok" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New chats and GigaAction start on your default gateway."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.ok.named" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New chats and GigaAction start on %@."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.focused.missing.detail.accountWide" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Setup isn't finished for this gateway, so it can't send — finish it in Personal AI, or Clone the conversation to a gateway that works."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.incomplete.detail.accountWide" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Setup was started but never finished, so this gateway can't send. Finish it in Personal AI — or forget it, which removes its saved details from every device signed in to your iCloud."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.incomplete.detail.unreadable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck can't read this gateway's saved details right now. That usually means iCloud hasn't finished syncing them to this device — check back in a moment."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.none.detail.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up your AI in Settings → Personal AI — every request needs one on this device."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.none.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No AI configured"
           }
         }
       }
@@ -3548,6 +2503,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "No gateway can send on this device until you finish one above, or connect another in Personal AI."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.leftover.caption" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing uses these, and nothing is broken. Forgetting one removes its saved details from every device signed in to your iCloud."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.leftover.header" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leftover setup"
           }
         }
       }
@@ -4693,6 +3670,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Error"
+          }
+        }
+      }
+    },
+    "error.unreachable.retry" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your AI. Try again."
           }
         }
       }
@@ -6824,9 +5812,6 @@
         }
       }
     },
-    "Full personal AI server — tools and file access." : {
-
-    },
     "gateway.commands.cta.paste" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -7481,6 +6466,17 @@
     "Installs automatically" : {
 
     },
+    "intent.converse.description" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcribe recorded audio and send it to your configured AI, returning the reply."
+          }
+        }
+      }
+    },
     "Invalid key." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7508,9 +6504,6 @@
 
     },
     "It doesn't have to be reachable from this device yet — the next step sets that up." : {
-
-    },
-    "Just connect your personal AI and you can start talking." : {
 
     },
     "Key" : {
@@ -8054,6 +7047,28 @@
     "On-device voice isn't ready. Open Conduck on your iPhone to set it up." : {
 
     },
+    "onboarding.completion.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Just connect your AI and you can start talking."
+          }
+        }
+      }
+    },
+    "onboarding.gatewayChooser.selfHosted.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Runs on your own server — tools and file access."
+          }
+        }
+      }
+    },
     "Open Conduck on your iPhone to enable microphone access." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8265,13 +7280,13 @@
         }
       }
     },
-    "popover.error.destinationBusy" : {
-      "extractionState" : "extracted_with_value",
+    "popover.error.destinationBusy.v2" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your personal AI is still answering. Your words are kept — press Retry when it finishes."
+            "value" : "Your AI is still answering. Your words are kept — press Retry when it finishes."
           }
         }
       }
@@ -8283,6 +7298,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "That conversation was deleted. Your words are kept — press Retry to send them to a new chat."
+          }
+        }
+      }
+    },
+    "popover.error.destinationUnavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Mac's default AI isn't set up. Your words are kept — choose a default in Settings, then press Retry."
           }
         }
       }
@@ -8450,13 +7476,13 @@
         }
       }
     },
-    "quitGuard.single.title" : {
-      "extractionState" : "extracted_with_value",
+    "quitGuard.single.title.v2" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your personal AI is still answering"
+            "value" : "Your AI is still answering"
           }
         }
       }
@@ -8709,6 +7735,17 @@
         }
       }
     },
+    "remoteAgent.editor.authFailed.hosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That API key was rejected. Check it in the dashboard for %@, then paste it again."
+          }
+        }
+      }
+    },
     "remoteAgent.editor.authFailed.selfHosted" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8716,6 +7753,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "That bearer token was rejected. Check your gateway's token, then paste it again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.authFailed.selfHosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The request to %@ was refused. Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.instance.fallback" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "this AI"
           }
         }
       }
@@ -8731,6 +7790,28 @@
         }
       }
     },
+    "remoteAgent.editor.invalidResponse.hosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reached %@, but its reply wasn't in the shape Conduck needs. Test again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.invalidResponse.selfHosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reached %@, but its reply wasn't in the shape Conduck needs. Check it serves an OpenAI-compatible model list, then test again."
+          }
+        }
+      }
+    },
     "remoteAgent.editor.serverError.hosted" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8742,6 +7823,50 @@
         }
       }
     },
+    "remoteAgent.editor.serverError.hosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't finish the test — %@ had a server error. Test again in a moment."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.serverError.selfHosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't finish the test — %@ returned a server error. Check the gateway logs, then test again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.timeout.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The test timed out waiting for %@. Test again in a moment."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.timeout.selfHosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The test timed out waiting for %@. Check the gateway is running, then test again."
+          }
+        }
+      }
+    },
     "remoteAgent.editor.unreachable.hosted" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8749,6 +7874,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Couldn't reach OpenRouter. Check your internet connection and try again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.unreachable.hosted.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach %@. Check your internet connection, then test again."
+          }
+        }
+      }
+    },
+    "remoteAgent.editor.unreachable.selfHosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach %@. Check the gateway is running and reachable from this device, then test again."
           }
         }
       }
@@ -8808,24 +7955,35 @@
         }
       }
     },
-    "remoteAgent.error.authFailed.recovery.v2" : {
-      "extractionState" : "extracted_with_value",
+    "remoteAgent.error.authFailed.recovery.hosted" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Check this gateway's token if it has one, and check anything in front of it — a proxy or tunnel can forward the request in a form your server refuses."
+            "value" : "Check your API key in your provider's dashboard, then paste it again."
           }
         }
       }
     },
-    "remoteAgent.error.authFailed.v2" : {
-      "extractionState" : "extracted_with_value",
+    "remoteAgent.error.authFailed.recovery.v3" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The request to your personal AI was refused."
+            "value" : "Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.authFailed.v3" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The request to your AI was refused."
           }
         }
       }
@@ -8885,6 +8043,50 @@
         }
       }
     },
+    "remoteAgent.error.contextTooLong.recovery.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Start a new chat to shorten the history."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.defaultNeedsSetup" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default AI, %@, isn't set up on this device."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.defaultNeedsSetup.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your other AIs still work. Open Settings → Personal AI and pick one for new chats."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.defaultNeedsSetup.unnamed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck doesn't know which AI to use for new chats."
+          }
+        }
+      }
+    },
     "remoteAgent.error.endpointNotFound" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8892,6 +8094,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Your gateway didn't recognise the AI endpoint."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointNotFound.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI provider didn't recognise the route."
           }
         }
       }
@@ -8907,6 +8120,17 @@
         }
       }
     },
+    "remoteAgent.error.endpointNotFound.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The provider didn't recognise that route. Try again in a moment."
+          }
+        }
+      }
+    },
     "remoteAgent.error.endpointUnexpectedResponse" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8914,6 +8138,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Your gateway answered, but not like an AI endpoint."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointUnexpectedResponse.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something answered, but not like an AI endpoint."
           }
         }
       }
@@ -8929,6 +8164,17 @@
         }
       }
     },
+    "remoteAgent.error.endpointUnexpectedResponse.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something other than the provider answered. Check the network you're on, then try again."
+          }
+        }
+      }
+    },
     "remoteAgent.error.endpointWrongEnvelope" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8936,6 +8182,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Your gateway answered JSON, but not in the shape Conduck needs."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.endpointWrongEnvelope.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something answered JSON, but not in the shape Conduck needs."
           }
         }
       }
@@ -8962,6 +8219,17 @@
         }
       }
     },
+    "remoteAgent.error.imageTooLarge.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "An attached image was too large for your AI."
+          }
+        }
+      }
+    },
     "remoteAgent.error.imageTooLarge.recovery" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8969,6 +8237,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Your gateway rejected the image as too large. Try a smaller image, or raise your gateway's image-size limit."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.imageTooLarge.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try a smaller image."
           }
         }
       }
@@ -8995,6 +8274,28 @@
         }
       }
     },
+    "remoteAgent.error.invalidResponse.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again, or pick a different model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.invalidResponse.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI returned an unexpected response."
+          }
+        }
+      }
+    },
     "remoteAgent.error.modelRequired" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9006,6 +8307,17 @@
         }
       }
     },
+    "remoteAgent.error.modelRequired.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI needs you to name a model."
+          }
+        }
+      }
+    },
     "remoteAgent.error.modelRequired.recovery" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9013,6 +8325,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Open this gateway's settings and set a Model, for example llama3."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and pick a model."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.modelRequired.recovery.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set a default model on your server, then try again."
           }
         }
       }
@@ -9039,6 +8373,17 @@
         }
       }
     },
+    "remoteAgent.error.modelUnavailable.recovery.serverChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check the model configured on your server."
+          }
+        }
+      }
+    },
     "remoteAgent.error.notConfigured" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9061,6 +8406,39 @@
         }
       }
     },
+    "remoteAgent.error.notConfigured.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and add your key."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured.recovery.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Settings → Personal AI and add its address and key."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notConfigured.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No AI is configured."
+          }
+        }
+      }
+    },
     "remoteAgent.error.notEstablished" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9072,6 +8450,17 @@
         }
       }
     },
+    "remoteAgent.error.notEstablished.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck couldn't open a connection to your AI."
+          }
+        }
+      }
+    },
     "remoteAgent.error.notEstablished.recovery" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9079,6 +8468,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Check the address is still current and the gateway is running. The request most likely never reached it."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.notEstablished.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your internet connection. The request most likely never left this device."
           }
         }
       }
@@ -9149,6 +8549,28 @@
         }
       }
     },
+    "remoteAgent.error.serverError.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again in a moment."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serverError.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI reported an error."
+          }
+        }
+      }
+    },
     "remoteAgent.error.serviceUnavailable" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9167,6 +8589,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Check your gateway, anything in front of it such as a tunnel or proxy, and the model provider it uses."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.serviceUnavailable.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The provider or something on the route is unavailable. Try again shortly."
           }
         }
       }
@@ -9193,6 +8626,17 @@
         }
       }
     },
+    "remoteAgent.error.timeout.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It may still be working on this one. Another attempt could repeat the work and the cost."
+          }
+        }
+      }
+    },
     "remoteAgent.error.timeout.recovery.v2" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9200,6 +8644,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "It may still be working on this one. Check the gateway before trying again, because another attempt could repeat the work and the cost."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.timeout.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI took too long to respond."
           }
         }
       }
@@ -9215,6 +8670,17 @@
         }
       }
     },
+    "remoteAgent.error.unexpectedStatus.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI answered with HTTP %lld, which Conduck doesn't recognise."
+          }
+        }
+      }
+    },
     "remoteAgent.error.unexpectedStatus.recovery" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9226,6 +8692,17 @@
         }
       }
     },
+    "remoteAgent.error.unexpectedStatus.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That came from the provider or the network between you. Try again."
+          }
+        }
+      }
+    },
     "remoteAgent.error.unexpectedStatus.unknown" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9233,6 +8710,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Your gateway answered in a way Conduck doesn't recognise."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unexpectedStatus.unknown.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI answered in a way Conduck doesn't recognise."
           }
         }
       }
@@ -9270,6 +8758,17 @@
         }
       }
     },
+    "remoteAgent.error.unreachable.recovery.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check your internet connection, then try again. Conduck can't tell whether the request arrived."
+          }
+        }
+      }
+    },
     "remoteAgent.error.unreachable.recovery.v2" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -9277,6 +8776,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Check the gateway is reachable from this device. Conduck can't tell whether the request arrived, so if it could run tools, check the gateway before trying again."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.unreachable.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your AI."
           }
         }
       }
@@ -9292,6 +8802,17 @@
         }
       }
     },
+    "remoteAgent.error.visionUnsupported.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI couldn't use the photo."
+          }
+        }
+      }
+    },
     "remoteAgent.error.visionUnsupported.recovery" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9299,6 +8820,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Enable photo support on your gateway, or keep chatting with text."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.visionUnsupported.recovery.modelChoice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Pick a model that accepts images, or keep chatting with text."
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.defaultNeedsSetup.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing to send to"
           }
         }
       }
@@ -9343,6 +8886,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No reply from your personal AI"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.failure.title.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No reply from your AI"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.reply.emptyBody" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your AI replied. Open Conduck to read it."
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.reply.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reply from your AI"
+          }
+        }
+      }
+    },
+    "remoteAgent.notification.unreachable.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach your AI"
           }
         }
       }
@@ -9888,6 +9475,17 @@
         }
       }
     },
+    "settings.certTrust.pinMismatch.refusal.compact.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This server's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone."
+          }
+        }
+      }
+    },
     "settings.certTrust.pinMismatch.remedy" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10115,6 +9713,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "(required)"
+          }
+        }
+      }
+    },
+    "settings.fileTransfer.testConnection.button" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Test file server"
           }
         }
       }
@@ -11395,6 +11004,83 @@
         }
       }
     },
+    "settings.personalAI.default.broken.footer.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ isn't set up on this iPad, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.broken.footer.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ isn't set up on this iPhone, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.broken.footer.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ isn't set up on this Mac, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.noChoice.footer.ipad" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing that starts a chat from outside this iPad knows which gateway to use. Pick one and new chats will start on it."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.noChoice.footer.iphone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing that starts a chat from outside this iPhone knows which gateway to use. Pick one and new chats will start on it."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.noChoice.footer.mac" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing that starts a chat from outside this Mac knows which gateway to use. Pick one and new chats will start on it."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.notChosen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not chosen yet"
+          }
+        }
+      }
+    },
     "settings.personalAI.default.notConfigured" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11402,6 +11088,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Not configured"
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.broken.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pick a gateway below to use for new chats, or tap %@ to finish setting it up."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.broken.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't set up here"
           }
         }
       }
@@ -11417,6 +11125,28 @@
         }
       }
     },
+    "settings.personalAI.default.picker.noChoice.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pick a gateway below and new chats will start on it."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.noChoice.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No default yet"
+          }
+        }
+      }
+    },
     "settings.personalAI.default.picker.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11424,6 +11154,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Default for new chats"
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.selector.broken.a11y" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needs attention"
           }
         }
       }
@@ -11461,6 +11202,17 @@
         }
       }
     },
+    "settings.personalAI.fullAgent.header.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Runs on your own server"
+          }
+        }
+      }
+    },
     "settings.personalAI.hostedBadge" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11483,6 +11235,17 @@
         }
       }
     },
+    "settings.personalAI.hostedModel.footer.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck talks straight to the provider. No tools, no file transfer."
+          }
+        }
+      }
+    },
     "settings.personalAI.hostedModel.header" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11490,6 +11253,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Hosted model"
+          }
+        }
+      }
+    },
+    "settings.personalAI.hostedModel.header.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No server needed"
           }
         }
       }
@@ -11505,13 +11279,46 @@
         }
       }
     },
-    "settings.personalAI.section.customHeader" : {
-      "extractionState" : "extracted_with_value",
+    "settings.personalAI.row.capability.custom" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Custom gateways"
+            "value" : "Your address · your model"
+          }
+        }
+      }
+    },
+    "settings.personalAI.row.capability.hostedModel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No server · chat only"
+          }
+        }
+      }
+    },
+    "settings.personalAI.row.capability.selfHostedAgent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your server · tools and files"
+          }
+        }
+      }
+    },
+    "settings.personalAI.section.customHeader.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You supply the address"
           }
         }
       }
@@ -11989,35 +11796,35 @@
         }
       }
     },
-    "settings.remoteAgent.customGateway.add" : {
-      "extractionState" : "extracted_with_value",
+    "settings.remoteAgent.customGateway.add.v2" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Add custom gateway"
+            "value" : "Set up a custom server"
           }
         }
       }
     },
-    "settings.remoteAgent.customGateway.addAtCap" : {
-      "extractionState" : "extracted_with_value",
+    "settings.remoteAgent.customGateway.addAtCap.v2" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Add custom gateway (limit reached)"
+            "value" : "Set up a custom server (limit reached)"
           }
         }
       }
     },
-    "settings.remoteAgent.customGateway.capHint" : {
-      "extractionState" : "extracted_with_value",
+    "settings.remoteAgent.customGateway.capHint.v2" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Delete a custom gateway above to add another."
+            "value" : "Delete a custom server above to add another."
           }
         }
       }
@@ -12106,6 +11913,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Test Connection checks that Conduck can reach this address, authenticate, and read its model list. To exercise the chat wire too, download the script on that machine with %@ and run bash conduck-connect.sh --check-server. After a PASS, the interactive script can continue into setup."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.customHelp.api.test.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The connection test checks that Conduck can reach this address, authenticate, and read its model list. To exercise the chat wire too, download the script on that machine with %@ and run bash conduck-connect.sh --check-server. After a PASS, the interactive script can continue into setup."
           }
         }
       }
@@ -12385,13 +12203,46 @@
         }
       }
     },
-    "settings.remoteAgent.forgetAlert.message.custom.retained" : {
-      "extractionState" : "extracted_with_value",
+    "settings.remoteAgent.forgetAlert.message.custom.retained.v2" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Conduck will delete this gateway and its saved URL, token, and pin, plus any file-transfer setup for it (server address and generated password). The URL and token are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns. They keep this gateway's colour tag so you can still tell them apart; its name is not kept."
+            "value" : "Conduck will delete this gateway and its saved URL, key, and pin, plus any file-transfer setup for it (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns. They keep this gateway's colour tag so you can still tell them apart; its name is not kept."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.forgetAlert.message.hosted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck will erase the saved API key. It's removed from all your devices signed in to iCloud, not just this one. You'll re-enter it next time."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.forgetAlert.message.leftover" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck will erase the saved URL, token, and pin for this gateway, plus any file-transfer setup. The URL and token are removed from every device signed in to your iCloud; the pin is only on this one."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.forgetAlert.message.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck will erase the saved URL, key, and pin, plus any file-transfer setup for this gateway (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. You'll re-enter them next time."
           }
         }
       }
@@ -12403,6 +12254,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Forget gateway?"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.forgetAlert.title.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Forget %@?"
           }
         }
       }
@@ -12689,6 +12551,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No models yet — run Test Connection to load them."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.model.suggestions.empty.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No models yet — run the connection test to load them."
           }
         }
       }
@@ -13111,6 +12984,17 @@
         }
       }
     },
+    "settings.remoteAgent.testConnection.button.instance" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Test %@"
+          }
+        }
+      }
+    },
     "settings.remoteAgent.testConnection.checking" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13316,6 +13200,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Which AI answers you — the exact name your gateway or provider knows it by, such as “llama3”. Test Connection fills in the choices it can see."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.tip.model.message.v3" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Which AI answers you — the exact name your gateway or provider knows it by, such as “llama3”. The connection test fills in the choices it can see."
           }
         }
       }
@@ -13569,6 +13464,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "AI & Voice"
+          }
+        }
+      }
+    },
+    "settings.root.personalAI.defaultNeedsSetup" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default needs setup"
+          }
+        }
+      }
+    },
+    "settings.root.personalAI.noDefaultYet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No default yet"
           }
         }
       }
@@ -15377,6 +15294,17 @@
         }
       }
     },
+    "settings.voice.openRouter.reuse.button.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Use my OpenRouter key"
+          }
+        }
+      }
+    },
     "settings.voice.openRouter.reuse.title" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15384,6 +15312,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "You've already set up OpenRouter as a personal-AI gateway. Reuse that API key for voice?"
+          }
+        }
+      }
+    },
+    "settings.voice.openRouter.reuse.title.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You've already set up OpenRouter for chat. Reuse that API key for voice?"
           }
         }
       }
@@ -15637,6 +15576,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Active"
+          }
+        }
+      }
+    },
+    "settings.voice.testConnection.button" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Test voice"
           }
         }
       }
@@ -16018,6 +15968,17 @@
     "Setup" : {
 
     },
+    "setup.requiredOnPhone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up your AI on iPhone first."
+          }
+        }
+      }
+    },
     "shortcut" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -16375,6 +16336,39 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "If this persists, the provider may have changed its API."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again — your recording is saved."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unlock this device, then open Conduck and retry."
+          }
+        }
+      }
+    },
+    "stt.error.keyUnreadable.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read your STT API key. If this device just restarted, unlock it and try again."
           }
         }
       }
@@ -17065,6 +17059,9 @@
           }
         }
       }
+    },
+    "This chat's AI isn't set up on your iPhone. Start a new chat to use another one." : {
+
     },
     "This gateway has no file server set up, so your file couldn't be sent. Add one in Settings, then share it again." : {
 
@@ -17951,17 +17948,6 @@
         }
       }
     },
-    "thread.outputs.review.saved" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Saved"
-          }
-        }
-      }
-    },
     "thread.outputs.review.save.mac" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -17969,6 +17955,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Save Anyway…"
+          }
+        }
+      }
+    },
+    "thread.outputs.review.saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved"
           }
         }
       }
@@ -18416,6 +18413,39 @@
         }
       }
     },
+    "unconfigured.defaultNeedsSetup.body" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From the menu bar, Conduck sends to this Mac's default AI — and that one isn't set up. Your other AIs still work; pick one of them as the default."
+          }
+        }
+      }
+    },
+    "unconfigured.defaultNeedsSetup.button" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Default AI"
+          }
+        }
+      }
+    },
+    "unconfigured.defaultNeedsSetup.headline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your default AI isn't set up"
+          }
+        }
+      }
+    },
     "unconfigured.empty.body" : {
       "localizations" : {
         "en" : {
@@ -18695,6 +18725,20 @@
           }
         }
       }
+    },
+    "Your default AI, %@, isn't set up on this device. Open Conduck to pick a different one?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default AI, %@, isn't set up on this device. Open Conduck to pick a different one?"
+          }
+        }
+      }
+    },
+    "Your default AI, %@, isn't set up. Choose another from the list." : {
+
     },
     "Your gateway couldn't use a photo in this chat. Start a new voice chat." : {
       "extractionState" : "manual",
