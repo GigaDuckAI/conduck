@@ -83,6 +83,20 @@ enum Constants {
     static let transcribeStallHintDelay: TimeInterval = 10
 
     // MARK: - UserDefaults Keys
+    //
+    // KVS KEY-LENGTH BUDGET — 128 UTF-16 code units, for every key below that is
+    // also written to `NSUbiquitousKeyValueStore`. Longest the app can build today
+    // is `tts.customModel.custom-openai-tts_<uuid>` at 70. Past the limit
+    // `set(_:forKey:)` raises `NSInvalidArgumentException` — a crash, not a silent
+    // drop — and nothing on our side catches it first: Apple states the limit in
+    // prose but exposes no public constant to check against, and the test double
+    // (`InMemoryUbiquitousStore`) is a plain dictionary that validates nothing, so
+    // a suite stays green either way.
+    //
+    // The budget is spent by the PREFIX, not the suffix: a per-uuid suffix is
+    // already 43–54 characters (`custom_<uuid>`, `custom-openai-tts_<uuid>`) and
+    // is frozen by persistence, so renaming a prefix to something more descriptive
+    // is the move that eats the remaining headroom. Do the arithmetic first.
 
     /// Key for user's preferred transcription language hint (ISO 639-1)
     static let preferredLanguageKey = "preferred_language"
