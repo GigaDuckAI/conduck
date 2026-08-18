@@ -1090,6 +1090,23 @@ actor SettingsManager {
         )
     }
 
+    /// SECRET-FREE probe of whether this device's default gateway is waiting on a
+    /// token — the convergence read behind `KeyArrivalMonitors.defaultGateway`.
+    ///
+    /// Derived from the resolver rather than from a raw slot read, so the monitor
+    /// and every screen agree about what the pointer is; a second derivation could
+    /// poll for a gateway the rest of the app had already given up on, or stay
+    /// quiet about one it had not.
+    ///
+    /// NON-REPAIRING, and that is required, not tidiness: the monitor probes from
+    /// a background timer and from a `.settingsDidChangeRemotely` handler, which
+    /// `resolveDefaultGateway()` explicitly forbids. A poll must never adopt,
+    /// bootstrap or drop a pointer — nor post the notification whose handler
+    /// called it.
+    func defaultGatewayTokenProbe() -> DefaultGatewayTokenProbe {
+        DefaultGatewayTokenProbe(resolution: defaultGatewayVerdictWithoutRepair())
+    }
+
     // MARK: - Cross-Device Broadcast Envelope
 
     /// Build the current `STTBroadcastEnvelope` payload for the active
@@ -3753,7 +3770,7 @@ actor SettingsManager {
     /// sixteen legacy holders (CarPlay, the menu bar, the Watch broadcast
     /// composer, three view models, two conversation views, `SharedInboxRouting`)
     /// that need a ref and nothing more. It CAN return a ref the resolution
-    /// FORBIDS sending on: `.brokenDefault` projects to the broken ref so nothing
+    /// FORBIDS sending on: `.defaultUnavailable` projects to the broken ref so nothing
     /// is silently rerouted, and `.selectionRequired` projects to the built-in
     /// fallback so those holders have a non-optional value.
     ///
@@ -3788,19 +3805,48 @@ actor SettingsManager {
     /// produces at most one `.settingsDidChangeRemotely` post. For that reason,
     /// never call this from inside a handler for that same notification.
     func resolveDefaultGateway() -> DefaultGatewayResolution {
-        resolveDefaultGateway(configured: nil)
+        resolveDefaultGateway(configured: nil, repairing: true)
+    }
+
+    /// The SAME verdict, computed without performing any repair — for callers
+    /// that only want to READ the standing, and specifically for the ones the
+    /// doc above forbids from calling `resolveDefaultGateway()`.
+    ///
+    /// `KeyArrivalMonitor` is why this exists. It probes on a background timer
+    /// and from a `.settingsDidChangeRemotely` handler, which is exactly the
+    /// call site the repairing entry point rules out: a poll would otherwise be
+    /// able to adopt a default, drop a dangling pointer, or bootstrap one, and
+    /// then post the very notification whose handler triggered it. A monitor
+    /// whose header promises "nothing is logged or persisted" must not be the
+    /// thing that rewrites the user's default.
+    ///
+    /// The verdict is otherwise IDENTICAL — the repair arms return the same
+    /// cases they would have returned, they simply do not write. That matters
+    /// for the probe: a device whose single working gateway is about to be
+    /// adopted reads as `.adopted` (nothing is waiting on a secret) either way,
+    /// so suppressing the write cannot change the polling decision. The next
+    /// ordinary resolve from a real surface performs the repair.
+    func defaultGatewayVerdictWithoutRepair() -> DefaultGatewayResolution {
+        resolveDefaultGateway(configured: nil, repairing: false)
     }
 
     /// The resolver core. `configured` is supplied by `newChatPickerSnapshot()`,
     /// which needs the array it publishes and the array the verdict was
     /// classified against to be literally the same value rather than two reads.
     ///
+    /// `repairing: false` computes the verdict and writes NOTHING (see
+    /// `defaultGatewayVerdictWithoutRepair`). The one-shot migrations still run:
+    /// they are prerequisites for reading the right slots at all, they are
+    /// idempotent, and by the time any non-repairing caller exists the app has
+    /// long since run them from launch.
+    ///
     /// ORDERING CONSTRAINT: on the no-argument path the dangling-custom drop must
     /// still run BEFORE the configured pass, so the pass never classifies against
     /// a pointer this call is about to delete. The pre-computed path accepts that
     /// the array was sampled a few statements earlier in the SAME actor turn with
     /// no suspension in between — which is the property that actually matters.
-    private func resolveDefaultGateway(configured precomputed: [RemoteAgentRef]?) -> DefaultGatewayResolution {
+    private func resolveDefaultGateway(configured precomputed: [RemoteAgentRef]?,
+                                       repairing: Bool) -> DefaultGatewayResolution {
         #if DEBUG
         // A QA rig's gateways are synthetic and complete by construction, and
         // `-ConduckQADefaultBackend` is authoritative — nothing below may
@@ -3827,7 +3873,9 @@ actor SettingsManager {
         // fails CLOSED on a nil token, and nil means "no token OR the Keychain
         // read failed".
         if let ref = stored, !ref.isBuiltin, !hasStoredRemoteAgentEvidence(ref) {
-            defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+            if repairing {
+                defaults.removeObject(forKey: Constants.remoteAgentDefaultBackendKVSKey)
+            }
             stored = nil
         }
 
@@ -3837,7 +3885,7 @@ actor SettingsManager {
         let configured = precomputed ?? configuredRemoteAgentRefs()
 
         // Asked HERE, on every resolve, for two reasons. It rides out inside the
-        // `.brokenDefault` verdict, so no consumer can hold the verdict without
+        // `.defaultUnavailable` verdict, so no consumer can hold the verdict without
         // the flag. And it is also where the marker RETIRES — the check clears
         // it once the pointer joins `configured` — so keeping it on the common
         // path means a placeholder that became a working gateway stops reading
@@ -3871,10 +3919,10 @@ actor SettingsManager {
             }
             if configured.count == 1, let only = configured.first, keychainReadable,
                !hasPendingBearerCandidate(excluding: only) {
-                adoptDefault(only, replacing: broken)
+                if repairing { adoptDefault(only, replacing: broken) }
                 return .adopted(ref: only, replacing: broken)
             }
-            return .brokenDefault(broken: broken, candidates: configured,
+            return .defaultUnavailable(pointer: broken, candidates: configured,
                                   pointerIsParked: pointerIsParked)
         }
 
@@ -3885,7 +3933,9 @@ actor SettingsManager {
         // them apart. PERSIST NOTHING on the `.selectionRequired` arm.
         if configured.count == 1, let only = configured.first, keychainReadable,
            !hasPendingBearerCandidate(excluding: only) {
-            defaults.set(only.rawString, forKey: Constants.remoteAgentDefaultBackendKVSKey)
+            if repairing {
+                defaults.set(only.rawString, forKey: Constants.remoteAgentDefaultBackendKVSKey)
+            }
             return .bootstrapped(only)
         }
         return .selectionRequired(candidates: configured)
@@ -4349,7 +4399,7 @@ actor SettingsManager {
     /// its callers are untouched.
     func newChatPickerSnapshot() -> NewChatPickerSnapshot {
         let configured = configuredRemoteAgentRefs()
-        let resolution = resolveDefaultGateway(configured: configured)
+        let resolution = resolveDefaultGateway(configured: configured, repairing: true)
         return NewChatPickerSnapshot(
             configuredRefs: configured,
             badgeRoster: gatewayBadgeRoster(),

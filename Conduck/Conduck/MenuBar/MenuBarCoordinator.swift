@@ -1849,7 +1849,7 @@ final class MenuBarCoordinator {
     private var destinationUnavailableMessage: String {
         String(localized: LocalizedStringResource(
             "popover.error.destinationUnavailable",
-            defaultValue: "This Mac's default AI isn't set up. Your words are kept — choose a default in Settings, then press Retry."
+            defaultValue: "This Mac can't reach its default AI. Your words are kept — choose a default in Settings, then press Retry."
         ))  // xcstrings: gateway-gate
     }
 

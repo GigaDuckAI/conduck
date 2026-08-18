@@ -234,7 +234,7 @@ struct ConduckApp: App {
         // didBecomeActive performs the initial evaluation. Mirrors the iOS
         // init's wiring (the two App structs share no init code).
         Task { @MainActor in
-            TTSKeyArrivalMonitor.shared.start()
+            KeyArrivalMonitors.startAll()
         }
 
         // Stale-"sending" recovery sweep: macOS sends are FOREGROUND URLSession
@@ -440,7 +440,7 @@ struct ConduckApp: App {
         //     only; the first didBecomeActive performs the initial evaluation.
         //     Both platforms (macOS runs this same init).
         Task { @MainActor in
-            TTSKeyArrivalMonitor.shared.start()
+            KeyArrivalMonitors.startAll()
         }
 
         // 4. Foreground banner delegate (single registration point).

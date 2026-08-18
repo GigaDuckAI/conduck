@@ -1079,7 +1079,7 @@ final class CarPlayRecordingService {
                     // per-conversation binding. Starting a new chat is the exit.
                     // xcstrings
                     endSession(
-                        speak: String(localized: "This chat's AI isn't set up on your iPhone. Start a new chat to use another one.")
+                        speak: String(localized: "This chat's AI isn't available on your iPhone. Start a new chat to use another one.")
                     )
                     return
                 }
@@ -1089,7 +1089,7 @@ final class CarPlayRecordingService {
                 if snapshot.authScheme.requiresToken, (snapshot.token?.isEmpty ?? true) {
                     // xcstrings
                     endSession(
-                        speak: String(localized: "This chat's AI isn't set up on your iPhone. Start a new chat to use another one.")
+                        speak: String(localized: "This chat's AI isn't available on your iPhone. Start a new chat to use another one.")
                     )
                     return
                 }
@@ -1429,7 +1429,7 @@ final class CarPlayRecordingService {
             // front of them, rather than at the iPhone.
             if let name {
                 // xcstrings
-                phrase = String(localized: "Your default AI, \(name), isn't set up. Choose another from the list.")
+                phrase = String(localized: "Your default AI, \(name), isn't available. Choose another from the list.")
             } else {
                 // xcstrings
                 phrase = String(localized: "Conduck doesn't know which AI to use. Choose one from the list.")

@@ -9,10 +9,10 @@
 // place to pick which gateway new conversations start on) + a gateway LIST whose
 // rows are configure-only (tap → a roomy per-gateway config detail via a
 // `NavigationStack` inside the full-window Settings mode swap). Status is
-// discrete — a quiet green check, or the words "Needs setup", via
-// `SettingsStatusMark`; no colored pills, no in-row set-default. The "Default"
-// caption rides any of those states (so a default that cannot send stays
-// identifiable), suppressed only while nothing at all is configured.
+// discrete and BINARY — a quiet green check via `SettingsStatusMark`, or nothing
+// at all; no colored pills, no in-row set-default, and no third "unfinished"
+// state. The "Default" caption rides either state (so a default that cannot send
+// stays identifiable), suppressed only while nothing at all is configured.
 //
 // Content sits on the shared settings rail (720pt max width, centered, 28pt
 // horizontal padding) as a stack of hand-drawn `SettingsCard` sections rather
@@ -102,8 +102,7 @@ struct MacPersonalAICategory: View {
                                 self.route = nil
                             }
                         },
-                        onSetUp: { ref in self.route = .configure(ref) },
-                        brokenDefaultName: viewModel.defaultSelectorBrokenName,
+                        defaultUnavailableName: viewModel.defaultSelectorUnavailableName,
                         needsDefaultChoice: viewModel.defaultSelectorNeedsChoice
                     )
                 case .configure(let ref):
@@ -175,19 +174,14 @@ struct MacPersonalAICategory: View {
                 defaultName: DefaultGatewayNotice.selectorValue(
                     needsChoice: viewModel.defaultSelectorNeedsChoice,
                     displayName: viewModel.defaultSelectorDisplayName
-                ),
-                needsSetup: viewModel.defaultSelectorFlagsBroken
+                )
             )
         }
-        // 64 when the value is two lines, matching the allowance
-        // `PersonalAIConnectSection` documents for a 31pt two-line block
-        // (31 + 16 + 16). The 48pt default would leave it ~8.5pt of air.
-        // Keyed on `defaultSelectorFlagsBroken`, the same flag that draws the
-        // second line: the nothing-chosen state is a ONE-line value ("Not chosen
-        // yet") and must not take the allowance.
-        .settingsCardRowButton(
-            minHeight: viewModel.defaultSelectorFlagsBroken ? 64 : SettingsCardMetrics.rowMinHeight
-        )
+        // The standard row height, unconditionally: this row's value is ALWAYS one
+        // line now. It used to grow to 64pt for the ⚠ + "Needs setup" second line
+        // an unavailable default drew; that line is gone, so the allowance would
+        // only pad an empty row on the one state a user most needs to read.
+        .settingsCardRowButton()
     }
 
     // Header, not row — see the iOS twin in `PersonalAISettingsView`. On
@@ -212,10 +206,10 @@ struct MacPersonalAICategory: View {
     /// per-conversation invariant ("Existing chats keep the one they started on")
     /// in `DefaultGatewayPicker`'s own footer.
     private var defaultSelectorFooter: String? {
-        if let name = viewModel.defaultSelectorBrokenName {
+        if let name = viewModel.defaultSelectorUnavailableName {
             return String(localized: LocalizedStringResource(
-                "settings.personalAI.default.broken.footer.mac",
-                defaultValue: "\(name) isn't set up on this Mac, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up \(name)."
+                "settings.personalAI.default.unavailable.footer.mac",
+                defaultValue: "\(name) isn't available on this Mac, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
             ))
         }
         if viewModel.defaultSelectorNeedsChoice {
@@ -293,11 +287,11 @@ struct MacPersonalAICategory: View {
 
     @ViewBuilder
     private func gatewayRow(_ row: PersonalAIRow) -> some View {
-        // Single tap → config detail. Discrete status: a quiet green check (+ a
-        // tertiary "Default" caption on the default) when configured, a quiet
-        // "Needs setup" when half-configured, nothing when untouched; both
-        // non-configured states dim the name. The default is chosen in the top
-        // selector; file-transfer readiness lives in the detail (Advanced).
+        // Single tap → config detail. Discrete, BINARY status: a quiet green check
+        // (+ a tertiary "Default" caption on the default) when configured, nothing
+        // at all otherwise, with the name dimmed. No third state, and none may be
+        // added — see the iOS twin for the argument. The default is chosen in the
+        // top selector; file-transfer readiness lives in the detail (Advanced).
         let configured = row.configured
         Button {
             route = .configure(row.ref)
@@ -316,36 +310,6 @@ struct MacPersonalAICategory: View {
                 Spacer()
                 SettingsStatusMark(
                     configured: configured,
-                    // A default the selector FLAGS counts as incomplete here even
-                    // when it holds no stored evidence of its own — the state a
-                    // CLEAN peer Forget leaves behind (it clears the synced URL /
-                    // scheme / model slots, so nothing is left to classify the row
-                    // as anything but untouched). Without this the selector says
-                    // "Needs setup" and the very row it sends the user to says
-                    // nothing.
-                    //
-                    // Read off `defaultSelectorFlagsBroken` rather than spelling
-                    // the membership question a second time here. A CONSISTENCY
-                    // refactor, not a behaviour fix: the flag is strictly narrower
-                    // than the question, and the one state it withholds —
-                    // `.readingUnreliable` — is one where the pointer is
-                    // unconfigured AND carries stored evidence (the verdict's
-                    // hazard arm requires exactly that), so it is already in
-                    // `incompleteRemoteAgentRefSet` and `row.incomplete` draws
-                    // "Needs setup" on its own. Same mark everywhere; one fewer
-                    // place for the two to drift apart.
-                    //
-                    // That the ROW still speaks while the selector is silent is
-                    // the intended split: this mark says "this gateway's setup
-                    // cannot be read here", which is true, where suppressing it
-                    // would be a false clean bill of health. Argued in
-                    // `selectorMaySpeak(for:)`'s doc in `SettingsViewModel.swift`
-                    // ("It does NOT gate a gateway's own readiness mark").
-                    // (`row.isDefault` is already false whenever the pointer is
-                    // one the app parked, so this term speaks only about a gateway
-                    // the user actually chose.) Twin of the iOS row.
-                    incomplete: row.incomplete
-                        || (row.isDefault && viewModel.defaultSelectorFlagsBroken),
                     // The "Default" caption renders on unconfigured rows too —
                     // a default that cannot send is exactly the row a user has to
                     // find. Suppressed only when NOTHING is configured: the

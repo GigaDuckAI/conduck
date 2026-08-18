@@ -69,18 +69,18 @@ final class HeadlessRefusalLaneDriftGuardTests: XCTestCase {
         // lands before the microphone.
         "Conduck/Intents/CheckNetworkIntent.swift": .implicit(
             gate: "SharedInboxRouting.liveQuickCaptureCanContinue",
-            refusal: "case .brokenDefault"
+            refusal: "case .defaultUnavailable"
         ),
         // GigaAction itself. Its refusal arrives AFTER the mic, so a verdict the
         // pre-flight above already waved through costs the user spoken words.
         "Conduck/Intents/ConverseIntent.swift": .implicit(
             gate: "SharedInboxRouting.liveQuickCaptureCanContinue",
-            refusal: "case .brokenDefault"
+            refusal: "case .defaultUnavailable"
         ),
         // The router — THE rule, which every pre-flight above restates.
         "Conduck/Services/RemoteAgent/SharedInboxRouting.swift": .implicit(
             gate: "resolveQuickCaptureConversation(",
-            refusal: "case .brokenDefault"
+            refusal: "case .defaultUnavailable"
         ),
         // CarPlay: the driver picks a row. `newChatPlan` runs only in the
         // no-conversation branch, so the default IS the destination there.
@@ -194,14 +194,14 @@ final class HeadlessRefusalLaneDriftGuardTests: XCTestCase {
     func testTheOrderingCheckDistinguishesAskFirstFromRefuseFirst() throws {
         let asksFirst = """
         let can = await SharedInboxRouting.liveQuickCaptureCanContinue(defaultRef: snap.defaultRef)
-        if !can { switch snap.resolution { case .brokenDefault: throw x } }
+        if !can { switch snap.resolution { case .defaultUnavailable: throw x } }
         """
         let refusesFirst = """
-        switch snap.resolution { case .brokenDefault: throw x }
+        switch snap.resolution { case .defaultUnavailable: throw x }
         let can = await SharedInboxRouting.liveQuickCaptureCanContinue(defaultRef: snap.defaultRef)
         """
         let gate = "SharedInboxRouting.liveQuickCaptureCanContinue"
-        let refusal = "case .brokenDefault"
+        let refusal = "case .defaultUnavailable"
 
         let good = try XCTUnwrap(asksFirst.range(of: gate)?.lowerBound)
         let goodRefusal = try XCTUnwrap(asksFirst.range(of: refusal)?.lowerBound)
@@ -220,13 +220,13 @@ final class HeadlessRefusalLaneDriftGuardTests: XCTestCase {
         let source = """
         // We ask SharedInboxRouting.liveQuickCaptureCanContinue here.
         /* and again: liveQuickCaptureCanContinue */
-        switch snap.resolution { case .brokenDefault: throw x }
+        switch snap.resolution { case .defaultUnavailable: throw x }
         """
         let stripped = RefusalLaneSource.stripComments(source)
         XCTAssertFalse(stripped.contains("liveQuickCaptureCanContinue"),
                        "A header that DESCRIBES the rule must never satisfy a check on whether the code "
                        + "DOES it — which is exactly how the two drifted lanes read as correct.")
-        XCTAssertTrue(stripped.contains("case .brokenDefault"))
+        XCTAssertTrue(stripped.contains("case .defaultUnavailable"))
     }
 
 }

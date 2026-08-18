@@ -132,13 +132,14 @@ enum AppleModelInstallState: Sendable, Equatable {
 struct PersonalAIRow: Identifiable, Hashable {
     let ref: RemoteAgentRef
     let displayName: String
+    /// Whether this gateway can send from this device. The ONLY readiness a row
+    /// carries, and deliberately binary: a list is a menu of optional things you
+    /// MAY connect, so "connected" and "not connected" is the whole vocabulary.
+    /// A third value for "holds stored state it cannot send on" used to ride
+    /// here and drew the words "Needs setup"; that state is real but it is not a
+    /// chore, and it is explained in the gateway's own editor instead.
     let configured: Bool
     let isDefault: Bool
-    /// Setup was started on this device but the gateway can't be used as it
-    /// stands. Distinct from `!configured`, which conflated "half set up" with
-    /// "never touched" and left a URL-without-key gateway looking untouched —
-    /// while Diagnostics warned about it and sent the user to this very list.
-    let incomplete: Bool
 
     var id: RemoteAgentRef { ref }
 }
@@ -475,22 +476,29 @@ final class SettingsViewModel {
     /// blocking on `SettingsManager` actor hops mid-render.
     var configuredRemoteAgentRefSet: Set<RemoteAgentRef> = []
 
-    /// Snapshot of refs whose setup was STARTED here but can't be used as it
-    /// stands — a URL that synced in while its token did not, a required model
-    /// that hasn't landed, a malformed saved URL. Drives the Personal AI list's
-    /// "Needs setup" mark.
+    /// Snapshot of refs that hold stored state here but CANNOT SEND — a URL that
+    /// synced in while its token did not, a required model that hasn't landed, a
+    /// malformed saved URL, a configuration the user abandoned.
+    ///
+    /// NEVER rendered in a list. The gateway catalog shows two states (green
+    /// check or nothing), because a set of optional connections has no third
+    /// "unfinished" reading to offer — and because the storage cannot tell a key
+    /// still crossing iCloud Keychain from a setup abandoned months ago, so any
+    /// list-level word for this state is a coin flip. Its one consumer is the
+    /// gateway's OWN editor, which the user opened about that gateway and where
+    /// "some saved details aren't available here" is both true and wanted.
     ///
     /// Disjoint from `configuredRemoteAgentRefSet` by construction: both are
     /// projected from ONE `remoteAgentInventory()` snapshot, so no gateway can
-    /// read as usable and half-finished at the same time.
-    var incompleteRemoteAgentRefSet: Set<RemoteAgentRef> = []
+    /// read as usable and unavailable at the same time.
+    var unavailableRemoteAgentRefSet: Set<RemoteAgentRef> = []
 
     /// Snapshot of refs holding anything Forget would erase — what the editor's
     /// destructive section keys on.
     ///
-    /// Deliberately WIDER than `incompleteRemoteAgentRefSet`: auxiliary residue
+    /// Deliberately WIDER than `unavailableRemoteAgentRefSet`: auxiliary residue
     /// is worth offering to remove without claiming the gateway is broken. The
-    /// direction that matters is the other one — every incomplete ref is
+    /// direction that matters is the other one — every unavailable ref is
     /// removable, so a Diagnostics row that says "go remove it" always finds a
     /// Forget button waiting. Gating Forget on CONFIGURED alone left exactly that
     /// state unreachable: the row said "fix this in Settings" and Settings
@@ -844,7 +852,7 @@ final class SettingsViewModel {
         isRecheckingTTSKey = true
         defer { isRecheckingTTSKey = false }
         await refreshActiveTTSKeyProbe()
-        await TTSKeyArrivalMonitor.shared.evaluate(reason: .manual)
+        await KeyArrivalMonitors.evaluateAll(reason: .manual)
     }
 
     // MARK: - Feedback Sheet
@@ -1941,10 +1949,10 @@ final class SettingsViewModel {
         configuredRemoteAgentRefSet.contains(ref)
     }
 
-    /// Whether `ref`'s setup was started here but can't be used as it stands.
-    /// Drives the list's "Needs setup" mark. Cached snapshot — no actor hop.
-    func isRemoteAgentIncomplete(_ ref: RemoteAgentRef) -> Bool {
-        incompleteRemoteAgentRefSet.contains(ref)
+    /// Whether `ref` holds stored state here but cannot send. Drives the editor's
+    /// point-of-use explanation, and NOTHING in any list. Cached — no actor hop.
+    func isRemoteAgentUnavailable(_ ref: RemoteAgentRef) -> Bool {
+        unavailableRemoteAgentRefSet.contains(ref)
     }
 
     /// Whether `ref` holds ANY stored state on this device — i.e. whether there
@@ -1959,15 +1967,47 @@ final class SettingsViewModel {
         configuredRemoteAgentRefSet.contains(ref) || removableRemoteAgentRefSet.contains(ref)
     }
 
+    /// The editor's "Check again": re-read whether gateways can send, and nothing
+    /// else.
+    ///
+    /// Deliberately NOT `refreshRemoteAgentState()`, which also rebuilds every
+    /// per-ref field buffer from storage — pressing this mid-edit would silently
+    /// discard the URL or model the user had just typed. The question being asked
+    /// is "has the key arrived yet", so only the answer to that is re-read.
+    ///
+    /// It exists because iCloud Keychain delivers opportunistically and posts no
+    /// app-visible arrival event: without a manual re-read, an editor open at the
+    /// moment the key lands keeps saying it is missing.
+    ///
+    /// Re-arms the arrival monitor for the same reason its TTS twin does, and it
+    /// is not optional: the gateway's poll window exhausts after ~5 min, and
+    /// `.manual` is the ONLY re-arm that does not require the app to be
+    /// backgrounded and re-activated. Without it a single tap re-reads once and
+    /// leaves automatic convergence switched off — the exact failure the monitor
+    /// was added to prevent.
+    func recheckRemoteAgentAvailability() async {
+        guard !isRecheckingRemoteAgent else { return }
+        isRecheckingRemoteAgent = true
+        defer { isRecheckingRemoteAgent = false }
+        await refreshRemoteAgentReadinessSnapshots()
+        defaultGatewayResolution = await SettingsManager.shared.resolveDefaultGateway()
+        await KeyArrivalMonitors.evaluateAll(reason: .manual)
+    }
+
+    /// "Check again" in-flight flag — disables the editor's button while a manual
+    /// recheck runs. Without it the common case (the answer has not changed) looks
+    /// like a dead button, and the user taps it repeatedly.
+    var isRecheckingRemoteAgent = false
+
     /// Re-read the three gateway-state snapshots from ONE inventory pass.
     ///
     /// One hop, not three: read separately, an iCloud change landing between the
-    /// calls could leave the list marking a gateway "Needs setup" while the
+    /// calls could leave a gateway reading as unavailable in one place while the
     /// editor it opens offers no Forget — the two describing different moments.
     private func refreshRemoteAgentReadinessSnapshots() async {
         let inventory = await SettingsManager.shared.remoteAgentInventory()
         configuredRemoteAgentRefSet = Set(inventory.configuredRefs)
-        incompleteRemoteAgentRefSet = Set(inventory.incompleteRefs)
+        unavailableRemoteAgentRefSet = Set(inventory.incompleteRefs)
         removableRemoteAgentRefSet = inventory.removableRefs
     }
 
@@ -2057,38 +2097,48 @@ final class SettingsViewModel {
         return !configured.isEmpty && !configured.contains(defaultRemoteAgentRef)
     }
 
-    /// Whether the selector may FLAG and NAME a broken default — the predicate
-    /// every DISPLAY site reads, as opposed to `defaultSelectorNeedsSetup`, which
-    /// is the raw membership question and is asserted verbatim elsewhere.
+    /// Whether a surface may NAME the stored default as unavailable here — the
+    /// predicate every DISPLAY site reads, as opposed to
+    /// `defaultSelectorNeedsSetup`, which is the raw membership question and is
+    /// asserted verbatim elsewhere.
+    ///
+    /// A LICENCE, NOT AN INSTRUCTION. True means "there is a stored pointer, it
+    /// cannot send here, and saying so would be honest" — not "say so". Only the
+    /// two surfaces the user deliberately opened spend it: the picker's callout
+    /// and the Settings-root summary line that leads there. The selector row
+    /// shows the bare name, the catalog rows show nothing, and the chat window is
+    /// silent, because an unconnected gateway is not a chore and a status stamped
+    /// on every screen is what makes it feel like one.
     ///
     /// TWO states are excluded, and the exclusions are the whole reason this
     /// exists — the membership question alone accuses the user in both.
     ///
     /// NOTHING CHOSEN. With nothing stored, `defaultRemoteAgentRef` is the
     /// compatibility projection — the built-in fallback — and when that fallback
-    /// is not itself configured the membership question answers "broken" about a
-    /// gateway the user never picked and may never have opened. "Not chosen yet"
-    /// is the honest reading there, and the row, footer and callout all say it.
+    /// is not itself configured the membership question answers "not a member"
+    /// about a gateway the user never picked and may never have opened. "Not
+    /// chosen yet" is the honest reading there, and the row, footer and callout
+    /// all say it.
     ///
     /// READING UNRELIABLE. The set the membership question is asked against is
     /// fail-closed, so a Keychain that does not read back reports a perfectly
     /// well-configured default as "not a member". `selectorMaySpeak(for:)` is
     /// where that is refused.
-    var defaultSelectorFlagsBroken: Bool {
+    var defaultSelectorFlagsUnavailable: Bool {
         defaultSelectorNeedsSetup
             && !defaultSelectorNeedsChoice
             && Self.selectorMaySpeak(for: defaultGatewayResolution)
     }
 
-    /// The broken default's display name, or nil when the default is fine,
+    /// The unavailable default's display name, or nil when the default is fine,
     /// nothing is configured, nothing has been chosen, or the reading cannot be
     /// trusted.
     ///
-    /// Derived FROM `defaultSelectorFlagsBroken` rather than computed beside it,
+    /// Derived FROM `defaultSelectorFlagsUnavailable` rather than computed beside it,
     /// so the picker callout and the selector footer can never name a gateway the
     /// row itself does not flag. A name here always describes a STORED pointer.
-    var defaultSelectorBrokenName: String? {
-        defaultSelectorFlagsBroken ? defaultRemoteAgentDisplayName : nil
+    var defaultSelectorUnavailableName: String? {
+        defaultSelectorFlagsUnavailable ? defaultRemoteAgentDisplayName : nil
     }
 
     /// Whether no default has been chosen yet and the device cannot honestly
@@ -2128,9 +2178,9 @@ final class SettingsViewModel {
     ///
     /// `defaultSelectorNeedsSetup` asks membership of a fail-closed set, and a
     /// Keychain that does not read back answers "not a member" about a gateway
-    /// that is perfectly well set up. That reading turns the ⚠ + "Needs setup"
-    /// line and the "<name> isn't set up on this iPhone" footer into an accusation
-    /// made by a locked device — and an invitation to re-enter a token that is
+    /// that is perfectly well set up. That reading turns the picker callout and
+    /// the "<name> isn't available on this iPhone" footer into a claim made by a
+    /// locked device — and an invitation to replace a default whose token is
     /// seconds from arriving.
     ///
     /// THE STATE THAT ACTUALLY REACHES THIS GATE, because only one can. The gate
@@ -2158,20 +2208,19 @@ final class SettingsViewModel {
     /// window, so the same silence has to be stated here, beside the predicate
     /// that would otherwise break it.
     ///
-    /// DISPLAY ONLY, and EVERY accusatory display: reached through
-    /// `defaultSelectorFlagsBroken`, which is what the selector's ⚠, the footer,
-    /// the picker callout, the Personal AI list's default row and the Settings
-    /// root's "Default needs setup" summary all read. `defaultSelectorNeedsSetup`
-    /// stays byte-identical — it is the raw membership question and is asserted
-    /// verbatim elsewhere — and nothing here touches the stored pointer or
-    /// anything a send reads.
+    /// DISPLAY ONLY, and every display that names the pointer: reached through
+    /// `defaultSelectorFlagsUnavailable`, which is what the picker callout and the
+    /// Settings root's "Default unavailable here" summary read.
+    /// `defaultSelectorNeedsSetup` stays byte-identical — it is the raw membership
+    /// question and is asserted verbatim elsewhere — and nothing here touches the
+    /// stored pointer or anything a send reads.
     ///
-    /// It does NOT gate a gateway's own readiness mark. `RemoteAgentReadiness`
-    /// already names an unreadable Keychain as one of the things `.incomplete`
-    /// covers, and its copy claims no missing field — so a row that says "setup
-    /// incomplete on this device" is reporting what it can see, not accusing the
-    /// default. Suppressing it would replace an honest hedge with a false clean
-    /// bill of health, and would hide genuinely half-finished gateways too.
+    /// It does NOT gate the gateway EDITOR's own "some saved details aren't
+    /// available here" line. That line is about the one gateway the user just
+    /// opened, it names no fault and claims no missing field, and an unreadable
+    /// Keychain is one of the things it honestly covers — so suppressing it here
+    /// would swap an accurate hedge for a false clean bill of health on the one
+    /// screen where the user is asking.
     ///
     /// A pure static for the reason `selectorNeedsChoice` is one: the resolution
     /// is `private(set)` behind an actor hop, so the rule is the part a test can
@@ -2179,7 +2228,7 @@ final class SettingsViewModel {
     static func selectorMaySpeak(for resolution: DefaultGatewayResolution) -> Bool {
         switch resolution {
         case .readingUnreliable: return false
-        case .usable, .adopted, .bootstrapped, .brokenDefault, .selectionRequired,
+        case .usable, .adopted, .bootstrapped, .defaultUnavailable, .selectionRequired,
              .nothingConfigured, .setupUnfinished: return true
         }
     }
@@ -2196,35 +2245,36 @@ final class SettingsViewModel {
         }
         // Nothing chosen is its own answer, and it is asked FIRST: the membership
         // guard below asks about the compatibility projection, which reads
-        // "broken" whenever the built-in fallback is not configured — on a device
-        // where the user has simply never picked. Naming that state "Default
-        // needs setup" would send them looking for a fault that is not there.
+        // "not a member" whenever the built-in fallback is not configured — on a
+        // device where the user has simply never picked. Calling that an
+        // unavailable default would send them looking for a gateway they never
+        // chose.
         guard !defaultSelectorNeedsChoice else {
             return String(localized: LocalizedStringResource(
                 "settings.root.personalAI.noDefaultYet",
                 defaultValue: "No default yet"
             ))
         }
-        // A STORED default outside the configured set names a gateway that cannot
-        // send, and the honest one-line answer for that state is the state itself
-        // — the same wording the selector and the gateway rows use, one tap away.
+        // A STORED default outside the configured set names a gateway this device
+        // cannot send on. Say that, and say only that — no "needs setup", which
+        // asserts a chore the storage cannot evidence, and no fall-through to the
+        // "<name> +N" line below, which would render "OpenClaw +5" and read as a
+        // working default with five friends.
         //
-        // Read through `defaultSelectorFlagsBroken`, NOT through a second spelling
+        // Read through `defaultSelectorFlagsUnavailable`, NOT through a second spelling
         // of the membership question: this row and the Personal AI screen it opens
         // must reach the same verdict, and the flag is where the silence rule
         // lives. Under `.readingUnreliable` it answers false, so this row falls
         // through to the ordinary name+count while the screen below it is silent
-        // too — rather than announcing "Default needs setup" about a gateway a
-        // locked device merely cannot read.
-        guard !defaultSelectorFlagsBroken else {
-            // Its OWN wording, not the row-level "Needs setup": on this row the
-            // subject is the whole Personal AI section, and a bare "Needs setup"
-            // there would read as "nothing works" on a device where four other
-            // gateways do. Distinct from "Setup needed" above, which is the
-            // genuinely-nothing-configured state.
+        // too — rather than reporting a default a locked device merely cannot read.
+        guard !defaultSelectorFlagsUnavailable else {
+            // Its OWN wording: on this row the subject is the whole Personal AI
+            // section, so a bare status would read as "nothing works" on a device
+            // where four other gateways do. Distinct from "Setup needed" above,
+            // which is the genuinely-nothing-configured state.
             return String(localized: LocalizedStringResource(
-                "settings.root.personalAI.defaultNeedsSetup",
-                defaultValue: "Default needs setup"
+                "settings.root.personalAI.defaultUnavailable",
+                defaultValue: "Default unavailable here"
             ))
         }
         let defaultName = defaultRemoteAgentDisplayName
@@ -2347,8 +2397,7 @@ final class SettingsViewModel {
                 ref: ref,
                 displayName: metadata.displayName,
                 configured: configuredRemoteAgentRefSet.contains(ref),
-                isDefault: chosenRef == ref,
-                incomplete: incompleteRemoteAgentRefSet.contains(ref)
+                isDefault: chosenRef == ref
             ))
         }
         for gateway in customGateways {
@@ -2359,8 +2408,7 @@ final class SettingsViewModel {
                     ? String(localized: "New gateway")
                     : gateway.name,
                 configured: configuredRemoteAgentRefSet.contains(ref),
-                isDefault: chosenRef == ref,
-                incomplete: incompleteRemoteAgentRefSet.contains(ref)
+                isDefault: chosenRef == ref
             ))
         }
         return rows
@@ -3726,10 +3774,10 @@ final class SettingsViewModel {
     /// `validateAndSaveRemoteAgent` — clear the GLOBAL pointer ONLY when the
     /// active conversation is bound to THIS (now-forgotten) backend.
     ///
-    /// The whole STORAGE side lives in `GatewayForget`, because the Diagnostics
-    /// leftover list offers the same action with no view model to reach and two
-    /// independently written forget paths is how a gateway comes back from the
-    /// dead. What remains here is this view model's own mirror refresh.
+    /// The whole STORAGE side lives in `GatewayForget` — one owner for a teardown
+    /// long enough that a second copy would drift, and two independently written
+    /// forget paths is how a gateway comes back from the dead. What remains here
+    /// is this view model's own mirror refresh.
     func clearRemoteAgent(for ref: RemoteAgentRef) async {
         await GatewayForget.perform(ref: ref)
 
@@ -3760,8 +3808,8 @@ final class SettingsViewModel {
         // Default first, snapshots second — same ordering rule as
         // `validateAndSaveRemoteAgent` above: the two are compared against each
         // other, so publishing the set while the pointer is still the gateway the
-        // user just forgot flashes "Needs setup" against its name. One actor hop
-        // carries both the ref and the verdict behind it.
+        // user just forgot momentarily reads that gateway as the unavailable
+        // default. One actor hop carries both the ref and the verdict behind it.
         let resolution = await SettingsManager.shared.resolveDefaultGateway()
         defaultRemoteAgentRef = resolution.ref
         defaultGatewayResolution = resolution

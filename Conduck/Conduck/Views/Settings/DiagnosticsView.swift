@@ -93,8 +93,6 @@ struct DiagnosticsContent: View {
     /// with no plumbing: `DiagnosticsContent` has no `SettingsViewModel`, and
     /// `TroubleshootButton` has none to give it.
     @State private var showingDefaultPicker = false
-    /// The leftover gateway awaiting its Forget confirmation.
-    @State private var pendingForget: LeftoverGatewayEntry?
     @Environment(\.scenePhase) private var scenePhase
     /// Drives the per-row action layout: inline-trailing at normal text sizes,
     /// stacked below at accessibility sizes (where a trailing button would crush
@@ -140,40 +138,6 @@ struct DiagnosticsContent: View {
         // section tree — on macOS `Group(sections:)` decomposes that tree section by
         // section, so a sheet attached inside it would ride one card.
         .sheet(isPresented: $showingDefaultPicker) { defaultPickerSheet }
-        .alert(
-            LocalizedStringResource("settings.remoteAgent.forgetAlert.title", defaultValue: "Forget gateway?"),
-            isPresented: Binding(
-                get: { pendingForget != nil },
-                set: { if !$0 { pendingForget = nil } }
-            ),
-            presenting: pendingForget
-        ) { entry in
-            Button(
-                LocalizedStringResource("settings.remoteAgent.forgetAlert.confirm", defaultValue: "Forget"),
-                role: .destructive
-            ) {
-                Task {
-                    // THE one Forget — never a second deletion path.
-                    await GatewayForget.perform(ref: entry.ref)
-                    pendingForget = nil
-                    await runner.refreshConfig()
-                }
-            }
-            Button(
-                LocalizedStringResource("settings.remoteAgent.forgetAlert.cancel", defaultValue: "Cancel"),
-                role: .cancel
-            ) { }
-        } message: { _ in
-            // A NEW message key: the shipped one ends with "You'll re-enter them
-            // next time", a promise that is wrong for residue the user is
-            // discarding. Title/confirm/cancel stay the SHIPPED keys — two Forget
-            // buttons wording their confirmation differently is how a user learns
-            // to distrust both.
-            Text(LocalizedStringResource(
-                "settings.remoteAgent.forgetAlert.message.leftover",
-                defaultValue: "Conduck will erase the saved URL, token, and pin for this gateway, plus any file-transfer setup. The URL and token are removed from every device signed in to your iCloud; the pin is only on this one."
-            ))
-        }
         .task { await runner.runAutoReads() }
         // Live re-derive on (re)appear + foreground: re-read the provider config +
         // permissions AND re-probe connectivity so a provider the user just
@@ -458,11 +422,13 @@ struct DiagnosticsContent: View {
 
     // MARK: Connection
 
-    /// Connection = the default-vs-reality row, then one row per gateway (titled
-    /// with its REAL name via `gatewayDisplayOrder`, status read live from
-    /// `checks`), each with its file-server lane nested beneath it, then the
-    /// non-gateway rows (no-gateway / focused-missing / Internet), and finally the
-    /// quiet leftover block.
+    /// Connection = the default-vs-reality row, then one row per CONFIGURED
+    /// gateway (titled with its REAL name via `gatewayDisplayOrder`, status read
+    /// live from `checks`), each with its file-server lane nested beneath it, then
+    /// the non-gateway rows (no-gateway / focused-missing / Internet).
+    ///
+    /// Nothing about a gateway you have not connected appears anywhere in it, and
+    /// nothing may be added: not a row, not an aggregate, not a demoted list.
     private var connectionSection: some View {
         Section {
             // Which gateway a NEW chat gets — the lane every picker-less surface
@@ -506,28 +472,15 @@ struct DiagnosticsContent: View {
                     fileServerSubRow(lane)
                 }
             }
-            // Half-configured gateways, one row each, TITLED WITH THE REAL NAME —
-            // the whole point of the row. The status (red when nothing else can
-            // send, amber when a healthy sibling exists) is read live from
-            // `checks`; only the name comes from this UI-only list, so the pasted
-            // report still shows the gateway KIND and never a user's own label.
-            ForEach(runner.incompleteGatewayDisplay) { entry in
-                if let check = runner.checks.first(where: { $0.id == entry.connectionCheckID }) {
-                    DiagnosticCheckRow(check: check, titleOverride: entry.displayName)
-                        .settingsCardPassiveRow()
-                }
-            }
-            // Leftover setup — DEMOTED gateways: nothing points at them, nothing is
-            // bound to them, nothing is broken. Rendered under EVERY verdict,
-            // including `.readingUnreliable`: this is non-accusatory tidying with an
-            // inline Forget, not an attention item. (Diagnostics is user-initiated,
-            // so the device is unlocked when anyone reads it; the realistic
-            // `.readingUnreliable` producer here is a half-arrived iCloud sync.)
-            if !runner.leftoverGateways.isEmpty { leftoverGatewayBlock }
+            // NO rows for gateways that cannot send here, and no "Leftover setup"
+            // block either — both used to live at this exact spot. A gateway you
+            // have not connected on this device is not a finding and not a chore,
+            // and Diagnostics reports what is broken. Clearing residue moved to
+            // the gateway's own editor, whose Forget section stays reachable for a
+            // gateway holding nothing but residue.
             ForEach(runner.checks.filter {
                 $0.category == .connection
                     && !$0.id.hasPrefix("gateway.")
-                    && !$0.id.hasPrefix("connection.gateway.incomplete.")
                     // The default-vs-reality row has its own slot at the top of the
                     // section; without this it would render twice.
                     && $0.id != DiagnosticsRunner.defaultGatewayCheckID
@@ -538,18 +491,13 @@ struct DiagnosticsContent: View {
             }
         } header: {
             Text(LocalizedStringResource("diagnostics.section.connection", defaultValue: "Connection"))
-        } footer: {
-            // Shown only when every gateway on the device is half-configured, so
-            // the named rows above have replaced "No Personal AI configured".
-            // A footer, not a row: it states the consequence the rows share,
-            // without counting as a finding of its own.
-            if runner.showsNoSendableGatewayNotice {
-                Text(LocalizedStringResource(
-                    "diagnostics.connection.gateway.noneSendable.footer",
-                    defaultValue: "No gateway can send on this device until you finish one above, or connect another in Personal AI."
-                ))
-            }
         }
+        // NO footer restating "nothing can send", and none may be added back.
+        // One existed to carry that conclusion while the per-gateway rows were
+        // the only thing on screen; `connection.gateway.none` now fires on
+        // exactly the fact the footer keyed on, so the two rendered together and
+        // said the same sentence twice. Its copy also told the user to "finish
+        // one above" — a chore, pointed at rows that no longer exist.
     }
 
     // MARK: Default for new chats (the default-vs-reality row + its Fix action)
@@ -617,23 +565,23 @@ struct DiagnosticsContent: View {
             guard let replaced = standing.replacedName else {
                 return String(
                     localized: "diagnostics.connection.defaultGateway.adopted",
-                    defaultValue: "Conduck switched your default because the old one isn't set up here."
+                    defaultValue: "Conduck switched your default because the old one isn't available here."
                 )
             }
             return String(
                 localized: "diagnostics.connection.defaultGateway.adopted.named",
-                defaultValue: "New chats and GigaAction start on \(name) — Conduck switched to it because \(replaced) isn't set up here."
+                defaultValue: "New chats and GigaAction start on \(name) — Conduck switched to it because \(replaced) isn't available here."
             )
         case .broken:
             if count == 1 {
                 return String(
-                    localized: "diagnostics.connection.defaultGateway.broken.named.one",
-                    defaultValue: "\(name) is your default for new chats, but it can't send — so new chats and GigaAction won't go anywhere. Choose \(only), or finish setting it up in Personal AI."
+                    localized: "diagnostics.connection.defaultGateway.unavailable.named.one",
+                    defaultValue: "\(name) is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. Choose \(only) instead."
                 )
             }
             return String(
-                localized: "diagnostics.connection.defaultGateway.broken.named",
-                defaultValue: "\(name) is your default for new chats, but it can't send — so new chats and GigaAction won't go anywhere. Choose one of your \(count) working gateways, or finish setting it up in Personal AI."
+                localized: "diagnostics.connection.defaultGateway.unavailable.named",
+                defaultValue: "\(name) is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. Choose one of your \(count) working gateways instead."
             )
         case .notChosen:
             if count == 1 {
@@ -660,8 +608,7 @@ struct DiagnosticsContent: View {
                 ref: entry.ref,
                 displayName: entry.displayName,
                 configured: true,               // a candidate can send by construction
-                isDefault: entry.ref == standing?.defaultRef,
-                incomplete: false
+                isDefault: entry.ref == standing?.defaultRef
             )
         }
         let picker = DefaultGatewayPicker(
@@ -681,10 +628,12 @@ struct DiagnosticsContent: View {
                     await runner.refreshConfig()
                 }
             },
-            // Unreachable by construction: every row in this sheet is
-            // `configured: true`, so no row can take the "Set up…" branch. Kept as an
-            // empty closure because the initializer requires it.
-            onSetUp: { _ in }
+            // The sheet's list is candidates only, so under `.broken` NOTHING in
+            // it is checked — the named gateway the red row just described is
+            // absent. The callout carries that sentence into the sheet rather
+            // than leaving the user to remember it from the row behind.
+            defaultUnavailableName: standing?.kind == .broken ? standing?.defaultName : nil,
+            needsDefaultChoice: standing?.kind == .notChosen
         )
         #if os(macOS)
         VStack(spacing: 0) {
@@ -713,56 +662,6 @@ struct DiagnosticsContent: View {
                 }
         }
         #endif
-    }
-
-    // MARK: Leftover setup (demoted gateways — tidying, never a finding)
-
-    /// Deliberately GLYPH-FREE and quiet: a warning triangle is exactly what this
-    /// block must not have. Nothing points at these gateways and nothing is bound to
-    /// them, so they are outside `checks` and outside `attentionCount`. The Forget
-    /// pill is neutral-tinted — the destructive framing belongs in the alert, not in
-    /// a list the user is meant to skim past.
-    private var leftoverGatewayBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(LocalizedStringResource(
-                "diagnostics.connection.leftover.header",
-                defaultValue: "Leftover setup"
-            ))
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(AppColors.textSecondary)
-            Text(LocalizedStringResource(
-                "diagnostics.connection.leftover.caption",
-                defaultValue: "Nothing uses these, and nothing is broken. Forgetting one removes its saved details from every device signed in to your iCloud."
-            ))
-            .font(.caption)
-            .foregroundStyle(AppColors.textTertiary)
-            .fixedSize(horizontal: false, vertical: true)
-            ForEach(runner.leftoverGateways) { entry in
-                HStack(spacing: 8) {
-                    Text(entry.displayName)
-                        .font(.subheadline)
-                        .foregroundStyle(AppColors.textSecondary)
-                    Spacer(minLength: 8)
-                    Button {
-                        pendingForget = entry
-                    } label: {
-                        Text(LocalizedStringResource(
-                            "diagnostics.action.forgetGateway",
-                            defaultValue: "Forget"
-                        ))
-                        .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.bordered)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .accessibilityLabel(Text(LocalizedStringResource(
-                        "diagnostics.action.forgetGateway.a11y",
-                        defaultValue: "Forget \(entry.displayName)"
-                    )))
-                }
-            }
-        }
-        .settingsCardPassiveRow()
-        .disabled(runner.isBusy)
     }
 
     // MARK: Voice

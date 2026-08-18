@@ -19,11 +19,11 @@
 // about it. Three of the cases exist for reasons a later reader will otherwise
 // try to simplify away:
 //
-//   - `.brokenDefault` guesses NOTHING. Silently moving a voice capture from the
-//     work agent to a scratch model is a trust break, not a kindness;
+//   - `.defaultUnavailable` guesses NOTHING. Silently moving a voice capture
+//     from the work agent to a scratch model is a trust break, not a kindness;
 //     `GatewayGate.swift` argues the blind-fallback case out at length and asks
-//     that it not be re-proposed. The projection therefore keeps the BROKEN ref,
-//     so a send fails closed on the gateway the user actually chose and the
+//     that it not be re-proposed. The projection therefore keeps the UNAVAILABLE
+//     ref, so a send fails closed on the gateway the user actually chose and the
 //     failure can be explained honestly.
 //
 //   - `.selectionRequired` persists NOTHING. A pointer the device invented is
@@ -71,20 +71,37 @@ enum DefaultGatewayResolution: Sendable, Equatable {
     /// notice is written.
     case bootstrapped(RemoteAgentRef)
 
-    /// A pointer is stored, it cannot send, and the roster genuinely offers
-    /// alternatives. Nothing is guessed and nothing is persisted: surface it,
-    /// name `broken`, offer `candidates`.
+    /// A pointer is stored, it cannot send here, and the roster genuinely offers
+    /// alternatives. Nothing is guessed and nothing is persisted: name `pointer`
+    /// where the user went looking, offer `candidates`.
+    ///
+    /// UNAVAILABLE, never "broken". The gateway is not faulty and its setup is
+    /// not unfinished — those were guesses the storage cannot support. What is
+    /// actually known is narrower and always true: this device cannot send on it
+    /// right now. A key still crossing iCloud Keychain and a configuration
+    /// abandoned months ago read identically (`errSecItemNotFound` means "never
+    /// entered", "not yet synced" and "cleared" indistinguishably), so every
+    /// surface says the one thing that holds for both.
+    ///
+    /// WHERE IT MAY BE NAMED is the other half of the contract, and it is a
+    /// product rule, not a technical one: only where the user went looking. The
+    /// picker they opened and the gateway's own editor name it; the chat window
+    /// says nothing, because an unconnected gateway is not a chore and a banner
+    /// on every launch is what turns it into one. A refusal counts as going
+    /// looking — the user pressed the button — so the headless lanes still name
+    /// it.
     ///
     /// `pointerIsParked` travels INSIDE the verdict rather than beside it. It is
-    /// the difference between "the gateway you chose stopped working" and "the
-    /// app wrote a placeholder here one step after you forgot a different
+    /// the difference between "the gateway you chose is not available here" and
+    /// "the app wrote a placeholder here one step after you forgot a different
     /// gateway", and every surface that names the default has to make that
-    /// distinction — the chat banner, the Settings selector, Diagnostics,
-    /// CarPlay, the wrist and the headless lanes. Carried as a second value
-    /// beside the verdict it was two facts a consumer could receive one of;
-    /// carried inside it, a consumer that has the verdict cannot fail to have
-    /// the flag.
-    case brokenDefault(broken: RemoteAgentRef, candidates: [RemoteAgentRef], pointerIsParked: Bool)
+    /// distinction — the Settings selector, the picker, Diagnostics, CarPlay,
+    /// the wrist and the headless lanes. A parked pointer is named NOWHERE: it
+    /// is nobody's choice, so it collapses to "no default chosen". Carried as a
+    /// second value beside the verdict it was two facts a consumer could receive
+    /// one of; carried inside it, a consumer that has the verdict cannot fail to
+    /// have the flag.
+    case defaultUnavailable(pointer: RemoteAgentRef, candidates: [RemoteAgentRef], pointerIsParked: Bool)
 
     /// There is NO stored pointer and the device cannot honestly infer one:
     /// either two or more gateways can send, or exactly one can but another is
@@ -102,7 +119,7 @@ enum DefaultGatewayResolution: Sendable, Equatable {
     /// does not read back — a `kSecAttrAccessibleAfterFirstUnlock` blackout, or
     /// a half-arrived iCloud Keychain sync.
     ///
-    /// NOBODY may refuse a capture, show a broken-default banner, emit an
+    /// NOBODY may refuse a capture, name the default anywhere, emit an
     /// accusatory Diagnostics finding, or repair or persist anything on this
     /// verdict. Fall through and let the send fail closed on its own, which is
     /// the one outcome that costs the user nothing if the reading was wrong.
@@ -118,8 +135,8 @@ enum DefaultGatewayResolution: Sendable, Equatable {
     /// The COMPATIBILITY PROJECTION — a ref for display, and for the legacy
     /// holders that need a non-optional value.
     ///
-    /// For `.brokenDefault` this is the BROKEN ref, deliberately: a send then
-    /// fails closed on the gateway the user actually chose, which is the only
+    /// For `.defaultUnavailable` this is the UNAVAILABLE ref, deliberately: a send
+    /// then fails closed on the gateway the user actually chose, which is the only
     /// outcome that can be explained honestly. For `.selectionRequired` it is
     /// the documented built-in fallback, purely so those holders have something
     /// to hold.
@@ -131,7 +148,7 @@ enum DefaultGatewayResolution: Sendable, Equatable {
         case .usable(let ref): return ref
         case .adopted(let ref, _): return ref
         case .bootstrapped(let ref): return ref
-        case .brokenDefault(let broken, _, _): return broken
+        case .defaultUnavailable(let pointer, _, _): return pointer
         case .selectionRequired: return .builtin(Constants.remoteAgentDefaultBackendDefault)
         case .nothingConfigured(let pointer): return pointer
         case .readingUnreliable(let pointer): return pointer
@@ -145,7 +162,7 @@ enum DefaultGatewayResolution: Sendable, Equatable {
     var canSend: Bool {
         switch self {
         case .usable, .adopted, .bootstrapped: return true
-        case .brokenDefault, .selectionRequired, .nothingConfigured,
+        case .defaultUnavailable, .selectionRequired, .nothingConfigured,
              .readingUnreliable, .setupUnfinished: return false
         }
     }
@@ -153,7 +170,7 @@ enum DefaultGatewayResolution: Sendable, Equatable {
     /// Whether the stored pointer is a placeholder the APP parked after a
     /// Forget, rather than a gateway the user chose.
     ///
-    /// Only `.brokenDefault` can report it, and that is the whole set that
+    /// Only `.defaultUnavailable` can report it, and that is the whole set that
     /// matters: a park writes a BUILT-IN pointer, so the pointer exists (never
     /// `.selectionRequired`), and the marker retires the moment that pointer
     /// becomes able to send (never `.usable` / `.adopted` / `.bootstrapped`).
@@ -161,44 +178,49 @@ enum DefaultGatewayResolution: Sendable, Equatable {
     /// name no gateway in the first place.
     var pointerIsParked: Bool {
         switch self {
-        case .brokenDefault(_, _, let parked): return parked
+        case .defaultUnavailable(_, _, let parked): return parked
         case .usable, .adopted, .bootstrapped, .selectionRequired,
              .nothingConfigured, .readingUnreliable, .setupUnfinished: return false
         }
     }
 
-    /// The gateway that let the user down: `.brokenDefault`'s `broken`,
+    /// The gateway a surface may NAME: `.defaultUnavailable`'s `pointer`,
     /// `.adopted`'s `replacing`. Nil for every case a surface should stay quiet
     /// about — including `.readingUnreliable`, where naming a gateway would be
-    /// an accusation made by a locked device, and a PARKED `.brokenDefault`,
-    /// where the pointer is a placeholder the user never chose and so cannot
-    /// have let them down.
-    var brokenRef: RemoteAgentRef? {
+    /// an accusation made by a locked device, and a PARKED `.defaultUnavailable`,
+    /// where the pointer is a placeholder the user never chose, so naming it
+    /// would attribute to them a decision they never took.
+    ///
+    /// A name here is a LICENCE, not an instruction. Whether it is spent is the
+    /// surface's call, and the rule is where-the-user-went-looking: the picker
+    /// and the gateway editor spend it, a refusal spends it (the user pressed
+    /// the button), the chat window never does.
+    var nameableRef: RemoteAgentRef? {
         switch self {
-        case .brokenDefault(let broken, _, let parked): return parked ? nil : broken
+        case .defaultUnavailable(let pointer, _, let parked): return parked ? nil : pointer
         case .adopted(_, let replacing): return replacing
         case .usable, .bootstrapped, .selectionRequired, .nothingConfigured,
              .readingUnreliable, .setupUnfinished: return nil
         }
     }
 
-    /// The gateways a surface may offer as the choice — `.brokenDefault`'s and
+    /// The gateways a surface may offer as the choice — `.defaultUnavailable`'s and
     /// `.selectionRequired`'s candidates, empty elsewhere.
     var candidates: [RemoteAgentRef] {
         switch self {
-        case .brokenDefault(_, let candidates, _): return candidates
+        case .defaultUnavailable(_, let candidates, _): return candidates
         case .selectionRequired(let candidates): return candidates
         case .usable, .adopted, .bootstrapped, .nothingConfigured,
              .readingUnreliable, .setupUnfinished: return []
         }
     }
 
-    /// True for `.brokenDefault` and `.selectionRequired` — the two states whose
+    /// True for `.defaultUnavailable` and `.selectionRequired` — the two states whose
     /// only exit is the user picking a gateway. Everything else either works, is
     /// already repaired, or is waiting on setup the app cannot do for them.
     var needsUserChoice: Bool {
         switch self {
-        case .brokenDefault, .selectionRequired: return true
+        case .defaultUnavailable, .selectionRequired: return true
         case .usable, .adopted, .bootstrapped, .nothingConfigured,
              .readingUnreliable, .setupUnfinished: return false
         }

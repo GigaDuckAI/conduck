@@ -14,7 +14,7 @@
 // "nothing chosen". The two disagreed on the same screen: the honest banner
 // deep-linked the user into Settings → Personal AI, where three controls then
 // named a gateway they never picked. The flag now rides INSIDE
-// `.brokenDefault`, which is what makes "hold the verdict without the flag"
+// `.defaultUnavailable`, which is what makes "hold the verdict without the flag"
 // unrepresentable rather than merely discouraged — and these tests are what stop
 // it being lifted back out.
 //
@@ -108,7 +108,7 @@ final class ParkedDefaultCollapseTests: XCTestCase {
         let manager = try await managerWithParkedPointer()
 
         let resolution = await manager.resolveDefaultGateway()
-        guard case .brokenDefault(let broken, let candidates, let pointerIsParked) = resolution else {
+        guard case .defaultUnavailable(let broken, let candidates, let pointerIsParked) = resolution else {
             return XCTFail("Precondition: the parked built-in is not configured here, got \(resolution).")
         }
         XCTAssertEqual(broken, openclaw)
@@ -117,7 +117,7 @@ final class ParkedDefaultCollapseTests: XCTestCase {
                       "`resolveDefaultGateway()` is the path the Settings view model reads. A verdict that "
                       + "cannot say the pointer is a placeholder is exactly how three controls came to name "
                       + "a gateway the user never chose.")
-        XCTAssertNil(resolution.brokenRef,
+        XCTAssertNil(resolution.nameableRef,
                      "Nobody let the user down — a placeholder cannot have broken a promise it never made.")
 
         // …and the snapshot path agrees, because it derives rather than stores.
@@ -133,11 +133,11 @@ final class ParkedDefaultCollapseTests: XCTestCase {
         let manager = try await managerWithUserChosenBrokenPointer()
 
         let resolution = await manager.resolveDefaultGateway()
-        guard case .brokenDefault(_, _, let pointerIsParked) = resolution else {
-            return XCTFail("Precondition: expected .brokenDefault, got \(resolution).")
+        guard case .defaultUnavailable(_, _, let pointerIsParked) = resolution else {
+            return XCTFail("Precondition: expected .defaultUnavailable, got \(resolution).")
         }
         XCTAssertFalse(pointerIsParked, "The user picked this one themselves.")
-        XCTAssertEqual(resolution.brokenRef, openclaw,
+        XCTAssertEqual(resolution.nameableRef, openclaw,
                        "A gateway the user chose and that stopped working IS the thing that let them down.")
     }
 
@@ -148,15 +148,15 @@ final class ParkedDefaultCollapseTests: XCTestCase {
     /// predicate. Under a park it has to read the same way the banner that sent
     /// the user here already did.
     func testTheSettingsSelectorCollapsesToNothingChosenUnderAPark() {
-        let parked = DefaultGatewayResolution.brokenDefault(
-            broken: openclaw, candidates: [hermes], pointerIsParked: true)
+        let parked = DefaultGatewayResolution.defaultUnavailable(
+            pointer: openclaw, candidates: [hermes], pointerIsParked: true)
         XCTAssertTrue(SettingsViewModel.selectorNeedsChoice(for: parked),
                       "The banner and Diagnostics both deep-link here calling it 'nothing chosen'. A screen "
                       + "that then flags and names a broken default contradicts the sentence that "
                       + "brought the user to it.")
 
-        let chosen = DefaultGatewayResolution.brokenDefault(
-            broken: openclaw, candidates: [hermes], pointerIsParked: false)
+        let chosen = DefaultGatewayResolution.defaultUnavailable(
+            pointer: openclaw, candidates: [hermes], pointerIsParked: false)
         XCTAssertFalse(SettingsViewModel.selectorNeedsChoice(for: chosen),
                        "Control: a default the user picked and that broke is still flagged and named.")
 
@@ -173,7 +173,7 @@ final class ParkedDefaultCollapseTests: XCTestCase {
     func testTheChatBannerSpeaksAsNoDefaultChosenUnderAPark() {
         let candidates = [hermes]
         let notice = DefaultGatewayNotice.resolve(
-            resolution: .brokenDefault(broken: openclaw, candidates: candidates, pointerIsParked: true),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: candidates, pointerIsParked: true),
             roster: [],
             pendingAdoption: nil
         )
@@ -184,7 +184,7 @@ final class ParkedDefaultCollapseTests: XCTestCase {
     func testDiagnosticsStandsDownToNotChosenUnderAPark() {
         let order = [GatewayDisplayEntry(ref: hermes, displayName: "Hermes", connectionCheckID: "gw.hermes")]
         let standing = DiagnosticsRunner.makeDefaultGatewayStanding(
-            resolution: .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: true),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: true),
             notice: nil,
             displayOrder: order,
             customGateways: [],
@@ -194,7 +194,7 @@ final class ParkedDefaultCollapseTests: XCTestCase {
         XCTAssertEqual(standing?.defaultName, "", "A placeholder carries no name.")
 
         let named = DiagnosticsRunner.makeDefaultGatewayStanding(
-            resolution: .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: false),
             notice: nil,
             displayOrder: order,
             customGateways: [],
@@ -208,12 +208,12 @@ final class ParkedDefaultCollapseTests: XCTestCase {
     func testTheDiagnosticsReportTokenAgreesWithTheStandingRow() {
         XCTAssertEqual(
             DiagnosticsRunner.defaultGatewayVerdict(
-                resolution: .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: true),
+                resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: true),
                 notice: nil),
             "not-chosen(candidates=1)")
         XCTAssertEqual(
             DiagnosticsRunner.defaultGatewayVerdict(
-                resolution: .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false),
+                resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: false),
                 notice: nil),
             "broken(candidates=1)")
     }
@@ -249,7 +249,7 @@ final class ParkedDefaultCollapseTests: XCTestCase {
     func testCarPlayRefusesWithoutNamingAParkedPointer() {
         let configured = [hermes]
         let plan = CarPlaySceneDelegate.newChatPlan(
-            resolution: .brokenDefault(broken: openclaw, candidates: configured, pointerIsParked: true),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: configured, pointerIsParked: true),
             configured: configured,
             override: nil,
             effectiveRef: openclaw
@@ -266,7 +266,7 @@ final class ParkedDefaultCollapseTests: XCTestCase {
     func testCarPlayStillNamesAUserChosenBrokenDefault() {
         let configured = [hermes]
         let plan = CarPlaySceneDelegate.newChatPlan(
-            resolution: .brokenDefault(broken: openclaw, candidates: configured, pointerIsParked: false),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: configured, pointerIsParked: false),
             configured: configured,
             override: nil,
             effectiveRef: openclaw
@@ -282,7 +282,7 @@ final class ParkedDefaultCollapseTests: XCTestCase {
     func testADriversOwnPickIsUnaffectedByAParkedPhonePointer() {
         let configured = [hermes]
         let plan = CarPlaySceneDelegate.newChatPlan(
-            resolution: .brokenDefault(broken: openclaw, candidates: configured, pointerIsParked: true),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: configured, pointerIsParked: true),
             configured: configured,
             override: hermes,
             effectiveRef: openclaw

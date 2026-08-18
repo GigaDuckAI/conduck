@@ -310,7 +310,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 if tokenMissing {
                     // xcstrings
                     CarPlaySpeechService.shared.speak(
-                        String(localized: "This chat's AI isn't set up on your iPhone. Start a new chat to use another one.")
+                        String(localized: "This chat's AI isn't available on your iPhone. Start a new chat to use another one.")
                     ) { }
                     return
                 }
@@ -337,7 +337,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                         self.sessionDefaultRefOverride = ref
                         self.refreshPicker()
                     }
-                case .chooseInstead(let broken, let candidates, let current):
+                case .chooseInstead(let unavailable, let candidates, let current):
                     // An override that reached here is no longer a member of the
                     // configured set, so it must stop titling the switcher and
                     // stop being this drive's target.
@@ -345,13 +345,16 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                         self.sessionDefaultRefOverride = nil
                         self.refreshPicker()
                     }
-                    if let broken {
-                        // Name the broken one, then put the chooser on screen so
-                        // the fix is one tap where the driver is already looking.
-                        let name = RemoteAgentRefMetadata.shortDisplayName(for: broken, customs: snap.badgeRoster)
+                    if let unavailable {
+                        // Name it, then put the chooser on screen so the fix is
+                        // one tap where the driver is already looking. "isn't
+                        // available", not "isn't set up": the driver cannot
+                        // finish a setup at the wheel, and the storage cannot
+                        // prove one is even outstanding.
+                        let name = RemoteAgentRefMetadata.shortDisplayName(for: unavailable, customs: snap.badgeRoster)
                         // xcstrings
                         CarPlaySpeechService.shared.speak(
-                            String(localized: "Your default AI, \(name), isn't set up. Choose another from the list.")
+                            String(localized: "Your default AI, \(name), isn't available. Choose another from the list.")
                         ) { }
                     } else {
                         // Nothing to name — no default has been chosen at all.
@@ -636,7 +639,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// pending-bearer-candidate gate — so the car inherits a decision the device
     /// already made, rather than making one of its own behind the wheel. Every
     /// other verdict either needs no change (`.usable`), needs the driver to
-    /// choose (`.brokenDefault`, `.selectionRequired`), or must be left strictly
+    /// choose (`.defaultUnavailable`, `.selectionRequired`), or must be left strictly
     /// alone (`.nothingConfigured`, `.setupUnfinished`, `.readingUnreliable`).
     ///
     /// A pure `static` on purpose, and not inlined in `startSession`: the
@@ -648,7 +651,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         switch resolution {
         case .adopted(let ref, _): return ref
         case .bootstrapped(let ref): return ref
-        case .usable, .brokenDefault, .selectionRequired,
+        case .usable, .defaultUnavailable, .selectionRequired,
              .nothingConfigured, .setupUnfinished, .readingUnreliable:
             return nil
         }
@@ -663,7 +666,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         case proceed(ref: RemoteAgentRef, adoptAsSessionOverride: Bool)
         /// Speak, then put the chooser on screen. `broken` is non-nil only when a
         /// stored pointer can be honestly named as the thing that is wrong.
-        case chooseInstead(broken: RemoteAgentRef?, candidates: [RemoteAgentRef], current: RemoteAgentRef)
+        case chooseInstead(unavailable: RemoteAgentRef?, candidates: [RemoteAgentRef], current: RemoteAgentRef)
         /// There is nothing to choose from. Speak and stop.
         case setUpOnPhone
     }
@@ -703,17 +706,17 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             return .proceed(ref: adopted, adoptAsSessionOverride: true)
         }
         switch resolution {
-        case .brokenDefault(let broken, let candidates, let pointerIsParked):
-            // `broken` is spoken aloud, so a pointer the APP parked after a
+        case .defaultUnavailable(let pointer, let candidates, let pointerIsParked):
+            // `unavailable` is spoken aloud, so a pointer the APP parked after a
             // Forget must not travel: the driver never chose that gateway, and
-            // hearing it named as the thing that is wrong is an accusation about
-            // a choice they did not make. `current` still carries it, because the
-            // chooser needs a row to check even when nothing may be blamed. The
-            // phone, the wrist and the headless lanes make the same collapse.
-            return .chooseInstead(broken: pointerIsParked ? nil : broken,
-                                  candidates: candidates, current: broken)
+            // hearing it named is an accusation about a choice they did not make.
+            // `current` still carries it, because the chooser needs a row to check
+            // even when nothing may be named. The phone, the wrist and the
+            // headless lanes make the same collapse.
+            return .chooseInstead(unavailable: pointerIsParked ? nil : pointer,
+                                  candidates: candidates, current: pointer)
         case .selectionRequired(let candidates):
-            return .chooseInstead(broken: nil, candidates: candidates, current: resolution.ref)
+            return .chooseInstead(unavailable: nil, candidates: candidates, current: resolution.ref)
         case .nothingConfigured, .setupUnfinished:
             return .setUpOnPhone
         case .usable, .adopted, .bootstrapped, .readingUnreliable:

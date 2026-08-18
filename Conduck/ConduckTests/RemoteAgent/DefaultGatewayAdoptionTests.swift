@@ -183,7 +183,7 @@ final class DefaultGatewayAdoptionTests: XCTestCase {
     }
 
     /// RULE B, adopt arm. Same partial-sync hazard, one difference: a pointer IS
-    /// stored, so refusing surfaces the loud `.brokenDefault` the user fixes in
+    /// stored, so refusing surfaces the loud `.defaultUnavailable` the user fixes in
     /// one tap rather than a repair nobody asked for.
     func testAdoptionIsRefusedWhileAnotherGatewayIsOneTokenAway() async throws {
         try await makeBearerSendable(.hermes, token: "tok-h")
@@ -192,7 +192,7 @@ final class DefaultGatewayAdoptionTests: XCTestCase {
         await SettingsManager.shared.setDefaultRemoteAgentRef(custom)
 
         let refused = await SettingsManager.shared.resolveDefaultGateway()
-        XCTAssertEqual(refused, .brokenDefault(broken: custom, candidates: [.builtin(.hermes)], pointerIsParked: false))
+        XCTAssertEqual(refused, .defaultUnavailable(pointer: custom, candidates: [.builtin(.hermes)], pointerIsParked: false))
         XCTAssertEqual(storedPointerRaw(), custom.rawString,
                        "The user's own pointer stays exactly where they left it.")
         let notice = await SettingsManager.shared.pendingDefaultAdoptionNotice()

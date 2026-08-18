@@ -310,18 +310,6 @@ struct DefaultGatewayStandingState: Equatable, Sendable {
     var offersFix: Bool { kind == .broken || kind == .notChosen }
 }
 
-/// One DEMOTED gateway: a built-in holding half-finished setup that nothing points
-/// at, nothing is bound to, and nothing else relies on. Deliberately NOT a
-/// `DiagnosticCheck` — `attentionCount` sums `checks`, so the only honest way to
-/// keep leftovers out of "N items need attention" is for them not to be a check
-/// at all. The name lives here rather than in a row for the same reason it does
-/// in `GatewayDisplayEntry`.
-struct LeftoverGatewayEntry: Identifiable, Equatable, Sendable {
-    let ref: RemoteAgentRef
-    var id: RemoteAgentRef { ref }
-    let displayName: String
-}
-
 /// A privacy-safe pointer to a failure that a "Troubleshoot" affordance opens
 /// the Diagnostics screen focused on. Carries ONLY an `AppError` numeric code +
 /// the (internal, non-identifying) gateway ref — never a message, URL, model,

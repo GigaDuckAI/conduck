@@ -4,8 +4,15 @@
 // DefaultGatewayNoticeBanner.swift
 //
 // The conversation shell's one sentence about this device's "Default for new
-// chats" — a broken pointer, a pointer never chosen, or a repair this device
-// already made.
+// chats" — a pointer never chosen, or a repair this device already made.
+//
+// TWO notices, and the absent third is the point: a stored pointer the user
+// chose that cannot send HERE never reaches this banner. That fact is real and
+// the app does say it — in the picker the user opens and in the gateway's own
+// editor — but a chat window is not where an unconnected gateway gets turned
+// into a chore, and a banner that returns every launch until the user gives up
+// their choice is exactly that. `DefaultGatewayNotice.resolve` is where the
+// silence is decided; this view simply has no case for it.
 //
 // Sibling of `PendingRetryCard`: same directory, same chrome primitive (16pt
 // padding then `glassCardBackground(borderColor:)`), so the shell keeps ONE
@@ -19,17 +26,17 @@
 // slab in their hands — and the fact is the whole point, because the pointer is
 // device-local and the gateway is very likely fine on their Mac.
 //
-// Colour carries the difference between a fault and an outstanding choice:
-// `sunsetOrange` (the retry card's border) for a default that cannot send, amber
-// for "you have not picked one yet" and for an adoption. Nothing here is red —
-// nothing is lost, and the exit is one tap away in every case.
+// Amber throughout, and no warning glyph: everything this banner can still say
+// is an outstanding choice or a completed repair, neither of which is a fault.
+// Nothing here is red or orange — nothing is lost, and the exit is one tap away
+// in every case.
 
 import SwiftUI
 
 struct DefaultGatewayNoticeBanner: View {
     let notice: DefaultGatewayNotice
-    /// Land the user on Settings → Personal AI, which shows BOTH doors: pick a
-    /// different gateway, or finish setting up the named one.
+    /// Land the user on Settings → Personal AI, which shows both doors: pick a
+    /// gateway for new chats, or connect one that isn't set up here yet.
     let onOpenPersonalAI: () -> Void
     let onDismiss: () -> Void
 
@@ -80,7 +87,7 @@ struct DefaultGatewayNoticeBanner: View {
     @ViewBuilder
     private var actionButton: some View {
         switch notice {
-        case .brokenDefault, .noDefaultChosen:
+        case .noDefaultChosen:
             Button {
                 onOpenPersonalAI()
             } label: {
@@ -110,7 +117,6 @@ struct DefaultGatewayNoticeBanner: View {
 
     private var glyph: String {
         switch notice {
-        case .brokenDefault: return "exclamationmark.triangle.fill"
         case .noDefaultChosen: return "questionmark.circle"
         case .adopted: return "checkmark.circle"
         }
@@ -118,15 +124,15 @@ struct DefaultGatewayNoticeBanner: View {
 
     private var accent: Color {
         switch notice {
-        case .brokenDefault: return AppColors.sunsetOrange
-        // Amber, not orange: nothing is broken here — a choice is outstanding.
+        // Amber, never orange: this banner only ever reports an outstanding
+        // choice or a completed repair. Nothing it can say is a fault, so the
+        // warning accent has no case left to appear in.
         case .noDefaultChosen, .adopted: return AppColors.brandAmber
         }
     }
 
     private var borderColor: Color {
         switch notice {
-        case .brokenDefault: return AppColors.sunsetOrange.opacity(0.4)
         case .noDefaultChosen, .adopted: return AppColors.brandAmber.opacity(0.35)
         }
     }
@@ -135,25 +141,6 @@ struct DefaultGatewayNoticeBanner: View {
 
     private var title: String {
         switch notice {
-        case .brokenDefault(_, let name):
-            #if os(macOS)
-            return String(localized: LocalizedStringResource(
-                "chat.defaultGateway.broken.title.mac",
-                defaultValue: "\(name) isn't set up on this Mac."
-            ))
-            #else
-            if DeviceCapabilities.isiPad {
-                return String(localized: LocalizedStringResource(
-                    "chat.defaultGateway.broken.title.ipad",
-                    defaultValue: "\(name) isn't set up on this iPad."
-                ))
-            }
-            return String(localized: LocalizedStringResource(
-                "chat.defaultGateway.broken.title.iphone",
-                defaultValue: "\(name) isn't set up on this iPhone."
-            ))
-            #endif
-
         case .noDefaultChosen:
             #if os(macOS)
             return String(localized: LocalizedStringResource(
@@ -181,7 +168,7 @@ struct DefaultGatewayNoticeBanner: View {
         }
     }
 
-    // The closing sentence of the two "…start a chat from outside the app" bodies
+    // The closing sentence of the "…start a chat from outside the app" body
     // — "New chats you start here are fine" — is true ONLY because
     // `NewChatGatewaySeed.resolve` FILTERS unconfigured gateways out of the
     // picker's pre-selection, so the in-app composer always opens on a gateway
@@ -189,12 +176,6 @@ struct DefaultGatewayNoticeBanner: View {
     // unconditionally, this sentence becomes a lie and both strings need new keys.
     private var message: String {
         switch notice {
-        case .brokenDefault:
-            return String(localized: LocalizedStringResource(
-                "chat.defaultGateway.broken.body",
-                defaultValue: "It's your default for new chats, so anything that starts a chat from outside the app has nowhere to go. New chats you start here are fine."
-            ))
-
         case .noDefaultChosen:
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.noDefault.body",
@@ -205,18 +186,18 @@ struct DefaultGatewayNoticeBanner: View {
             #if os(macOS)
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.adopted.body.mac",
-                defaultValue: "\(previousName) isn't set up on this Mac. Chats you've already started keep the gateway they started on."
+                defaultValue: "\(previousName) isn't available on this Mac. Chats you've already started keep the gateway they started on."
             ))
             #else
             if DeviceCapabilities.isiPad {
                 return String(localized: LocalizedStringResource(
                     "chat.defaultGateway.adopted.body.ipad",
-                    defaultValue: "\(previousName) isn't set up on this iPad. Chats you've already started keep the gateway they started on."
+                    defaultValue: "\(previousName) isn't available on this iPad. Chats you've already started keep the gateway they started on."
                 ))
             }
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.adopted.body.iphone",
-                defaultValue: "\(previousName) isn't set up on this iPhone. Chats you've already started keep the gateway they started on."
+                defaultValue: "\(previousName) isn't available on this iPhone. Chats you've already started keep the gateway they started on."
             ))
             #endif
         }
@@ -224,11 +205,6 @@ struct DefaultGatewayNoticeBanner: View {
 
     private var actionTitle: String {
         switch notice {
-        case .brokenDefault:
-            return String(localized: LocalizedStringResource(
-                "chat.defaultGateway.broken.action",
-                defaultValue: "Choose a default"
-            ))
         case .noDefaultChosen:
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.noDefault.action",

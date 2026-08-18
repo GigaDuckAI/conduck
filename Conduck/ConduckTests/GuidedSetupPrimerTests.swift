@@ -227,15 +227,18 @@ final class DefaultSelectorDisplayNameTests: XCTestCase {
     /// that could not send AND subtracted it from the count, hiding a working one
     /// ("OpenClaw +4" on a five-gateway device, or a bare "OpenClaw" on a
     /// one-gateway device).
-    func testRootSummaryReportsNeedsSetupRatherThanNamingADeadDefault() {
+    func testRootSummaryReportsUnavailableRatherThanNamingADeadDefault() {
         let vm = SettingsViewModel()
         vm.configuredRemoteAgentRefSet = [.builtin(.hermes)]   // default is still .openclaw
 
-        let defaultNeedsSetup = String(localized: LocalizedStringResource(
-            "settings.root.personalAI.defaultNeedsSetup",
-            defaultValue: "Default needs setup"
+        // "Unavailable here", never "needs setup": the storage cannot tell a key
+        // still crossing iCloud from a configuration abandoned long ago, and only
+        // one of those two is a task the user could act on.
+        let defaultUnavailable = String(localized: LocalizedStringResource(
+            "settings.root.personalAI.defaultUnavailable",
+            defaultValue: "Default unavailable here"
         ))
-        XCTAssertEqual(vm.personalAISummaryShort, defaultNeedsSetup)
+        XCTAssertEqual(vm.personalAISummaryShort, defaultUnavailable)
         let nothingConfigured = String(localized: "settings.root.personalAI.setupNeeded", defaultValue: "Setup needed")
         XCTAssertNotEqual(vm.personalAISummaryShort, nothingConfigured,
                           "Distinct from the nothing-configured state — four gateways still work here.")
