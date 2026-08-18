@@ -321,6 +321,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     func testV8StoreMigratesToV9WithNilOutputDeliveryCensus() async throws {
         let v8 = try requiredModel(named: "Conversations 8.mom")
         let v9 = try requiredModel(named: "Conversations 9.mom")
+        let v10 = try requiredModel(named: "Conversations 10.mom")
         let conversationID = UUID()
         let messageID = UUID()
         let boxKey = "\(conversationID.uuidString)/out-0123456789abcdef"
@@ -359,14 +360,14 @@ final class ConversationsModelMigrationTests: XCTestCase {
             }
         }
 
-        let container = try await loadStore(model: v9)
-        let context = container.newBackgroundContext()
-        try await context.perform {
+        let v9Container = try await loadStore(model: v9)
+        let v9Context = v9Container.newBackgroundContext()
+        try await v9Context.perform {
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
             request.fetchLimit = 1
             let message = try XCTUnwrap(
-                context.fetch(request).first,
+                v9Context.fetch(request).first,
                 "the v8 message row must survive migration"
             )
 
@@ -404,7 +405,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
             message.setValue(NSNumber(value: false), forKey: "outputRemainderIsRecoverable")
             message.setValue(#"{"e":[{"b":4096,"n":"profile.mobileconfig"}],"v":1}"#,
                              forKey: "outputRefusedTypeNames")
-            try context.save()
+            try v9Context.save()
 
             XCTAssertEqual((message.value(forKey: "outputRefusedTypeCount") as? NSNumber)?.intValue, 2)
             XCTAssertEqual((message.value(forKey: "outputRefusedShapeCount") as? NSNumber)?.intValue, 3)
@@ -419,6 +420,31 @@ final class ConversationsModelMigrationTests: XCTestCase {
                 + "recorded, which may never be read as the promise that a later pass delivers")
             XCTAssertEqual(message.value(forKey: "outputRefusedTypeNames") as? String,
                            #"{"e":[{"b":4096,"n":"profile.mobileconfig"}],"v":1}"#)
+        }
+        for store in v9Container.persistentStoreCoordinator.persistentStores {
+            try v9Container.persistentStoreCoordinator.remove(store)
+        }
+
+        // THE BRIDGE RUNS AT THE CURRENT MODEL VERSION, never at the version
+        // this test migrates TO, and the same store file is simply carried one
+        // more hop to get there. `MessageRecord(managedObject:)` reads every
+        // column the app ships with, so opening it against an older model
+        // raises `NSUnknownKeyException` on the first attribute a later version
+        // added — a failure about the test's staging, not about the migration
+        // it is meant to pin. Each new model version therefore moves this half
+        // forward while the assertions above stay exactly where they were, and
+        // the chained v8 → v9 → v10 load is a free extra: it proves the census
+        // columns survive the NEXT lightweight migration too.
+        let v10Container = try await loadStore(model: v10)
+        let v10Context = v10Container.newBackgroundContext()
+        try await v10Context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            request.fetchLimit = 1
+            let message = try XCTUnwrap(
+                v10Context.fetch(request).first,
+                "the row must survive the second lightweight migration too"
+            )
 
             // The bridge the app actually reads through, exercised on the same
             // row: seven columns in, one value out.
@@ -443,7 +469,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
             message.setValue(NSNumber(value: Int32(0)), forKey: "outputRefusedShapeCount")
             message.setValue(NSNumber(value: Int32(0)), forKey: "outputRefusedShapeOverlongCount")
             message.setValue(NSNumber(value: Int32(0)), forKey: "outputRefusedShapeWhitespaceCount")
-            try context.save()
+            try v10Context.save()
             XCTAssertEqual(MessageRecord(managedObject: message).outputDeliveryOutcome?.shapeRefused,
                            .nothingRefused,
                            "an explicit zero survives as zero — the distinction the whole feature "
@@ -499,11 +525,199 @@ final class ConversationsModelMigrationTests: XCTestCase {
         }
     }
 
-    /// The model the APP opens is v9. A pointer left on v8 would ship code that
-    /// reads six columns from a store that has none — and, worse, would not fail
+    /// v10 makes "what the user has already seen" an account fact instead of a
+    /// device fact: three markers on `Conversation`, and one delivery identity on
+    /// `Message` so a retry's failure is distinguishable from the failure it
+    /// replaced. All four are PERMANENT — the production CloudKit schema is
+    /// additive-only, so nothing added here can ever be renamed or withdrawn — and
+    /// that is exactly why their shape is pinned by a test rather than left to
+    /// whatever the model editor last wrote.
+    ///
+    /// THE ONE THING THIS TEST EXISTS TO CATCH is a value arriving on a row that
+    /// nobody ever observed. A migrated row must read nil on all four, because nil
+    /// is how "this account has not looked at this yet" is spelled, and the single
+    /// migration pass is the only moment at which that can be silently falsified
+    /// for the user's entire history at once.
+    func testV9StoreMigratesToV10WithNilAccountSeenMarkers() async throws {
+        let v9 = try requiredModel(named: "Conversations 9.mom")
+        let v10 = try requiredModel(named: "Conversations 10.mom")
+        let conversationID = UUID()
+        let messageID = UUID()
+        let lastActivityAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        do {
+            let container = try await loadStore(model: v9)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let conversation = NSEntityDescription.insertNewObject(
+                    forEntityName: "Conversation",
+                    into: context
+                )
+                conversation.setValue(conversationID, forKey: "id")
+                conversation.setValue("openclaw", forKey: "backend")
+                conversation.setValue(Date(timeIntervalSince1970: 1_699_000_000), forKey: "createdAt")
+                conversation.setValue(lastActivityAt, forKey: "lastActivityAt")
+                conversation.setValue(conversationID.uuidString, forKey: "sessionID")
+                conversation.setValue("an old thread", forKey: "title")
+
+                let message = NSEntityDescription.insertNewObject(
+                    forEntityName: "Message",
+                    into: context
+                )
+                message.setValue(messageID, forKey: "id")
+                message.setValue("user", forKey: "role")
+                message.setValue("never sent", forKey: "text")
+                message.setValue(lastActivityAt, forKey: "createdAt")
+                message.setValue("phone", forKey: "sourceDevice")
+                // A row already sitting in the state the new identity is about:
+                // failed, minted by a build that had no attempt identity to mint.
+                message.setValue("failed", forKey: "status")
+                message.setValue(conversation, forKey: "conversation")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v10)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let conversationRequest = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
+            conversationRequest.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
+            conversationRequest.fetchLimit = 1
+            let conversation = try XCTUnwrap(
+                context.fetch(conversationRequest).first,
+                "the v9 conversation row must survive migration"
+            )
+            let messageRequest = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            messageRequest.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            messageRequest.fetchLimit = 1
+            let message = try XCTUnwrap(
+                context.fetch(messageRequest).first,
+                "the v9 message row must survive migration"
+            )
+
+            // Old columns preserved. `lastActivityAt` in particular: it is the
+            // other half of the unseen test, so a conversation that lost it would
+            // read as unseen or seen at random rather than by comparison.
+            XCTAssertEqual(conversation.value(forKey: "title") as? String, "an old thread")
+            XCTAssertEqual(conversation.value(forKey: "lastActivityAt") as? Date, lastActivityAt)
+            XCTAssertEqual(message.value(forKey: "text") as? String, "never sent")
+            XCTAssertEqual(message.value(forKey: "status") as? String, "failed")
+
+            // THE ASSERTION. Every new column reads nil on a pre-existing row.
+            for column in ["lastViewedAt", "failureSeenAttemptID", "tailProjection"] {
+                XCTAssertNil(
+                    conversation.value(forKey: column),
+                    "Conversation.\(column) must be nil on a migrated row — a defaultValueString "
+                    + "here is written to every conversation the user has ever had, in one "
+                    + "irreversible pass")
+            }
+            XCTAssertNil(
+                message.value(forKey: "deliveryAttemptID"),
+                "Message.deliveryAttemptID must be nil on a migrated row — a legacy failure has no "
+                + "attempt identity, and an acknowledgement is accepted only on exact equality, so "
+                + "nil is what keeps an old failure red instead of silently acknowledged")
+
+            // And each is writable post-migration, at its NATIVE type. The two
+            // identities are `UUID` columns, not UUID strings: equality between
+            // them is the entire acknowledgement rule, and a string column would
+            // add a malformed-value parsing path that has to fail somewhere.
+            let viewedAt = Date(timeIntervalSince1970: 1_700_000_500)
+            let attemptID = UUID()
+            let projection = "1|\(messageID.uuidString)|1700000000.0|user"
+            conversation.setValue(viewedAt, forKey: "lastViewedAt")
+            conversation.setValue(attemptID, forKey: "failureSeenAttemptID")
+            conversation.setValue(projection, forKey: "tailProjection")
+            message.setValue(attemptID, forKey: "deliveryAttemptID")
+            try context.save()
+
+            XCTAssertEqual(conversation.value(forKey: "lastViewedAt") as? Date, viewedAt)
+            XCTAssertEqual(conversation.value(forKey: "failureSeenAttemptID") as? UUID, attemptID)
+            XCTAssertEqual(conversation.value(forKey: "tailProjection") as? String, projection)
+            XCTAssertEqual(
+                message.value(forKey: "deliveryAttemptID") as? UUID, attemptID,
+                "the attempt identity round-trips as a UUID value, which is what lets the resolver "
+                + "compare it for equality rather than parse it")
+        }
+    }
+
+    /// v10 is ADDITIVE and adds exactly four columns: three on `Conversation` and
+    /// one on `Message`, with `Attachment` untouched. Asserted against the compiled
+    /// models rather than the XML, so an edit to v9 in place — the one genuine
+    /// data-loss path in this change — shows up here as v9 already carrying
+    /// attributes it never shipped.
+    ///
+    /// The type assertions are not decoration. Both identity columns are settled
+    /// as native `UUID` before the production CloudKit deploy, and a production
+    /// schema is additive-only: a column that ships as `String` can never become a
+    /// `UUID` afterwards.
+    func testV10AddsFourOptionalMarkerAttributesAndNothingElse() throws {
+        let v9 = try requiredModel(named: "Conversations 9.mom")
+        let v10 = try requiredModel(named: "Conversations 10.mom")
+
+        XCTAssertEqual(Set(v9.entitiesByName.keys), Set(v10.entitiesByName.keys),
+                       "no entity appears or disappears — an entity change is not lightweight")
+
+        let expectedAdditions: [String: Set<String>] = [
+            "Conversation": ["lastViewedAt", "failureSeenAttemptID", "tailProjection"],
+            "Message": ["deliveryAttemptID"],
+            "Attachment": [],
+        ]
+        let expectedTypes: [String: NSAttributeType] = [
+            "lastViewedAt": .dateAttributeType,
+            "failureSeenAttemptID": .UUIDAttributeType,
+            "tailProjection": .stringAttributeType,
+            "deliveryAttemptID": .UUIDAttributeType,
+        ]
+
+        for (name, newEntity) in v10.entitiesByName {
+            let oldEntity = try XCTUnwrap(v9.entitiesByName[name])
+            let added = Set(newEntity.attributesByName.keys)
+                .subtracting(oldEntity.attributesByName.keys)
+            let removed = Set(oldEntity.attributesByName.keys)
+                .subtracting(newEntity.attributesByName.keys)
+            XCTAssertTrue(removed.isEmpty,
+                          "\(name) lost \(removed.sorted()) — a removal is data loss, not a migration")
+            let expectedForEntity = try XCTUnwrap(expectedAdditions[name])
+            XCTAssertEqual(added, expectedForEntity,
+                           "\(name) gains exactly the columns settled before the production CloudKit "
+                           + "deploy — an extra one is permanent, and a missing one is a marker the "
+                           + "account can never carry")
+            XCTAssertEqual(
+                Set(newEntity.relationshipsByName.keys), Set(oldEntity.relationshipsByName.keys),
+                "\(name) keeps its relationships — a relationship change is not lightweight")
+
+            for attribute in added.compactMap({ newEntity.attributesByName[$0] }) {
+                XCTAssertEqual(attribute.attributeType, expectedTypes[attribute.name],
+                               "\(attribute.name) ships at its settled type: a production CloudKit "
+                               + "schema is additive-only, so the type it deploys with is the type "
+                               + "it keeps forever")
+                XCTAssertTrue(attribute.isOptional,
+                              "\(attribute.name) must be optional — CloudKit requires it, and a "
+                              + "required column cannot be nil, which is how NEVER SEEN is spelled")
+                XCTAssertNil(
+                    attribute.defaultValue,
+                    "\(attribute.name) must carry NO default: a default is written to every "
+                    + "pre-existing row at migration time, so a default on lastViewedAt stamps the "
+                    + "user's ENTIRE history 'already read' in one irreversible pass — every unread "
+                    + "reply on every device loses its mark, and nothing afterwards can tell a "
+                    + "defaulted row from one the user genuinely looked at. The same pass would "
+                    + "acknowledge failures nobody has seen via failureSeenAttemptID, assert a tail "
+                    + "shape nothing observed via tailProjection, and hand every historical message "
+                    + "one shared deliveryAttemptID — under which a single acknowledgement retires "
+                    + "every red mark in the store")
+            }
+        }
+    }
+
+    /// The model the APP opens is v10. A pointer left on v9 would ship code that
+    /// reads four columns from a store that has none — and, worse, would not fail
     /// loudly: KVC on a missing attribute is what the record's tolerant reads are
-    /// built to survive, so the census would simply always be nil.
-    func testTheCurrentModelVersionIsV9() throws {
+    /// built to survive, so every marker would simply always be nil and every row
+    /// would read unseen forever.
+    func testTheCurrentModelVersionIsV10() throws {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         let momd = try XCTUnwrap(
             bundles.compactMap { $0.url(forResource: "Conversations", withExtension: "momd") }.first,
@@ -511,6 +725,6 @@ final class ConversationsModelMigrationTests: XCTestCase {
         let plist = try XCTUnwrap(
             NSDictionary(contentsOf: momd.appendingPathComponent("VersionInfo.plist")),
             "a compiled momd always carries VersionInfo.plist")
-        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 9")
+        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 10")
     }
 }

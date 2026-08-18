@@ -54,6 +54,50 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
     /// ("Try photos again"). Nil (v3 row) == false.
     let hideEarlierPhotos: Bool
 
+    // ACCOUNT-WIDE ATTENTION MARKERS — real `Conversation` attributes and real
+    // CloudKit fields, mirrored to every device the user owns. Read that against
+    // the TURN-STATE PROJECTION block directly below, which is the exact
+    // opposite: derived per fetch, stored nowhere, gone the moment the fetch
+    // that filled it is discarded. Folding the two groups together is the
+    // mistake this note exists to stop — the "derived, cheap to drop, recompute
+    // it later" reflex applied to one of these three silently discards a durable
+    // synced fact that no later fetch can rebuild. They are also permanent: the
+    // production CloudKit schema is additive-only, so none of the three can ever
+    // be renamed or withdrawn.
+
+    /// When this thread was last looked at, on ANY of the user's devices. Nil
+    /// means never viewed anywhere — including every row written before this
+    /// attribute existed, which is why nothing may read a nil as "seen".
+    let lastViewedAt: Date?
+    /// WHICH failure the account acknowledged: the `Message.deliveryAttemptID`
+    /// of the failed turn the user was actually shown. An identity, never a
+    /// time — asking again mints a new attempt ID on the retried turn and this
+    /// stored one simply stops matching, which re-arms the red mark without
+    /// anything having to clear a marker. Nil = nothing acknowledged here.
+    ///
+    /// WRITE-ONCE-FORWARD, and it is never written nil. A writer that cannot
+    /// name an attempt does nothing at all: nil is not "acknowledge as of now"
+    /// (there is no such fallback under identity) and it is not a value to
+    /// store either, because writing it would ERASE an acknowledgement made on
+    /// another device and relight the mark on all of them — a cross-device
+    /// regression triggered by opening a conversation. The id a writer stores
+    /// is the one on the failed turn it actually DREW; re-reading the aggregate
+    /// at write time would let a failure that imported seconds before the tap
+    /// be acknowledged without ever having been on screen.
+    let failureSeenAttemptID: UUID?
+    /// Versioned envelope naming this conversation's newest message — schema
+    /// version, message id, its `createdAt`, its role — so a surface can answer
+    /// "is the tail a reply?" from the conversation row alone. That question is
+    /// otherwise a per-row message fetch, which is exactly what the wrist's
+    /// whole list design refuses to pay.
+    ///
+    /// Untrusted on read and valid ONLY on a full match, `lastActivityAt`
+    /// included: a build that appends a message without writing this string
+    /// leaves a well-formed envelope describing the wrong tail, so any mismatch
+    /// in either direction means stale rather than authoritative. Nil = never
+    /// written.
+    let tailProjection: String?
+
     // TURN-STATE PROJECTION — derived, NOT Core Data attributes, NOT CloudKit
     // fields. Filled ONLY by `ConversationStore.fetchConversations(activity:)`
     // from the whole-store unresolved-turn aggregate. Nil everywhere else
@@ -68,8 +112,14 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
 
     /// Newest still-`sending` USER turn in this conversation.
     let newestSendingAt: Date?
-    /// Newest still-`failed` USER turn in this conversation.
-    let newestFailedAt: Date?
+    /// Newest still-`failed` USER turn in this conversation — its stamp AND its
+    /// `Message.deliveryAttemptID` as one value. They travel together because
+    /// they describe one turn and an acknowledgement is matched against the
+    /// identity while the mark is bounded by the stamp; split apart, a surface
+    /// could pair one turn's stamp with another turn's identity and report a
+    /// failure acknowledged that the user was never shown. See
+    /// `FailedTurnProjection`.
+    let newestFailed: FailedTurnProjection?
 
     init(
         id: UUID,
@@ -80,8 +130,11 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
         backend: String,
         titleSnippet: String?,
         hideEarlierPhotos: Bool = false,
+        lastViewedAt: Date? = nil,
+        failureSeenAttemptID: UUID? = nil,
+        tailProjection: String? = nil,
         newestSendingAt: Date? = nil,
-        newestFailedAt: Date? = nil
+        newestFailed: FailedTurnProjection? = nil
     ) {
         self.id = id
         self.title = title
@@ -91,8 +144,11 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
         self.backend = backend
         self.titleSnippet = titleSnippet
         self.hideEarlierPhotos = hideEarlierPhotos
+        self.lastViewedAt = lastViewedAt
+        self.failureSeenAttemptID = failureSeenAttemptID
+        self.tailProjection = tailProjection
         self.newestSendingAt = newestSendingAt
-        self.newestFailedAt = newestFailedAt
+        self.newestFailed = newestFailed
     }
 
     /// Defensive bridge from the all-optional Core Data entity. Every field
@@ -110,17 +166,39 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
         self.titleSnippet = managedObject.value(forKey: "titleSnippet") as? String
         // Compat flag (v4 model): nil (v3 row / partial sync) == false.
         self.hideEarlierPhotos = ((managedObject.value(forKey: "hideEarlierPhotos") as? NSNumber)?.boolValue) ?? false
+        // Account-wide attention markers (v10 model): nil-tolerant like every
+        // field here, and a nil is the ABSENCE of a fact, never a default. A v9
+        // row, and a CloudKit row that arrives before these attributes land,
+        // both read nil — "nothing recorded", never "everything already seen".
+        // Native UUID attributes, so there is no malformed-string parsing path
+        // to get wrong; a non-UUID value simply reads nil.
+        self.lastViewedAt = managedObject.value(forKey: "lastViewedAt") as? Date
+        self.failureSeenAttemptID = managedObject.value(forKey: "failureSeenAttemptID") as? UUID
+        self.tailProjection = managedObject.value(forKey: "tailProjection") as? String
         // Derived, never stored: the aggregate that fills these runs over
         // `Message`, so a single-conversation materialization cannot know them.
         self.newestSendingAt = nil
-        self.newestFailedAt = nil
+        self.newestFailed = nil
     }
 
     /// Copy carrying this conversation's unresolved-turn stamps. The only
     /// writer is `ConversationStore.fetchConversations(activity: .turnStates)`,
     /// which reads them from ONE whole-store aggregate rather than a per-row
     /// fan-out.
-    func withTurnStates(newestSendingAt: Date?, newestFailedAt: Date?) -> ConversationRecord {
+    ///
+    /// EVERY OTHER FIELD IS CARRIED BY HAND HERE, and the three account-wide
+    /// markers are the ones that hurt if they are not. This rebuilds the record
+    /// from scratch and sits on the path of EVERY list fetch, so omitting
+    /// `lastViewedAt` breaks no build and fails almost no test — it makes every
+    /// row on every surface read a nil marker, a nil marker reads as "never
+    /// viewed", and the entire list goes bold with an amber unseen disc on each
+    /// answered thread. Omitting `failureSeenAttemptID` relights every failure
+    /// the user already acknowledged, everywhere, for the same reason. Add a
+    /// stored field to this struct and you add a line here.
+    func withTurnStates(
+        newestSendingAt: Date?,
+        newestFailed: FailedTurnProjection?
+    ) -> ConversationRecord {
         ConversationRecord(
             id: id,
             title: title,
@@ -130,8 +208,11 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
             backend: backend,
             titleSnippet: titleSnippet,
             hideEarlierPhotos: hideEarlierPhotos,
+            lastViewedAt: lastViewedAt,
+            failureSeenAttemptID: failureSeenAttemptID,
+            tailProjection: tailProjection,
             newestSendingAt: newestSendingAt,
-            newestFailedAt: newestFailedAt
+            newestFailed: newestFailed
         )
     }
 

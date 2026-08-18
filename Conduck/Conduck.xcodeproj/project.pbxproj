@@ -26,6 +26,7 @@
 		63C0DE110000000000000022 /* WatchOutboxMintGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000021 /* WatchOutboxMintGateTests.swift */; };
 		63C0DE110000000000000032 /* WatchSTTKeyBlackoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */; };
 		63C0DE110000000000000042 /* WatchRelayQueueRetryabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */; };
+		63C0DE110000000000000052 /* WatchConversationRowStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C0DE110000000000000051 /* WatchConversationRowStateTests.swift */; };
 		63FA00032F6A1B0A00A00003 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 63FA00022F6A1B0A00A00002 /* FluidAudio */; };
 		63ST00032F6A1B0A00ST0003 /* ShareTargetFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */; };
 		63TX00032F6A1B0A00TX0003 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 63TX00022F6A1B0A00TX0002 /* Textual */; };
@@ -152,6 +153,7 @@
 		63C0DE110000000000000021 /* WatchOutboxMintGateTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchOutboxMintGateTests.swift; sourceTree = "<group>"; };
 		63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchSTTKeyBlackoutTests.swift; sourceTree = "<group>"; };
 		63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchRelayQueueRetryabilityTests.swift; sourceTree = "<group>"; };
+		63C0DE110000000000000051 /* WatchConversationRowStateTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConversationRowStateTests.swift; sourceTree = "<group>"; };
 		63C0F1D12F6A1B0A00C0F1D1 /* Identity.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Identity.xcconfig; sourceTree = "<group>"; };
 		63ST00012F6A1B0A00ST0001 /* ShareTargetFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareTargetFilter.swift; path = ConduckShareExtensionMac/ShareTargetFilter.swift; sourceTree = SOURCE_ROOT; };
 		63WC00012F6A1B0A00WC0001 /* WebPageCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WebPageCapture.swift; path = ConduckShareExtensionMac/WebPageCapture.swift; sourceTree = SOURCE_ROOT; };
@@ -241,6 +243,7 @@
 				Services/Storage/ConduckStorage.swift,
 				Services/Storage/InMemoryStorage.swift,
 				Services/Storage/LiveStorage.swift,
+				Services/Storage/ReadStateStore.swift,
 				Services/STT/AppleSpeechRunner.swift,
 				Services/STT/CustomVoiceEndpoint.swift,
 				Services/STT/Providers/ElevenLabsSTTProvider.swift,
@@ -467,6 +470,7 @@
 				57D97EB749763DF8E3A5BC86 /* WatchFileLaneReturnCapabilityTests.swift */,
 				63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */,
 				63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */,
+				63C0DE110000000000000051 /* WatchConversationRowStateTests.swift */,
 			);
 			path = ConduckWatchTests;
 			sourceTree = "<group>";
@@ -804,6 +808,7 @@
 				0810000C9526DF4B5A80B517 /* WatchFileLaneReturnCapabilityTests.swift in Sources */,
 				63C0DE110000000000000032 /* WatchSTTKeyBlackoutTests.swift in Sources */,
 				63C0DE110000000000000042 /* WatchRelayQueueRetryabilityTests.swift in Sources */,
+				63C0DE110000000000000052 /* WatchConversationRowStateTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

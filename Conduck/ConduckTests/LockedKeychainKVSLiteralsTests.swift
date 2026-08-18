@@ -247,6 +247,50 @@ final class LockedKeychainKVSLiteralsTests: XCTestCase {
                        "On-launch-mode KVS key literal changed.")
     }
 
+    // MARK: - Read-state keys (legacy marker prefixes + the account cutover pair)
+
+    func testReadStateKeyLiterals() {
+        // The two LEGACY marker prefixes. Read-and-drain-only — nothing writes a
+        // new one — but they are still on every installed device, and
+        // `ReadStateStore`'s construction sweep finds them by these exact
+        // strings. A rename makes the sweep find nothing: the read markers never
+        // fold into their conversation records (so a year of already-read
+        // threads arrives bold on the next launch) and the failure markers are
+        // never retired (so they sit in the App-Group domain forever).
+        XCTAssertEqual(Constants.conversationReadStatePrefix, "conversations.readState.",
+                       "Legacy read-marker key PREFIX changed — the drain finds nothing and already-read threads go bold.")
+        XCTAssertEqual(Constants.conversationFailureSeenPrefix, "conversations.failureSeen.",
+                       "Legacy failure-marker key PREFIX changed — the retirement sweep finds nothing.")
+
+        // The account cutover's LOCAL MIRROR. The name says "epoch" because that
+        // is what it held on every already-installed device; the meaning is the
+        // account cutover. Renaming it resets every installed device to an
+        // unstamped cutover, and everything older than its next launch arrives
+        // bold on every surface at once.
+        XCTAssertEqual(Constants.conversationReadStateEpochKey, "conversations.readState.epoch",
+                       "Account-cutover local mirror key changed — every installed device resets to an unstamped cutover.")
+
+        // The account cutover's iCloud KVS key — the one read-state value that
+        // travels through KVS rather than through the conversation record.
+        // Renaming it splits the fleet in two: devices on either name meet a
+        // different register and stop converging, with no visible symptom beyond
+        // dots that disagree.
+        XCTAssertEqual(Constants.conversationReadCutoverKVSKey, "conversations.readCutover",
+                       "Account-cutover KVS key changed — devices on the old and new names stop converging.")
+
+        // The mirror and the register are DISTINCT keys in DISTINCT stores.
+        // Collapsing them to one literal would be harmless today and a trap the
+        // moment either store grows a prefix scan over the other's namespace.
+        XCTAssertNotEqual(Constants.conversationReadStateEpochKey, Constants.conversationReadCutoverKVSKey,
+                          "The cutover's local mirror and its KVS register must stay distinct keys.")
+
+        // The KVS key must NOT sit under the legacy marker prefix. That prefix's
+        // sweep deletes every key beneath it that does not parse as a UUID
+        // marker, so a cutover key nested there would be swept as an orphan.
+        XCTAssertFalse(Constants.conversationReadCutoverKVSKey.hasPrefix(Constants.conversationReadStatePrefix),
+                       "The cutover KVS key must not sit under the legacy marker prefix — the orphan sweep would delete it.")
+    }
+
     // MARK: - Image-history policy keys
 
     func testImageHistoryPolicyKeyLiterals() {

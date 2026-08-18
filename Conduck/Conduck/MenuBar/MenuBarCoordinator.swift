@@ -82,6 +82,108 @@ struct QuickDestinationSnapshot: Equatable {
     }
 }
 
+// MARK: - Menu-bar attention (derived, never accumulated)
+
+/// What the status item's two dots are showing, as ONE value derived from the
+/// stored conversation rows.
+///
+/// WHY DERIVED RATHER THAN ACCUMULATED, because the obvious implementation is
+/// the other one: two in-memory `Set<UUID>`s that local turn-completion events
+/// write into. That version is wrong in a way only a second device exposes. A
+/// reply arriving purely by CloudKit from another Mac raises no event in this
+/// process, so it bolds a list row while the status item stays dark — the menu
+/// bar and the list on the same screen answering the same question from
+/// different evidence.
+///
+/// Because a read on any device is a fact about the ACCOUNT, the mirror image of
+/// that gap is worse than the gap. An imported read empties the list row while a
+/// set this process filled keeps its dot lit beside it, pointing at a
+/// conversation with nothing left in it — and nothing local ever arrives to
+/// retire it, because the event that would have was somebody else's tap on
+/// another device. A derived value cannot contradict the list, because it IS the
+/// same value.
+///
+/// SAME RESOLVER, SAME INPUTS, SAME DEVICE-LOCAL HALVES. `rowState` goes through
+/// `ConversationRowActivity.state`, which is also what the list row, its mark and
+/// its status line resolve through — so this device's optimistic view overlay and
+/// its in-flight claims are folded in here exactly as they are there. One
+/// definition, three surfaces.
+///
+/// NO STORE FETCH — it reads only the rows it is handed (plus the two in-memory
+/// singletons every list row already consults), so the whole derivation can be
+/// exercised on hand-built rows with no container, no Keychain and no popover.
+struct MenuBarAttention: Equatable {
+    /// Conversations whose newest message is an agent reply nobody has looked at
+    /// yet, on any of the user's devices.
+    var unreadConversationIDs: Set<UUID> = []
+    /// Conversations reporting a send failure the account has not acknowledged.
+    var failedConversationIDs: Set<UUID> = []
+    /// The freshest member of each set — what a dot-click opens.
+    var mostRecentUnread: UUID?
+    var mostRecentFailure: UUID?
+
+    /// Resolve ONE picker row exactly as the conversation list resolves it.
+    ///
+    /// `tailRole` comes from the stored tail envelope rather than a per-row
+    /// message fetch: the picker reads a bounded number of conversations in one
+    /// aggregate and must not turn that into one query per row. An envelope that
+    /// is absent, malformed, stale or written by a newer build yields `nil`, which
+    /// the resolver reads as NOT PROJECTED and which suppresses the unseen branch
+    /// rather than guessing at it — a missing dot, never a wrong one.
+    static func rowState(
+        _ row: ConversationStore.RecentConversation,
+        now: Date = Date()
+    ) -> ConversationRowState {
+        ConversationRowActivity.state(
+            inputs: ConversationActivityInputs(
+                recent: row,
+                tailRole: TailProjection.read(
+                    row.tailProjection,
+                    lastActivityAt: row.lastActivityAt
+                ).role
+            ),
+            conversationID: row.id,
+            now: now
+        )
+    }
+
+    /// Fold a set of rows into the two dots.
+    ///
+    /// Freshness is decided by each row's own `lastActivityAt` rather than by the
+    /// order the caller happened to hand them over, so "what a dot-click opens" is
+    /// a property of the account's data and not of a fetch's sort descriptor —
+    /// and stays right if a caller ever passes an unsorted or merged list.
+    static func derive(
+        from rows: [ConversationStore.RecentConversation],
+        now: Date = Date()
+    ) -> MenuBarAttention {
+        var attention = MenuBarAttention()
+        var newestUnreadAt: Date?
+        var newestFailureAt: Date?
+        for row in rows {
+            let state = rowState(row, now: now)
+            if state.hasUnseenReply {
+                attention.unreadConversationIDs.insert(row.id)
+                if newestUnreadAt.map({ row.lastActivityAt > $0 }) ?? true {
+                    newestUnreadAt = row.lastActivityAt
+                    attention.mostRecentUnread = row.id
+                }
+            }
+            // An ACKNOWLEDGED failure keeps its red mark in the list — the
+            // message still did not go — but loses the alert, which is what this
+            // dot is. So the dot tracks the unacknowledged ones only.
+            if state.activity == .failed, !state.failureAcknowledged {
+                attention.failedConversationIDs.insert(row.id)
+                if newestFailureAt.map({ row.lastActivityAt > $0 }) ?? true {
+                    newestFailureAt = row.lastActivityAt
+                    attention.mostRecentFailure = row.id
+                }
+            }
+        }
+        return attention
+    }
+}
+
 /// `@MainActor` long-lived owner of the macOS capture → agent round-trip.
 /// Created once in `AppDelegate.applicationDidFinishLaunching`.
 @MainActor
@@ -120,9 +222,11 @@ final class MenuBarCoordinator {
 
     /// Reuse-or-mint a thread VM. The VM posts `.conversationReplyArrived` on
     /// every macOS reply success and decides nothing about presentation; this
-    /// coordinator observes it and owns BOTH cues — the menu-bar unread dot
-    /// (`noteReplyArrived`) and the reply banner
-    /// (`postReplyBannerIfUnattended`).
+    /// coordinator observes it and owns the reply banner
+    /// (`postReplyBannerIfUnattended`). It does NOT own the status-item dots
+    /// through that event — those are derived from the stored rows
+    /// (`MenuBarAttention`), and the event's only remaining attention job is to
+    /// settle a thread the user is watching the reply land in.
     func viewModel(for id: UUID) -> ConversationDetailViewModel {
         if let existing = vmRegistry[id] { return existing }
         let vm = ConversationDetailViewModel(conversationID: id)
@@ -267,42 +371,15 @@ final class MenuBarCoordinator {
     /// starts from an answer that is already correct.
     private(set) var newChatSeedRef: RemoteAgentRef = .builtin(Constants.remoteAgentDefaultBackendDefault)
 
-    // MARK: - Reply-arrived menu-bar cue
-
-    /// Conversations whose latest agent reply landed while the user wasn't
-    /// looking at that thread. Drives the status-item unread dot (ONE dot when
-    /// non-empty — count is unreadable at 18pt and ambiguous when one thread is
-    /// read but another isn't). Holds BOTH in-app replies
-    /// (`.conversationReplyArrived`) and background/share replies
-    /// (`.remoteAgentTurnDidComplete`) — see `init`'s observers.
-    ///
-    /// STORED (not a computed view over `unreadOrder`): the icon refresh in
-    /// `MenuBarController.observeStateChanges` reads this inside a
-    /// `withObservationTracking`, and a SHARE reply changes ONLY this — there is
-    /// no capture-state / `isAwaitingReply` flip to piggyback the re-fire on (as
-    /// the in-app path has). A computed view over the array does not reliably
-    /// register that dependency, so the dot wouldn't repaint until some other
-    /// event forced a refresh. Kept in lockstep with `unreadOrder`.
-    private(set) var unreadReplyConversationIDs: Set<UUID> = []
-
-    /// Arrival order (last = most recent) so a dot-click opens the freshest
-    /// reply. Parallel to `unreadReplyConversationIDs` (membership); both are
-    /// mutated together in `noteReplyArrived` / `clearUnread`.
-    private var unreadOrder: [UUID] = []
-
-    /// The most recently arrived unread thread — the one a dot-click opens.
-    var mostRecentUnreadConversationID: UUID? { unreadOrder.last }
-
-    /// Whether the status-item icon should show the unread dot.
-    var hasUnreadReply: Bool { !unreadReplyConversationIDs.isEmpty }
+    // MARK: - Menu-bar attention (both status-item dots)
 
     /// The thread the popover is CURRENTLY showing (nil when closed). The
-    /// explicit "is the user looking at this right now" signal for the unread
-    /// gate — `ActiveViewTracker` is too blunt here (it also counts background
-    /// main-window mounts) and `showPopover` can run before the quick lane is
-    /// bound. Set on popover show / quick-lane rebind-while-shown; cleared on
-    /// close. NOT set during the window-composer-mic auto-open (the popover
-    /// shows a HUD for a window capture whose quick thread may be stale).
+    /// explicit "is the user looking at this right now" signal — `ActiveViewTracker`
+    /// is too blunt here (it also counts background main-window mounts) and
+    /// `showPopover` can run before the quick lane is bound. Set on popover show /
+    /// quick-lane rebind-while-shown; cleared on close. NOT set during the
+    /// window-composer-mic auto-open (the popover shows a HUD for a window capture
+    /// whose quick thread may be stale).
     private(set) var popoverVisibleConversationID: UUID?
 
     /// The thread the MAIN WINDOW's detail column is showing while that window
@@ -326,122 +403,169 @@ final class MenuBarCoordinator {
     /// retain the view's state object.
     @ObservationIgnored weak var popoverSpeaker: ThreadSpeaker?
 
-    /// A reply landed for `id` — mark it unread (moved to most-recent) UNLESS the
-    /// popover or the ACTIVE main window is showing that exact thread right now
-    /// (then the user already sees it). Re-noting an already-unread thread
-    /// refreshes its recency.
+    /// Conversations whose newest message is an agent reply nobody has looked at
+    /// yet, on ANY of the user's devices. Drives the status-item unread dot — ONE
+    /// dot when non-empty, because a count is unreadable at 18pt and ambiguous
+    /// when one thread is read but another isn't.
     ///
-    /// NEVER POST A NOTIFICATION FROM HERE. BOTH reply observers funnel into
-    /// this method, and one of them (`.remoteAgentTurnDidComplete` — the share
-    /// drain / background landing) has already posted its own banner. A post
-    /// here would emit two banners for one reply and consume the burst-chime
-    /// window twice. The banner lives in the `.conversationReplyArrived`
-    /// observer alone.
-    func noteReplyArrived(_ id: UUID) {
-        guard id != popoverVisibleConversationID,
-              id != windowVisibleConversationID else { return }
-        unreadOrder.removeAll { $0 == id }
-        unreadOrder.append(id)
-        unreadReplyConversationIDs.insert(id)   // stored → drives the icon refresh
-    }
+    /// STORED rather than computed over `quickRecents`: the icon refresh in
+    /// `MenuBarController.observeStateChanges` reads this inside a
+    /// `withObservationTracking`, and a background/share landing changes ONLY
+    /// this — there is no capture-state / `isAwaitingReply` flip to piggyback the
+    /// re-fire on (as the in-app path has). Written only by `refreshAttention`,
+    /// and only when the value actually differs.
+    private(set) var unreadReplyConversationIDs: Set<UUID> = []
 
-    /// The user viewed `id` (popover opened/rebound onto it, or the window
-    /// navigated to it) — drop its unread mark. The dot stays lit if others
-    /// remain unread.
-    func clearUnread(_ id: UUID) {
-        unreadOrder.removeAll { $0 == id }
-        unreadReplyConversationIDs.remove(id)
-        markViewedLocally(id)
-    }
-
-    /// Stamp the device-local "last looked at" marker that drives the
-    /// conversation LIST's unviewed treatment. Called from every acknowledgement
-    /// seam the menu bar owns, so the two surfaces settle together: opening a
-    /// thread clears its dot AND un-bolds its row.
-    ///
-    /// `lastActivityAt` comes from the cached picker recents when the thread is
-    /// in them, and is nil otherwise — nil is not a failure case, it just means
-    /// the marker clamps to `now`, which is exactly "I looked at this now".
-    ///
-    /// DOCUMENTED DIVERGENCE, deliberately not fixed here: the menu-bar dot is
-    /// populated by local completion EVENTS, while the list row is derived from
-    /// STORED data. A reply that arrives purely via CloudKit from another Mac
-    /// can therefore bold a list row without ever lighting the dot. Both are
-    /// honest about what they observe; unifying them is a much larger refactor.
-    private func markViewedLocally(_ id: UUID) {
-        ReadStateStore.shared.markViewed(
-            id,
-            lastActivityAt: quickRecents.first(where: { $0.id == id })?.lastActivityAt
-        )
-    }
-
-    // MARK: - Send-failure menu-bar cue (red dot)
-
-    /// Conversations whose send/turn FAILED while the user wasn't looking at
-    /// that thread. Drives the status-item RED dot — the failure analog of the
-    /// yellow unread dot, mirroring its shape EXACTLY (one dot when non-empty;
-    /// red takes precedence over yellow). "Unviewed failure" semantics: opening
-    /// the thread (where the inline failed bubble + Retry live) is the user
-    /// looking at it, so the dot clears on open.
-    ///
-    /// STORED (not computed) for the SAME reason as `unreadReplyConversationIDs`:
-    /// the icon refresh in `MenuBarController.observeStateChanges` reads this
-    /// inside a `withObservationTracking`, and a background/share failure changes
-    /// ONLY this — there is no capture-state flip to piggyback the re-fire on.
-    /// Kept in lockstep with `failedOrder`.
+    /// Conversations reporting a send failure the ACCOUNT has not acknowledged.
+    /// Drives the status-item RED dot — the failure analog of the yellow unread
+    /// dot, mirroring its shape EXACTLY (one dot when non-empty; red takes
+    /// precedence over yellow, because a failure is more urgent). Same
+    /// stored-not-computed reason as the set above.
     private(set) var failedConversationIDs: Set<UUID> = []
 
-    /// Arrival order (last = most recent) so a dot-click opens the freshest
-    /// failure. Parallel to `failedConversationIDs` (membership); both are
-    /// mutated together in `noteFailure` / `clearFailure`.
-    private var failedOrder: [UUID] = []
+    /// The freshest member of each set — the thread a dot-click opens. Freshest
+    /// by `lastActivityAt`, which is an ACCOUNT fact, rather than by the order
+    /// this process happened to hear about things.
+    private(set) var mostRecentUnreadConversationID: UUID?
+    private(set) var mostRecentFailureConversationID: UUID?
 
-    /// The most recently failed thread — the one a red-dot click opens.
-    var mostRecentFailureConversationID: UUID? { failedOrder.last }
+    /// Whether the status-item icon should show the unread dot.
+    var hasUnreadReply: Bool { !unreadReplyConversationIDs.isEmpty }
 
     /// Whether the status-item icon should show the failure (red) dot.
     var hasFailure: Bool { !failedConversationIDs.isEmpty }
 
-    /// A send/turn failed for `id` — mark it failed (moved to most-recent)
-    /// UNLESS the popover or the ACTIVE main window is showing that exact thread
-    /// right now (then the user already sees the inline failed bubble).
-    /// Re-noting an already-failed thread refreshes its recency. Mirrors
-    /// `noteReplyArrived`.
-    func noteFailure(_ id: UUID) {
-        guard id != popoverVisibleConversationID,
-              id != windowVisibleConversationID else { return }
-        failedOrder.removeAll { $0 == id }
-        failedOrder.append(id)
-        failedConversationIDs.insert(id)   // stored → drives the icon refresh
+    /// Re-derive both dots from the rows currently in `quickRecents`.
+    ///
+    /// Synchronous and store-free: `refreshQuickCaches` owns the fetch, this owns
+    /// the derivation, and every seam that moves this device's optimistic view
+    /// overlay calls it directly — the overlay leads the store by a save plus an
+    /// import, and a dot must go out on the same runloop turn the user opens the
+    /// thread rather than a round-trip later.
+    ///
+    /// EACH WRITE IS EQUALITY-GUARDED, and that is a correctness requirement, not
+    /// tidiness. `@Observable` publishes every assignment, equal or not, and
+    /// `MenuBarController.handleStateChange` responds to a change on these two
+    /// sets by re-reporting the popover's visible thread — which stamps the read
+    /// marker, which saves, which posts `.conversationsDidChange`, which lands
+    /// back here. Unconditional assignment would close that circle into an
+    /// unbounded save loop for as long as the popover stays open.
+    private func refreshAttention(now: Date = Date()) {
+        let attention = MenuBarAttention.derive(from: quickRecents, now: now)
+        if unreadReplyConversationIDs != attention.unreadConversationIDs {
+            unreadReplyConversationIDs = attention.unreadConversationIDs
+        }
+        if failedConversationIDs != attention.failedConversationIDs {
+            failedConversationIDs = attention.failedConversationIDs
+        }
+        if mostRecentUnreadConversationID != attention.mostRecentUnread {
+            mostRecentUnreadConversationID = attention.mostRecentUnread
+        }
+        if mostRecentFailureConversationID != attention.mostRecentFailure {
+            mostRecentFailureConversationID = attention.mostRecentFailure
+        }
     }
 
-    /// The user viewed `id` — drop its failure mark. The red dot stays lit if
-    /// other threads remain failed. Called everywhere `clearUnread` is, so
-    /// opening a thread clears BOTH its unread and failed flags.
-    func clearFailure(_ id: UUID) {
-        failedOrder.removeAll { $0 == id }
-        // Membership BEFORE the removal: this method is called on every open,
-        // failed or not, and only a thread that actually had a failure to show
-        // can have had one seen. Acknowledging unconditionally would retire the
-        // list's red mark for a failure the user never opened.
-        let hadFailure = failedConversationIDs.remove(id) != nil
-        markViewedLocally(id)
-        guard hadFailure else { return }
-        // Same reasoning as `markViewedLocally`: the two surfaces settle
-        // together, so the menu-bar dot and the list row are never left
-        // disagreeing about whether the user has seen this failure.
-        //
-        // `failedAt: nil` — acknowledge as of NOW, deliberately, because this
-        // seam does not hold the failed turn's stamp. `quickRecents` is fetched
-        // WITHOUT turn states, so its `newestFailedAt` is always nil here, and
-        // substituting `lastActivityAt` would be a different field wearing the
-        // right parameter's name. Nil resolves to `now`, which acknowledges
-        // correctly whenever the turn was stamped by a clock this device agrees
-        // with. The residue is the clock-ahead-sibling case, where the mark
-        // simply survives until the user opens the real thread — and
-        // `ConversationThreadView`, which does hold the exact stamp, settles it
-        // there. A mark that clears one screen later is the safe direction.
-        ReadStateStore.shared.markFailureSeen(id, failedAt: nil)
+    /// The user is demonstrably looking at this thread — settle BOTH of its
+    /// attention markers, in ONE store transaction.
+    ///
+    /// ONE WRITE, NOT TWO. Opening a thread is a single act that is
+    /// simultaneously "I have looked at this" and "I have seen its failure".
+    /// Stamping the read marker and then acknowledging separately would mean two
+    /// saves, two change notifications and two CKRecord exports for one click,
+    /// plus a window in which a reload lands between them and renders the row
+    /// half-updated.
+    ///
+    /// THE MARKERS ARE ACCOUNT FACTS, not device ones — they land on
+    /// `Conversation.lastViewedAt` / `.failureSeenAttemptID` and reach the phone,
+    /// the iPad and the wrist. That is exactly why the caller has to be a surface
+    /// that has PROVEN it is on screen: retiring a mark from an intent to display
+    /// retires it everywhere, for a failure nobody saw.
+    ///
+    /// THE ATTEMPT ID COMES OFF THE PICKER PROJECTION, which is why `quickRecents`
+    /// is fetched WITH turn states. An acknowledgement names one
+    /// `Message.deliveryAttemptID` and is accepted only on exact equality, so
+    /// there is nothing this seam could substitute: a timestamp, or the
+    /// conversation's `lastActivityAt` wearing the right parameter's name, cannot
+    /// identify an attempt at all. The stamp and the identity travel together in
+    /// `FailedTurnProjection` precisely so this caller cannot pair one turn's time
+    /// with another turn's id.
+    ///
+    /// IT ACKNOWLEDGES ONLY A ROW THAT IS ACTUALLY PAINTING THE FAILURE, and that
+    /// test is now the resolver's own — the same `ConversationRowState` the list
+    /// row beside it renders — rather than membership of a set this process filled
+    /// from local events. Acknowledging unconditionally would retire the mark for
+    /// a failure that a later turn already superseded and the user therefore never
+    /// saw; asking the resolver keeps the question in one place and keeps the two
+    /// surfaces incapable of disagreeing about it.
+    ///
+    /// NIL IS THE SAFE RESIDUE, not a failure case: a conversation outside the
+    /// picker's row budget, or a failed turn from before the attribute existed,
+    /// acknowledges nothing here and keeps its red mark until the user reaches the
+    /// thread itself — `ConversationThreadView`, which reads the id straight off
+    /// the tail, settles it there. A mark that clears one screen later is the
+    /// direction this design always takes.
+    func noteConversationSeen(_ id: UUID) {
+        let recent = quickRecents.first(where: { $0.id == id })
+        let paintsFailure = recent.map { row in
+            let state = MenuBarAttention.rowState(row)
+            return state.activity == .failed && !state.failureAcknowledged
+        } ?? false
+        ReadStateStore.shared.markViewedAndAcknowledgeFailure(
+            id,
+            lastActivityAt: recent?.lastActivityAt,
+            attemptID: paintsFailure ? recent?.newestFailed?.deliveryAttemptID : nil
+        )
+        // The overlay moved; the dot has to follow it in this runloop turn, not
+        // after the save and the import that will eventually confirm it.
+        refreshAttention()
+    }
+
+    /// A reply landed for `id`.
+    ///
+    /// THIS DOES NOT RAISE THE DOT. The dot is derived from the stored rows, and
+    /// the append that produced this reply already posted
+    /// `.conversationsDidChange`, which refreshes them. What is left is the one
+    /// half no stored value can answer: whether the user is watching this land.
+    ///
+    /// POPOVER ONLY, deliberately. The popover hosts `DictationPopoverView`, not
+    /// `ConversationThreadView`, so the thread view's own re-stamp-on-every-new-tail
+    /// never fires for a popover glance and this is the only seam that can. The
+    /// main window needs no arm here precisely because it DOES host that view,
+    /// which re-stamps against the exact tail id; a second, coarser write from
+    /// here would be one more save and one more export for the same reply.
+    ///
+    /// The rows are refreshed BEFORE settling so the stamp and any attempt id are
+    /// taken against the turn that just landed rather than the projection from
+    /// before it.
+    ///
+    /// NEVER POST A NOTIFICATION FROM HERE. BOTH reply observers funnel into this
+    /// method, and one of them (`.remoteAgentTurnDidComplete` — the share drain /
+    /// background landing) has already posted its own banner. A post here would
+    /// emit two banners for one reply and consume the burst-chime window twice.
+    /// The banner lives in the `.conversationReplyArrived` observer alone.
+    func noteReplyArrived(_ id: UUID) {
+        settleIfWatchedInPopover(id)
+    }
+
+    /// A send/turn failed for `id`. Same contract as `noteReplyArrived`: the red
+    /// dot comes from the stored rows, and this settles the thread only when the
+    /// popover is the surface showing it — a failure under the user's eyes has
+    /// been seen, and its inline failed bubble is right there.
+    func noteFailure(_ id: UUID) {
+        settleIfWatchedInPopover(id)
+    }
+
+    /// Shared body of the two arrival hooks: refresh the projection, then settle
+    /// `id` if the popover is showing exactly it. A no-op otherwise — including
+    /// the refresh, because the change bus already drives one and a second fetch
+    /// per landing would buy nothing.
+    private func settleIfWatchedInPopover(_ id: UUID) {
+        guard id == popoverVisibleConversationID else { return }
+        Task { [weak self] in
+            await self?.refreshQuickCaches()
+            self?.noteConversationSeen(id)
+        }
     }
 
     // MARK: - macOS reply banner
@@ -520,14 +644,18 @@ final class MenuBarCoordinator {
         return nil
     }
 
-    /// Record that the popover is now showing `id` (clears its unread mark).
-    /// Pass nil on close. Skip the call entirely during the window-composer
-    /// auto-open path.
+    /// Record that the popover is now showing `id`, which settles both of that
+    /// thread's attention markers. Pass nil on close. Skip the call entirely
+    /// during the window-composer auto-open path.
+    ///
+    /// This is one of the two callbacks that report SETTLED visibility, and
+    /// therefore one of the two places allowed to retire an account-wide mark —
+    /// the popover is on screen and showing this thread, which is as close to
+    /// proof of attention as this surface can get.
     func setPopoverVisibleConversation(_ id: UUID?) {
         popoverVisibleConversationID = id
         if let id {
-            clearUnread(id)
-            clearFailure(id)   // viewing the thread settles its failure dot too
+            noteConversationSeen(id)
             // Retire this thread's banners. The popover hosts
             // `DictationPopoverView`, NOT `ConversationThreadView`, so that
             // view's own `.onAppear` clear never fires for a popover glance.
@@ -535,16 +663,22 @@ final class MenuBarCoordinator {
         }
     }
 
-    /// Record that the ACTIVE main window is now showing `id` — clears its
-    /// unread AND failure marks (clear-site parity with the popover pin), which
-    /// also covers re-activation: cmd-tabbing back to a window already on the
-    /// reply's thread reports here and settles the dot the arrival raised.
-    /// Pass nil when the window deactivates with the thread still mounted.
+    /// Record that the ACTIVE main window is now showing `id` — settling both of
+    /// that thread's attention markers, in parity with the popover pin. Pass nil
+    /// when the window deactivates with the thread still mounted.
+    ///
+    /// The second of the two settled-visibility callbacks, and the one that
+    /// covers re-activation: cmd-tabbing back to a window already parked on a
+    /// thread mounts nothing, so the thread view's own `.onAppear` stamp fired
+    /// long ago and this report is the only signal that the user is looking at it
+    /// again. `\.appearsActive`-gated at the reporter, so a thread merely mounted
+    /// in a backgrounded window never reaches here — which matters more than it
+    /// used to, because what it would retire is now the mark on the phone and the
+    /// wrist as well.
     func setWindowVisibleConversation(_ id: UUID?) {
         windowVisibleConversationID = id
         if let id {
-            clearUnread(id)
-            clearFailure(id)
+            noteConversationSeen(id)
             // Covers cmd-tabbing back onto an ALREADY-MOUNTED thread: the view's
             // `.onAppear` fired long ago, so this re-activation report is the
             // only signal that the user is looking at it again.
@@ -735,9 +869,21 @@ final class MenuBarCoordinator {
     /// generation breaks in favor of the latest arm.
     @ObservationIgnored private var armGeneration = 0
 
-    /// Recent threads (refreshed alongside the snapshot; ≤6). The synchronous
-    /// metadata source for `selectQuickDestination(.explicitConversation:)` — a
-    /// pick must not hop actors to label its own thread.
+    /// Recent threads, most-recently-active first (refreshed by
+    /// `refreshQuickCaches`; ≤6). Two jobs: the synchronous metadata source for
+    /// `selectQuickDestination(.explicitConversation:)` — a pick must not hop
+    /// actors to label its own thread — and the STORED FACTS both status-item dots
+    /// are derived from.
+    ///
+    /// THE ROW BUDGET BOUNDS THE DOTS, and the bound is benign in the direction it
+    /// bites. Both attention states imply recent activity: an unseen reply is a
+    /// message that just bumped `lastActivityAt`, and a reported failure is only
+    /// reported while it is still the conversation's last activity. So a thread
+    /// wanting attention leaves this window only once six OTHER threads have been
+    /// active more recently — and if all six are settled, the seventh is a genuinely
+    /// old unread rather than the thing the user just missed. The residue is a dot
+    /// that goes dark early, never one that lights wrongly, and the thread's own
+    /// list row keeps saying so.
     private(set) var quickRecents: [ConversationStore.RecentConversation] = []
 
     /// Cached custom-gateway roster, so `selectQuickDestination` resolves gateway
@@ -840,8 +986,16 @@ final class MenuBarCoordinator {
 
         // Conversation churn (new turns, deletes, renames) goes stale in the
         // destination label + recents otherwise. `refreshQuickDestination`
-        // internally no-ops while latched (a capture froze the snapshot) or
-        // while an explicit pick is sticky.
+        // internally no-ops the DESTINATION while latched (a capture froze the
+        // snapshot) or while an explicit pick is sticky; the row refresh behind it
+        // always runs.
+        //
+        // THIS IS WHAT DRIVES BOTH STATUS-ITEM DOTS. The store fans
+        // `.NSPersistentStoreRemoteChange` into this same notification, so a reply
+        // that arrives purely by CloudKit from another Mac — and a read that
+        // arrives from the iPad — reach the menu bar exactly as a local turn does.
+        // That equivalence is the entire reason the dots are derived rather than
+        // accumulated from local events.
         observerBox.observers.append(NotificationCenter.default.addObserver(
             forName: .conversationsDidChange,
             object: nil,
@@ -872,8 +1026,10 @@ final class MenuBarCoordinator {
         })
 
         // Reply-arrived (posted by `ConversationDetailViewModel` on every macOS
-        // FOREGROUND reply success) → raise the menu-bar unread dot for that
-        // thread AND post the reply banner.
+        // FOREGROUND reply success) → post the reply banner, and settle the
+        // thread if the popover is watching this land. NOT the dot: the append
+        // that produced this reply also posted `.conversationsDidChange`, and the
+        // observer above is what refreshes the rows both dots are derived from.
         //
         // THE BANNER LIVES HERE AND NOWHERE ELSE. Both reply observers funnel
         // into `noteReplyArrived`, and the OTHER one
@@ -900,11 +1056,11 @@ final class MenuBarCoordinator {
         // the agent bubble is persisted — `postTurnCompleted`, main queue). The
         // in-app macOS path appends in the foreground and posts
         // `.conversationReplyArrived` instead (no background delegate), so the two
-        // events are mutually exclusive per turn — observing both raises the dot
-        // for shares too without double-marking. We deliberately do NOT fire from
-        // the share drainer's success branch: the dispatch awaiter resumes BEFORE
-        // the reply is persisted, and a drainer post would also miss the
-        // relaunch-reconcile completion.
+        // events are mutually exclusive per turn — observing both means a share
+        // reply landing in the open popover settles it too. We deliberately do NOT
+        // fire from the share drainer's success branch: the dispatch awaiter
+        // resumes BEFORE the reply is persisted, and a drainer post would also
+        // miss the relaunch-reconcile completion.
         //
         // POSTS NO BANNER, deliberately: this path already posted one inside
         // `recordReply → finishRecordedReply → postReplyNotification`. Adding one
@@ -924,10 +1080,12 @@ final class MenuBarCoordinator {
 
         // A turn FAILED (posted by `BackgroundRemoteAgent` — background/headless
         // post-dispatch, share dispatch-failure, and `ConverseIntent`
-        // pre-dispatch all route through it). Raise the menu-bar RED dot for that
-        // thread unless the popover is showing it right now. A no-turn failure
-        // carries no thread (empty/absent conversationID) → the guard no-ops, and
-        // such failures surface via notification only, never the dot.
+        // pre-dispatch all route through it). Settles the thread when the popover
+        // is showing exactly it — the user is looking at the inline failed bubble,
+        // so the account has been shown this attempt. The RED dot itself comes
+        // from the stored rows, not from here. A no-turn failure carries no thread
+        // (empty/absent conversationID) → the guard no-ops, and such failures
+        // surface via notification only, never the dot.
         observerBox.observers.append(NotificationCenter.default.addObserver(
             forName: .remoteAgentTurnDidFail,
             object: nil,
@@ -1058,13 +1216,22 @@ final class MenuBarCoordinator {
     /// deliberately does NOT touch the quick lane or the per-device
     /// quick-capture pointer (implicit-only: quick captures write it; browsing
     /// must not retarget where the next hotkey capture lands).
+    ///
+    /// SETTLES NOTHING, deliberately, and this is the one thing about the method
+    /// worth remembering. Binding a lane is an INTENT to show a thread, not proof
+    /// that anything is on screen: a deep-link can arrive while the window is
+    /// closed, behind another app or miniaturized, and a sidebar pick can land in
+    /// a window the user then leaves without reading. Acknowledging here would
+    /// retire an ACCOUNT-wide mark — on the phone and the wrist too — for a reply
+    /// or a failure nobody looked at, and nothing ever re-arms one.
+    ///
+    /// The two visibility callbacks answer that question properly and both settle
+    /// on arrival: `setWindowVisibleConversation`, fed by `MainWindowView`'s
+    /// `\.appearsActive`-gated `WindowThreadVisibilityReporter`, and
+    /// `setPopoverVisibleConversation`. Whichever surface actually ends up showing
+    /// this thread reports it, and the marker is written then.
     func openConversation(_ id: UUID) {
         bindWindowViewModel(to: id)
-        // The user navigated to this thread — drop any unread-reply mark AND any
-        // failure mark (the inline failed bubble + Retry live in this thread, so
-        // opening it is "looking at the failure").
-        clearUnread(id)
-        clearFailure(id)
     }
 
     /// Clear the WINDOW lane so the window returns to its new-chat empty state;
@@ -1110,17 +1277,58 @@ final class MenuBarCoordinator {
     // MARK: - Quick destination (capture-time snapshot)
 
     /// Re-resolve the automatic destination + refresh the snapshot caches.
-    /// No-op while LATCHED (a capture armed — the press froze the snapshot) or
-    /// while the current destination is EXPLICIT (a pick is sticky until
-    /// consumed by a capture or reset/discarded). Called on launch, on
-    /// settings/conversation change, and after every turn settles.
+    /// The DESTINATION half is a no-op while LATCHED (a capture armed — the press
+    /// froze the snapshot) or while the current destination is EXPLICIT (a pick is
+    /// sticky until consumed by a capture or reset/discarded). Called on launch,
+    /// on settings/conversation change, and after every turn settles.
+    ///
+    /// THE CACHE HALF RUNS ON EVERY CALL, ahead of both guards, and that ordering
+    /// is load-bearing. Those guards protect the frozen destination; neither has
+    /// anything to say about the menu bar's dots, which are derived from the rows
+    /// this refresh fetches. Gating the fetch on them would freeze both dots for
+    /// the length of a capture — and the latch is held until the turn SETTLES, so
+    /// that is the whole multi-minute agent wait: a reply landing in another
+    /// thread, or a read arriving from the iPad, would not reach the status item
+    /// until the current turn finished.
     func refreshQuickDestination() async {
-        guard !quickDestinationLatched else { return }
+        var destinationIsExplicit = false
         switch quickDestination?.destination {
-        case .explicitNew, .explicitConversation: return
+        case .explicitNew, .explicitConversation: destinationIsExplicit = true
         case .automatic, nil: break
         }
+        guard !quickDestinationLatched, !destinationIsExplicit else {
+            await refreshQuickCaches()
+            return
+        }
         await resolveAutomaticDestinationNow()
+    }
+
+    /// Re-read everything this coordinator caches about the store and the gateway
+    /// roster, then re-derive the menu-bar dots from it.
+    ///
+    /// The ONE place `quickRecents` is written, which is why it also owns the
+    /// derivation: the rows and the dots must never be one fetch apart.
+    ///
+    /// The name caches come first so the automatic snapshot and every
+    /// `selectQuickDestination` pick resolve display names synchronously
+    /// afterwards — a menu tap must not hop actors to label its own pick.
+    private func refreshQuickCaches() async {
+        let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
+        let customs = await SettingsManager.shared.gatewayBadgeRoster()
+        quickCustomGateways = customs
+        quickDefaultGatewayName = RemoteAgentRefMetadata.displayName(for: defaultRef, customs: customs)
+        // WITH turn states: these rows answer both dots and carry the
+        // acknowledgement's attempt IDENTITY, which only this projection has.
+        // Without it the menu bar could resolve nothing but "unacknowledged" and
+        // would contradict the conversation list on the same screen — the exact
+        // inconsistency the account-wide markers exist to remove. The cost is ONE
+        // extra whole-store aggregate query per refresh (never one per row), on a
+        // path that already re-reads the picker rows.
+        quickRecents = (try? await conversationStore.fetchRecentForPicker(
+            limit: 6,
+            includeTurnStates: true
+        )) ?? []
+        refreshAttention()
     }
 
     /// The actual resolve — split from `refreshQuickDestination` so
@@ -1130,17 +1338,10 @@ final class MenuBarCoordinator {
         // The arm this resolve belongs to. If a NEWER arm lands before we reach
         // the write below, this resolve is stale and must NOT commit (a later
         // arm — notably the direct-response freeze — has already decided).
+        // Captured BEFORE the cache refresh, because that refresh awaits and a
+        // newer arm can land inside it.
         let generation = armGeneration
-        // Refresh the name caches first so the automatic snapshot + every
-        // `selectQuickDestination` pick resolve display names synchronously
-        // afterwards. Populated HERE (not the `refreshQuickDestination` wrapper)
-        // so the `armQuickCapture` force-resolve-while-latched path keeps them
-        // fresh too.
-        let defaultRef = await SettingsManager.shared.defaultRemoteAgentRef()
-        let customs = await SettingsManager.shared.gatewayBadgeRoster()
-        quickCustomGateways = customs
-        quickDefaultGatewayName = RemoteAgentRefMetadata.displayName(for: defaultRef, customs: customs)
-        quickRecents = (try? await conversationStore.fetchRecentForPicker(limit: 6)) ?? []
+        await refreshQuickCaches()
 
         // Pointer resolution rides the shared quick-capture helper (TTL +
         // default-gateway re-check): a pointer whose row is bound to a
@@ -1763,10 +1964,12 @@ final class MenuBarCoordinator {
                 // conversation meanwhile. Discard only our unused empty mint;
                 // never bind it over the user's newer selection.
                 try? await conversationStore.deleteConversation(id: fresh.id)
-                // Real deletion is the ONLY thing that drops a read-state
-                // marker (absence from a fetch is not one), so every delete
-                // path calls this — even a mint that never carried a marker.
-                ReadStateStore.shared.markDeleted(fresh.id)
+                // Real deletion is the ONLY thing that drops the device-local
+                // read-state residue (absence from a fetch is not one), so
+                // every delete path calls this — even a mint that never carried
+                // an echo. The durable markers need nothing: they are columns
+                // on the conversation and die with it by cascade.
+                ReadStateStore.shared.forget(fresh.id)
                 windowViewModel?.reportComposerDispatchRejection()
                 return false
             }

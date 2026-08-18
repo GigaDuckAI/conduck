@@ -14,16 +14,37 @@
 //
 // iOS/macOS only, by file location: the wrist renders delivery state as WORDS in
 // its existing date slot (it has neither the width for a mark nor the budget for
-// a clock), and CarPlay renders a phrase. `InFlightTurnRegistry` and
-// `ReadStateStore` are not Watch members either, so this file's re-resolution
-// could not compile there.
+// a clock), and CarPlay renders a phrase. `InFlightTurnRegistry` is not a Watch
+// target member either — the wrist has no local claim to probe, it keeps its own
+// App-Group in-flight marker — so this file's re-resolution could not compile
+// there. `ReadStateStore` IS one: what the user has already seen is an account
+// fact, so the wrist reads and writes it through the same store every other
+// surface does, and only the claim probe stays phone-and-Mac-shaped.
 
 import SwiftUI
 
 // MARK: - Shared derivation
 
-/// The ONE place a conversation-list row's state is derived from the two
+/// The ONE place a conversation-list row's state is derived from the
 /// device-local sources the resolver needs.
+///
+/// There is exactly one of those left, and the asymmetry is the design.
+/// `lastViewed` is an OPTIMISTIC OVERLAY — this device's most recent local
+/// intent, folded by `max` with the account-wide marker riding on the record so
+/// that backing out of a thread un-bolds the row on the same runloop turn
+/// instead of waiting on a save plus an import. Acknowledgement has no such
+/// overlay and takes no argument here: it is an identity match against one
+/// delivery attempt, and no device-local value can say WHICH attempt was seen,
+/// so it is answered entirely from the record's own `failureSeenAttemptID`.
+///
+/// The record's own `lastViewedAt` is handed to `ReadStateStore.lastViewed`
+/// even though it also reaches the resolver inside `inputs`, and the apparent
+/// duplication is deliberate. That parameter IS the record's account-wide
+/// marker, and this is the one caller that holds the row it belongs to, so
+/// passing nil would be telling the store there is none — a lie that would make
+/// its answer wrong for any other reader that trusted it. Folding the same
+/// value on both sides costs nothing: every source involved is monotone and the
+/// fold is `max`, which is idempotent.
 ///
 /// Static and shared because THREE readers must reach the same answer for one
 /// row: `ConversationListViewModel.rowState` (which decides the bold title and
@@ -45,8 +66,10 @@ enum ConversationRowActivity {
         ConversationActivityResolver.resolve(
             inputs,
             locallyLiveSince: InFlightTurnRegistry.shared.liveSince(conversationID, now: now),
-            lastViewedAt: ReadStateStore.shared.lastViewed(conversationID),
-            failureSeenAt: ReadStateStore.shared.lastFailureSeen(conversationID),
+            lastViewedAt: ReadStateStore.shared.lastViewed(
+                conversationID,
+                stored: inputs.storedLastViewedAt
+            ),
             now: now
         )
     }

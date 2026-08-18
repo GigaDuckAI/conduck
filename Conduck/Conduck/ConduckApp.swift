@@ -506,13 +506,20 @@ struct ConduckApp: App {
             await CarPlayConverseUploader.shared.liveConversationIDs()
         }
 
-        // 6c. Stamp this device's first sight of the unviewed-reply feature.
-        //     HERE, in deterministic app init — never from a SwiftUI `body`.
-        //     A body-stamped epoch both creates state during rendering and races
+        // 6c. Resolve the ACCOUNT read cutover — the moment before which the
+        //     absence of a marker means "already seen" rather than "we were not
+        //     recording yet". Stamps a local value if this device has none, arms
+        //     the iCloud change feed, and meets whatever the account already
+        //     holds by `min`.
+        //
+        //     HERE, in deterministic app init — never from a SwiftUI `body`. A
+        //     body-stamped cutover both creates state during rendering and races
         //     the CloudKit import: a reply that imported at 10:00 would be
         //     classified as already-read because the first row happened to
-        //     render at 10:01. Idempotent after the first launch.
-        ReadStateStore.shared.stampEpochIfNeeded()
+        //     render at 10:01. Idempotent after the first launch, and
+        //     synchronous — `synchronize()` schedules an exchange rather than
+        //     waiting for one, so nothing here blocks the first frame.
+        ReadStateStore.shared.resolveAccountCutover()
 
         // 7. Warm the conversation store at launch so NSPersistentCloudKitContainer
         //    starts mirroring immediately, rather than lazily when the list first

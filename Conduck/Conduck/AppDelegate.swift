@@ -157,13 +157,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.isPowerOffInProgress = true }
         }
 
-        // Stamp this device's first sight of the unviewed-reply feature. HERE,
-        // in deterministic app init — never from a SwiftUI `body`, which both
-        // creates state during rendering and races the CloudKit import (a reply
-        // that imported at 10:00 would be classified read because the first row
-        // happened to render at 10:01). Idempotent after the first launch.
-        // Mirrors the iOS `ConduckApp.init` wiring.
-        ReadStateStore.shared.stampEpochIfNeeded()
+        // Resolve the ACCOUNT read cutover — the moment before which the absence
+        // of a marker means "already seen" rather than "we were not recording
+        // yet". Stamps a local value if this Mac has none, arms the iCloud
+        // change feed, and meets whatever the account already holds by `min`.
+        //
+        // HERE, in deterministic app init — never from a SwiftUI `body`, which
+        // both creates state during rendering and races the CloudKit import (a
+        // reply that imported at 10:00 would be classified read because the
+        // first row happened to render at 10:01). Idempotent after the first
+        // launch. Mirrors the iOS `ConduckApp.init` wiring — the two platforms
+        // share no launch code at all, so this call genuinely has to exist twice.
+        ReadStateStore.shared.resolveAccountCutover()
 
         // "Show in Dock" ON → promote to a Dock app at launch (PERMANENT): Dock
         // icon + top app menu appear with NO window and NO focus grab (deliberately

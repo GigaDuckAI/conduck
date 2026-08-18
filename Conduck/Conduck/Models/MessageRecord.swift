@@ -397,6 +397,48 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
     /// written with no send at all, so nil means "no send state to show" and
     /// the UI treats it as `sent`.
     let status: String?
+    /// Identity of the delivery attempt this turn's `status` reports on.
+    ///
+    /// This is what an acknowledgement points AT: the red mark is retired only
+    /// while `Conversation.failureSeenAttemptID` equals this exact value, so
+    /// asking again re-arms the mark by minting a NEW id here rather than by
+    /// clearing anything — which is what removes the whole class of "a stale
+    /// write silenced a live failure" bug.
+    ///
+    /// MINTED WHERE AN ATTEMPT BEGINS AND WHERE ONE IS DECLARED FAILED, over
+    /// whatever identity the row already carries: on insert as `sending`, on a
+    /// retry's `failed → sending` compare-and-set, on the clone path's synthetic
+    /// `failed` stamp (a row with no attempt behind it at all, so it is given
+    /// one rather than inheriting the source turn's), and on every writer that
+    /// declares a user turn `failed` — the plain send-state writer, the failure
+    /// classifier including its classification upgrade, and the launch sweep for
+    /// stale `sending` turns. `ConversationStore` owns all of them, and only a
+    /// write that genuinely changes the row reaches the mint.
+    ///
+    /// SO WHAT AN ACKNOWLEDGEMENT MATCHES IS THE LATEST FAILURE DECLARATION,
+    /// not one immutable id per semantic delivery. Preserving the id across a
+    /// re-declaration is the tempting inversion, and it is the unsafe one:
+    /// several authorities declare a single delivery failed — the writers above
+    /// — and they run on DIFFERENT DEVICES against unreconciled replicas, while
+    /// `Message` rows converge under record-level last-writer-wins. A device
+    /// rejoining late would then republish, as the winning write, the identity
+    /// the account has already acknowledged, for a failure whose latest attempt
+    /// nobody was ever shown; `failed` is terminal, nothing touches that row
+    /// again, and the message renders as though it sent. A fresh id makes that
+    /// export self-defeating — it names something no acknowledgement can match,
+    /// so the mark stands. The price is a bounded OVER-report, which costs one
+    /// thread open, and that is the direction this app takes every time.
+    /// `ConversationStore.mintDeliveryAttemptID` carries the full trace.
+    ///
+    /// Nil on agent turns, on a headless capture with no send at all, and on a
+    /// row written before this attribute existed that no writer here has since
+    /// declared failed. A nil can never be matched, so such a failure stays
+    /// marked — the safe direction. The one compatibility case that runs the
+    /// OTHER way is a RETRY performed by a build with no such attribute: it
+    /// writes only the status column, so the row keeps the id the account
+    /// already acknowledged and the re-failure resolves silent rather than red.
+    /// `ConversationActivity.swift` step 2b states that exposure in full.
+    let deliveryAttemptID: UUID?
     /// Failure classification: the `AppError.errorCode` the turn failed
     /// with. Nil while `sending`/`sent`, on legacy failed rows, and after a
     /// successful retry (cleared with the `sent` flip). NEVER a raw server
@@ -475,6 +517,7 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
         createdAt: Date,
         sourceDevice: String,
         status: String? = nil,
+        deliveryAttemptID: UUID? = nil,
         failureCode: Int? = nil,
         failureWireCode: String? = nil,
         failureHadHistoryImages: Bool? = nil,
@@ -491,6 +534,7 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
         self.createdAt = createdAt
         self.sourceDevice = sourceDevice
         self.status = status
+        self.deliveryAttemptID = deliveryAttemptID
         self.failureCode = failureCode
         self.failureWireCode = failureWireCode
         self.failureHadHistoryImages = failureHadHistoryImages
@@ -513,6 +557,12 @@ struct MessageRecord: Identifiable, Hashable, Sendable {
         // `status` is nil-tolerant: a legacy row (no attribute / nil value) is
         // treated as `sent` by the UI, so a nil here is correct, not a default.
         self.status = managedObject.value(forKey: "status") as? String
+        // `deliveryAttemptID` (v10 model): nil-tolerant, and a nil is the
+        // ABSENCE of an identity rather than a default — an attempt nobody can
+        // name is an attempt nobody can acknowledge, which leaves its failure
+        // marked. Native UUID attribute, so a malformed value reads nil and
+        // there is no string-parsing path to get wrong.
+        self.deliveryAttemptID = managedObject.value(forKey: "deliveryAttemptID") as? UUID
         // Failure-classification fields (v4 model). All nil-tolerant: a v3 row (or a
         // partially-synced CloudKit row) simply has no classification, which
         // renders as the generic failure copy. `failureCode` is a non-scalar

@@ -51,11 +51,30 @@ struct ConversationThreadView: View {
     /// scroll state.
     let viewModel: ConversationDetailViewModel
 
-    /// Whether the scene hosting this thread is the one the user is actually
-    /// looking at. Read ONLY by `acknowledgeVisibleFailure` — a thread mounted
-    /// in a backgrounded window or an inactive iPad scene must not retire a
-    /// failure mark for an error nobody saw.
+    /// Whether the WINDOW hosting this thread is the one the user is actually
+    /// looking at — the macOS half of `threadIsExposed`.
+    ///
+    /// MACOS-MEANINGFUL ONLY. On iOS this environment value is bridged from the
+    /// `activeAppearance` UIKit trait, which no iPhone or iPad reports as
+    /// inactive, so it reads `true` there whatever the user is doing. It stays
+    /// in the expression on both platforms anyway: it costs nothing, and a
+    /// future iPadOS that does report per-window activation tightens the gate
+    /// for free rather than needing this file changed again.
     @Environment(\.appearsActive) private var appearsActive
+
+    /// The lifecycle phase of the scene hosting this thread — the iOS TRIGGER
+    /// for re-asking the markers, not the evidence they are gated on. A scene
+    /// returning to `.active` is the iOS twin of a macOS window becoming the one
+    /// the user is looking at, and it is the moment a suppressed stamp becomes
+    /// takeable. The gate itself reads UIKit live (`threadIsExposed`), because
+    /// this value is frozen inside the deferred retry's `.task`.
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// A marker write this view owed and could not take, because the thread was
+    /// not exposed at the moment the event that owed it arrived. Drives the
+    /// deferred retry attached below; see the comment there for the stuck state
+    /// it exists to prevent.
+    @State private var markersDeferred = false
 
     /// The host-owned Settings VM, borrowed for ONE thing: the "Review file
     /// setup" route out of the output-discovery fault row. Passed in rather than
@@ -252,9 +271,10 @@ struct ConversationThreadView: View {
         .onAppear {
             ActiveViewTracker.track(viewModel.conversationID)
             // The acknowledgement seam. Opening the thread IS the act of
-            // looking at it, so it stamps the device-local read marker (which
-            // un-bolds its list row) and retires any banner still sitting in
-            // Notification Center pointing here.
+            // looking at it, so it stamps the read marker (which un-bolds its
+            // list row here, on the iPad, on the Mac and on the wrist — the
+            // marker is an account fact now) and retires any banner still
+            // sitting in Notification Center pointing here.
             markThreadViewed()
             acknowledgeVisibleFailure()
             NotificationDeepLink.clearDelivered(for: viewModel.conversationID)
@@ -284,13 +304,72 @@ struct ConversationThreadView: View {
         .onChange(of: viewModel.messages.last?.status) { _, _ in
             acknowledgeVisibleFailure()
         }
-        // Coming BACK to a window that was inactive when the failure landed. The
-        // gate above rejected it then; the user is looking at the error now, so
-        // this is the moment it counts as seen. Without this arm the mark would
-        // survive until the thread was navigated away from and re-entered.
+        // Coming BACK to a window that was inactive when the reply or the
+        // failure landed. The gate rejected BOTH markers then; the user is
+        // looking at them now, so this is the moment they count as seen.
+        // Without this arm a macOS window raised from the background would keep
+        // its row bold and its red mark until the thread was navigated away
+        // from and re-entered — and, because both markers are account facts,
+        // would keep them that way on every other device too.
         .onChange(of: appearsActive) { _, isActive in
-            if isActive { acknowledgeVisibleFailure() }
+            guard isActive else { return }
+            markThreadViewed()
+            acknowledgeVisibleFailure()
         }
+        #if os(iOS)
+        // The iOS twin of the arm above. `appearsActive` never moves on this
+        // platform, so "the window became the one you are looking at" arrives
+        // here instead, as the scene returning to `.active`.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            markThreadViewed()
+            acknowledgeVisibleFailure()
+        }
+        #endif
+        // THE DEFERRED STAMP. Every arm above reports at the instant its own
+        // event arrives, and an event that arrives while the thread is covered
+        // is otherwise simply lost — nothing re-fires when a sheet goes away.
+        //
+        // The concrete stuck state that produces is on the iPhone, where the
+        // conversation LIST is a sheet over the thread: a reply landing while
+        // that sheet is open is correctly withheld, the user then taps the row
+        // for the thread they are ALREADY in, no view identity changes, no
+        // `.onAppear` runs, and that row stays bold — on every device — until
+        // some future message happens to arrive.
+        //
+        // So a suppressed write is remembered and retried, and the retry POLLS,
+        // deliberately. UIKit publishes no notification for "the modal over you
+        // went away"; a page sheet gives its presenter no appearance callback
+        // at all (iOS 13 changed that); and SwiftUI is free to skip re-running
+        // this view's `body` when the host's presentation binding flips,
+        // because none of this view's own values changed. A poll is the only
+        // signal that is correct in both directions.
+        //
+        // ITS COST IS BOUNDED BY CONSTRUCTION: it exists only after a write was
+        // actually suppressed, it stops on the first exposed reading, and
+        // `.task(id:)` cancels it when the thread unmounts or the debt clears.
+        // A thread nobody ever covered starts no task at all.
+        //
+        // iOS ONLY, because macOS has the notification the poll is standing in
+        // for. There `threadIsExposed` IS `appearsActive`, and the
+        // `.onChange(of: appearsActive)` arm above already re-runs both markers
+        // the moment the window becomes the one the user is looking at. Compiled
+        // in, the poll would wake twice a second for as long as a Conduck window
+        // sat on a thread behind another app — which is hours, or a whole
+        // working day — for a debt that arm settles on its own.
+        #if os(iOS)
+        .task(id: markersDeferred) {
+            guard markersDeferred else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                guard threadIsExposed else { continue }
+                markThreadViewed()
+                acknowledgeVisibleFailure()
+                if !markersDeferred { return }
+            }
+        }
+        #endif
         .onDisappear { ActiveViewTracker.untrack(viewModel.conversationID) }
         // Copy conversation — declared HERE (not in the three host views) so
         // the child `.toolbar` merges into each host's nav bar: iPhone
@@ -453,7 +532,64 @@ struct ConversationThreadView: View {
         }
     }
 
-    /// Stamp the device-local "last looked at" marker for this thread.
+    /// Whether the user can actually SEE this thread right now — the single
+    /// gate on both marker writes below.
+    ///
+    /// IT IS ONE PROPERTY WITH TWO PLATFORM ANSWERS because the platforms
+    /// expose completely different evidence, and reading the wrong one is
+    /// silent rather than broken.
+    ///
+    /// macOS: `appearsActive`, and nothing else. A Mac's windows are
+    /// independently active or not, so this is the whole question there, and it
+    /// is the same signal `WindowThreadVisibilityReporter` already uses for the
+    /// menu-bar dot — deliberately, so the two surfaces can never disagree
+    /// about whether a window was being looked at.
+    ///
+    /// iOS/iPadOS: `appearsActive` reads `true` unconditionally (see its own
+    /// declaration), so it proves nothing and `ThreadCoverage.isThreadExposed`
+    /// stands in for it. That asks UIKit two things at once: is there a
+    /// foreground-ACTIVE scene at all (which rejects a thread left mounted in a
+    /// backgrounded or mid-transition scene), and is anything presented over it
+    /// (which rejects a thread that is mounted, in an active scene, and covered
+    /// anyway — the ordinary state of this app, not an edge case: the iPhone
+    /// presents its conversation LIST as a sheet over the open thread, and both
+    /// idioms present Settings over it).
+    ///
+    /// IT ASKS UIKIT RATHER THAN READING `scenePhase`, and that is not a style
+    /// choice. This property is also evaluated from inside the deferred retry's
+    /// `.task`, and a SwiftUI task captures the view value it STARTED with — so
+    /// an `@Environment` read there answers with the phase the task began in.
+    /// A retry armed while a sheet covered the thread and still running after
+    /// the user backgrounded the app would see a frozen `.active`, find no sheet
+    /// (the scene is no longer foreground-active, so nothing is presented in
+    /// one), and stamp a thread nobody is looking at — for every device on the
+    /// account. `scenePhase` still drives the `.onChange` arm below, because a
+    /// phase change is a good moment to RE-ASK; it is just not the evidence.
+    ///
+    /// WHAT THE IPAD CASE HAD TO GET RIGHT. The split view's detail column is
+    /// mounted for as long as a conversation is selected, and at regular width
+    /// it is on screen beside the sidebar — that is a thread the user is
+    /// reading, and it must count as viewed. So the gate deliberately asks
+    /// nothing about navigation structure: not whether the sidebar is showing,
+    /// not what `NavigationSplitViewVisibility` resolved to, not whether this
+    /// view is the top of a stack. Every one of those answers "not visible" for
+    /// a perfectly visible iPad thread. Only an actual presentation on top of
+    /// the scene covers it.
+    ///
+    /// FAILING TOWARDS "NOT EXPOSED" IS THE SAFE DIRECTION, and the asymmetry
+    /// is why the sloppier reading is acceptable in one direction only. A false
+    /// "covered" costs a row that stays bold a moment longer and is repaired by
+    /// the deferred retry. A false "exposed" marks an unread reply read on
+    /// every device the user owns, permanently, because nothing re-bolds a row.
+    private var threadIsExposed: Bool {
+        #if os(macOS)
+        appearsActive
+        #else
+        appearsActive && ThreadCoverage.isThreadExposed
+        #endif
+    }
+
+    /// Stamp the "last looked at" marker for this thread.
     ///
     /// `lastActivityAt` is the newest bubble's stamp rather than `Date()` alone:
     /// message timestamps are local wall clock, so a reply mirrored from a
@@ -462,18 +598,39 @@ struct ConversationThreadView: View {
     /// clamps anything implausibly far ahead, so a badly-skewed device costs a
     /// stuck dot rather than silence.
     ///
-    /// CAVEAT, benign and deliberate: on macOS a background window keeping a
-    /// thread mounted marks it viewed. The menu-bar dot uses the stricter
-    /// `appearsActive`-gated window report, so the more urgent cue is unaffected.
+    /// GATED ON `threadIsExposed`, AND THAT GATE IS LOAD-BEARING. This write
+    /// lands on `Conversation.lastViewedAt`, which reaches every device on the
+    /// account, so a thread merely MOUNTED where nobody is looking — a macOS
+    /// window idling behind other apps, a backgrounded phone — would read the
+    /// user's replies for them: the phone in their pocket goes quiet for a
+    /// reply nobody saw, and nothing ever re-bolds a row. The failure is
+    /// silent, permanent, and remote from the machine that caused it, which is
+    /// the worst shape a bug can have.
+    ///
+    /// It is not enough that some OTHER surface applies a stricter gate. A
+    /// device-local marker could lean on the menu-bar dot answering through
+    /// `WindowThreadVisibilityReporter`, because the two disagreeing cost one
+    /// Mac one wrong row. An account-wide marker has no such fallback: whatever
+    /// this writes is the answer every surface on every device gives.
+    ///
+    /// A suppressed stamp is NOT dropped — it is owed, and the deferred retry
+    /// attached to the body takes it as soon as the thread is exposed again.
     private func markThreadViewed() {
+        guard threadIsExposed else {
+            markersDeferred = true
+            return
+        }
+        markersDeferred = false
         ReadStateStore.shared.markViewed(
             viewModel.conversationID,
             lastActivityAt: viewModel.messages.last?.createdAt
         )
     }
 
-    /// Stamp the device-local "I have seen this thread's failure" marker, which
-    /// is what retires the list row's red mark.
+    /// Record that the user has been shown THIS delivery attempt's failure,
+    /// which is what retires the list row's red mark — on every device, because
+    /// the acknowledgement rides on the conversation record rather than on this
+    /// one.
     ///
     /// A SEPARATE marker from `markThreadViewed`, and separately gated, because
     /// the read marker is stamped the instant the user's own message appears —
@@ -481,33 +638,54 @@ struct ConversationThreadView: View {
     /// red mark for everything sent from the composer. See the `ReadStateStore`
     /// header.
     ///
+    /// IT NAMES AN ATTEMPT, NOT A TIME. `Message.deliveryAttemptID` is minted
+    /// when a delivery attempt BEGINS, so `beginRetry` gives a re-ask a new one
+    /// while its `createdAt` stays frozen at the original send. A timestamp
+    /// acknowledgement therefore could not tell "seen" from "seen the PREVIOUS
+    /// attempt", and a re-failure would quietly keep the mark the first
+    /// acknowledgement retired. An id nothing names is not acknowledged, so a
+    /// tail carrying none (a row from before the attribute existed) stays red —
+    /// the safe direction, and `acknowledgeFailure` makes that nil a no-op
+    /// rather than a wildcard.
+    ///
     /// GATED ON THE TAIL, which is exact rather than an approximation: the list
     /// paints `.failed` only while the newest failed turn is still the
     /// conversation's last activity, which means it IS the tail. So this needs
-    /// no store aggregate of its own and cannot drift from what the list shows.
+    /// no store aggregate of its own and cannot drift from what the list shows —
+    /// including the attempt id, which comes off that same tail row rather than
+    /// from a second read that could name a different turn.
     ///
     /// Mirrors `deliveryErrorRow`'s own suppression: a turn awaiting its clone
     /// continuation shows no error row here, so there is nothing for the user to
     /// have seen, and acknowledging it would retire a mark for an error the
     /// thread deliberately withheld.
     ///
-    /// GATED ON `appearsActive`, unlike `markThreadViewed`, and the difference
-    /// is deliberate. That method documents its background-window caveat as
-    /// benign BECAUSE the menu-bar dot answers through the stricter
-    /// `appearsActive` report, so the urgent cue survives. For the failure mark
-    /// there is no second surface to fall back on — the list row is the only
-    /// one — so a thread merely MOUNTED in a backgrounded window must not
-    /// retire it. Same rule `WindowThreadVisibilityReporter` applies: a reply
-    /// (or a failure) landing where nobody is looking has not been seen.
+    /// GATED ON `threadIsExposed`, the SAME gate `markThreadViewed` takes.
+    /// Both markers are account facts, both decide for devices the user is not
+    /// holding, and one shared gate is the only construction under which the
+    /// two can never disagree about whether this thread was on screen — a
+    /// second, separately-worded visibility test would drift the first time
+    /// either was edited. Same rule `WindowThreadVisibilityReporter` applies: a
+    /// reply (or a failure) landing where nobody is looking has not been seen.
     private func acknowledgeVisibleFailure() {
-        guard appearsActive,
-              let tail = viewModel.messages.last,
+        // THE TAIL TEST COMES FIRST, and the order is deliberate. A debt is only
+        // owed when there is actually a failure to acknowledge, and this is
+        // called on every status flip of the newest bubble — the overwhelmingly
+        // common one being an ordinary send succeeding. Taking the visibility
+        // gate first would arm the deferred retry for those too, leaving a
+        // covered thread polling twice a second to settle a debt that was never
+        // incurred.
+        guard let tail = viewModel.messages.last,
               tail.role == "user",
               tail.status == "failed",
               !awaitsCloneContinuation(tail) else { return }
-        ReadStateStore.shared.markFailureSeen(
+        guard threadIsExposed else {
+            markersDeferred = true
+            return
+        }
+        ReadStateStore.shared.acknowledgeFailure(
             viewModel.conversationID,
-            failedAt: tail.createdAt
+            attemptID: tail.deliveryAttemptID
         )
     }
 
@@ -3223,3 +3401,82 @@ final class FilePreviewCoordinator {
 extension Notification.Name {
     static let scrollThreadToBottom = Notification.Name("scrollThreadToBottom")
 }
+
+#if os(iOS)
+// MARK: - Modal coverage
+
+/// Whether anything is presented on top of the app's own UI right now.
+///
+/// THE QUESTION IT ANSWERS is "is the thread the user is looking at, or is
+/// something in front of it" — the iOS half of `ConversationThreadView
+/// .threadIsExposed`. UIKit has no direct API for it, and the obvious
+/// substitutes are all wrong here: SwiftUI does not send `onDisappear` to
+/// content behind a sheet, `scenePhase` stays `.active` throughout a
+/// presentation, and `appearsActive` is a macOS signal that iOS reports as
+/// `true` forever. What IS knowable is whether a view controller in the scene
+/// is presenting one, so that is what this asks.
+///
+/// SCENE-WIDE, NOT VIEW-RELATIVE, and that is sound only because of where this
+/// view is mounted: on iOS the thread is always in the root hierarchy — the
+/// iPhone `NavigationStack`, the iPad split view's detail column — and is never
+/// itself inside a sheet. So anything presented in its scene is by definition
+/// in front of it, including the sheets the thread presents itself (an
+/// attachment full-screen, the file-setup sheet, a Quick Look preview), which
+/// genuinely do cover it.
+///
+/// A DISMISSAL IN FLIGHT READS AS EXPOSED (`isBeingDismissed`). Without that,
+/// the ordinary "tap a row in the list sheet" path would evaluate this while
+/// the sheet was still animating away and suppress the stamp for a thread the
+/// user had just deliberately opened.
+///
+/// THE WALK IS A TREE, NOT A CHAIN. SwiftUI presents from whichever hosting
+/// controller owns the modifier, which is frequently a child of the window's
+/// root rather than the root itself, so following `presentedViewController`
+/// from the root alone misses those. The walk is bounded by the depth of one
+/// scene's controller tree and runs only at the handful of moments a marker is
+/// written or retried.
+///
+/// MULTIPLE FOREGROUND-ACTIVE SCENES (iPad Stage Manager) are answered
+/// coarsely: a sheet in one of the user's windows suppresses stamping in the
+/// other. That is the safe direction, and the deferred retry repairs it the
+/// moment the sheet closes.
+///
+/// ONE PROPERTY ANSWERS BOTH HALVES, deliberately. "Is a scene foreground-active"
+/// and "is something presented in it" are the same walk over the same objects,
+/// and asking them separately is what would let a caller take the second answer
+/// against a scene that is no longer on screen: NOTHING is presented in a
+/// backgrounded scene, so a coverage-only test reads "exposed" for an app the
+/// user has put away. This is also the LIVE form of `scenePhase == .active`,
+/// which matters because `ConversationThreadView.threadIsExposed` is evaluated
+/// from inside a long-running `.task` whose captured `@Environment` values are
+/// frozen at task start.
+@MainActor
+private enum ThreadCoverage {
+    static var isThreadExposed: Bool {
+        var sawForegroundActiveScene = false
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene,
+                  windowScene.activationState == .foregroundActive else { continue }
+            sawForegroundActiveScene = true
+            // `.normal` only: the keyboard, alerts routed to their own window
+            // and other system chrome ride higher levels, and none of them mean
+            // the user has stopped looking at the thread.
+            for window in windowScene.windows where window.windowLevel == .normal {
+                guard let root = window.rootViewController else { continue }
+                if presentsAnything(root) { return false }
+            }
+        }
+        return sawForegroundActiveScene
+    }
+
+    private static func presentsAnything(_ controller: UIViewController) -> Bool {
+        if let presented = controller.presentedViewController, !presented.isBeingDismissed {
+            return true
+        }
+        for child in controller.children where presentsAnything(child) {
+            return true
+        }
+        return false
+    }
+}
+#endif

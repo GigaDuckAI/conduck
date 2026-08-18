@@ -190,6 +190,18 @@ final class WatchConversationViewModel {
             // the two derived fields the equality skip below would swallow it.
             let fresh = try await store.fetchConversations(activity: .turnStates)
             hasCompletedInitialLoad = true
+            // Read-state housekeeping on the SAME main-actor turn the rows are
+            // assigned, so a row never renders against fresh records and a stale
+            // overlay. Two jobs, both PUSHES: retire the optimistic echoes these
+            // records have caught up with, and fold the legacy device-local read
+            // keys of the conversations that actually turned up. It has to
+            // happen here because `ReadStateStore`'s reads are pure — a getter
+            // that retired its own entry would mutate `@Observable` state from
+            // inside a SwiftUI `body` — which leaves the fetch site the only
+            // place retirement can occur. Unconditional, ahead of the equality
+            // skip below: the TTL and the legacy drain still have work to do on
+            // a pass whose list came back byte-identical.
+            ReadStateStore.shared.reconcile(with: fresh)
             // Assign only on a REAL change — the records are Hashable value
             // snapshots, and `@Observable` invalidates on reassignment regardless
             // of equality, so a no-op pass (e.g. the CloudKit remote-change echo
@@ -207,18 +219,49 @@ final class WatchConversationViewModel {
     }
 
     /// Resolve one list row's activity SYNCHRONOUSLY, for `body` — the row
-    /// renders it in the date slot, so this must not await and must not fetch.
+    /// renders it in the date slot and in its trailing mark, so this must not
+    /// await and must not fetch.
     ///
-    /// `lastViewedAt: nil`, `failureSeenAt: nil` and `tailRole: nil` are
-    /// LOAD-BEARING, not placeholders. The Watch keeps no read state: its app
-    /// has its own container, so a wrist marker could only ever record
-    /// wrist-viewing, and "I read this on my watch" is not a fact the phone
-    /// should inherit. And it projects no tail role: that costs a per-row
-    /// message fetch on the slowest device in the fleet, which is the same
-    /// reason the rows carry no preview. The first and last nils suppress the
-    /// unseen branch entirely, so `.answeredUnseen` cannot arise here; the
-    /// middle one leaves a failure permanently unacknowledged on the wrist,
-    /// which is correct — the phone's acknowledgement is the phone's.
+    /// EVERY ATTENTION INPUT COMES OFF THE RECORD, which is the whole reason the
+    /// wrist can show a mark at all. `Conversation.lastViewedAt` and
+    /// `Conversation.failureSeenAttemptID` are CloudKit-mirrored columns, so a
+    /// thread read on the iPad arrives here already read, and a failure
+    /// acknowledged on the Mac arrives here already acknowledged — with no
+    /// wrist-local marker to keep, and no extra query. The Watch app has its own
+    /// container, so a wrist-local marker could only ever have recorded
+    /// wrist-viewing; riding the record is what removes that limitation instead
+    /// of working around it.
+    ///
+    /// `tailRole` COMES FROM THE STORED TAIL ENVELOPE, NEVER FROM A MESSAGE
+    /// QUERY. "Is the newest message a reply?" is otherwise a per-row message
+    /// fetch on the slowest device in the fleet — the same cost these rows
+    /// already refuse for a preview — and `Conversation.tailProjection` exists
+    /// precisely so the wrist does not pay it.
+    ///
+    /// A STALE OR ABSENT ENVELOPE SUPPRESSES THE UNSEEN MARK RATHER THAN
+    /// GUESSING AT IT. `TailProjectionReading.role` is nil for both cases, and
+    /// nil means NOT PROJECTED, which makes the resolver withhold the unseen
+    /// branch entirely. iOS and macOS answer a stale envelope with the lazy tail
+    /// fetch they can afford and schedule a repair; the wrist has neither
+    /// option, and guessing is the one answer that can fail in the unsafe
+    /// direction — a guessed `.agent` would light an amber disc on the user's
+    /// own last message, and a guessed `.user` would hide a genuinely unread
+    /// reply. Showing nothing is the honest third answer, and the repair the
+    /// phone schedules is what ends it.
+    ///
+    /// Failure acknowledgement takes no argument at all: it is an identity match
+    /// against one delivery attempt, and both sides of that match — the failed
+    /// turn's `deliveryAttemptID` and the conversation's `failureSeenAttemptID`
+    /// — ride in on the record this method is handed. No device-local value
+    /// could answer it, because no timestamp can say WHICH attempt was seen.
+    ///
+    /// `ReadStateStore.lastViewed` folds this device's OPTIMISTIC OVERLAY over
+    /// the record's own marker by `max`. That overlay is what un-bolds a row on
+    /// the same runloop turn the user backs out of a thread, instead of leaving
+    /// it lit for as long as a background save plus a CloudKit import takes. It
+    /// is a PURE read — retirement happens in `reload()`'s `reconcile`, never
+    /// here, because an `@Observable` mutation from inside a SwiftUI `body` is a
+    /// rendering error.
     ///
     /// `locallyLiveSince` is this wrist's own App-Group in-flight marker, read
     /// through `WatchRecordingService` rather than the raw defaults keys. It is
@@ -227,10 +270,15 @@ final class WatchConversationViewModel {
     /// for a reply…"). Neither is ever a reason to write.
     func rowState(for convo: ConversationRecord, now: Date = Date()) -> ConversationRowState {
         ConversationActivityResolver.resolve(
-            ConversationActivityInputs(record: convo, tailRole: nil),
+            ConversationActivityInputs(
+                record: convo,
+                tailRole: TailProjection.read(
+                    convo.tailProjection,
+                    lastActivityAt: convo.lastActivityAt
+                ).role
+            ),
             locallyLiveSince: WatchRecordingService.shared.liveTurnStartedAt(for: convo.id, now: now),
-            lastViewedAt: nil,
-            failureSeenAt: nil,
+            lastViewedAt: ReadStateStore.shared.lastViewed(convo.id, stored: convo.lastViewedAt),
             now: now
         )
     }
@@ -244,6 +292,15 @@ final class WatchConversationViewModel {
                 // landed — without this they would sit invisible until the
                 // inbox's age bound expired them.
                 attachmentInbox.purgeConversation(conversation.id)
+                // Same rule for the read-state residue. The durable markers are
+                // columns on the conversation and die with it by cascade, so
+                // this drops only what is device-local: the optimistic echo, and
+                // any legacy read key that can no longer fold now that its
+                // record is gone. A real deletion is the ONE authoritative
+                // signal that those are dead — absence from a fetch is not,
+                // because an offline wrist launch reads a partial local mirror
+                // long before the CloudKit import lands.
+                ReadStateStore.shared.forget(conversation.id)
                 conversations.removeAll { $0.id == conversation.id }
                 changeGeneration += 1
             } catch {

@@ -28,6 +28,20 @@
 // merge-timing dependency, and each write commits before `postDidChange()`
 // fires (observers refetch committed rows — read-your-own-write holds).
 //
+// Account-wide attention markers: `Conversation.lastViewedAt`,
+// `failureSeenAttemptID` and `tailProjection` are ordinary mirrored columns, so
+// what the user has already seen is a fact about the ACCOUNT rather than about
+// one device. Every write path to them obeys one rule — WRITE, SAVE AND POST
+// ONLY WHEN THE VALUE ACTUALLY MOVES. It is not an optimisation. A marker write
+// that always looks like a change posts `.conversationsDidChange`, which reloads
+// every list, which re-stamps the open thread, which writes again — a refetch
+// loop locally and a CKRecord export per turn against the user's own iCloud
+// (`MessageRecord.encodedNames` documents the same failure from the other end).
+// The pair also has a single-transaction entry point, because the menu bar marks
+// viewed AND acknowledges on one click and two calls would mean two saves, two
+// exports and a reload that can land between them and paint the row half
+// updated.
+//
 // No Spotlight indexing (`SpotlightIndexer` / the
 // `FeatureFlags` gate) — conversations are not Spotlight-surfaced in V1.
 //
@@ -124,6 +138,318 @@ struct CloneResult: Sendable {
     /// before any of this runs. The store's job is to leave the turn in a state
     /// where BOTH answers work — see the `failed` rule on `cloneConversation`.
     let continuationMessageID: UUID?
+}
+
+/// What `foldLegacyReadMarker` tells its caller about ONE device-local read
+/// marker it was asked to fold into the conversation record.
+///
+/// THE CALLER DELETES THE DEFAULTS KEY ONLY ON A CONFIRMATION, which is the
+/// whole reason this is a return value rather than a fire-and-forget call. The
+/// legacy key is the read-side fallback that keeps a row from going bold while
+/// the fold is pending, so deleting it on anything less than "the record now
+/// covers this" loses the marker outright — the conversation reverts to unread
+/// on every device, with nothing left anywhere to recover it from. A failed
+/// fold keeps its key, keeps answering reads, and is retried on the next pass.
+///
+/// CROSS-TARGET: declared here beside the store for the same reason
+/// `CloneResult` is — pure Foundation, visible to the Watch target.
+enum ReadMarkerFoldOutcome: Sendable, Hashable {
+    /// The record's `lastViewedAt` is already at or past the local marker, so
+    /// there was nothing to write. The key is covered and may be deleted.
+    case alreadyCovered
+    /// The record's `lastViewedAt` moved forward to the local marker and the
+    /// save committed. The key is covered and may be deleted.
+    case saved
+    /// Nothing was committed — the store would not load, the conversation is not
+    /// present locally (an import that has not landed yet is NOT a deletion), or
+    /// the save threw. KEEP THE KEY.
+    case failed
+}
+
+/// The decoded form of `Conversation.tailProjection`: which message is this
+/// conversation's newest, when it was written, and whether it is a reply.
+///
+/// WHY THE COLUMN EXISTS AT ALL. The unseen test is "the tail is an agent reply
+/// AND `lastActivityAt` is past the account's view marker". iOS and macOS answer
+/// the first half with a lazy per-row tail fetch; the wrist deliberately projects
+/// no role, because a per-row message fetch on the slowest device in the fleet is
+/// exactly what its whole list design refuses to pay — so without a projection
+/// carried ON the conversation row the Watch can never show an unseen mark at
+/// all. One string on a record already in flight buys that.
+///
+/// WHY IT IS VERSIONED AND WHY IT IS VALIDATED AGAINST `lastActivityAt`. A bare
+/// `lastMessageRole` column would go stale INVISIBLY in a mixed-version fleet: a
+/// build that appends a reply, bumps `lastActivityAt` and never touches the role
+/// leaves a perfectly well-formed value describing the wrong tail, and a newer
+/// device would then withhold the mark for a genuinely unread reply. So the
+/// envelope carries its own version, the tail's identity, the millisecond it was
+/// written at and its role, and is VALID ONLY ON A FULL MATCH — recognised
+/// version, parseable UUID, known role, parseable millisecond count, AND a
+/// millisecond count equal to the conversation's own `lastActivityAt` quantised
+/// the same way. Any mismatch in either direction is stale. That clause is what
+/// makes a missed write detectable at all: nothing else in the string can
+/// reveal that a message landed after it.
+///
+/// GRAMMAR — FROZEN ONCE `Conversations 10` DEPLOYS TO PRODUCTION CLOUDKIT:
+///
+///     tailProjection := version SEP messageID SEP milliseconds SEP role
+///     version        := "1"                     (this build's `currentVersion`)
+///     messageID      := `UUID.uuidString`       (uppercase hex + "-")
+///     milliseconds   := `String(Int64)`         (SIGNED whole milliseconds since
+///                                                the Unix epoch, decimal, no
+///                                                padding — `milliseconds(from:)`)
+///     role           := "user" | "agent"        (a `MessageRole` raw value)
+///     SEP            := "|"
+///
+/// Exactly four fields — a rule about VERSION 1, not about the string. `read`
+/// judges the version tag first, so a future version is free to carry a
+/// different count and this build reports it unreadable rather than measuring it
+/// against a grammar it does not belong to. The separator is chosen so it
+/// cannot occur INSIDE a field: a UUID string is hex digits and hyphens, a role
+/// is lowercase ASCII letters, the version is digits, and the millisecond count
+/// is digits with at most a leading "-" — none of them can produce a `|`, so a
+/// field can never swallow a separator and a split can never mis-align. SIGNED
+/// rather than unsigned because a pre-1970 instant is representable in every
+/// other layer of this app (an imported thread, a device whose clock was wrong,
+/// `Date.distantPast`), and an encoding that cannot carry one would either
+/// refuse the row or wrap it into the far future. Frozen means frozen: the
+/// column is on the additive-only production schema and is read by builds that
+/// will never learn a new shape, so a future change takes a NEW version tag and
+/// leaves version 1 parsing exactly as it does here.
+///
+/// THE STAMP IS A CANONICAL INTEGER MILLISECOND COUNT, AND THAT IS THE WHOLE
+/// DESIGN. The two sides of the validity clause do not cross CloudKit in the
+/// same encoding: the envelope's stamp rides inside this String, which the
+/// mirror carries byte for byte, while `lastActivityAt` rides as a CKRecord DATE
+/// field, which Apple documents as milliseconds since the Unix epoch and does
+/// NOT document as rounding or truncating. So this app does the quantising
+/// FIRST, and never leaves a value where the two answers could differ: every
+/// tail-producing write converts its proposed instant to one `Int64` millisecond
+/// value, rebuilds a `Date` from that value, and stores THAT `Date` in both
+/// `Message.createdAt` and `Conversation.lastActivityAt` while the integer goes
+/// in the envelope (`canonical(_:)`). A value already sitting exactly on a
+/// millisecond boundary is the one class of value rounding and truncation agree
+/// about, so the mirror has nothing left to decide and the round trip is
+/// lossless either way.
+///
+/// READ TIME COMPARES INTEGERS, NEVER DATES. `read` re-quantises whatever
+/// `lastActivityAt` it was handed and compares that integer to the one the
+/// string carried. Bit-exact `Date` equality would keep the clause hostage to
+/// IEEE-754 and to Foundation's own 1970↔2001 epoch shift even after
+/// quantisation — two additions and a division, each free to land a few hundred
+/// nanoseconds off. Re-quantising absorbs all of it: the noise is under a
+/// microsecond and a canonical stamp sits half a millisecond from the nearest
+/// boundary, so the integer is recovered with a margin of roughly a thousand to
+/// one.
+///
+/// AND THERE IS NO TOLERANCE WINDOW, DELIBERATELY. A window wide enough to hide
+/// a quantisation disagreement is also wide enough to accept an envelope
+/// describing the turn one step away in the clone loop's deliberate
+/// one-millisecond-per-copied-turn spacing, so it trades a detectable staleness
+/// for an undetectable one. Worse, a window PLUS a canonical form is two
+/// mechanisms for one job, and the looser one silently defines the behaviour:
+/// exactness at the shared precision would stop being tested the day it stopped
+/// being what the code depends on.
+///
+/// WHAT QUANTISATION COSTS, stated rather than discovered later. Two writes into
+/// one conversation inside the same millisecond would carry the SAME stamp
+/// instead of differing by microseconds, and `Message.createdAt` is the only
+/// order a thread has. `ConversationStore.appendStamp` is what stops that
+/// happening — it settles each append at least one millisecond past the
+/// conversation's own last activity — and it earns its keep beyond this file,
+/// because `Message.createdAt` crosses the mirror at millisecond granularity
+/// too, so sub-millisecond spacing was never visible to another device anyway.
+/// Ties therefore survive only on rows written before that rule, or across two
+/// devices settling one millisecond independently — and every site that picks a
+/// message out of a conversation breaks them the SAME way: LARGER `Message.id`
+/// wins, matching `FailedTurnProjection.isNewer`, which is the order the
+/// unresolved-turn aggregate already published. `fetchConversationTail` and
+/// `repairTailProjection` sort `createdAt` descending and `id` DESCENDING;
+/// `fetchMessages` sorts both ascending, so its `last` element is that same row.
+/// One order rather than two is what lets a surface acknowledge the failure the
+/// list is painting: the tail an acknowledgement reads off `messages.last` and
+/// the failure the aggregate selected must be the same message, or the stored
+/// `failureSeenAttemptID` names an attempt no resolver will ever match and the
+/// row stays red with nothing the user can do about it.
+///
+/// CROSS-TARGET: declared here beside the store (pure Foundation + `MessageRole`,
+/// both Watch members) so the wrist can validate the same envelope the phone
+/// writes.
+nonisolated struct TailProjection: Sendable, Hashable {
+    /// `Message.id` of the conversation's newest message.
+    let messageID: UUID
+    /// That message's `Message.createdAt`, rebuilt from the integer the envelope
+    /// carried — so it is the canonical `Date` for that millisecond, which is
+    /// bit-identical to the one the writing device stored in the row.
+    let createdAt: Date
+    /// That message's role — the half of the unseen test this column exists for.
+    let role: MessageRole
+
+    /// The only version this build writes. A higher one is another build's, and
+    /// is reported `.unreadableVersion` rather than `.stale` so nothing here
+    /// overwrites it (see `TailProjectionReading`).
+    static let currentVersion = 1
+
+    /// See the grammar in the type header. A `Character`, so `split` yields
+    /// whole fields.
+    static let separator: Character = "|"
+
+    /// THE quantisation — the only place an instant becomes the envelope's
+    /// integer, and the only definition of "the same instant" this file has.
+    ///
+    /// Rounds to nearest rather than truncating, so an instant already on a
+    /// millisecond boundary is recovered exactly whichever direction the float
+    /// noise of a transport or an epoch conversion nudged it. Truncation would
+    /// spend the whole half-millisecond margin on one side and turn a stamp that
+    /// came back a nanosecond light into a stamp one millisecond early.
+    ///
+    /// TOTAL, because it has to be. A partially-synced row can hand this a date
+    /// built from a value no `Int64` can hold, and a trapping conversion would
+    /// crash a list reload where reading one row as stale is the correct answer.
+    static func milliseconds(from date: Date) -> Int64 {
+        let scaled = (date.timeIntervalSince1970 * 1000).rounded()
+        if let exact = Int64(exactly: scaled) { return exact }
+        // NaN takes this branch too and lands on `.max`, which is a value no
+        // real `lastActivityAt` can match — stale, which is what an unusable
+        // stamp deserves.
+        return scaled < 0 ? .min : .max
+    }
+
+    /// The canonical `Date` naming a millisecond value — the inverse of
+    /// `milliseconds(from:)` across every value that method can produce.
+    static func date(fromMilliseconds milliseconds: Int64) -> Date {
+        Date(timeIntervalSince1970: Double(milliseconds) / 1000)
+    }
+
+    /// Snap an instant onto its millisecond. THE call every tail-producing write
+    /// makes exactly once, before it stamps anything: the one returned value
+    /// goes into `Message.createdAt` AND `Conversation.lastActivityAt`, so the
+    /// two are bit-identical on this device and quantise to one integer on every
+    /// other. Deriving them from two separate `Date()` reads, or quantising one
+    /// half and not the other, is the exact skew the envelope's validity clause
+    /// would then report as staleness.
+    static func canonical(_ instant: Date) -> Date {
+        date(fromMilliseconds: milliseconds(from: instant))
+    }
+
+    /// Encode the envelope for storage, or nil when the role is not one this
+    /// build recognises.
+    ///
+    /// NIL RATHER THAN AN ENVELOPE CARRYING THE RAW ROLE STRING. An unknown role
+    /// can never satisfy `read`, so storing one would produce a well-formed
+    /// string that is stale by construction — a row permanently in the repair
+    /// path, exporting a CKRecord for a value no reader can ever use. Nil is the
+    /// honest answer: "no projection", which is exactly what a reader does with
+    /// it. Unreachable from the write paths in practice (every role this store
+    /// writes is a `MessageRole` raw value); it exists so a partially-synced row
+    /// with a foreign role degrades instead of lying.
+    static func encoded(messageID: UUID, createdAt: Date, role: String?) -> String? {
+        guard let role = MessageRole(stored: role) else { return nil }
+        return encoded(messageID: messageID, createdAt: createdAt, role: role)
+    }
+
+    /// Encode the envelope from an already-known role.
+    ///
+    /// Quantises `createdAt` rather than trusting it, so the envelope carries a
+    /// millisecond value even if a caller ever hands this a stamp it did not
+    /// take from `canonical(_:)`. For every caller in this store that is a no-op
+    /// — the row was written from the same canonical `Date` — which is the point:
+    /// the encoder cannot be the place the invariant is lost.
+    static func encoded(messageID: UUID, createdAt: Date, role: MessageRole) -> String {
+        [
+            String(currentVersion),
+            messageID.uuidString,
+            String(milliseconds(from: createdAt)),
+            role.rawValue
+        ].joined(separator: String(separator))
+    }
+
+    /// Read a stored envelope against the conversation it belongs to.
+    ///
+    /// UNTRUSTED INPUT BY POSTURE, not just by caution: this string arrives from
+    /// CloudKit, written by a build this one knows nothing about. Every field is
+    /// parsed and the whole thing is cross-checked against `lastActivityAt`;
+    /// there is no partial acceptance and no field is believed on its own.
+    static func read(_ stored: String?, lastActivityAt: Date) -> TailProjectionReading {
+        guard let stored, !stored.isEmpty else { return .stale }
+        // `omittingEmptySubsequences: false` so an empty field is a field: a
+        // string with a missing value must fail the count check or the role
+        // parse, never silently re-align onto the neighbouring field.
+        let fields = stored.split(separator: separator, omittingEmptySubsequences: false)
+        // THE VERSION IS JUDGED BEFORE THE FIELD COUNT, and that order is the
+        // whole reason the tag is first in the grammar. A newer build may change
+        // the SHAPE of the envelope as well as the meaning of its fields — one
+        // more field is the obvious next change — so measuring the count first
+        // would report a version-2 envelope `.stale`, which is REPAIRABLE, and
+        // this build would overwrite it with four version-1 fields while the
+        // newer device restamped its own: the downgrade fight
+        // `.unreadableVersion` exists to prevent, entered by accident, with the
+        // newer field's information destroyed on every round trip. `split`
+        // always yields at least one field for a non-empty string, so index 0 is
+        // safe before any count check.
+        guard let version = Int(fields[0]) else { return .stale }
+        guard version == currentVersion else {
+            // A FUTURE version is a different fact, not a wrong one, and it is
+            // NOT repairable: rewriting it would start a downgrade fight — this
+            // build stamps version 1, the newer device restamps its own, and the
+            // two export a CKRecord at each other for as long as both exist.
+            // Below-current cannot happen (1 is the first) and is malformed.
+            return version > currentVersion ? .unreadableVersion : .stale
+        }
+        guard fields.count == 4 else { return .stale }
+        guard let messageID = UUID(uuidString: String(fields[1])),
+              let storedMilliseconds = Int64(fields[2]),
+              let role = MessageRole(stored: String(fields[3])) else { return .stale }
+        // THE CLAUSE THE WHOLE ENVELOPE EXISTS FOR. A build that appended a
+        // message without writing this string left a valid-looking envelope
+        // describing the previous tail; only the stamp can expose that. INTEGERS
+        // on both sides: the string already carries one, and `lastActivityAt` is
+        // re-quantised here rather than compared as a `Date`, so whatever the
+        // mirror and the epoch conversion did to the double in transit is
+        // absorbed instead of decided (see the type header).
+        guard storedMilliseconds == milliseconds(from: lastActivityAt) else { return .stale }
+        return .valid(
+            TailProjection(
+                messageID: messageID,
+                createdAt: date(fromMilliseconds: storedMilliseconds),
+                role: role
+            )
+        )
+    }
+}
+
+/// What a stored tail envelope turned out to be. Three cases, because "cannot be
+/// used" and "must not be rewritten" are different questions and only one of them
+/// is answered by whether the string parsed.
+nonisolated enum TailProjectionReading: Sendable, Hashable {
+    /// A full match. `role` is authoritative for the unseen test.
+    case valid(TailProjection)
+    /// Absent, malformed, or describing a tail that is no longer the tail. The
+    /// surfaces that can afford a per-row tail fetch (iOS, macOS) fall back to
+    /// one and schedule `repairTailProjection`; the wrist, which cannot, shows
+    /// no mark rather than guessing at one.
+    case stale
+    /// Written by a build newer than this one. Unusable here for the same reason
+    /// `.stale` is — but it must NOT be repaired, because rewriting it downgrades
+    /// a value the newer device will immediately restamp. Left alone, it simply
+    /// waits for this device to be updated.
+    case unreadableVersion
+
+    /// The role a valid envelope proved, or nil in both unusable cases. The
+    /// shape every consumer of `ConversationActivityInputs.tailRole` wants — nil
+    /// there means NOT PROJECTED and suppresses the unseen branch, which is
+    /// exactly the right answer for both.
+    var role: MessageRole? {
+        if case .valid(let projection) = self { return projection.role }
+        return nil
+    }
+
+    /// Whether `repairTailProjection` may rewrite this. False for `.valid`
+    /// (nothing to fix) and for `.unreadableVersion` (see above).
+    var isRepairable: Bool {
+        if case .stale = self { return true }
+        return false
+    }
 }
 
 /// A to-be-persisted attachment carrying the FULL bytes for the write. Built
@@ -624,6 +950,7 @@ nonisolated enum AgentFileOverlay {
                 createdAt: message.createdAt,
                 sourceDevice: message.sourceDevice,
                 status: message.status,
+                deliveryAttemptID: message.deliveryAttemptID,
                 failureCode: message.failureCode,
                 failureWireCode: message.failureWireCode,
                 failureHadHistoryImages: message.failureHadHistoryImages,
@@ -631,11 +958,14 @@ nonisolated enum AgentFileOverlay {
                 outputScanDone: message.outputScanDone,
                 outputScanLaneID: message.outputScanLaneID,
                 outputBoxKey: message.outputBoxKey,
-                // Carried explicitly. This rebuild is field-by-field against a
-                // memberwise init whose later parameters all default, so an
-                // omission here COMPILES and silently blanks the census on every
-                // row a couriered descriptor touches — a refusal the user was
-                // told about would vanish the moment the wrist delivered a file.
+                // Carried explicitly, like `deliveryAttemptID` above. This
+                // rebuild is field-by-field against a memberwise init whose
+                // later parameters all default, so an omission here COMPILES and
+                // silently blanks the field on every row a couriered descriptor
+                // touches — the census refusal the user was told about would
+                // vanish the moment the wrist delivered a file, and a blanked
+                // attempt identity would leave that turn's red mark unretirable
+                // from the thread on every device.
                 outputDeliveryOutcome: message.outputDeliveryOutcome,
                 attachments: (message.attachments + additions).sorted { $0.sequence < $1.sequence }
             )
@@ -750,6 +1080,17 @@ actor ConversationStore {
     /// same-process mutex. The store predicate remains the durable/cross-process
     /// gate; this set guarantees one local claimant reaches it at a time.
     private var retryClaims: Set<UUID> = []
+
+    /// Conversations `repairTailProjection` has already been asked about in this
+    /// process. THE LOOP GUARD, and it has to be here rather than in the caller:
+    /// a repair is triggered by a surface noticing a stale envelope, and a
+    /// conversation whose envelope CANNOT be made valid — no messages, a tail
+    /// whose `createdAt` no longer matches `lastActivityAt`, a role this build
+    /// does not know — would be noticed as stale by every reload for as long as
+    /// the app runs. One attempt per conversation per launch bounds that to a
+    /// single fetch, and a genuinely repairable row needs no second attempt
+    /// because the first one fixed it.
+    private var tailProjectionRepairsAttempted: Set<UUID> = []
 
     // MARK: - Errors
 
@@ -1173,7 +1514,14 @@ actor ConversationStore {
     func createConversation(id: UUID = UUID(), backend: String) async throws -> ConversationRecord {
         try await ensureLoaded()
         let context = newWriteContext()
-        let now = Date()
+        // CANONICAL from the very first stamp this row carries, even though a
+        // conversation with no messages has no envelope to validate. One rule
+        // with no exceptions is the point: `lastActivityAt` is the value every
+        // later envelope is checked against, so a store where some rows sit on a
+        // millisecond boundary and some do not is a store whose readers would
+        // have to know which writer produced a row before they could trust it.
+        // See `TailProjection.canonical`.
+        let now = TailProjection.canonical(Date())
         let sessionID = UUID().uuidString
 
         try await context.perform { [context] in
@@ -1189,6 +1537,14 @@ actor ConversationStore {
             // No user turn yet — the snippet is captured on the first user
             // `appendMessage` (below). Set nil explicitly for clarity.
             conversation.setValue(nil, forKey: "titleSnippet")
+            // No messages yet, so there is no tail to describe. Written
+            // explicitly rather than left to the attribute's own absence,
+            // because every OTHER site that touches `lastActivityAt` writes this
+            // string in the same block and the one exception should be visible
+            // as a decision rather than as an omission. Nil reads `.stale`,
+            // which is the correct answer here — a surface falls back and finds
+            // no tail either.
+            conversation.setValue(nil, forKey: "tailProjection")
             try context.save()
         }
 
@@ -1248,6 +1604,19 @@ actor ConversationStore {
     /// in `ConversationHistoryAssembler`) — the turn is never lost by declining
     /// to send it now.
     ///
+    /// THE CLONE'S `lastActivityAt` IS ITS COPIED TAIL'S `createdAt`, NOT `now`.
+    /// The copy loop preserves relative render order by advancing each turn one
+    /// whole millisecond past `now`, so a clone stamped `lastActivityAt = now`
+    /// claims the conversation's last activity happened BEFORE its own last
+    /// message —
+    /// an inconsistency no other write path can produce, since every append
+    /// writes both halves from one `now`. It was invisible while nothing
+    /// compared the two. `tailProjection` is validated by exactly that
+    /// comparison, so a clone would have shipped an envelope that is stale in
+    /// the transaction that wrote it, and every cloned thread would have been
+    /// permanently mark-less on the wrist. The tail is also what a user's list
+    /// sort should show: the fork's newest turn, not the instant the copy ran.
+    ///
     /// CloudKit-store-compatible: uses the same `insertNewObject` +
     /// background-context save pattern as the existing CRUD (the mirror exports
     /// the new rows on the next sync).
@@ -1259,10 +1628,13 @@ actor ConversationStore {
         try await ensureLoaded()
         let context = newWriteContext()
         let newID = UUID()
-        let now = Date()
+        // Canonical, and then every copied turn is derived from its INTEGER
+        // millisecond value rather than from this `Date` (see the copy loop).
+        let now = TailProjection.canonical(Date())
+        let baseMilliseconds = TailProjection.milliseconds(from: now)
         let sessionID = UUID().uuidString
 
-        let outcome: (snippet: String?, continuationMessageID: UUID?)
+        let outcome: (snippet: String?, continuationMessageID: UUID?, lastActivityAt: Date, tailProjection: String?)
         outcome = try await context.perform { [context] in
             // Source conversation + its text turns (createdAt-ascending).
             let convoRequest = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
@@ -1293,7 +1665,12 @@ actor ConversationStore {
             // drives the list label) — matches `createConversation`'s posture.
             conversation.setValue(nil, forKey: "title")
             conversation.setValue(now, forKey: "createdAt")
+            // Provisional: overwritten below with the copied TAIL's `createdAt`
+            // once the loop knows it (see the header). Written here anyway so a
+            // source conversation with no copyable turns still leaves the
+            // attribute populated rather than nil.
             conversation.setValue(now, forKey: "lastActivityAt")
+            conversation.setValue(nil, forKey: "tailProjection")
             conversation.setValue(sessionID, forKey: "sessionID")
             conversation.setValue(rawString, forKey: "backend")
             conversation.setValue(sourceTitleSnippet, forKey: "titleSnippet")
@@ -1305,13 +1682,24 @@ actor ConversationStore {
             // first request, unprompted.
             conversation.setValue(sourceHideEarlierPhotos, forKey: "hideEarlierPhotos")
 
-            // Copy turns in order, preserving relative timing via a small
-            // increasing offset so `createdAt`-ascending render order matches
-            // the original.
-            var offset: TimeInterval = 0
+            // Copy turns in order, one millisecond apart, so
+            // `createdAt`-ascending render order matches the original.
+            //
+            // INTEGER ARITHMETIC, not repeated addition of a `TimeInterval`.
+            // `baseMilliseconds + turnIndex` puts adjacent copies EXACTLY one
+            // millisecond apart and lands every one of them on a millisecond
+            // boundary, which is what the tail envelope's validity clause needs
+            // (`TailProjection`). Accumulating 0.001 as a `Double` does neither:
+            // 0.001 is not a binary fraction, so the running total drifts and
+            // every copied turn sits at an instant no millisecond exactly names
+            // — a thread long enough would eventually round two neighbours onto
+            // one stamp, and the settled tail would be a value the envelope
+            // could only approximate.
+            var turnIndex: Int64 = 0
             var lastInserted: NSManagedObject?
             var lastInsertedID: UUID?
             var lastInsertedRole: String?
+            var lastInsertedCreatedAt: Date?
             var lastSourceStatus: String?
             for sourceMessage in sourceMessages {
                 // `Message.text` is optional in the model, so a partially-synced
@@ -1324,7 +1712,9 @@ actor ConversationStore {
                 let text = sourceMessage.value(forKey: "text") as? String ?? ""
                 guard let role = sourceMessage.value(forKey: "role") as? String else { continue }
                 let messageID = UUID()
-                let createdAt = now.addingTimeInterval(offset)
+                let createdAt = TailProjection.date(
+                    fromMilliseconds: baseMilliseconds + turnIndex
+                )
                 let message = NSEntityDescription.insertNewObject(
                     forEntityName: "Message", into: context
                 )
@@ -1370,8 +1760,9 @@ actor ConversationStore {
                 lastInserted = message
                 lastInsertedID = messageID
                 lastInsertedRole = role
+                lastInsertedCreatedAt = createdAt
                 lastSourceStatus = sourceMessage.value(forKey: "status") as? String
-                offset += 0.001
+                turnIndex += 1
 
                 // Release the SOURCE row's blobs as soon as they are copied.
                 // Everything here runs in one transaction, so without this an
@@ -1396,11 +1787,44 @@ actor ConversationStore {
                 // undelivered message. Stamping it `failed` would put "this
                 // message wasn't delivered" under a message that was.
                 lastInserted.setValue("failed", forKey: "status")
+                // This stamp DECLARES a failure, so it mints — the same rule
+                // every other failure writer follows (`mintDeliveryAttemptID`).
+                // It is also the only identity this row will ever have until
+                // something retries it: the copy loop above carries neither
+                // `status` nor an attempt id across (cloned turns are
+                // historical), so without a mint here the fork would carry a
+                // `failed` turn with a nil identity — and a nil identity is
+                // never matched by an acknowledgement, by design, so its mark
+                // could never be retired. Fresh rather than inherited from the
+                // source turn: that identity names an attempt made in another
+                // thread against another gateway, and nothing about it is true
+                // of this row.
+                Self.mintDeliveryAttemptID(on: lastInserted)
                 continuationMessageID = lastInsertedID
             }
 
+            // Settle the conversation's activity stamp on the copied tail, and
+            // build the tail envelope from that SAME row — see the header for
+            // why `now` was wrong and why the two must be derived together.
+            // Deriving them separately is how they drift: the envelope is valid
+            // only while its millisecond equals `lastActivityAt`'s, so one
+            // expression reading the tail and another reading the clock would
+            // ship a clone whose projection is stale on arrival.
+            var tailProjection: String?
+            var settledActivityAt = now
+            if let lastInsertedID, let lastInsertedCreatedAt {
+                settledActivityAt = lastInsertedCreatedAt
+                conversation.setValue(settledActivityAt, forKey: "lastActivityAt")
+                tailProjection = TailProjection.encoded(
+                    messageID: lastInsertedID,
+                    createdAt: lastInsertedCreatedAt,
+                    role: lastInsertedRole
+                )
+                conversation.setValue(tailProjection, forKey: "tailProjection")
+            }
+
             try context.save()
-            return (sourceTitleSnippet, continuationMessageID)
+            return (sourceTitleSnippet, continuationMessageID, settledActivityAt, tailProjection)
         }
 
         await postDidChange()
@@ -1410,10 +1834,16 @@ actor ConversationStore {
                 id: newID,
                 title: nil,
                 createdAt: now,
-                lastActivityAt: now,
+                // The snapshot reports what the ROW holds, never what this
+                // method's clock said. A record disagreeing with its own row
+                // would hand the caller a `lastActivityAt` the projection beside
+                // it cannot validate against — the exact skew the settle above
+                // exists to remove.
+                lastActivityAt: outcome.lastActivityAt,
                 sessionID: sessionID,
                 backend: rawString,
-                titleSnippet: outcome.snippet
+                titleSnippet: outcome.snippet,
+                tailProjection: outcome.tailProjection
             ),
             continuationMessageID: outcome.continuationMessageID
         )
@@ -1497,11 +1927,16 @@ actor ConversationStore {
 
     // MARK: - Unresolved-turn aggregate (conversation-list activity)
 
-    /// The unresolved USER turns of ONE conversation, reduced to the two stamps
-    /// a list row needs.
+    /// The unresolved USER turns of ONE conversation, reduced to what a list
+    /// row needs: a stamp for the in-flight arm, and stamp-plus-identity for
+    /// the failed one.
     nonisolated struct UnresolvedTurns: Sendable, Hashable {
         let newestSendingAt: Date?
-        let newestFailedAt: Date?
+        /// Stamp AND attempt identity of the newest failed turn, as one value
+        /// — see `FailedTurnProjection`. The sending arm stays a bare date on
+        /// purpose: nothing is ever acknowledged about a turn still in flight,
+        /// so it carries no identity to skew.
+        let newestFailed: FailedTurnProjection?
     }
 
     /// Whether `fetchConversations` also runs the unresolved-turn aggregate.
@@ -1545,7 +1980,7 @@ actor ConversationStore {
             let objects = try context.fetch(request)
 
             var sending: [UUID: Date] = [:]
-            var failed: [UUID: Date] = [:]
+            var failed: [UUID: FailedTurnProjection] = [:]
             for message in objects {
                 guard let conversationID = (message.value(forKey: "conversation") as? NSManagedObject)?
                         .value(forKey: "id") as? UUID,
@@ -1554,11 +1989,34 @@ actor ConversationStore {
                     continue
                 }
                 if status == "sending" {
+                    // A tie here is genuinely invisible: the sending arm reports
+                    // only a stamp, so two turns at one instant yield the same
+                    // value whichever wins.
                     if let existing = sending[conversationID], existing >= createdAt { continue }
                     sending[conversationID] = createdAt
                 } else {
-                    if let existing = failed[conversationID], existing >= createdAt { continue }
-                    failed[conversationID] = createdAt
+                    // The failed arm reports an IDENTITY, so the winner is
+                    // chosen by an explicit total order (`isNewer(than:)`),
+                    // never by which row this fetch happened to return first.
+                    // Fetch order is not stable across devices or across two
+                    // fetches on one device, and it would decide WHICH attempt
+                    // id this conversation reports: two devices would then
+                    // acknowledge different failures, and one device could
+                    // select differently between the fetch that fed an
+                    // acknowledgement and the next fetch that resolves the row
+                    // — leaving that conversation red with no way for the user
+                    // to retire it. The order lives on the value type rather
+                    // than in an `NSSortDescriptor` so the tie-break is the
+                    // documented `messageID.uuidString` comparison and not a
+                    // store's byte layout or collation.
+                    let candidate = FailedTurnProjection(
+                        messageID: message.value(forKey: "id") as? UUID,
+                        createdAt: createdAt,
+                        deliveryAttemptID: message.value(forKey: "deliveryAttemptID") as? UUID
+                    )
+                    if let existing = failed[conversationID],
+                       !candidate.isNewer(than: existing) { continue }
+                    failed[conversationID] = candidate
                 }
             }
 
@@ -1566,7 +2024,7 @@ actor ConversationStore {
             for conversationID in Set(sending.keys).union(failed.keys) {
                 merged[conversationID] = UnresolvedTurns(
                     newestSendingAt: sending[conversationID],
-                    newestFailedAt: failed[conversationID]
+                    newestFailed: failed[conversationID]
                 )
             }
             return (merged, objects.count)
@@ -1612,7 +2070,7 @@ actor ConversationStore {
             guard let turn = turns[record.id] else { return record }
             return record.withTurnStates(
                 newestSendingAt: turn.newestSendingAt,
-                newestFailedAt: turn.newestFailedAt
+                newestFailed: turn.newestFailed
             )
         }
     }
@@ -1740,7 +2198,25 @@ actor ConversationStore {
         /// `includeTurnStates: true`. Same derived-not-stored contract as
         /// `ConversationRecord`'s pair; nil resolves to `.idle`.
         let newestSendingAt: Date?
-        let newestFailedAt: Date?
+        /// Stamp AND attempt identity together (`FailedTurnProjection`). These
+        /// two surfaces are the reason it is one value: they have no per-row
+        /// message fetch, so without an identity riding in with the stamp they
+        /// could only ever resolve every failure as unacknowledged and
+        /// contradict the conversation list sitting on the same screen.
+        let newestFailed: FailedTurnProjection?
+        /// The account-wide attention markers, copied verbatim off the stored
+        /// row. STORED `Conversation` attributes, unlike the derived pair above
+        /// — they are present on every read here, whatever `includeTurnStates`
+        /// says, because the fetch materializes the record anyway.
+        ///
+        /// They are carried at all so the picker and the menu-bar list resolve a
+        /// row through the SAME `ConversationActivityResolver` as the phone,
+        /// from the same facts. Without them these two surfaces would answer
+        /// "unseen" and "acknowledged" from nothing, and would contradict the
+        /// conversation list sitting on the same screen.
+        let lastViewedAt: Date?
+        let failureSeenAttemptID: UUID?
+        let tailProjection: String?
 
         init(
             id: UUID,
@@ -1748,14 +2224,20 @@ actor ConversationStore {
             lastActivityAt: Date,
             backend: String,
             newestSendingAt: Date? = nil,
-            newestFailedAt: Date? = nil
+            newestFailed: FailedTurnProjection? = nil,
+            lastViewedAt: Date? = nil,
+            failureSeenAttemptID: UUID? = nil,
+            tailProjection: String? = nil
         ) {
             self.id = id
             self.label = label
             self.lastActivityAt = lastActivityAt
             self.backend = backend
             self.newestSendingAt = newestSendingAt
-            self.newestFailedAt = newestFailedAt
+            self.newestFailed = newestFailed
+            self.lastViewedAt = lastViewedAt
+            self.failureSeenAttemptID = failureSeenAttemptID
+            self.tailProjection = tailProjection
         }
     }
 
@@ -1840,7 +2322,13 @@ actor ConversationStore {
                     lastActivityAt: record.lastActivityAt,
                     backend: record.backend,
                     newestSendingAt: turns[record.id]?.newestSendingAt,
-                    newestFailedAt: turns[record.id]?.newestFailedAt
+                    newestFailed: turns[record.id]?.newestFailed,
+                    // Straight off the record — no aggregate, no extra fetch:
+                    // `ConversationRecord(managedObject:)` above already read
+                    // them from the row this loop is standing on.
+                    lastViewedAt: record.lastViewedAt,
+                    failureSeenAttemptID: record.failureSeenAttemptID,
+                    tailProjection: record.tailProjection
                 )
             }
         }
@@ -1982,7 +2470,39 @@ actor ConversationStore {
 
         let suppliedID = id
         let id = id ?? UUID()
-        let now = Date()
+        // Proposed by the clock, SETTLED inside the transaction against this
+        // conversation's own last activity (`appendStamp`) — a millisecond
+        // stamp has to be able to see the row it is being appended to. The one
+        // settled value then goes into `Message.createdAt`, into the parent's
+        // `lastActivityAt`, into the tail envelope's integer and into every
+        // attachment row, so they are bit-identical locally and quantise to one
+        // integer on every device that imports them.
+        let proposedNow = Date()
+
+        // ATTEMPT-START identity, minted here because a delivery attempt
+        // begins here. It is NOT the row's identity for life: every writer that
+        // later declares this turn `failed` re-mints, and the value an
+        // acknowledgement is matched against is whichever failure declaration
+        // wrote last (`mintDeliveryAttemptID` carries the argument, including
+        // the trace that forces it).
+        //
+        // The start mint still earns its keep. A retryable row carries an
+        // identity from the instant it exists rather than from the instant
+        // something fails it, so a surface that reads the row before any
+        // failure writer has run never sees a nameless attempt; and across the
+        // mixed-version window, a build that predates the re-mint rule still
+        // finds a non-nil identity on every row this one wrote.
+        //
+        // The one site that cannot route through the shared mint: the value is
+        // needed OUTSIDE the transaction, so the row below and the
+        // `MessageRecord` returned to the caller can be stamped from it.
+        //
+        // Only a USER turn actually being sent gets one. An agent reply, and a
+        // headless capture written with no send state at all, have no attempt
+        // to identify — and a nil identity is never matched by an
+        // acknowledgement, which is the safe direction: it leaves a mark
+        // standing rather than retiring one the user never saw.
+        let deliveryAttemptID: UUID? = (role == "user" && status == "sending") ? UUID() : nil
 
         // Insert (+ any attachments) on a BACKGROUND context so the write never
         // blocks the main thread. Every chat write — user turn, plain agent
@@ -2003,13 +2523,19 @@ actor ConversationStore {
         // unreachable in practice. Skipped entirely when `id == nil` (no probe
         // cost for the fresh-append callers).
         let bgContext = newWriteContext()
-        let dedupeHit: MessageRecord? = try await bgContext.perform { [bgContext] in
+        // The settled stamp has to leave the transaction: the `MessageRecord`
+        // returned below and its attachment snapshots must report the value the
+        // row actually carries, not the clock this method read. A snapshot
+        // disagreeing with its own row is the same class of defect as the
+        // envelope disagreeing with `lastActivityAt`.
+        let written: (dedupeHit: MessageRecord?, stamp: Date)
+        written = try await bgContext.perform { [bgContext] in
             if let suppliedID {
                 let probe = NSFetchRequest<NSManagedObject>(entityName: "Message")
                 probe.predicate = NSPredicate(format: "id == %@", suppliedID as CVarArg)
                 probe.fetchLimit = 1
                 if let existing = try bgContext.fetch(probe).first {
-                    return MessageRecord(managedObject: existing)
+                    return (MessageRecord(managedObject: existing), proposedNow)
                 }
             }
 
@@ -2020,6 +2546,8 @@ actor ConversationStore {
                 throw StoreError.conversationNotFound
             }
 
+            let now = Self.appendStamp(proposed: proposedNow, appendingTo: conversation)
+
             let message = NSEntityDescription.insertNewObject(
                 forEntityName: "Message", into: bgContext
             )
@@ -2029,6 +2557,12 @@ actor ConversationStore {
             message.setValue(now, forKey: "createdAt")
             message.setValue(sourceDevice, forKey: "sourceDevice")
             message.setValue(status, forKey: "status")
+            // Minted above, OUTSIDE this transaction, so the stored row and the
+            // `MessageRecord` returned below carry the same identity. A
+            // snapshot that disagreed with its own row would let a caller
+            // acknowledge an attempt the store never recorded, which retires a
+            // mark for a failure that is still standing.
+            message.setValue(deliveryAttemptID, forKey: "deliveryAttemptID")
             message.setValue(fileTransferLaneID, forKey: "fileTransferLaneID")
             // Explicit pending marker + owner identity + the output folder the
             // dispatch named, written in the SAME transaction as the reply
@@ -2047,8 +2581,23 @@ actor ConversationStore {
                 Self.insertAttachment(draft, on: message, into: bgContext, at: now)
             }
 
-            // Bump the parent's activity stamp so list sort reflects this turn.
+            // Bump the parent's activity stamp so list sort reflects this turn,
+            // and re-describe the tail in the SAME block. These two are one
+            // fact: the envelope is valid only while its millisecond equals
+            // `lastActivityAt`'s, so a site that bumps one without the other
+            // leaves a well-formed string describing the previous tail — which
+            // reads as "the newest message is still that user turn" and silently
+            // withholds the unseen mark for a reply that did land. Both are
+            // written from the SAME canonical `now` this insert stamped the
+            // message with, so the equality holds by construction rather than by
+            // luck — and holds on the devices that import the row too, because a
+            // canonical stamp survives the mirror's millisecond quantisation
+            // unchanged.
             conversation.setValue(now, forKey: "lastActivityAt")
+            conversation.setValue(
+                TailProjection.encoded(messageID: id, createdAt: now, role: role),
+                forKey: "tailProjection"
+            )
 
             // Denormalize a list-row title from the FIRST user turn only —
             // gateways never give us a real `title`, so this is what the
@@ -2062,10 +2611,11 @@ actor ConversationStore {
             }
 
             try bgContext.save()
-            return nil
+            return (nil, now)
         }
 
-        if let dedupeHit { return dedupeHit }
+        if let dedupeHit = written.dedupeHit { return dedupeHit }
+        let now = written.stamp
 
         await postDidChange()
 
@@ -2076,6 +2626,7 @@ actor ConversationStore {
             createdAt: now,
             sourceDevice: sourceDevice,
             status: status,
+            deliveryAttemptID: deliveryAttemptID,
             fileTransferLaneID: fileTransferLaneID,
             // Mirror the row just written: an owner identity always arrives
             // paired with the explicit `false` marker (same rule as
@@ -2113,16 +2664,22 @@ actor ConversationStore {
     ) async throws -> MessageRecord {
         try await ensureLoaded()
 
-        let now = Date()
+        // Proposed by the clock, settled inside the transaction — one stamp for
+        // the reply row, the parent's `lastActivityAt`, the tail envelope and
+        // every attachment. Same rule as `appendMessage`, including why the
+        // settled value has to travel back out for the returned snapshot.
+        let proposedNow = Date()
 
         let bgContext = newWriteContext()
-        try await bgContext.perform { [bgContext] in
+        let now: Date = try await bgContext.perform { [bgContext] in
             let convoRequest = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             convoRequest.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
             convoRequest.fetchLimit = 1
             guard let conversation = try bgContext.fetch(convoRequest).first else {
                 throw StoreError.conversationNotFound
             }
+
+            let now = Self.appendStamp(proposed: proposedNow, appendingTo: conversation)
 
             // Flip the user turn out of `sending` (no-op if it no longer resolves).
             let userRequest = NSFetchRequest<NSManagedObject>(entityName: "Message")
@@ -2162,11 +2719,23 @@ actor ConversationStore {
                 Self.insertAttachment(draft, on: message, into: bgContext, at: now)
             }
 
-            // Bump the parent's activity stamp so list sort reflects this turn.
+            // Bump the parent's activity stamp so list sort reflects this turn,
+            // and re-describe the tail in the SAME block (same rule as
+            // `appendMessage` — the envelope's millisecond must equal
+            // `lastActivityAt`'s or the projection is stale on arrival, on this
+            // device and on every device that imports the row). This is the site that
+            // matters most for the wrist: an agent reply is the ONLY tail that
+            // can make a row unseen, so a missed write here is precisely a
+            // withheld mark for a reply the user has not read.
             // No `titleSnippet` capture — agent replies never set it (user turns only).
             conversation.setValue(now, forKey: "lastActivityAt")
+            conversation.setValue(
+                TailProjection.encoded(messageID: agentMessageID, createdAt: now, role: .agent),
+                forKey: "tailProjection"
+            )
 
             try bgContext.save()
+            return now
         }
 
         await postDidChange()
@@ -2182,6 +2751,86 @@ actor ConversationStore {
             outputScanLaneID: outputScanLaneID,
             outputBoxKey: outputScanLaneID == nil ? nil : outputBoxKey,
             attachments: Self.attachmentRecords(from: attachments, at: now)
+        )
+    }
+
+    /// The canonical stamp the next message appended to `conversation` carries:
+    /// `proposed` snapped onto its millisecond, advanced if that millisecond is
+    /// not strictly past the conversation's current `lastActivityAt`.
+    ///
+    /// WHY IT IS NOT JUST `TailProjection.canonical(Date())`. Quantising to
+    /// milliseconds collapses every instant inside one millisecond onto one
+    /// value, and `Message.createdAt` is the ONLY order this store keeps for a
+    /// thread — the render fetch, the clone's copy loop and every tail pick sort
+    /// on it. Two writes into one conversation inside the same millisecond would
+    /// otherwise share a stamp and leave their order to whatever a fetch
+    /// happened to return, which is stable neither across two fetches here nor
+    /// across two devices. That is not a cost quantisation introduces, only one
+    /// it makes visible: `Conversation.lastActivityAt` and `Message.createdAt`
+    /// both cross CloudKit as DATE fields at millisecond granularity, so a pair
+    /// of turns a few hundred microseconds apart already arrives on every OTHER
+    /// device indistinguishable. Settling the stamp here fixes both ends at once
+    /// — the thread has one order, and it is the same order everywhere.
+    ///
+    /// THE ADVANCE IS BOUNDED BY THE CONVERSATION'S OWN NEWEST ACTIVITY, never
+    /// by a global clock or a monotonic counter: it moves the stamp exactly far
+    /// enough to stay one millisecond ahead of the row it is being appended to,
+    /// and it stops the moment real time overtakes that row again. So a burst
+    /// spreads over as many milliseconds as it has turns and nothing else in the
+    /// store is displaced. `lastActivityAt` is the right thing to measure
+    /// against because every writer that adds a message writes it from this same
+    /// stamp, which makes it the newest message's stamp by construction.
+    ///
+    /// AND THE ADVANCE ITSELF IS CAPPED, because `lastActivityAt` is not this
+    /// device's value. It is a CloudKit-mirrored column, written from some other
+    /// device's wall clock, so a peer whose clock is wrong can hand this a row
+    /// dated arbitrarily far in the future — and following it unconditionally
+    /// would make that offset PERMANENT: every later append into that
+    /// conversation would inherit it and add a millisecond, so nothing would
+    /// ever pull the row back to real time. Two things break at once when it
+    /// does. `sweepStaleSendingUserTurns` fetches `createdAt < now - grace`, so
+    /// a future-dated `sending` turn is never swept and its bubble keeps a
+    /// spinner with no Retry for as long as the offset lasts; and
+    /// `ReadStateStore.clamped` caps a view marker at `now + clockSkewGrace`, so
+    /// a `lastActivityAt` further ahead than that can never be covered and the
+    /// row is bold, discreet and pinned to the top of the list no matter how
+    /// many times the user reads it.
+    ///
+    /// The cap is `clockSkewGrace` past the proposed instant — the SAME budget
+    /// the read marker's clamp allows — and the pairing is the point rather
+    /// than a coincidence: no stamp this store writes exceeds the ceiling a view
+    /// marker is allowed to reach, so every conversation stays markable as read,
+    /// and one further turn is all it takes to pull a poisoned row back inside
+    /// it. Skew inside the budget is absorbed, which is what keeps ordinary
+    /// multi-device drift from reordering a thread; skew beyond it is declined,
+    /// and the append simply lands at real time. The residual cost falls
+    /// entirely on the row that is already corrupt: its future-dated message
+    /// keeps sorting after the new one, which is an inconsistency that row
+    /// already carries and this cannot repair.
+    private static func appendStamp(
+        proposed: Date,
+        appendingTo conversation: NSManagedObject
+    ) -> Date {
+        let proposedMilliseconds = TailProjection.milliseconds(from: proposed)
+        guard let previous = conversation.value(forKey: "lastActivityAt") as? Date else {
+            return TailProjection.date(fromMilliseconds: proposedMilliseconds)
+        }
+        let previousMilliseconds = TailProjection.milliseconds(from: previous)
+        // `.max` can only arrive from a stamp no `Int64` could hold, i.e. a
+        // corrupt row. Declining to advance past it keeps this total instead of
+        // trapping on overflow; the row is unusable either way.
+        let mustExceed = previousMilliseconds == .max
+            ? previousMilliseconds
+            : previousMilliseconds + 1
+        // Saturating rather than wrapping, for the same reason: the addition is
+        // unreachable in real time (the proposal is a wall clock) but has to
+        // stay total for a corrupt one.
+        let graceMilliseconds = Int64(ReadStateStore.clockSkewGrace * 1000)
+        let ceiling = proposedMilliseconds > Int64.max - graceMilliseconds
+            ? Int64.max
+            : proposedMilliseconds + graceMilliseconds
+        return TailProjection.date(
+            fromMilliseconds: min(max(proposedMilliseconds, mustExceed), ceiling)
         )
     }
 
@@ -2281,14 +2930,16 @@ actor ConversationStore {
     func updateStatus(messageID: UUID, status: String) async throws {
         try await ensureLoaded()
         let bgContext = newWriteContext()
-        try await bgContext.perform { [bgContext] in
+        let changed: Bool = try await bgContext.perform { [bgContext] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
             request.fetchLimit = 1
-            guard let message = try bgContext.fetch(request).first else { return }
-            Self.applySendState(status, to: message)
+            guard let message = try bgContext.fetch(request).first else { return false }
+            guard Self.applySendState(status, to: message) else { return false }
             try bgContext.save()
+            return true
         }
+        guard changed else { return }
         await postDidChange()
     }
 
@@ -2299,14 +2950,99 @@ actor ConversationStore {
     /// shows nothing — the row renders only for `failed` — but a NEW failure
     /// overwrites and a success clears; the stale value never surfaces).
     /// `failed` writes the fields explicitly in `failTurn` — plain callers
-    /// (sweeps, cancellation) leave them untouched.
-    private static func applySendState(_ status: String, to message: NSManagedObject) {
+    /// (sweeps, cancellation) leave them untouched. A REAL transition INTO
+    /// `failed` also mints a fresh delivery attempt identity, because this
+    /// writer is the one declaring that failure; a `failed` → `failed`
+    /// re-write declares nothing and mints nothing. See
+    /// `mintDeliveryAttemptID`.
+    @discardableResult
+    private static func applySendState(_ status: String, to message: NSManagedObject) -> Bool {
+        let previousStatus = message.value(forKey: "status") as? String
+        let clearsFailure = status == "sent"
+            && (message.value(forKey: "failureCode") != nil
+                || message.value(forKey: "failureWireCode") != nil
+                || message.value(forKey: "failureHadHistoryImages") != nil)
+        // A REDUNDANT WRITE IS NOT A WRITE. Re-applying the status a row already
+        // carries, with no failure classification left to clear, declares
+        // nothing new — so it must not dirty the object and must not export a
+        // CKRecord. Reporting that lets the one caller that can be handed a
+        // no-op skip its save and its change notification too.
+        guard previousStatus != status || clearsFailure else { return false }
         message.setValue(status, forKey: "status")
+        // A real transition into `failed` DECLARES the failure, so it stamps a
+        // fresh identity even over one the row already carries. The
+        // `previousStatus` guard is the whole idempotence story: re-writing
+        // `failed` onto a row that is already `failed` declares nothing new, so
+        // it must not mint — a mint there would relight a retired mark on every
+        // redundant write and export a CKRecord for each one.
+        if status == "failed", previousStatus != "failed" {
+            mintDeliveryAttemptID(on: message)
+        }
         if status == "sent" {
             message.setValue(nil, forKey: "failureCode")
             message.setValue(nil, forKey: "failureWireCode")
             message.setValue(nil, forKey: "failureHadHistoryImages")
         }
+        return true
+    }
+
+    /// Stamp `message` with a FRESH delivery attempt identity. UNCONDITIONAL by
+    /// design: an identity the row already carries is OVERWRITTEN, never
+    /// preserved. Every writer that declares a user turn `failed` calls it —
+    /// `applySendState`, both writing branches of `applyFailure`, the launch
+    /// sweep and the two `markPendingUserTurn(s)` flips through
+    /// `applySendState`, and the clone's synthetic `failed` stamp — and so does
+    /// `beginRetry`, which starts the next attempt. So does the ONE writer that
+    /// declares nothing and still republishes a failure: `repairTailProjection`,
+    /// when it snaps a failed user tail's `createdAt` onto its millisecond. It
+    /// is in this list because record-level last-writer-wins does not care what
+    /// a writer meant — a save that carries `failed` plus an inherited identity
+    /// is indistinguishable from a fresh declaration of that identity, which is
+    /// precisely the ABA the trace below rules out.
+    ///
+    /// WHAT AN ACKNOWLEDGEMENT ACTUALLY MATCHES IS THE LATEST FAILURE
+    /// DECLARATION, not one immutable id per semantic delivery attempt. That is
+    /// the opposite of the intuitive rule, so it is stated first and argued
+    /// below: `Message` rows converge under RECORD-LEVEL last-writer-wins, and
+    /// under that rule a preserved identity is an ABA hazard, not a stability
+    /// guarantee.
+    ///
+    /// THE TRACE THAT FORCES IT. Turn M is `sending` under identity A1 on
+    /// devices A and B. A fails it, the user is shown the mark and acknowledges
+    /// it, so the conversation stores `failureSeenAttemptID = A1`. B then goes
+    /// offline still holding `sending`/A1. A retries: `beginRetry` mints A2, the
+    /// send fails again, and A exports `failed`/A2 — the mark correctly returns.
+    /// B relaunches; its launch sweep finds ITS OWN copy of M still `sending`
+    /// past the grace, flips it to `failed`, and — were the existing id
+    /// preserved — exports `failed`/A1 with a LATER record timestamp. The fleet
+    /// converges on `failed`/A1 against an acknowledgement of A1, so a message
+    /// that never sent, and whose second failure was never put in front of
+    /// anyone, renders CLEAR. Permanently: `failed` is terminal, nothing writes
+    /// that row again, and on the Watch the row shows nothing at all.
+    ///
+    /// A FRESH id closes it by making the stale writer's export self-defeating.
+    /// B's sweep publishes an identity no acknowledgement can name, so whichever
+    /// of the two records wins the merge, the stored acknowledgement matches
+    /// neither and the mark stands. The residual cost is a bounded OVER-report —
+    /// a straggling writer can re-arm a mark the user already retired, which
+    /// costs one thread open — and that is the direction this app takes every
+    /// time: an extra mark is a nuisance, a missing one is a message the user
+    /// never learns did not send.
+    ///
+    /// IT SUBSUMES THE LEGACY CASE RATHER THAN SPECIAL-CASING IT. A turn written
+    /// `sending` by a build older than this attribute reaches `failed` carrying
+    /// no identity at all, and a failure with no identity can never be
+    /// acknowledged, so it would stay marked for the life of the install. The
+    /// same mint that runs for every other failure gives it one.
+    ///
+    /// CALLERS MUST GATE ON A REAL CHANGE. The mint is unconditional; CALLING it
+    /// is not. A writer that changes nothing — a repeat `failed` write, a
+    /// classification that upgrades nothing — must not reach this at all, or
+    /// every no-op would relight the mark and export a CKRecord for it. Each
+    /// call site carries that guard, and the guards are the reason this is not a
+    /// write amplifier.
+    private static func mintDeliveryAttemptID(on message: NSManagedObject) {
+        message.setValue(UUID(), forKey: "deliveryAttemptID")
     }
 
     /// Flip every still-`sending` USER turn in a conversation to `status`
@@ -2318,6 +3054,12 @@ actor ConversationStore {
     /// `status == "sending"` user turns, so it never disturbs already-resolved
     /// turns or headless captures (which are written `status == nil` = sent).
     /// Non-throwing (best-effort): a background-delegate cleanup must not throw.
+    ///
+    /// A flip to `failed` here DECLARES that failure — this writer is often the
+    /// only one that ever will — so each flipped turn is stamped with a fresh
+    /// delivery attempt identity via `applySendState`. The `sending`-only
+    /// predicate is what keeps that from repeating: a turn already `failed` is
+    /// not in the fetch, so it is neither re-written nor re-minted.
     func markPendingUserTurns(conversationID: UUID, to status: String) async {
         do { try await ensureLoaded() } catch { return }
         let context = newWriteContext()
@@ -2392,13 +3134,16 @@ actor ConversationStore {
     /// converge on the richest classification regardless of order:
     ///
     /// - `sending` → `failed` + classification written (nils allowed — a
-    ///   generic failure IS the classification).
+    ///   generic failure IS the classification) + a fresh delivery attempt
+    ///   identity.
     /// - already `failed` with NO stored `failureCode` + incoming has one →
-    ///   metadata upgraded in place (status untouched). This is the
-    ///   delegate-lost-the-race case: a plain `failed` write landed first,
-    ///   the coded write still must not be dropped.
+    ///   metadata upgraded in place (status untouched) + a fresh delivery
+    ///   attempt identity. This is the delegate-lost-the-race case: a plain
+    ///   `failed` write landed first, the coded write still must not be
+    ///   dropped. The re-mint on an ALREADY-failed row is deliberate and is
+    ///   argued at `applyFailure`.
     /// - anything else → no-op (a resolved turn is never disturbed — same
-    ///   posture as `markPendingUserTurn`).
+    ///   posture as `markPendingUserTurn`), and a no-op mints nothing.
     ///
     /// `role == "user"` guard mirrors the other send-state writers.
     /// Non-throwing best-effort: failure writers run on cleanup paths.
@@ -2455,6 +3200,11 @@ actor ConversationStore {
     /// generic-first race: a foreground `unreachable` landing before the
     /// delegate's body-classified `image_unsupported` must not pin the row on
     /// hedged copy). Equal-or-poorer incoming → no-op.
+    ///
+    /// BOTH WRITING BRANCHES MINT a fresh `deliveryAttemptID`
+    /// (`mintDeliveryAttemptID`); the no-op branch mints nothing. Returning
+    /// false is therefore load-bearing beyond saving a write — it is what keeps
+    /// an unchanging classification from relighting a retired mark.
     private static func applyFailure(
         _ classification: TurnFailureClassification?,
         to message: NSManagedObject
@@ -2462,6 +3212,11 @@ actor ConversationStore {
         let status = message.value(forKey: "status") as? String
         if status == "sending" {
             message.setValue("failed", forKey: "status")
+            // This writer is DECLARING the failure, so it stamps a fresh
+            // identity over whatever the row was carrying — see
+            // `mintDeliveryAttemptID` for why preserving one is the defect
+            // rather than the safeguard.
+            mintDeliveryAttemptID(on: message)
             message.setValue(classification?.failureCode.map { NSNumber(value: $0) }, forKey: "failureCode")
             message.setValue(classification?.wireCode, forKey: "failureWireCode")
             message.setValue(classification?.hadHistoryImages.map { NSNumber(value: $0) }, forKey: "failureHadHistoryImages")
@@ -2472,10 +3227,24 @@ actor ConversationStore {
             let storedWireMissing = message.value(forKey: "failureWireCode") == nil
             let upgrades = (storedCodeMissing && classification.failureCode != nil)
                 || (storedWireMissing && classification.wireCode != nil)
+            // An upgrade that upgrades nothing is not a write at all: no save,
+            // no export, and above all no mint.
             guard upgrades else { return false }
             message.setValue(classification.failureCode.map { NSNumber(value: $0) }, forKey: "failureCode")
             message.setValue(classification.wireCode, forKey: "failureWireCode")
             message.setValue(classification.hadHistoryImages.map { NSNumber(value: $0) }, forKey: "failureHadHistoryImages")
+            // A REAL upgrade mints too, and this is the counter-intuitive half
+            // of the rule: the row is already `failed`, nothing new failed, and
+            // the mark may already have been retired — yet leaving the identity
+            // alone here reopens exactly the ABA the sweep case does. A device
+            // that went offline holding the OLD, code-less copy of attempt A1
+            // comes back, upgrades ITS row, and exports `failed`/A1 after the
+            // fleet has already settled on `failed`/A2 from a retry it never
+            // saw; against a standing acknowledgement of A1 that message goes
+            // silent forever, and `failed` is terminal so nothing writes it
+            // again. Re-minting makes the straggler's export name an attempt
+            // nothing acknowledges, so the mark survives whichever record wins.
+            mintDeliveryAttemptID(on: message)
             return true
         }
         return false
@@ -2487,6 +3256,17 @@ actor ConversationStore {
     /// it (fail-fast: the loser aborts, never a double dispatch). KEEPS the
     /// stored classification (frozen rule: cleared only on success — see
     /// `applySendState`).
+    ///
+    /// MINTS A NEW `deliveryAttemptID` in the same compare-and-set, because
+    /// this IS a new delivery attempt, and it deliberately does NOT touch the
+    /// conversation's `failureSeenAttemptID`. That asymmetry is the whole
+    /// design: there is no destructive clear anywhere in it. The stored
+    /// acknowledgement stays exactly where it is and simply stops matching, so
+    /// if this attempt fails too the mark re-arms by itself. Clearing instead
+    /// would put back the entire class of bug the identity scheme exists to
+    /// kill — a stale clear landing after a later acknowledgement, or a stale
+    /// acknowledgement landing after a clear, silencing a live failure with no
+    /// way for the user to get the mark back.
     func beginRetry(messageID: UUID) async -> Bool {
         guard retryClaims.insert(messageID).inserted else { return false }
         defer { retryClaims.remove(messageID) }
@@ -2502,6 +3282,14 @@ actor ConversationStore {
             request.fetchLimit = 1
             guard let message = (try? context.fetch(request))?.first else { return false }
             message.setValue("sending", forKey: "status")
+            // New attempt, new identity — see the header. Nothing preserves the
+            // old one: the acknowledgement that named it is now an
+            // acknowledgement of an attempt this row no longer reports, which
+            // is exactly how asking again re-arms the mark without any writer
+            // having to clear anything. Routed through the shared mint so the
+            // one rule — a fresh identity whenever this row's delivery story
+            // materially moves — lives at a single site.
+            Self.mintDeliveryAttemptID(on: message)
             try? context.save()
             return true
         }
@@ -2524,6 +3312,610 @@ actor ConversationStore {
             try? context.save()
         }
         await postDidChange()
+    }
+
+    // MARK: - Account-wide attention markers
+    //
+    // The three writes below are what makes "I have already seen this" a fact
+    // about the ACCOUNT instead of about one device: `lastViewedAt` and
+    // `failureSeenAttemptID` are mirrored columns, so reading a thread on the
+    // iPad retires its mark on the phone, the Mac and the wrist.
+    //
+    // ALL OF THEM ARE BEST-EFFORT AND NON-THROWING. A marker write happens
+    // because the user opened a thread, and nothing about opening a thread may
+    // fail on a store that will not load — the surface has already drawn.
+    // `ReadStateStore`'s optimistic overlay carries the intent locally in the
+    // meantime and the legacy fallback carries it across a relaunch, so a
+    // dropped write costs a repeat stamp, never a lost read.
+    //
+    // EVERY ONE OF THEM SAVES AND POSTS ONLY WHEN A VALUE ACTUALLY MOVED. See
+    // the file header: a write that always looks like a change is a local
+    // refetch loop and a CKRecord export per turn, and a thread left open across
+    // a long conversation re-stamps on every tail.
+
+    /// Record that the account has looked at this conversation, as of `date`.
+    ///
+    /// MONOTONE AGAINST THE STORED VALUE, and against the STORED one rather than
+    /// against any value the caller happens to hold — that is the point. The
+    /// column is last-writer-wins across devices, so a marker that could move
+    /// BACKWARD would let a delayed write carrying an older view time re-bold a
+    /// thread that was read somewhere else. Comparing inside the transaction
+    /// that writes makes moving backward unrepresentable on this device, which
+    /// is as far as a record-level LWW field can be defended (the residual
+    /// cross-device case is an accepted, self-repairing imperfection: it can
+    /// only ever show one extra mark, never hide a reply).
+    ///
+    /// An equal stamp is NOT a move. A thread open across many landing tails
+    /// re-stamps the same clamped value, and exporting a CKRecord for each of
+    /// them is the write amplification this rule exists to prevent.
+    func markConversationViewed(_ id: UUID, at date: Date) async {
+        // NEVER AGAINST THE REAL STORE FROM A TEST HOST — the same seam split
+        // `foldLegacyReadMarker` documents at length, and for the same reason.
+        // These columns are CloudKit-mirrored, and the Core Data store they land
+        // in is one of the storage seam's documented carve-outs: it is the real
+        // App-Group sqlite with the mirror attached on every non-simulator
+        // build. A signed macOS or on-device suite run reaching this through
+        // `ReadStateStore.shared` — which every visibility seam does — would
+        // stamp view markers onto the founder's own conversations and export
+        // them to their private CloudKit zone. Gated on the STORE rather than on
+        // the test host, so a suite driving an ephemeral
+        // `ConversationStore(inMemory:)` still exercises the write.
+        #if CONDUCK_TESTING
+        guard container.persistentStoreDescriptions.first?.type == NSInMemoryStoreType else {
+            return
+        }
+        #endif
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        let moved: Bool = await context.perform { [context] in
+            guard let conversation = Self.conversation(id: id, in: context) else { return false }
+            guard Self.applyViewed(date, to: conversation) else { return false }
+            try? context.save()
+            return true
+        }
+        if moved { await postDidChange() }
+    }
+
+    /// Record that the account has been shown THIS delivery attempt's failure —
+    /// the acknowledgement that retires the red mark on every device.
+    ///
+    /// `attemptID` is the `Message.deliveryAttemptID` of the failed turn the
+    /// surface actually painted, taken from the same `FailedTurnProjection` that
+    /// supplied its stamp so the two can never name different turns.
+    ///
+    /// DELIBERATELY NOT ROUTED THROUGH THE MONOTONE HELPER `markConversationViewed`
+    /// USES. An acknowledgement is an IDENTITY, and identities have no order:
+    /// there is no "later" UUID, and the newest attempt is not the largest one.
+    /// The stored value is simply replaced, and it is replaced with the id the
+    /// caller drew rather than with anything re-read here — a failure that
+    /// imported seconds before the tap must not be acknowledged without ever
+    /// having been on screen. Nothing needs clearing on retry either: a new
+    /// attempt mints a new id and the stored acknowledgement stops matching by
+    /// itself.
+    ///
+    /// NO TIMESTAMP is written, and this method deliberately does not also mark
+    /// the conversation viewed. The two markers answer different questions and
+    /// one is not evidence of the other; a surface that means both says so, via
+    /// `markConversationViewedAndAcknowledged`.
+    func acknowledgeConversationFailure(_ id: UUID, attemptID: UUID) async {
+        // NEVER AGAINST THE REAL STORE FROM A TEST HOST — the same seam split
+        // `foldLegacyReadMarker` documents at length, and for the same reason.
+        // These columns are CloudKit-mirrored, and the Core Data store they land
+        // in is one of the storage seam's documented carve-outs: it is the real
+        // App-Group sqlite with the mirror attached on every non-simulator
+        // build. A signed macOS or on-device suite run reaching this through
+        // `ReadStateStore.shared` — which every visibility seam does — would
+        // stamp view markers onto the founder's own conversations and export
+        // them to their private CloudKit zone. Gated on the STORE rather than on
+        // the test host, so a suite driving an ephemeral
+        // `ConversationStore(inMemory:)` still exercises the write.
+        #if CONDUCK_TESTING
+        guard container.persistentStoreDescriptions.first?.type == NSInMemoryStoreType else {
+            return
+        }
+        #endif
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        let moved: Bool = await context.perform { [context] in
+            guard let conversation = Self.conversation(id: id, in: context) else { return false }
+            guard Self.applyAcknowledgement(attemptID, to: conversation) else { return false }
+            try? context.save()
+            return true
+        }
+        if moved { await postDidChange() }
+    }
+
+    /// Both markers in ONE transaction, for a surface where a single user action
+    /// means both things at once.
+    ///
+    /// The macOS menu bar is that surface: clicking a row opens the thread AND
+    /// dismisses its failure, one click, one intent. Calling the two methods
+    /// above in sequence would produce two saves, two `.conversationsDidChange`
+    /// posts and two CKRecord exports per opening, and would let a reload land
+    /// between them and paint the row half-updated — viewed but still red, or
+    /// the reverse.
+    ///
+    /// A NIL `attemptID` MARKS VIEWED AND ACKNOWLEDGES NOTHING. It is not a
+    /// clear and not a wildcard: nil means the row had no failure to
+    /// acknowledge, or one carrying no attempt identity, and writing nil into
+    /// the column would ERASE an acknowledgement another device made — relighting
+    /// the mark everywhere because someone opened a conversation.
+    func markConversationViewedAndAcknowledged(_ id: UUID, at date: Date, attemptID: UUID?) async {
+        // NEVER AGAINST THE REAL STORE FROM A TEST HOST — the same seam split
+        // `foldLegacyReadMarker` documents at length, and for the same reason.
+        // These columns are CloudKit-mirrored, and the Core Data store they land
+        // in is one of the storage seam's documented carve-outs: it is the real
+        // App-Group sqlite with the mirror attached on every non-simulator
+        // build. A signed macOS or on-device suite run reaching this through
+        // `ReadStateStore.shared` — which every visibility seam does — would
+        // stamp view markers onto the founder's own conversations and export
+        // them to their private CloudKit zone. Gated on the STORE rather than on
+        // the test host, so a suite driving an ephemeral
+        // `ConversationStore(inMemory:)` still exercises the write.
+        #if CONDUCK_TESTING
+        guard container.persistentStoreDescriptions.first?.type == NSInMemoryStoreType else {
+            return
+        }
+        #endif
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        let moved: Bool = await context.perform { [context] in
+            guard let conversation = Self.conversation(id: id, in: context) else { return false }
+            // Both are evaluated, never short-circuited: an acknowledgement must
+            // land even when the view marker did not move (the user has seen
+            // this failure either way), and the view marker must move even when
+            // the acknowledgement is a no-op repeat.
+            var changed = Self.applyViewed(date, to: conversation)
+            if let attemptID, Self.applyAcknowledgement(attemptID, to: conversation) {
+                changed = true
+            }
+            guard changed else { return false }
+            try? context.save()
+            return true
+        }
+        if moved { await postDidChange() }
+    }
+
+    /// Fold ONE conversation's legacy device-local read marker into its record,
+    /// and SAY WHAT HAPPENED so the caller can delete that defaults key only on a
+    /// confirmed cover.
+    ///
+    /// THE RETURN VALUE IS THE WHOLE POINT. The legacy key is a durable read-side
+    /// fallback, not a migration input: while it exists it keeps answering reads,
+    /// so nothing goes bold in the gap. A fire-and-forget call followed by an
+    /// unconditional key deletion would drop the marker on the floor every time
+    /// the record was not actually present or the save did not commit — and a
+    /// lost read marker is not recoverable from anywhere, on any device. See
+    /// `ReadMarkerFoldOutcome`.
+    ///
+    /// A MISSING CONVERSATION IS `.failed`, NOT `.alreadyCovered`. Absence from
+    /// a fetch is not proof of deletion: the initial CloudKit import is
+    /// asynchronous and an offline launch reads a partial local mirror, so the
+    /// conversation this key belongs to may simply not have arrived yet. That is
+    /// exactly the case a one-shot migration with a done-flag gets wrong, and
+    /// keeping the key is how this design avoids it.
+    ///
+    /// Only the READ marker folds. Legacy failure acknowledgements are
+    /// deliberately never migrated — a stale fold can silence a failure that
+    /// re-occurred after the upgrade, and the safe direction is one extra red
+    /// mark rather than a hidden one.
+    func foldLegacyReadMarker(_ id: UUID, localMarker: Date) async -> ReadMarkerFoldOutcome {
+        // NEVER AGAINST THE REAL STORE FROM A TEST HOST — the same seam split
+        // `backfillTitleSnippetsIfNeeded` documents at length, and for the same
+        // reason. The legacy markers live behind the storage seam (in-memory
+        // doubles under `CONDUCK_TESTING`), the Core Data store they fold INTO
+        // is one of the seam's documented carve-outs and is real, with the
+        // CloudKit mirror attached on every non-simulator build. A signed macOS
+        // or on-device suite run would therefore write view markers into the
+        // founder's actual conversations and export them to their private
+        // CloudKit zone. Gated on the STORE rather than on the test host, so a
+        // suite driving an ephemeral `ConversationStore(inMemory:)` still
+        // exercises the fold. `.failed` rather than `.alreadyCovered` because
+        // nothing was covered: the caller keeps its key, which is the safe
+        // direction in the one configuration where this cannot run.
+        #if CONDUCK_TESTING
+        guard container.persistentStoreDescriptions.first?.type == NSInMemoryStoreType else {
+            return .failed
+        }
+        #endif
+        do { try await ensureLoaded() } catch { return .failed }
+        let context = newWriteContext()
+        // The result is returned WITHOUT a `postDidChange()`, deliberately. The
+        // value this commits is one the read path was ALREADY answering with,
+        // and the caller keeps answering with it: `ReadStateStore.completeFold`
+        // moves the marker from its legacy map into its overlay rather than
+        // dropping it, so the same `max` produces the same answer and nothing on
+        // this device renders differently. That handoff is what makes the
+        // silence here correct — without it this method would be committing a
+        // value only the record knows about, while the caller retired the only
+        // copy the rendering list could see. Posting would instead fan a
+        // whole-list refetch per folded key, and the first launch after the
+        // upgrade folds them in batches. The other devices learn about it the
+        // way they learn about every column: through the mirror.
+        //
+        // The save is `try`/`catch` rather than `try?` because the CALLER acts
+        // on the answer: a dropped save reported as `.saved` deletes the only
+        // remaining copy of that marker.
+        return await context.perform { [context] in
+            guard let conversation = Self.conversation(id: id, in: context) else { return .failed }
+            guard Self.applyViewed(localMarker, to: conversation) else { return .alreadyCovered }
+            do {
+                try context.save()
+            } catch {
+                return .failed
+            }
+            return .saved
+        }
+    }
+
+    /// Rewrite ONE conversation's stale tail envelope from its real tail, and
+    /// canonicalise the pair of stamps that envelope is validated against.
+    ///
+    /// WHY A REPAIR EXISTS. A stale envelope is not self-healing: iOS and macOS
+    /// fall back to a lazy per-row tail fetch and carry on, so nothing on those
+    /// surfaces ever notices again — but the wrist has no fallback, and a single
+    /// append by an older build (or by any writer that missed the projection)
+    /// would leave that conversation permanently mark-less on the Watch. The
+    /// repair is what closes that, and it costs one bounded write.
+    ///
+    /// WHY IT ALSO WRITES THE TWO STAMPS. This is the ONE path that describes a
+    /// tail it did not write, so it is the one path that can be handed an
+    /// instant sitting at an arbitrary offset inside its millisecond — a row an
+    /// older build stamped from a bare `Date()`, which is every row that
+    /// predates `TailProjection.canonical`. A non-canonical instant is precisely
+    /// the value CloudKit's millisecond DATE field is free to quantise in a
+    /// direction Apple does not document, so two devices holding two
+    /// quantisations of one such stamp would compute envelopes a millisecond
+    /// apart, each read the other's as stale, and rewrite it on every launch for
+    /// as long as that conversation gets no new turn. Snapping the tail's
+    /// `createdAt` and the conversation's `lastActivityAt` onto the same
+    /// canonical `Date` — the value both quantisations agree about — is what
+    /// makes the row converge instead. BOTH or neither: the resolver's failed
+    /// arm bounds a terminal failure by `createdAt >= lastActivityAt` and relies
+    /// on the tail comparing EQUAL, so moving one half by a fraction of a
+    /// millisecond and not the other would silently retire a red mark for a
+    /// message that never sent. For every row this build wrote it is a no-op —
+    /// the stamps are already canonical — so the write is a one-time migration,
+    /// not a recurring cost.
+    ///
+    /// IT CANNOT LOOP, by three independent constructions:
+    ///   - one attempt per conversation per process (`tailProjectionRepairsAttempted`),
+    ///     so a row that can never hold a valid envelope is tried once, not on
+    ///     every reload;
+    ///   - it saves only when something actually changes — a repair that
+    ///     computes the string already stored and finds both stamps already
+    ///     canonical writes nothing;
+    ///   - it posts NO change notification. That is the important one: posting
+    ///     would reload the lists, the reload would re-read the envelope, and a
+    ///     row that still could not be made valid would ask for a repair again.
+    ///     Nothing on this device is waiting for the result either — the surface
+    ///     that noticed the staleness already has the tail role from its own
+    ///     fallback fetch. The repair is for the devices that cannot fetch.
+    ///
+    /// THE SNAP IS BOUNDED BY THE MESSAGE BEHIND THE TAIL. Rounding to nearest
+    /// can move a stamp EARLIER, and `Message.createdAt` is the only order a
+    /// thread has, so on a legacy pair sharing one millisecond an unbounded snap
+    /// could put the newest turn behind the one it answered. The repair reads
+    /// two rows rather than one and declines outright when the move would cross
+    /// the second — a row it cannot improve is left exactly as it is.
+    ///
+    /// REWRITING A FAILED USER TURN MINTS A FRESH DELIVERY ATTEMPT IDENTITY.
+    /// This is the only writer in the file that materially updates a `Message`
+    /// row it did not author, and under the record-level last-writer-wins that
+    /// `Message` rows converge by, that save republishes the whole row — including
+    /// a `status`/`deliveryAttemptID` pair this device may hold from before a
+    /// retry it has not imported yet. Republishing a failure declaration IS a
+    /// declaration as far as every other device is concerned, so it takes the
+    /// same rule every other one does: see `mintDeliveryAttemptID`.
+    ///
+    /// A `.unreadableVersion` envelope is left ALONE — see `TailProjectionReading`:
+    /// rewriting a newer build's value starts a downgrade fight across the
+    /// mirror. A conversation whose real tail cannot produce a VALID envelope
+    /// (its `createdAt` no longer names the same millisecond as `lastActivityAt`,
+    /// which means a message is missing locally rather than that the string is
+    /// wrong) is likewise left alone, stamps included: an envelope that is stale
+    /// by construction is worse than the one already there, because it exports.
+    ///
+    /// Returns whether anything was written — for tests and diagnostics; every
+    /// production caller can ignore it.
+    @discardableResult
+    func repairTailProjection(conversationID: UUID) async -> Bool {
+        // NEVER AGAINST THE REAL STORE FROM A TEST HOST — the same seam split
+        // `markConversationViewed` and `foldLegacyReadMarker` document, and this
+        // path needs it MORE than they do: they move one attention column, while
+        // this rewrites `Message.createdAt` and `Conversation.lastActivityAt`
+        // and exports both records. `ConversationStore`'s App-Group sqlite is a
+        // documented storage-seam carve-out — the real shared container, with
+        // the CloudKit mirror attached on every non-simulator build — and this
+        // is reachable from a test host through
+        // `ConversationListViewModel.scheduleTailProjectionRepairs`, which
+        // reaches `ConversationStore.shared`. Gated on the STORE rather than on
+        // the test host, so a suite driving an ephemeral
+        // `ConversationStore(inMemory:)` still exercises the repair. BEFORE the
+        // memo, so a refused call does not also burn this conversation's one
+        // attempt for the process.
+        #if CONDUCK_TESTING
+        guard container.persistentStoreDescriptions.first?.type == NSInMemoryStoreType else {
+            return false
+        }
+        #endif
+        guard !tailProjectionRepairsAttempted.contains(conversationID) else { return false }
+        tailProjectionRepairsAttempted.insert(conversationID)
+        do { try await ensureLoaded() } catch { return false }
+        let context = newWriteContext()
+        return await context.perform { [context] in
+            guard let conversation = Self.conversation(id: conversationID, in: context),
+                  let lastActivityAt = conversation.value(forKey: "lastActivityAt") as? Date else {
+                return false
+            }
+            let stored = conversation.value(forKey: "tailProjection") as? String
+            guard TailProjection.read(stored, lastActivityAt: lastActivityAt).isRepairable else {
+                return false
+            }
+
+            // The real tail, and the message behind it — two rows, because the
+            // snap below must not be allowed to cross the second one.
+            //
+            // THE `id` TIE-BREAK IS LOAD-BEARING NOW THAT STAMPS ARE QUANTISED.
+            // Two turns written into one conversation inside the same
+            // millisecond carry the SAME `createdAt`, so `createdAt` alone no
+            // longer picks a row — fetch order would, and fetch order is not
+            // stable across two fetches on one device, let alone across devices.
+            // The envelope names ONE message id, so an unstable pick means two
+            // devices writing two different envelopes at each other forever.
+            // DESCENDING on the id, which is the same end of a tie as
+            // `FailedTurnProjection.isNewer` (stamp, then the LARGER id), as
+            // `fetchConversationTail` — the per-row fallback this envelope
+            // stands in for on iOS and macOS — and as `fetchMessages`, whose
+            // `last` element the thread acknowledges failures off. Four sites,
+            // one order; see `TailProjection`'s header.
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(
+                format: "conversation.id == %@", conversationID as CVarArg
+            )
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "createdAt", ascending: false),
+                NSSortDescriptor(key: "id", ascending: false)
+            ]
+            request.fetchLimit = 2
+            let newest = (try? context.fetch(request)) ?? []
+            let tail = newest.first
+            let predecessorStamp = newest.dropFirst().first?
+                .value(forKey: "createdAt") as? Date
+
+            // Set only on the branch that is going to write an envelope: the
+            // canonical `Date` for the millisecond this conversation's tail
+            // names, which both stamps are then snapped onto.
+            var canonicalStamp: Date?
+            let repaired: String? = {
+                // No messages at all — the correct envelope is no envelope, and
+                // writing it clears a string that was describing a tail this
+                // conversation does not have.
+                guard let tail else { return nil }
+                guard let messageID = tail.value(forKey: "id") as? UUID,
+                      let createdAt = tail.value(forKey: "createdAt") as? Date,
+                      TailProjection.milliseconds(from: createdAt)
+                        == TailProjection.milliseconds(from: lastActivityAt),
+                      let encoded = TailProjection.encoded(
+                          messageID: messageID,
+                          createdAt: createdAt,
+                          role: tail.value(forKey: "role") as? String
+                      )
+                else { return stored }
+                let candidate = TailProjection.canonical(createdAt)
+                // THE SNAP MUST NOT REORDER THE THREAD. Rounding to nearest can
+                // move the tail EARLIER, and `Message.createdAt` is the only
+                // order a thread has, so a legacy pair sharing one millisecond
+                // could land the newest turn behind the message it answered:
+                // the thread would render the user's own turn above the reply
+                // that preceded it, `fetchConversationTail` would return the
+                // other row while this envelope named this one, and
+                // `lastActivityAt` would sit behind its own newest message.
+                // Leaving such a row entirely alone is the honest answer — it
+                // keeps the imperfection it already has instead of adding a
+                // worse one — and it costs only the wrist's mark on a row that
+                // no build of this app could have written.
+                //
+                // Only a DOWNWARD snap can cross anything, so a row whose stamp
+                // is already canonical is accepted without consulting the
+                // neighbour at all — including one that legitimately shares the
+                // tail's millisecond, which two devices settling one
+                // millisecond independently can produce and which the `id`
+                // tie-break already orders.
+                let crossesPredecessor = candidate != createdAt
+                    && (predecessorStamp.map { candidate <= $0 } ?? false)
+                guard !crossesPredecessor else { return stored }
+                canonicalStamp = candidate
+                return encoded
+            }()
+
+            var changed = false
+            if let canonicalStamp, let tail {
+                // Both halves or neither — see the header. Guarded on exact
+                // inequality rather than written unconditionally so a row this
+                // build already stamped stays a pure envelope repair and exports
+                // one record instead of two.
+                if tail.value(forKey: "createdAt") as? Date != canonicalStamp {
+                    tail.setValue(canonicalStamp, forKey: "createdAt")
+                    // REWRITING A FAILED TURN REPUBLISHES ITS FAILURE, so it
+                    // mints — see `mintDeliveryAttemptID`. `Message` rows
+                    // converge under record-level last-writer-wins, so this
+                    // save exports the whole row, `status` and
+                    // `deliveryAttemptID` included, from whatever values this
+                    // device happens to hold. On a device that has not yet
+                    // imported a retry made elsewhere those are the PREVIOUS
+                    // attempt's, and republishing them against a standing
+                    // acknowledgement of that attempt would clear the mark for
+                    // a message that never sent — the exact ABA the mint rule
+                    // exists to close. A fresh identity makes the export
+                    // self-defeating instead: no acknowledgement can name it,
+                    // so the mark stands. The cost is the direction this app
+                    // always takes — one already-retired mark can come back and
+                    // cost a tap, once, on a row whose stamps predate
+                    // `TailProjection.canonical`.
+                    if tail.value(forKey: "role") as? String == "user",
+                       tail.value(forKey: "status") as? String == "failed" {
+                        Self.mintDeliveryAttemptID(on: tail)
+                    }
+                    changed = true
+                }
+                if lastActivityAt != canonicalStamp {
+                    conversation.setValue(canonicalStamp, forKey: "lastActivityAt")
+                    changed = true
+                }
+            }
+            if repaired != stored {
+                conversation.setValue(repaired, forKey: "tailProjection")
+                changed = true
+            }
+
+            guard changed else { return false }
+            try? context.save()
+            return true
+        }
+    }
+
+    #if CONDUCK_TESTING
+    /// TEST SEAM — overwrite one conversation's stored tail envelope directly.
+    ///
+    /// WHY IT HAS TO EXIST. Every production writer of `tailProjection` writes it
+    /// in the SAME transaction that bumps `lastActivityAt`, from one `now`, which
+    /// is precisely the invariant that makes a stale envelope impossible to
+    /// produce through the public API. So the one state `repairTailProjection`
+    /// exists for — a well-formed envelope describing a tail this conversation
+    /// has moved past, written by a build that did not know about the column —
+    /// is unreachable from a test without a seam, and the repair's WRITE branch
+    /// would go permanently unobserved: a suite could delete the whole repair
+    /// and stay green while the wrist lost its marks on every mixed-fleet row.
+    ///
+    /// Compiled only under `CONDUCK_TESTING`, and gated on the in-memory store
+    /// for the same reason the marker writers are: nothing here may reach the
+    /// founder's real conversations from a signed suite run.
+    func _setTailProjectionForTesting(_ value: String?, conversationID: UUID) async {
+        guard container.persistentStoreDescriptions.first?.type == NSInMemoryStoreType else {
+            return
+        }
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        await context.perform { [context] in
+            guard let conversation = Self.conversation(id: conversationID, in: context) else { return }
+            conversation.setValue(value, forKey: "tailProjection")
+            try? context.save()
+        }
+    }
+
+    /// TEST SEAM — put a conversation's activity stamp and its tail's
+    /// `createdAt` at an arbitrary instant, ignoring the quantisation every
+    /// production writer applies.
+    ///
+    /// WHY IT HAS TO EXIST, and it is the same argument as the seam above. A row
+    /// whose stamps sit at an offset INSIDE their millisecond is precisely what
+    /// `repairTailProjection`'s canonicalising branch exists for — it is every
+    /// row written before `TailProjection.canonical` did, which is a user's
+    /// entire existing history — and no public API can produce one, because
+    /// every writer snaps first. Without a seam that branch is unreachable from
+    /// a test: it could be deleted, or write one stamp and not the other, and
+    /// both suites would stay green while every legacy conversation lost its
+    /// mark on the wrist and every legacy failure lost its red mark everywhere.
+    ///
+    /// Writes those columns and NOTHING else — in particular it does not touch
+    /// `tailProjection`, so a caller composes it with the seam above to build
+    /// the exact pre-upgrade shape: a non-canonical pair and no envelope.
+    ///
+    /// `newestFirst` is applied to the conversation's messages in the same total
+    /// order the repair picks them by — index 0 is the tail, index 1 the message
+    /// behind it — so a caller can also build the one pair the repair has to
+    /// REFUSE: two turns inside one millisecond whose tail rounds down past its
+    /// own predecessor.
+    ///
+    /// Compiled only under `CONDUCK_TESTING`, and gated on the in-memory store
+    /// for the same reason every other writer here is.
+    func _setStampsForTesting(
+        conversationID: UUID,
+        lastActivityAt: Date,
+        newestFirst: [Date]
+    ) async {
+        guard container.persistentStoreDescriptions.first?.type == NSInMemoryStoreType else {
+            return
+        }
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        await context.perform { [context] in
+            guard let conversation = Self.conversation(id: conversationID, in: context) else { return }
+            conversation.setValue(lastActivityAt, forKey: "lastActivityAt")
+            guard !newestFirst.isEmpty else {
+                try? context.save()
+                return
+            }
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(
+                format: "conversation.id == %@", conversationID as CVarArg
+            )
+            // The same total order the repair itself uses, so index 0 is the row
+            // the repair will pick.
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "createdAt", ascending: false),
+                NSSortDescriptor(key: "id", ascending: false)
+            ]
+            request.fetchLimit = newestFirst.count
+            let rows = (try? context.fetch(request)) ?? []
+            for (row, stamp) in zip(rows, newestFirst) {
+                row.setValue(stamp, forKey: "createdAt")
+            }
+            try? context.save()
+        }
+    }
+    #endif
+
+    /// The one conversation row for `id`, or nil. Every marker write starts here,
+    /// so the fetch shape (`id == %@`, `fetchLimit 1`) lives once.
+    private static func conversation(
+        id: UUID,
+        in context: NSManagedObjectContext
+    ) -> NSManagedObject? {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
+        request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+        request.fetchLimit = 1
+        return (try? context.fetch(request))?.first
+    }
+
+    /// Move `lastViewedAt` forward to `date`, or report that it did not move.
+    ///
+    /// The single site the monotone rule lives at, shared by the plain write, the
+    /// combined write and the legacy fold — three callers that must not be able
+    /// to disagree about what "already seen" means. Returns false for an equal
+    /// stamp as well as an older one: equal is not a change, and treating it as
+    /// one is what turns a long-open thread into a CKRecord export per tail.
+    ///
+    /// ONLY EVER WRITES `lastViewedAt`. Never `lastActivityAt` — that column is
+    /// what the list sorts on and what the unseen test compares against, so
+    /// touching it here would float a thread to the top of the list for being
+    /// READ and would silence the very reply the marker is being compared with.
+    private static func applyViewed(_ date: Date, to conversation: NSManagedObject) -> Bool {
+        if let stored = conversation.value(forKey: "lastViewedAt") as? Date, date <= stored {
+            return false
+        }
+        conversation.setValue(date, forKey: "lastViewedAt")
+        return true
+    }
+
+    /// Store `attemptID` as the acknowledged failure, or report that it was
+    /// already the stored one.
+    ///
+    /// No ordering and no `max` — see `acknowledgeConversationFailure`. The only
+    /// no-op is an exact repeat, which is the common case (a surface re-stamping
+    /// the same row) and the one worth not exporting. ONLY EVER WRITES
+    /// `failureSeenAttemptID`, for the same reason `applyViewed` writes only its
+    /// own column.
+    private static func applyAcknowledgement(
+        _ attemptID: UUID,
+        to conversation: NSManagedObject
+    ) -> Bool {
+        guard (conversation.value(forKey: "failureSeenAttemptID") as? UUID) != attemptID else {
+            return false
+        }
+        conversation.setValue(attemptID, forKey: "failureSeenAttemptID")
+        return true
     }
 
     /// Launch-time recovery sweep: flip USER turns stuck at `status ==
@@ -2552,6 +3944,15 @@ actor ConversationStore {
     /// so the threshold must comfortably exceed timeout + sync skew. 30 min
     /// does; the immediate post-kill case is handled separately by the
     /// resurrected-`.cancelled` mapping in the background delegates.
+    ///
+    /// A flip to `failed` here DECLARES that failure, so the turn is stamped
+    /// with a fresh delivery attempt identity through `applySendState` — even
+    /// though the row this sweep is looking at was very often written by a
+    /// DIFFERENT device. That is the case the mint rule exists for, and
+    /// `mintDeliveryAttemptID` traces it: a sweep on a device that never saw the
+    /// retry must not be able to publish the retry's predecessor identity as the
+    /// row's final answer. The `sending`-only predicate keeps the sweep from
+    /// touching, or re-minting, a turn that is already resolved.
     ///
     /// Non-throwing (best-effort): a launch-time sweep must never block or
     /// fail the launch path. Posts `.conversationsDidChange` only when
@@ -3053,8 +4454,22 @@ actor ConversationStore {
     }
 #endif
 
-    /// Fetch a conversation's messages, oldest first (`createdAt` ascending —
-    /// thread render order; a `sequence` tiebreaker is a V1.x concern).
+    /// Fetch a conversation's messages, oldest first — `createdAt` ascending,
+    /// then `id` ascending, which is thread render order.
+    ///
+    /// THE `id` TIE-BREAK IS NOT COSMETIC, and it is the same total order every
+    /// other message picker in this store uses (see `TailProjection`'s header).
+    /// Stamps are whole milliseconds, and two devices settling one millisecond
+    /// independently can land two turns on the same value, so `createdAt` alone
+    /// leaves `last` to whatever the fetch happened to return. `last` is what
+    /// `ConversationThreadView.acknowledgeVisibleFailure` reads the failed
+    /// turn's `deliveryAttemptID` off, while the list paints the failure the
+    /// aggregate selected with `FailedTurnProjection.isNewer` — larger stamp,
+    /// then larger id. Without the tie-break those two can name different
+    /// messages, and the acknowledgement then stores an identity the resolver
+    /// compares against a different attempt: it never matches, so the row stays
+    /// red permanently and re-opening the thread rewrites the same
+    /// non-matching value.
     func fetchMessages(for conversationID: UUID) async throws -> [MessageRecord] {
         try await ensureLoaded()
         let context = container.newBackgroundContext()
@@ -3065,7 +4480,8 @@ actor ConversationStore {
                 format: "conversation.id == %@", conversationID as CVarArg
             )
             request.sortDescriptors = [
-                NSSortDescriptor(key: "createdAt", ascending: true)
+                NSSortDescriptor(key: "createdAt", ascending: true),
+                NSSortDescriptor(key: "id", ascending: true)
             ]
             // Authoritative read by construction — see `fetchConversations`: a
             // fresh background context holds no registered objects, so a
@@ -3096,9 +4512,13 @@ actor ConversationStore {
     /// keeps only the last. Strictly cheaper than the fetch it replaces.
     ///
     /// The `id` tiebreaker on the sort is REQUIRED, not cosmetic: message
-    /// timestamps are local wall clock, so two turns written on two devices can
-    /// share (or invert) a `createdAt`, and without a total order the chosen
-    /// tail would flip between otherwise identical fetches.
+    /// timestamps are local wall clock quantised to whole milliseconds, so two
+    /// turns written on two devices can share (or invert) a `createdAt`, and
+    /// without a total order the chosen tail would flip between otherwise
+    /// identical fetches. DESCENDING, so the row this returns is the one
+    /// `FailedTurnProjection.isNewer` calls newest and the one `fetchMessages`
+    /// returns last — see `TailProjection`'s header for why all three have to
+    /// agree.
     func fetchConversationTail(id: UUID) async throws -> ConversationTail? {
         try await ensureLoaded()
         let context = container.newBackgroundContext()
@@ -3110,7 +4530,7 @@ actor ConversationStore {
             )
             request.sortDescriptors = [
                 NSSortDescriptor(key: "createdAt", ascending: false),
-                NSSortDescriptor(key: "id", ascending: true)
+                NSSortDescriptor(key: "id", ascending: false)
             ]
             request.fetchLimit = 1
             guard let message = try context.fetch(request).first else { return nil }

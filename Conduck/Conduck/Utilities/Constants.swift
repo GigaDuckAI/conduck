@@ -215,24 +215,44 @@ enum Constants {
     /// `SettingsManager.menuBarInputModeAtLaunch()`, mirroring `showDockIconKey`.
     static let menuBarInputModeKey = "menuBarInputMode"
 
-    /// App-Group UserDefaults key PREFIX for the device-local "last looked at"
-    /// marker of ONE conversation: `conversations.readState.<uuidString>` →
-    /// `Double` (seconds since 1970). **App Group ONLY, never iCloud KVS** —
-    /// "I read this on my phone" is not a fact the iPad should inherit, and the
-    /// CloudKit production schema is additive-only and permanent.
+    /// App-Group UserDefaults key PREFIX of a LEGACY per-conversation "last
+    /// looked at" marker: `conversations.readState.<uuidString>` → `Double`
+    /// (seconds since 1970). **App Group ONLY, never iCloud KVS.**
+    ///
+    /// READ-AND-DRAIN ONLY — nothing writes a new one. What the user has seen is
+    /// an ACCOUNT fact now and lives on the conversation record
+    /// (`Conversation.lastViewedAt`), so these keys are only the residue of the
+    /// device-local design that preceded it. `ReadStateStore` loads them once at
+    /// construction, folds each into its conversation's record as that
+    /// conversation actually turns up in a fetch, and deletes the key ONLY on a
+    /// confirmed cover; until then the key keeps answering reads so nothing goes
+    /// bold in the gap. There is deliberately no one-shot sweep: the initial
+    /// CloudKit import is asynchronous, so a done-flag could commit before every
+    /// conversation existed locally and would lose the marker of each one that
+    /// had not arrived yet.
     ///
     /// One key per conversation (matching the per-ref prefix convention
     /// elsewhere in this file) rather than one dictionary: `DefaultsStore`
     /// offers no compare-and-swap, so a single dictionary key would make every
     /// write a read-modify-write and two writers could lose each other's
-    /// markers. Read/written only through `ReadStateStore`.
+    /// markers. Cannot be deleted for several releases — an install that skips
+    /// them upgrades straight past its own history.
     static let conversationReadStatePrefix = "conversations.readState."
 
-    /// App-Group UserDefaults key PREFIX for the device-local "last looked at
-    /// WHILE IT WAS SHOWING A FAILURE" marker of ONE conversation:
+    /// App-Group UserDefaults key PREFIX of a LEGACY per-conversation "last
+    /// looked at WHILE IT WAS SHOWING A FAILURE" marker:
     /// `conversations.failureSeen.<uuidString>` → `Double` (seconds since 1970).
-    /// **App Group ONLY, never iCloud KVS**, for the same reasons as
-    /// `conversationReadStatePrefix`.
+    /// **App Group ONLY, never iCloud KVS.**
+    ///
+    /// SWEPT AT LAUNCH, NEVER FOLDED, and that asymmetry with the read prefix
+    /// above is deliberate. The account's acknowledgement is an ATTEMPT IDENTITY
+    /// (`Conversation.failureSeenAttemptID`), not a time, so folding one of these
+    /// would have to invent an identity for whatever attempt happens to be failed
+    /// right now — and asking again keeps the turn's `createdAt`, so that
+    /// invented cover would silence the re-failure permanently. The safe failure
+    /// mode is one extra red mark the user clears with a tap, not a hidden one.
+    /// Nothing will ever read one again, so `ReadStateStore`'s construction sweep
+    /// retires them instead of letting them grow the App-Group domain forever.
     ///
     /// A SIBLING prefix, deliberately not nested under
     /// `conversationReadStatePrefix` — that prefix's marker sweep treats every
@@ -244,14 +264,45 @@ enum Constants {
     /// that reads or writes this key.
     static let conversationFailureSeenPrefix = "conversations.failureSeen."
 
-    /// App-Group UserDefaults key for the moment this device first saw the
-    /// unviewed-reply feature, as a `Double` (seconds since 1970). **App Group
-    /// ONLY, never iCloud KVS.** Everything older than this stamp counts as
-    /// already viewed, which is what keeps an imported iCloud history from
-    /// lighting up on a fresh install. Note it shares
-    /// `conversationReadStatePrefix`'s literal prefix — the marker sweep skips
-    /// it because "epoch" is not a UUID.
+    /// App-Group UserDefaults key holding the LOCAL MIRROR of the account read
+    /// cutover, as a `Double` (seconds since 1970). Everything older than it
+    /// counts as already viewed, which is what keeps an imported iCloud history
+    /// from lighting up on a fresh install.
+    ///
+    /// THE KEY NAME IS FROZEN. It says "epoch" because that is what it held on
+    /// every already-installed device, and renaming it would silently reset all
+    /// of them to an unstamped cutover — every conversation older than the next
+    /// launch would arrive bold, on every surface at once. The NAME is legacy;
+    /// the MEANING is the account cutover.
+    ///
+    /// Mirror, not truth: the account's value lives in iCloud KVS under
+    /// `conversationReadCutoverKVSKey` and the two meet by `min`. This key is
+    /// what a synchronous read on a SwiftUI render pass — offline, or before
+    /// iCloud has hydrated — actually answers from. Note it shares
+    /// `conversationReadStatePrefix`'s literal prefix; the legacy marker sweep
+    /// skips it because "epoch" is not a UUID.
     static let conversationReadStateEpochKey = "conversations.readState.epoch"
+
+    /// iCloud KVS key holding the ACCOUNT read cutover, as a `Double` (seconds
+    /// since 1970). The one read-state value that travels through KVS rather
+    /// than through the conversation record.
+    ///
+    /// **WHY KVS AND NOT A COLUMN:** the cutover is a fact about the ACCOUNT,
+    /// not about any one conversation, and it must never be folded into a record
+    /// — a device's stamp means "I was not here before this date", not "the
+    /// account read everything before this date", so writing a newly-installed
+    /// iPad's stamp onto records would mark months of genuinely unread replies as
+    /// read on every device. One account-scoped value is the whole payload: a
+    /// single key, a single `Double`, nowhere near the KVS key or size limits
+    /// that ruled per-conversation markers out of this store.
+    ///
+    /// **MERGED BY `min`, NEVER `max`** — see `ReadStateStore.meetCutover`. A
+    /// future reader will assume `max` and be wrong.
+    ///
+    /// The local mirror is `conversationReadStateEpochKey`; reads never come from
+    /// here directly, because a KVS read on a render pass is neither offline-safe
+    /// nor cheap enough to run per row.
+    static let conversationReadCutoverKVSKey = "conversations.readCutover"
 
     /// App-Group UserDefaults key for the last moment a reply notification was
     /// allowed to play a sound, as a `Double` (seconds since 1970). **App Group

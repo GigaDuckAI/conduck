@@ -74,8 +74,10 @@ nonisolated enum ConversationActivity: Sendable, Hashable {
 /// not folded into `activity` either. A seen failure is still a failure — the
 /// message did not go — so the row keeps saying so; what it loses is the alert,
 /// because the user has already been told. Meaningful only when `activity` is
-/// `.failed`; false everywhere else, and always false on a surface that keeps no
-/// read state.
+/// `.failed`; false everywhere else. It is an ACCOUNT fact, not a per-surface
+/// one: the acknowledgement rides on the conversation itself, so a failure
+/// acknowledged on any device is acknowledged on all of them, the wrist
+/// included.
 nonisolated struct ConversationRowState: Sendable, Hashable {
     let activity: ConversationActivity
     let hasUnseenReply: Bool
@@ -92,6 +94,73 @@ nonisolated struct ConversationRowState: Sendable, Hashable {
     }
 }
 
+// MARK: - Failed-turn projection
+
+/// The conversation's newest unresolved `failed` USER turn, reduced to the
+/// three facts a row needs, as ONE value.
+///
+/// WHY ONE VALUE AND NOT TWO FIELDS. The stamp and the attempt identity
+/// describe the SAME turn, and carried separately they were free to skew. The
+/// whole-store unresolved-turn aggregate is the only reader that knows WHICH
+/// message is a conversation's newest failed one, so any surface obtaining the
+/// identity from somewhere else — a later fetch, a different selector, a caller
+/// that simply had no channel for it and passed nil — could name attempt F2
+/// while the stamp still named F1. A stored acknowledgement for F2 would then
+/// report F1 acknowledged, which is a failure the user never saw losing its
+/// mark: the one direction this design forbids. Travelling as one value makes
+/// that skew unrepresentable rather than merely discouraged.
+///
+/// It also removes the second half of the same defect. CarPlay and the menu-bar
+/// picker read `ConversationStore.RecentConversation`, which had no channel for
+/// an attempt id at all, so those two surfaces could only ever pass nil and
+/// every failure stayed permanently unacknowledged on exactly the screens the
+/// account-wide markers exist to keep consistent with the list beside them.
+nonisolated struct FailedTurnProjection: Sendable, Hashable {
+    /// `Message.id` of that turn. Optional because everything in a
+    /// CloudKit-mirrored model is, and a nil is NOT a filter: dropping an
+    /// id-less failed row from the aggregate would silently retire its red
+    /// mark, so it is carried and simply loses every tie. Two id-less rows at
+    /// one instant stay mutually ambiguous, which costs nothing — neither can
+    /// be acknowledged, so both resolve red either way.
+    let messageID: UUID?
+    /// That turn's `Message.createdAt` — the stamp the resolver bounds the
+    /// failed arm with.
+    let createdAt: Date
+    /// That turn's `Message.deliveryAttemptID`. The ONLY thing an
+    /// acknowledgement is matched against, so a nil here can never be
+    /// acknowledged and its failure stays marked — a row written before the
+    /// attribute existed resolves red rather than silently. A turn RETRIED by a
+    /// build that mints no identity is the one case that goes the other way; the
+    /// resolver's step 2b states it in full.
+    let deliveryAttemptID: UUID?
+
+    init(messageID: UUID?, createdAt: Date, deliveryAttemptID: UUID?) {
+        self.messageID = messageID
+        self.createdAt = createdAt
+        self.deliveryAttemptID = deliveryAttemptID
+    }
+
+    /// TOTAL ORDER over a conversation's failed turns: newer `createdAt` wins,
+    /// and an exact tie is broken on `messageID.uuidString`.
+    ///
+    /// The tie-break is load-bearing, not tidiness. Selecting by fetch order
+    /// decides WHICH identity the aggregate reports, and fetch order is not
+    /// stable across devices or across two fetches on one device: two devices
+    /// would report different ids for the same pair of same-instant failures,
+    /// so an acknowledgement made on one could never match on the other; worse,
+    /// one device could select differently between the fetch that fed an
+    /// acknowledgement and the next fetch that resolves the row, leaving that
+    /// conversation red with nothing the user can do to retire it.
+    ///
+    /// `uuidString` rather than raw `UUID` because `UUID` is not `Comparable`
+    /// and the canonical string form is an ordering every device agrees on
+    /// without depending on a store's byte layout or collation.
+    func isNewer(than other: FailedTurnProjection) -> Bool {
+        if createdAt != other.createdAt { return createdAt > other.createdAt }
+        return (messageID?.uuidString ?? "") > (other.messageID?.uuidString ?? "")
+    }
+}
+
 // MARK: - Resolver inputs
 
 /// Everything the resolver reads, so the SAME resolver serves
@@ -103,12 +172,21 @@ nonisolated struct ConversationActivityInputs: Sendable, Hashable {
     /// Newest unresolved `sending` USER turn in this conversation, from the
     /// whole-store aggregate. NOT the tail.
     let newestSendingAt: Date?
-    /// Newest unresolved `failed` USER turn in this conversation. Terminal and
-    /// never cleared, so the resolver bounds it two ways — it is reported only
-    /// while it is still the conversation's last activity, and it stops carrying
-    /// a mark once the user has seen it. See
+    /// Newest unresolved `failed` USER turn in this conversation — its stamp
+    /// and its attempt identity as one value, because they describe one turn
+    /// (see `FailedTurnProjection`). Terminal and never cleared, so the resolver
+    /// bounds it two ways: it is reported only while it is still the
+    /// conversation's last activity, and it stops carrying a mark once the
+    /// account has acknowledged THAT attempt. See
     /// `ConversationActivityResolver.resolve`.
-    let newestFailedAt: Date?
+    let newestFailed: FailedTurnProjection?
+    /// The conversation's own `lastViewedAt`: when this thread was last looked
+    /// at on ANY of the user's devices, mirrored in with the row. Nil = never
+    /// viewed anywhere.
+    let storedLastViewedAt: Date?
+    /// The conversation's own `failureSeenAttemptID`: WHICH failure the account
+    /// has acknowledged, as an identity rather than a time. Nil = none.
+    let storedFailureSeenAttemptID: UUID?
     /// Role of the newest message, when the surface projected it. `nil` means
     /// NOT PROJECTED (watchOS, CarPlay) — never "unknown role" — and suppresses
     /// the unseen branch entirely rather than guessing.
@@ -117,24 +195,37 @@ nonisolated struct ConversationActivityInputs: Sendable, Hashable {
     init(
         lastActivityAt: Date,
         newestSendingAt: Date?,
-        newestFailedAt: Date?,
+        newestFailed: FailedTurnProjection?,
+        storedLastViewedAt: Date?,
+        storedFailureSeenAttemptID: UUID?,
         tailRole: MessageRole?
     ) {
         self.lastActivityAt = lastActivityAt
         self.newestSendingAt = newestSendingAt
-        self.newestFailedAt = newestFailedAt
+        self.newestFailed = newestFailed
+        self.storedLastViewedAt = storedLastViewedAt
+        self.storedFailureSeenAttemptID = storedFailureSeenAttemptID
         self.tailRole = tailRole
     }
 
     /// The list surfaces. Both turn-state fields are nil unless the record came
     /// from `ConversationStore.fetchConversations(activity: .turnStates)`, and
     /// nil resolves to `.idle` — the row renders exactly as it does without the
-    /// projection.
+    /// projection. The two stored markers need no such caveat: they are columns
+    /// on the conversation, so every fetch carries them.
+    ///
+    /// There is deliberately no attempt-id parameter beside `tailRole`. The
+    /// identity rides inside `record.newestFailed` with the stamp it belongs
+    /// to, so a caller cannot supply one that names a different turn, and a
+    /// caller with no way to obtain one cannot silently pass nil and leave
+    /// every acknowledged failure red.
     init(record: ConversationRecord, tailRole: MessageRole?) {
         self.init(
             lastActivityAt: record.lastActivityAt,
             newestSendingAt: record.newestSendingAt,
-            newestFailedAt: record.newestFailedAt,
+            newestFailed: record.newestFailed,
+            storedLastViewedAt: record.lastViewedAt,
+            storedFailureSeenAttemptID: record.failureSeenAttemptID,
             tailRole: tailRole
         )
     }
@@ -147,7 +238,9 @@ nonisolated struct ConversationActivityInputs: Sendable, Hashable {
         self.init(
             lastActivityAt: recent.lastActivityAt,
             newestSendingAt: recent.newestSendingAt,
-            newestFailedAt: recent.newestFailedAt,
+            newestFailed: recent.newestFailed,
+            storedLastViewedAt: recent.lastViewedAt,
+            storedFailureSeenAttemptID: recent.failureSeenAttemptID,
             tailRole: tailRole
         )
     }
@@ -170,19 +263,22 @@ nonisolated enum ConversationActivityResolver {
     ///   Authoritative for THIS device only, and NEVER a reason to write
     ///   anything — a reconciliation write based on "I don't see a task" would
     ///   be a write based on local ignorance about another device's turn.
-    /// - Parameter lastViewedAt: `nil` on a surface that does not track read
-    ///   state (watchOS, CarPlay) → `hasUnseenReply` is always false there.
-    /// - Parameter failureSeenAt: `ReadStateStore.shared.lastFailureSeen(id)` on
-    ///   iOS/macOS; `nil` on a surface that keeps no read state, which leaves
-    ///   the failure mark exactly as it was before acknowledgement existed.
-    ///   DELIBERATELY NOT `lastViewedAt` — that marker is stamped when the
-    ///   user's own message appears, which is before the failure it would have
-    ///   to acknowledge exists. See the `ReadStateStore` header.
+    /// - Parameter lastViewedAt: THIS DEVICE's optimistic view marker, folded
+    ///   together with the account-wide `inputs.storedLastViewedAt` by `max`.
+    ///   It exists so leaving a thread un-bolds its row on the same runloop turn
+    ///   instead of waiting on a store save plus a CloudKit import; the stored
+    ///   value is the durable truth and outlives it. `nil` means this device
+    ///   holds no such local intent — NOT that the surface tracks no read state
+    ///   — and only both being nil suppresses the unseen branch outright.
+    ///
+    /// There is deliberately NO acknowledgement parameter beside it.
+    /// Acknowledgement is an identity match against one delivery attempt (step
+    /// 2b), and no device-local timestamp can say WHICH attempt was seen, so it
+    /// is answered from `inputs` alone.
     static func resolve(
         _ inputs: ConversationActivityInputs,
         locallyLiveSince: Date?,
         lastViewedAt: Date?,
-        failureSeenAt: Date?,
         now: Date = Date()
     ) -> ConversationRowState {
         // 1. DELIVERY — the NEWEST unresolved turn wins.
@@ -208,14 +304,36 @@ nonisolated enum ConversationActivityResolver {
         // compares EQUAL, not less: the append writes `Message.createdAt` and
         // `Conversation.lastActivityAt` from one `now` in one transaction, and a
         // status flip bumps neither.
-        let failed = inputs.newestFailedAt.flatMap {
-            $0 >= inputs.lastActivityAt ? $0 : nil
+        //
+        // AND THE COMPARISON IS ON INTEGERS, NEVER ON `Date`s — the same rule
+        // `TailProjection.read` states at length, for the same reason, over the
+        // same pair of values. These two halves are separate CKRecords: the
+        // stamp belongs to a `Message`, the bound belongs to its `Conversation`,
+        // and the mirror imports them in whatever batches it likes. A bit-exact
+        // comparison therefore has a window in which one half has arrived and
+        // the other has not — `ConversationStore.repairTailProjection` moves
+        // both in one local save, and roughly half the rows it touches round
+        // upward — and in that window an equal pair reads as LESS. The red mark
+        // would vanish from the list, the menu bar and the wrist for a message
+        // that never sent. Quantising both sides to the millisecond the mirror
+        // itself carries makes the window invisible, and costs nothing anywhere
+        // else: every stamp this build writes is already canonical, so the
+        // quantisation is the identity on it.
+        let failed = inputs.newestFailed.flatMap {
+            TailProjection.milliseconds(from: $0.createdAt)
+                >= TailProjection.milliseconds(from: inputs.lastActivityAt) ? $0 : nil
         }
 
         let activity: ConversationActivity = {
             let sending = inputs.newestSendingAt
 
-            if let sending, failed == nil || sending > failed! {
+            // Same quantisation on the sibling test, so "newer than the failure"
+            // and "still the last thing that happened" cannot disagree about
+            // what one millisecond contains.
+            if let sending,
+               failed == nil
+                || TailProjection.milliseconds(from: sending)
+                    > TailProjection.milliseconds(from: failed!.createdAt) {
                 if let locallyLiveSince {
                     return .working(.live, since: locallyLiveSince)
                 }
@@ -236,20 +354,83 @@ nonisolated enum ConversationActivityResolver {
 
         // 2. ATTENTION — independent of delivery, and never inferred from a
         //    role this surface did not project.
+        //
+        //    The effective view time is the LATER of the account-wide stored
+        //    marker and this device's optimistic overlay. Both are needed and
+        //    neither subsumes the other: the overlay leads (it is set before the
+        //    save it describes), the stored value both outlives it and arrives
+        //    from the other devices. Taking `max` rather than preferring one
+        //    means an out-of-order arrival can only ever move the marker
+        //    FORWARD here, so a late-arriving older value cannot re-bold a row.
         let unseen: Bool = {
-            guard let lastViewedAt, inputs.tailRole == .agent else { return false }
-            return inputs.lastActivityAt > lastViewedAt   // strict: equal is NOT unseen
+            let effectiveViewedAt = [inputs.storedLastViewedAt, lastViewedAt]
+                .compactMap { $0 }
+                .max()
+            guard let effectiveViewedAt, inputs.tailRole == .agent else { return false }
+            return inputs.lastActivityAt > effectiveViewedAt   // strict: equal is NOT unseen
         }()
 
-        // 2b. The failure's SECOND bound: has the user already been shown it?
-        //     Answered from its own marker, never from `lastViewedAt` — see the
-        //     parameter doc. Only the failure the row would actually paint is
-        //     considered, so a superseded one cannot report itself acknowledged.
-        //     Non-strict: the marker's clamp pulls it up to at least the failed
-        //     turn's stamp, so equality is exactly the "seen it" case.
+        // 2b. The failure's SECOND bound: has the account already been shown
+        //     THIS delivery attempt? IDENTITY, never recency — the stored
+        //     acknowledgement names one `Message.deliveryAttemptID` and has to
+        //     equal the failed turn's exactly.
+        //
+        //     A timestamp comparison cannot answer this question, which is why
+        //     it is not used: asking again does NOT advance the failed turn's
+        //     `createdAt`, so "acknowledged" and "acknowledged the PREVIOUS
+        //     attempt" are indistinguishable by time — and under
+        //     last-writer-wins that ends with a message which never sent showing
+        //     no mark at all, permanently. Under identity a stale write can only
+        //     ever name some other attempt, and an attempt nothing names is not
+        //     acknowledged. Nothing has to CLEAR an acknowledgement either: a
+        //     retry mints a new attempt id, and so does any writer that declares
+        //     the failure afresh, so the stored one simply stops matching.
+        //
+        //     BOTH SIDES MUST BE PRESENT — `nil == nil` does NOT acknowledge. A
+        //     failure carrying no attempt id — a row written before the
+        //     attribute existed — stays red. That is the safe direction: an
+        //     unacknowledged failure over-reports and costs one tap, while a
+        //     silenced one is a message the user never learns did not send.
+        //
+        //     THE ONE CASE THAT DOES NOT LAND ON THE SAFE SIDE, written out
+        //     because the rule above invites the opposite reading: a RETRY
+        //     performed by a device still running a build that has no
+        //     `deliveryAttemptID` at all. Its compare-and-set writes only
+        //     `status`, so the row's identity does not become nil — it stays the
+        //     SAME identity the account already acknowledged. (A client cannot
+        //     put a key its model does not define into a CKRecord, and a key a
+        //     save does not carry is left alone on the server rather than
+        //     cleared, so nothing removes it either.) When that attempt fails
+        //     too, the comparison below matches and the re-failure resolves
+        //     ACKNOWLEDGED: silent on every updated device, and `failed` is
+        //     terminal, so only another retry from a build that DOES mint gets
+        //     the mark back. The pre-v10 device is the one screen that still
+        //     shows red — it spends its own device-local acknowledgement at the
+        //     retry — which is the reverse of every other divergence here and
+        //     makes the mixed fleet disagree in the dangerous direction.
+        //
+        //     NOTHING IN THIS FILE CAN CLOSE IT, and no field added to the
+        //     schema could either: the device that advances the attempt is the
+        //     device running none of this code, so whatever it fails to mint it
+        //     would equally fail to bump. Nor can it be detected after the fact
+        //     — "acknowledged and untouched" and "acknowledged, re-attempted,
+        //     re-failed" leave the record carrying byte-identical values. It is
+        //     bounded instead by the rollout: it needs an acknowledgement made
+        //     on an updated device and a retry made on one that is not, and it
+        //     ends when the last device updates. Accepted deliberately, at the
+        //     price of naming it here rather than letting the paragraph above be
+        //     read as covering it.
+        //
+        //     Only the failure the row would actually paint is considered, and
+        //     the identity is read off THAT SAME projection rather than passed
+        //     in beside it — so a superseded failure cannot report itself
+        //     acknowledged, and no caller can pair one turn's stamp with
+        //     another turn's identity.
         let acknowledged: Bool = {
-            guard let failed, let failureSeenAt else { return false }
-            return failureSeenAt >= failed
+            guard let failed,
+                  let seenAttemptID = inputs.storedFailureSeenAttemptID,
+                  let failedAttemptID = failed.deliveryAttemptID else { return false }
+            return seenAttemptID == failedAttemptID
         }()
 
         // 3. Fold to the four-state mark vocabulary, keeping both attention

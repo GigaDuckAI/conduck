@@ -87,6 +87,25 @@ struct ConduckWatchApp: App {
         _ = WatchAudioUploader.shared.backgroundSession
         _ = WatchAudioUploader.shared.converseSession
 
+        // Resolve the ACCOUNT read cutover — the moment before which the absence
+        // of a marker means "already seen" rather than "we were not recording
+        // yet". Stamps a local value if this Watch has none, arms the iCloud
+        // change feed, and meets whatever the account already holds by `min`.
+        //
+        // THE WRIST NEEDS THIS MOST. It is the last device of the fleet to be
+        // set up and the one whose local storage is wiped by an unpair/re-pair,
+        // so it is the likeliest to mint a cutover months later than the
+        // account's real one. Without the meet, that late stamp would classify
+        // every reply older than the re-pair as seen, and the wrist would show a
+        // silent list while the phone showed dots.
+        //
+        // HERE, in deterministic app init — never from a SwiftUI `body`, which
+        // both creates state during rendering and races the CloudKit import.
+        // Idempotent, so the background-URLSession relaunches below re-run it
+        // for free. Mirrors the iOS `ConduckApp.init` and macOS `AppDelegate`
+        // wiring; watchOS shares no launch code with either.
+        ReadStateStore.shared.resolveAccountCutover()
+
         // Warm the conversation store so the first capture's append/fetch isn't
         // blocked on lazy `loadPersistentStores` (the Watch is a
         // conversational surface backed by `ConversationStore`).

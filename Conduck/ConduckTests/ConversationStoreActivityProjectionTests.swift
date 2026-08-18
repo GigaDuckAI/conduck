@@ -34,7 +34,7 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
         let plain = try await store.fetchConversations()
         XCTAssertEqual(plain.count, 1)
         XCTAssertNil(plain[0].newestSendingAt)
-        XCTAssertNil(plain[0].newestFailedAt)
+        XCTAssertNil(plain[0].newestFailed)
     }
 
     func testTurnStatesProjectionFillsTheSendingStamp() async throws {
@@ -46,7 +46,7 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
         )
         let projected = try await store.fetchConversations(activity: .turnStates)
         XCTAssertEqual(projected[0].newestSendingAt, turn.createdAt)
-        XCTAssertNil(projected[0].newestFailedAt)
+        XCTAssertNil(projected[0].newestFailed)
     }
 
     // MARK: - Sibling safety
@@ -66,7 +66,8 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
 
         let turns = try await store.fetchUnresolvedUserTurns()
         let entry = try XCTUnwrap(turns[convo.id])
-        XCTAssertEqual(entry.newestFailedAt, older.createdAt)
+        XCTAssertEqual(entry.newestFailed?.createdAt, older.createdAt)
+        XCTAssertEqual(entry.newestFailed?.messageID, older.id)
         XCTAssertEqual(entry.newestSendingAt, newer.createdAt)
 
         // And the derived state is WORKING, because the newest unresolved turn
@@ -76,7 +77,6 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
             ConversationActivityInputs(record: record, tailRole: .user),
             locallyLiveSince: nil,
             lastViewedAt: nil,
-            failureSeenAt: nil,
             now: newer.createdAt
         )
         guard case .working = state.activity else {
@@ -99,7 +99,8 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
         await store.failTurn(messageID: secondFailed.id, classification: nil)
 
         let turns = try await store.fetchUnresolvedUserTurns()
-        XCTAssertEqual(turns[convo.id]?.newestFailedAt, secondFailed.createdAt)
+        XCTAssertEqual(turns[convo.id]?.newestFailed?.createdAt, secondFailed.createdAt)
+        XCTAssertEqual(turns[convo.id]?.newestFailed?.messageID, secondFailed.id)
         XCTAssertNil(turns[convo.id]?.newestSendingAt)
     }
 
@@ -117,7 +118,7 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
 
         let record = try await store.fetchConversations(activity: .turnStates)[0]
         XCTAssertNil(record.newestSendingAt)
-        XCTAssertNil(record.newestFailedAt)
+        XCTAssertNil(record.newestFailed)
     }
 
     func testAResolvedTurnLeavesTheAggregate() async throws {
@@ -159,9 +160,9 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
 
         let turns = try await store.fetchUnresolvedUserTurns()
         XCTAssertNotNil(turns[working.id]?.newestSendingAt)
-        XCTAssertNil(turns[working.id]?.newestFailedAt)
+        XCTAssertNil(turns[working.id]?.newestFailed)
         XCTAssertNil(turns[broken.id]?.newestSendingAt)
-        XCTAssertNotNil(turns[broken.id]?.newestFailedAt)
+        XCTAssertNotNil(turns[broken.id]?.newestFailed)
     }
 
     // MARK: - Tail
@@ -237,9 +238,154 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
 
         let projected = try await store.fetchRecentForPicker(limit: 5, includeTurnStates: true)
         XCTAssertEqual(projected.first?.newestSendingAt, turn.createdAt)
-        XCTAssertNil(projected.first?.newestFailedAt)
+        XCTAssertNil(projected.first?.newestFailed)
     }
     #endif
+
+    // MARK: - The total order, not the fetch order
+
+    /// The aggregate must report the total order's MAXIMUM, not whichever
+    /// matching row the store happened to hand back last. The fetch carries no
+    /// sort descriptor on purpose — the order lives on `FailedTurnProjection` so
+    /// the comparison is the documented one and not a store's byte layout or
+    /// collation — which makes this the assertion that the reduction actually
+    /// uses it.
+    ///
+    /// It matters because the reported turn NAMES the attempt id an
+    /// acknowledgement is matched against: two devices that select differently
+    /// acknowledge different failures, and a device that selects differently
+    /// between the fetch that fed the acknowledgement and the fetch that
+    /// resolves the row leaves the conversation red with no way to retire it.
+    ///
+    /// The EXACT-TIE half of that order (equal `createdAt`, broken on
+    /// `messageID.uuidString`) is locked in `ConversationActivityResolverTests`
+    /// instead: the store stamps `createdAt` from its own clock, so two turns at
+    /// one instant cannot be built through this API — only imported from another
+    /// device, which is precisely the case that must not depend on fetch order.
+    func testTheNewestFailedTurnIsTheTotalOrdersMaximum() async throws {
+        let store = makeStore()
+        let convo = try await store.createConversation(backend: "openclaw")
+        for index in 0..<4 {
+            let turn = try await store.appendMessage(
+                role: "user", text: "attempt \(index)", conversationID: convo.id,
+                sourceDevice: "phone", status: "sending"
+            )
+            await store.failTurn(messageID: turn.id, classification: nil)
+        }
+
+        // The expected winner, computed independently of the store's reduction.
+        let messages = try await store.fetchMessages(for: convo.id)
+        var expected: FailedTurnProjection?
+        for message in messages where message.status == "failed" {
+            let candidate = FailedTurnProjection(
+                messageID: message.id,
+                createdAt: message.createdAt,
+                deliveryAttemptID: message.deliveryAttemptID
+            )
+            if expected == nil || candidate.isNewer(than: expected!) { expected = candidate }
+        }
+        let winner = try XCTUnwrap(expected)
+
+        for pass in 0..<5 {
+            let turns = try await store.fetchUnresolvedUserTurns()
+            let reported = try XCTUnwrap(turns[convo.id]?.newestFailed)
+            XCTAssertEqual(
+                reported, winner,
+                "pass \(pass): the aggregate must agree with the total order on "
+                    + "every fetch and on every device — the turn it reports is "
+                    + "the one whose attempt id an acknowledgement is matched "
+                    + "against"
+            )
+        }
+    }
+
+    // MARK: - The rebuild that sits on every list fetch
+
+    /// R1, asserted directly. `withTurnStates` rebuilds the record FROM SCRATCH
+    /// and sits on the path of every list fetch on every surface, so a field
+    /// left out of it breaks no build and fails almost no other test — it simply
+    /// makes every row read a nil marker. A nil `lastViewedAt` reads as "never
+    /// viewed", so the WHOLE LIST goes bold with an amber unseen disc on each
+    /// answered thread; a dropped `failureSeenAttemptID` relights every failure
+    /// the user has already acknowledged, everywhere, at once.
+    ///
+    /// Add a stored field to `ConversationRecord` and you add a line here and a
+    /// line there.
+    func testWithTurnStatesCarriesEveryStoredFieldThrough() throws {
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let viewed = stamp.addingTimeInterval(-120)
+        let acknowledged = UUID()
+        let envelope = TailProjection.encoded(
+            messageID: UUID(), createdAt: stamp, role: .agent
+        )
+        let original = ConversationRecord(
+            id: UUID(),
+            title: "Kitchen",
+            createdAt: stamp.addingTimeInterval(-9_000),
+            lastActivityAt: stamp,
+            sessionID: "session",
+            backend: "openclaw",
+            titleSnippet: "first line",
+            hideEarlierPhotos: true,
+            lastViewedAt: viewed,
+            failureSeenAttemptID: acknowledged,
+            tailProjection: envelope
+        )
+
+        let rebuilt = original.withTurnStates(
+            newestSendingAt: stamp.addingTimeInterval(-10),
+            newestFailed: FailedTurnProjection(
+                messageID: UUID(), createdAt: stamp.addingTimeInterval(-30),
+                deliveryAttemptID: UUID()
+            )
+        )
+
+        let regression = "dropping this field from `withTurnStates` sends every "
+            + "row on every surface into the list fetch with a nil value — the "
+            + "whole conversation list goes bold, or every acknowledged failure "
+            + "goes red again, with a clean build and a green suite"
+        XCTAssertEqual(rebuilt.id, original.id, regression)
+        XCTAssertEqual(rebuilt.title, original.title, regression)
+        XCTAssertEqual(rebuilt.createdAt, original.createdAt, regression)
+        XCTAssertEqual(rebuilt.lastActivityAt, original.lastActivityAt, regression)
+        XCTAssertEqual(rebuilt.sessionID, original.sessionID, regression)
+        XCTAssertEqual(rebuilt.backend, original.backend, regression)
+        XCTAssertEqual(rebuilt.titleSnippet, original.titleSnippet, regression)
+        XCTAssertEqual(rebuilt.hideEarlierPhotos, original.hideEarlierPhotos, regression)
+        XCTAssertEqual(rebuilt.lastViewedAt, viewed, regression)
+        XCTAssertEqual(rebuilt.failureSeenAttemptID, acknowledged, regression)
+        XCTAssertEqual(rebuilt.tailProjection, envelope, regression)
+        XCTAssertEqual(rebuilt.newestSendingAt, stamp.addingTimeInterval(-10))
+        XCTAssertNotNil(rebuilt.newestFailed)
+    }
+
+    /// The same guard where it actually bites: a PROJECTED list fetch, which is
+    /// the only fetch the conversation lists run.
+    func testTheProjectedListFetchStillCarriesTheAccountWideMarkers() async throws {
+        let store = makeStore()
+        let convo = try await store.createConversation(backend: "openclaw")
+        let turn = try await store.appendMessage(
+            role: "user", text: "hi", conversationID: convo.id,
+            sourceDevice: "phone", status: "sending"
+        )
+        let viewed = Date(timeIntervalSince1970: 1_700_000_000)
+        let acknowledged = UUID()
+        await store.markConversationViewedAndAcknowledged(
+            convo.id, at: viewed, attemptID: acknowledged
+        )
+
+        let projected = try await store.fetchConversations(activity: .turnStates)
+        let row = try XCTUnwrap(projected.first { $0.id == convo.id })
+        XCTAssertEqual(row.newestSendingAt, turn.createdAt, "the projection ran")
+        XCTAssertEqual(
+            row.lastViewedAt, viewed,
+            "the rebuild that adds the turn states must not drop the account's "
+                + "read marker — every row would come back nil and the whole list "
+                + "would render unread"
+        )
+        XCTAssertEqual(row.failureSeenAttemptID, acknowledged)
+        XCTAssertNotNil(row.tailProjection, "and the wrist's tail envelope survives too")
+    }
 
     // MARK: - Cost
 
@@ -313,9 +459,20 @@ final class ConversationStoreActivityProjectionTests: XCTestCase {
         )
     }
 
+    /// THE SEED IS DEEP RATHER THAN WIDE, and that is what makes the reading
+    /// mean anything. The in-memory store evaluates a predicate by walking every
+    /// `Message` it holds, so both reads pay the same scan and the same sort
+    /// whatever `fetchLimit` says — the ONLY thing the tail read saves here is
+    /// building a `MessageRecord`, and its attachment set, for every turn of the
+    /// thread. Spread the same number of rows across many short threads and that
+    /// saving is a handful of objects against a scan of hundreds: the two
+    /// readings land within scheduling jitter of each other and the assertion
+    /// becomes a coin toss. Concentrating the rows into a couple of long threads
+    /// puts the materialization the tail read skips on the same order as the
+    /// scan both reads pay, which is the difference this test claims to see.
     func testTailIsCheaperThanMaterializingTheWholeThread() async throws {
         let store = makeStore()
-        let ids = try await seedLargeStore(store, conversations: 20, messagesEach: 40)
+        let ids = try await seedLargeStore(store, conversations: 2, messagesEach: 400)
         let subject = try XCTUnwrap(ids.first)
         _ = try await store.fetchMessages(for: subject)
 

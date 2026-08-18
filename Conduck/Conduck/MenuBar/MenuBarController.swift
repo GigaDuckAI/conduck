@@ -324,8 +324,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             }
         }
         installEscMonitor()
-        // Mark the quick thread as "being viewed" (clears its unread dot) ONLY
-        // when opening onto settled content — during the window-composer-mic
+        // Report the quick thread as VISIBLE — the settled-visibility callback
+        // that settles both of its attention markers — but ONLY when opening
+        // onto settled content. During the window-composer-mic
         // auto-open (`handleStateChange` opens for a capture in
         // recording/processing/error) the popover shows a HUD, not the quick
         // thread, and the quick lane may be stale. `handleStateChange` re-sets
@@ -427,8 +428,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         coordinator.popoverDidCloseHook()
         // The refusal notice belongs to the press that raised it.
         coordinator.clearQuickCaptureRefusalNotice()
-        // Popover no longer showing any thread — a reply that lands now marks
-        // its thread unread (raises the dot).
+        // Popover no longer showing any thread — nothing is being looked at, so
+        // a reply that lands now leaves its thread unseen and the dot follows.
         coordinator.setPopoverVisibleConversation(nil)
         // Drop any read-only shared-reply override so the next open shows the
         // quick lane unless a fresh dot-click re-selects one.
@@ -498,6 +499,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             withObservationTracking {
                 _ = dictationService.state
                 _ = coordinator.quickViewModel?.isAwaitingReply
+                // Both derived from the stored rows, so this also picks up a
+                // reply or a read that arrived from another device by CloudKit
+                // rather than from anything that happened in this process.
                 _ = coordinator.unreadReplyConversationIDs   // drive the unread dot
                 _ = coordinator.failedConversationIDs        // drive the failure dot
             } onChange: {

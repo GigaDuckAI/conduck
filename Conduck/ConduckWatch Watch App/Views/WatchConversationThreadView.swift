@@ -82,6 +82,37 @@ struct WatchConversationThreadView: View {
     /// flash and no stale-thread flash.
     @State private var hasLoaded = false
 
+    /// What the read-state stamp last covered, or nil while this thread has
+    /// never been stamped.
+    ///
+    /// THIS IS A WRITE BOUND, NOT A CACHE, and it is the wrist's one deliberate
+    /// divergence from the iPhone thread — which re-stamps on every hook and
+    /// accepts the cost. Here the stamping hooks include the wrist-raise and the
+    /// un-dim edge, which fire every time a user glances at an open thread. A
+    /// marker write is a Core Data save on a mirrored column, so an unguarded
+    /// re-stamp is a CKRecord export per glance on the smallest battery and the
+    /// weakest radio in the fleet, for a value the record already carries.
+    /// Comparing against what was actually stamped makes a repeat glance free
+    /// while leaving every case that MOVED the truth to write.
+    ///
+    /// THE STATUS IS PART OF THE KEY, not just the message id, because the one
+    /// transition this view most needs to notice does not change the id: a send
+    /// FAILING flips the tail's `status` in place, and a key of the id alone
+    /// would decide nothing had happened and never acknowledge it.
+    @State private var stampedTail: StampedTail?
+
+    /// The identity of what a read-state stamp covered: which conversation,
+    /// which tail message, and that message's delivery status. Value-compared,
+    /// so an unchanged thread produces an equal key and no write.
+    private struct StampedTail: Equatable {
+        let conversationID: UUID
+        /// Nil for a thread with no messages at all — a legitimate state (an
+        /// empty conversation opened from the list), and one that still deserves
+        /// exactly one stamp.
+        let messageID: UUID?
+        let status: String?
+    }
+
     /// Mirrors the recording service state machine so the inline "Thinking…"
     /// indicator above the composer surfaces in this thread.
     @State private var recordingService = WatchRecordingService.shared
@@ -514,6 +545,13 @@ struct WatchConversationThreadView: View {
             viewModel.selectedConversationID = id
             await viewModel.loadThread(for: id)
             hasLoaded = true
+            // Read-state hook 1 — the thread is loaded and on screen. Opening a
+            // thread IS the act of looking at it, and on this build that is an
+            // ACCOUNT fact: the stamp lands on a mirrored column, so it clears
+            // the row on the iPhone, the iPad and the Mac too. Deliberately
+            // AFTER the load rather than on the route push, so the stamp is
+            // bounded by the tail it actually shows.
+            stampViewedIfLookedAt()
             // Auto-speak hook 1 — the thread just finished loading (covers the
             // notification-tap deep-link open, where the request was armed
             // before the route push).
@@ -559,6 +597,20 @@ struct WatchConversationThreadView: View {
             // so this onChange can observe it.
             attemptAutoSpeak()
         }
+        .onChange(of: tailSignature) { _, _ in
+            // Read-state hook 2 — a new tail, or the SAME tail changing status.
+            //
+            // A reply landing while the user is reading must never light the row
+            // they are looking at, on any device — so every new tail re-stamps.
+            // Keyed on the tail's identity rather than on the message COUNT: a
+            // refresh pass can replace the whole array without growing it (a
+            // cold open, a couriered file row merging in), and a send failing
+            // changes neither the count nor the id — only the status. That last
+            // case is the one that matters most here, because it is the moment
+            // there is a failure to acknowledge, and it is invisible to every
+            // other signal this view has.
+            stampViewedIfLookedAt()
+        }
         .onChange(of: scenePhase) { _, newPhase in
             // Auto-speak hook 4 — wrist-raise. A reply that landed while the
             // wrist was down was STAGED (see `handleBackgroundReply`) but not
@@ -570,6 +622,14 @@ struct WatchConversationThreadView: View {
             if newPhase == .active {
                 resumeAfterDimIfNeeded()
                 attemptAutoSpeak()
+                // Read-state hook 3 — the wrist came back up on an already-open
+                // thread. Everything that arrived while it was down was refused
+                // by the gate at the time, correctly: a thread mounted on a
+                // lowered wrist has not been looked at. This is the moment it
+                // has been, and without this edge that reply would stay unread
+                // on every device until the thread was navigated away from and
+                // re-entered.
+                stampViewedIfLookedAt()
             } else {
                 // Leaving the foreground (wrist-down / cover-to-mute) is a dim
                 // cut for built-in-speaker audio — own the pause NOW, while we
@@ -592,6 +652,12 @@ struct WatchConversationThreadView: View {
                 pauseForDimIfNeeded()
             } else {
                 resumeAfterDimIfNeeded()
+                // Read-state hook 4 — the un-dim edge, and it is NOT redundant
+                // with the scenePhase hook above. The ambient dim can leave
+                // `scenePhase == .active` and toggle luminance only, so on that
+                // path hook 3 never fires; luminance is the extra edge for
+                // exactly the same reason the TTS resume needs it here.
+                stampViewedIfLookedAt()
             }
         }
         .onDisappear {
@@ -677,6 +743,98 @@ struct WatchConversationThreadView: View {
         // (event only, no content).
         WatchLog.note(.state, "tts.dimpause")
         speaker.systemDimPause()
+    }
+
+    // MARK: - Read state
+
+    /// The tail identity `.onChange` watches, or nil while this view is still a
+    /// draft shell with no conversation of its own.
+    private var tailSignature: StampedTail? {
+        guard let id = conversationID else { return nil }
+        let tail = viewModel.threadMessages.last
+        return StampedTail(conversationID: id, messageID: tail?.id, status: tail?.status)
+    }
+
+    /// True iff a person is actually looking at this screen right now.
+    ///
+    /// BOTH HALVES ARE REQUIRED, and the second is the one an iOS habit drops.
+    /// `scenePhase == .active` alone is not "on screen" on watchOS: the ambient
+    /// dim keeps the scene active with the wrist down, so a thread left open in
+    /// a pocket would otherwise report itself read. `isLuminanceReduced` is what
+    /// separates a raised wrist from Always-On Display, and this file already
+    /// depends on that distinction for the TTS dim-pause.
+    ///
+    /// THE GATE MATTERS MORE HERE THAN ANYWHERE ELSE IN THE APP, because the
+    /// write it guards is no longer device-local. A stamp made on a lowered
+    /// wrist does not merely mis-mark this row — it clears the amber dot on the
+    /// iPhone, the iPad and the Mac, for a reply nobody has seen. That is the
+    /// one failure this whole feature must not produce, so the gate is
+    /// deliberately strict: the cost of refusing a stamp is one extra dot the
+    /// next glance retires, and the cost of granting a wrong one is a lost
+    /// reply.
+    private var isBeingLookedAt: Bool {
+        scenePhase == .active && !isLuminanceReduced
+    }
+
+    /// Record that the account has looked at this thread — and, when its tail is
+    /// a delivery that failed, that the account has been shown THAT failure.
+    ///
+    /// ONE TRANSACTION WHEN BOTH ARE TRUE. Opening a failed thread on the wrist
+    /// is a single act that means both things, and calling the two writes in
+    /// sequence would produce two saves, two change notifications and two
+    /// CKRecord exports for it — and would let a refresh land between them and
+    /// paint the row half-updated, viewed but still red.
+    ///
+    /// THE ACKNOWLEDGEMENT NAMES AN ATTEMPT, NOT A TIME, and it is read off the
+    /// tail this view is actually showing rather than from a second query. A
+    /// retry does not advance a failed turn's `createdAt`, so no timestamp could
+    /// tell "seen" from "seen the previous attempt"; `Message.deliveryAttemptID`
+    /// can, and taking it from the drawn tail is what stops a failure that
+    /// imported seconds ago from being acknowledged without ever having been on
+    /// screen. A tail carrying no attempt id acknowledges NOTHING — nil is a
+    /// no-op in the store, never a clear and never a wildcard — so a row written
+    /// before that attribute existed stays marked, which is the safe direction.
+    ///
+    /// GATED ON THE TAIL, which is exact rather than approximate: a list row
+    /// paints `.failed` only while the newest failed turn is still the
+    /// conversation's last activity, and that means it IS the tail. So this
+    /// needs no aggregate of its own and cannot drift from what the list beside
+    /// it shows.
+    ///
+    /// FIRE-AND-FORGET, by way of `ReadStateStore`, which stamps its in-memory
+    /// overlay synchronously and dispatches the durable write behind it. A cold
+    /// wrist launch can sit tens of seconds behind on the store's first touch,
+    /// and none of that may block the thread the user is already reading.
+    private func stampViewedIfLookedAt() {
+        guard isBeingLookedAt, let signature = tailSignature else { return }
+        guard signature != stampedTail else { return }
+        stampedTail = signature
+
+        let tail = viewModel.threadMessages.last
+        let failedAttemptID: UUID? = {
+            guard let tail, tail.role == "user", tail.status == "failed" else { return nil }
+            return tail.deliveryAttemptID
+        }()
+
+        if let failedAttemptID {
+            ReadStateStore.shared.markViewedAndAcknowledgeFailure(
+                signature.conversationID,
+                lastActivityAt: tail?.createdAt,
+                attemptID: failedAttemptID
+            )
+        } else {
+            // `lastActivityAt` is the newest bubble's stamp rather than `Date()`
+            // alone: message timestamps are local wall clock, so a reply
+            // mirrored in from a device whose clock runs a little ahead would
+            // otherwise stay "newer than the marker" and keep lighting its own
+            // row while the user reads it. The store clamps anything
+            // implausibly far ahead, so a badly-skewed peer costs a stuck dot
+            // rather than silence.
+            ReadStateStore.shared.markViewed(
+                signature.conversationID,
+                lastActivityAt: tail?.createdAt
+            )
+        }
     }
 
     private func attemptAutoSpeak() {

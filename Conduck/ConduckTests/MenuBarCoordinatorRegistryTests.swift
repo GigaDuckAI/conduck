@@ -14,6 +14,16 @@
 //   - The sweep drops orphans (no lane references them, not mid-turn) but
 //     RETAINS lane-referenced and `isAwaitingReply` VMs.
 //
+// …plus the status item's two dots, which are DERIVED from stored conversation
+// rows rather than accumulated from local turn-completion events. That is why
+// these cases drive `MenuBarAttention` with hand-built rows instead of poking
+// the coordinator with notifications: the interesting inputs — a view marker
+// written on the iPad, an acknowledgement made on the wrist, a retry's new
+// attempt id — never arrive as a local event at all, and a test that could only
+// deliver them as one would be testing the mechanism this file exists to prove
+// gone. The coordinator-level cases here cover the other half: which callbacks
+// are allowed to claim the user is looking at a thread.
+//
 // Store-light: conversation ids are bare minted UUIDs — `viewModel(for:)`
 // never validates them against the store, and the VM's background `reload()`
 // simply finds no messages (same construction as
@@ -29,6 +39,16 @@ import XCTest
 
 @MainActor
 final class MenuBarCoordinatorRegistryTests: XCTestCase {
+
+    /// The derivation folds in `ReadStateStore.shared`, whose ACCOUNT CUTOVER is
+    /// process-wide rather than per-conversation: a cutover another suite left
+    /// behind would read as "everything before this moment has been seen" and
+    /// silently disarm every unseen case below. Fresh ids are not protection
+    /// against it, so the store is reset instead.
+    override func setUp() async throws {
+        try await super.setUp()
+        ReadStateStore._resetForTesting()
+    }
 
     // MARK: - Reuse-or-mint identity
 
@@ -48,111 +68,229 @@ final class MenuBarCoordinatorRegistryTests: XCTestCase {
         XCTAssertFalse(a === b)
     }
 
-    // MARK: - Reply-arrived unread dot
+    // MARK: - Attention derivation fixtures
 
-    func testNoteReplyArrivedMarksThreadUnreadWhenNotVisibleInPopover() {
-        let coordinator = MenuBarCoordinator()
-        let id = UUID()
-        XCTAssertFalse(coordinator.hasUnreadReply)
-        coordinator.noteReplyArrived(id)
-        XCTAssertTrue(coordinator.hasUnreadReply)
-        XCTAssertTrue(coordinator.unreadReplyConversationIDs.contains(id))
+    /// A picker row carrying an agent tail, i.e. one that CAN read as unseen.
+    /// The tail envelope is built with the row's own `lastActivityAt` because the
+    /// resolver accepts a projection only on exact equality — a row built any
+    /// other way is stale by construction and would suppress the branch under
+    /// test for the wrong reason.
+    private func agentTailRow(
+        id: UUID = UUID(),
+        at lastActivityAt: Date,
+        lastViewedAt: Date? = nil
+    ) -> ConversationStore.RecentConversation {
+        ConversationStore.RecentConversation(
+            id: id,
+            label: "row",
+            lastActivityAt: lastActivityAt,
+            backend: "openclaw",
+            lastViewedAt: lastViewedAt,
+            tailProjection: TailProjection.encoded(
+                messageID: UUID(),
+                createdAt: lastActivityAt,
+                role: .agent
+            )
+        )
     }
 
-    func testNoteReplyArrivedSkipsThreadCurrentlyVisibleInPopover() {
-        let coordinator = MenuBarCoordinator()
-        let id = UUID()
-        coordinator.setPopoverVisibleConversation(id)   // popover is showing it
-        coordinator.noteReplyArrived(id)
-        XCTAssertFalse(coordinator.hasUnreadReply,
-                       "A reply for the thread the popover is showing must NOT raise the dot — the user sees it.")
+    /// A picker row whose newest failed user turn IS its last activity — the only
+    /// shape the resolver reports as `.failed`.
+    private func failedRow(
+        id: UUID = UUID(),
+        at lastActivityAt: Date,
+        attemptID: UUID?,
+        seenAttemptID: UUID?
+    ) -> ConversationStore.RecentConversation {
+        ConversationStore.RecentConversation(
+            id: id,
+            label: "row",
+            lastActivityAt: lastActivityAt,
+            backend: "openclaw",
+            newestFailed: FailedTurnProjection(
+                messageID: UUID(),
+                createdAt: lastActivityAt,
+                deliveryAttemptID: attemptID
+            ),
+            failureSeenAttemptID: seenAttemptID
+        )
     }
 
-    func testClearUnreadRemovesTheMark() {
-        let coordinator = MenuBarCoordinator()
-        let id = UUID()
-        coordinator.noteReplyArrived(id)
-        XCTAssertTrue(coordinator.hasUnreadReply)
-        coordinator.clearUnread(id)
-        XCTAssertFalse(coordinator.hasUnreadReply)
+    // MARK: - The unread (yellow) dot, derived from stored rows
+
+    func testUnseenAgentTailRaisesTheUnreadDot() {
+        let now = Date()
+        let row = agentTailRow(at: now)
+        let attention = MenuBarAttention.derive(from: [row], now: now)
+        XCTAssertEqual(attention.unreadConversationIDs, [row.id])
+        XCTAssertEqual(attention.mostRecentUnread, row.id,
+                       "A dot-click opens the freshest unseen thread.")
     }
 
-    func testSetPopoverVisibleConversationClearsThatThreadsUnread() {
-        let coordinator = MenuBarCoordinator()
-        let id = UUID()
-        coordinator.noteReplyArrived(id)         // marked while popover closed
-        XCTAssertTrue(coordinator.hasUnreadReply)
-        coordinator.setPopoverVisibleConversation(id)   // user opens onto it
-        XCTAssertFalse(coordinator.hasUnreadReply,
-                       "Opening the popover onto a thread clears its unread dot.")
+    func testStoredViewMarkerClearsTheUnreadDot() {
+        let now = Date()
+        // The read arrived from another device: nothing local ever happened here,
+        // and the dot must be dark anyway. This is the case an accumulated set
+        // could not answer at all.
+        let row = agentTailRow(at: now, lastViewedAt: now)
+        let attention = MenuBarAttention.derive(from: [row], now: now)
+        XCTAssertTrue(attention.unreadConversationIDs.isEmpty,
+                      "A view marker imported from another device must retire this Mac's dot.")
+        XCTAssertNil(attention.mostRecentUnread)
     }
 
-    func testOpenConversationClearsUnread() {
-        let coordinator = MenuBarCoordinator()
-        let id = UUID()
-        coordinator.noteReplyArrived(id)
-        coordinator.openConversation(id)         // window navigates to it
-        XCTAssertFalse(coordinator.unreadReplyConversationIDs.contains(id))
+    func testUserTailNeverReadsAsUnseen() {
+        let now = Date()
+        let row = ConversationStore.RecentConversation(
+            id: UUID(),
+            label: "row",
+            lastActivityAt: now,
+            backend: "openclaw",
+            tailProjection: TailProjection.encoded(
+                messageID: UUID(),
+                createdAt: now,
+                role: .user
+            )
+        )
+        XCTAssertTrue(MenuBarAttention.derive(from: [row], now: now).unreadConversationIDs.isEmpty,
+                      "Only an agent reply is something the user has not seen — their own message is not.")
+    }
+
+    func testMissingTailProjectionSuppressesTheUnreadDot() {
+        let now = Date()
+        let row = ConversationStore.RecentConversation(
+            id: UUID(),
+            label: "row",
+            lastActivityAt: now,
+            backend: "openclaw"
+        )
+        XCTAssertTrue(MenuBarAttention.derive(from: [row], now: now).unreadConversationIDs.isEmpty,
+                      "No projection means NOT PROJECTED — a missing dot, never a guessed one.")
+    }
+
+    func testStaleTailProjectionSuppressesTheUnreadDot() {
+        let now = Date()
+        // An older build appended a reply, bumped `lastActivityAt` and left the
+        // envelope describing the previous tail. The stamp is what exposes it.
+        let row = ConversationStore.RecentConversation(
+            id: UUID(),
+            label: "row",
+            lastActivityAt: now,
+            backend: "openclaw",
+            tailProjection: TailProjection.encoded(
+                messageID: UUID(),
+                createdAt: now.addingTimeInterval(-90),
+                role: .agent
+            )
+        )
+        XCTAssertTrue(MenuBarAttention.derive(from: [row], now: now).unreadConversationIDs.isEmpty,
+                      "A projection that no longer describes the tail must not drive a dot.")
     }
 
     func testMultipleUnreadThreadsCoalesceToOneDot() {
-        let coordinator = MenuBarCoordinator()
-        coordinator.noteReplyArrived(UUID())
-        coordinator.noteReplyArrived(UUID())
-        XCTAssertEqual(coordinator.unreadReplyConversationIDs.count, 2)
-        XCTAssertTrue(coordinator.hasUnreadReply,
-                      "Any non-empty unread set shows ONE dot (count is not surfaced).")
+        let now = Date()
+        let attention = MenuBarAttention.derive(
+            from: [agentTailRow(at: now), agentTailRow(at: now.addingTimeInterval(-60))],
+            now: now
+        )
+        XCTAssertEqual(attention.unreadConversationIDs.count, 2)
+        XCTAssertNotNil(attention.mostRecentUnread,
+                        "Any non-empty unread set shows ONE dot (count is not surfaced).")
     }
 
-    // MARK: - Window-visible pin (active main window showing the thread)
+    func testMostRecentUnreadIsDecidedByActivityNotArrayOrder() {
+        let now = Date()
+        let older = agentTailRow(at: now.addingTimeInterval(-600))
+        let newer = agentTailRow(at: now)
+        let attention = MenuBarAttention.derive(from: [newer, older], now: now)
+        XCTAssertEqual(attention.mostRecentUnread, newer.id,
+                       "Freshness is the account's `lastActivityAt`, not the order the rows were handed over.")
+    }
 
-    func testNoteReplyArrivedSkipsThreadCurrentlyVisibleInActiveWindow() {
+    // MARK: - The failure (red) dot, derived from stored rows
+
+    func testUnacknowledgedFailureRaisesTheFailureDot() {
+        let now = Date()
+        let row = failedRow(at: now, attemptID: UUID(), seenAttemptID: nil)
+        let attention = MenuBarAttention.derive(from: [row], now: now)
+        XCTAssertEqual(attention.failedConversationIDs, [row.id])
+        XCTAssertEqual(attention.mostRecentFailure, row.id)
+    }
+
+    func testFailureAcknowledgedOnAnotherDeviceRetiresTheDot() {
+        let now = Date()
+        let attempt = UUID()
+        let row = failedRow(at: now, attemptID: attempt, seenAttemptID: attempt)
+        XCTAssertTrue(MenuBarAttention.derive(from: [row], now: now).failedConversationIDs.isEmpty,
+                      "An acknowledgement made on the phone or the wrist must retire this Mac's red dot.")
+    }
+
+    func testAcknowledgementOfAnOtherAttemptLeavesTheDotLit() {
+        let now = Date()
+        // Retry mints a NEW attempt id and leaves the stored acknowledgement
+        // alone, so the stored one simply stops matching.
+        let row = failedRow(at: now, attemptID: UUID(), seenAttemptID: UUID())
+        XCTAssertFalse(MenuBarAttention.derive(from: [row], now: now).failedConversationIDs.isEmpty,
+                       "An acknowledgement naming a different attempt must not silence this one.")
+    }
+
+    func testFailureWithNoAttemptIdentityStaysLit() {
+        let now = Date()
+        let row = failedRow(at: now, attemptID: nil, seenAttemptID: UUID())
+        XCTAssertFalse(MenuBarAttention.derive(from: [row], now: now).failedConversationIDs.isEmpty,
+                       "A failure carrying no identity is not acknowledged by anything — the safe direction.")
+    }
+
+    func testSupersededFailureRaisesNoDot() {
+        let now = Date()
+        var row = failedRow(at: now.addingTimeInterval(-600), attemptID: UUID(), seenAttemptID: nil)
+        row = ConversationStore.RecentConversation(
+            id: row.id,
+            label: row.label,
+            lastActivityAt: now,               // a later turn moved the conversation on
+            backend: row.backend,
+            newestFailed: row.newestFailed
+        )
+        XCTAssertTrue(MenuBarAttention.derive(from: [row], now: now).failedConversationIDs.isEmpty,
+                      "A failure that is no longer the last thing that happened is not what the row reports.")
+    }
+
+    func testNoRowsMeansNoDots() {
+        let attention = MenuBarAttention.derive(from: [])
+        XCTAssertTrue(attention.unreadConversationIDs.isEmpty)
+        XCTAssertTrue(attention.failedConversationIDs.isEmpty)
+        XCTAssertNil(attention.mostRecentUnread)
+        XCTAssertNil(attention.mostRecentFailure)
+    }
+
+    func testFreshCoordinatorShowsNeitherDot() {
+        let coordinator = MenuBarCoordinator()
+        XCTAssertFalse(coordinator.hasUnreadReply)
+        XCTAssertFalse(coordinator.hasFailure)
+        XCTAssertNil(coordinator.mostRecentUnreadConversationID)
+        XCTAssertNil(coordinator.mostRecentFailureConversationID)
+    }
+
+    // MARK: - Visibility pins (the settled-visibility callbacks)
+
+    func testPopoverVisiblePinTracksTheDisplayedThread() {
         let coordinator = MenuBarCoordinator()
         let id = UUID()
-        coordinator.setWindowVisibleConversation(id)   // active window shows it
-        coordinator.noteReplyArrived(id)
-        XCTAssertFalse(coordinator.hasUnreadReply,
-                       "A reply for the thread the ACTIVE window is showing must NOT raise the dot — the user is watching it land.")
+        coordinator.setPopoverVisibleConversation(id)
+        XCTAssertEqual(coordinator.popoverVisibleConversationID, id)
+        coordinator.setPopoverVisibleConversation(nil)
+        XCTAssertNil(coordinator.popoverVisibleConversationID,
+                     "Closing the popover means nobody is looking at that thread any more.")
     }
 
-    func testNoteReplyArrivedMarksOtherThreadWhileWindowShowsOne() {
-        let coordinator = MenuBarCoordinator()
-        let visible = UUID(); let other = UUID()
-        coordinator.setWindowVisibleConversation(visible)
-        coordinator.noteReplyArrived(other)
-        XCTAssertTrue(coordinator.unreadReplyConversationIDs.contains(other),
-                      "The window pin suppresses only ITS thread — a reply elsewhere still raises the dot.")
-    }
-
-    func testNoteFailureSkipsThreadCurrentlyVisibleInActiveWindow() {
+    func testWindowVisiblePinTracksTheActiveWindowsThread() {
         let coordinator = MenuBarCoordinator()
         let id = UUID()
         coordinator.setWindowVisibleConversation(id)
-        coordinator.noteFailure(id)
-        XCTAssertFalse(coordinator.hasFailure,
-                       "A failure for the visible thread shows its inline failed bubble — no red dot.")
-    }
-
-    func testSetWindowVisibleConversationClearsExistingMarks() {
-        let coordinator = MenuBarCoordinator()
-        let id = UUID()
-        coordinator.noteReplyArrived(id)     // raised while the user was away
-        coordinator.noteFailure(id)
-        coordinator.setWindowVisibleConversation(id)   // cmd-tab back onto it
-        XCTAssertFalse(coordinator.hasUnreadReply,
-                       "Re-activating the window on the reply's thread clears its unread dot.")
-        XCTAssertFalse(coordinator.hasFailure,
-                       "…and its failure dot (clear-site parity).")
-    }
-
-    func testWindowDeactivationLetsRepliesRaiseTheDotAgain() {
-        let coordinator = MenuBarCoordinator()
-        let id = UUID()
-        coordinator.setWindowVisibleConversation(id)
-        coordinator.setWindowVisibleConversation(nil)   // app resigned active
-        coordinator.noteReplyArrived(id)
-        XCTAssertTrue(coordinator.hasUnreadReply,
-                      "With the window inactive the thread is no longer 'being watched' — the dot must raise.")
+        XCTAssertEqual(coordinator.windowVisibleConversationID, id)
+        coordinator.setWindowVisibleConversation(nil)
+        XCTAssertNil(coordinator.windowVisibleConversationID,
+                     "A window that resigned active is no longer showing anything to anybody.")
     }
 
     func testClearWindowVisibleIfCurrentIgnoresStaleThread() {
@@ -162,69 +300,22 @@ final class MenuBarCoordinatorRegistryTests: XCTestCase {
         // one's .onDisappear runs — the stale clear must not wipe the fresh pin.
         coordinator.setWindowVisibleConversation(new)
         coordinator.clearWindowVisibleConversation(ifCurrent: old)
-        coordinator.noteReplyArrived(new)
-        XCTAssertFalse(coordinator.hasUnreadReply,
+        XCTAssertEqual(coordinator.windowVisibleConversationID, new,
                        "The stale thread's unmount clear must not drop the NEW thread's pin.")
-        // The matching clear DOES drop it.
         coordinator.clearWindowVisibleConversation(ifCurrent: new)
-        coordinator.noteReplyArrived(new)
-        XCTAssertTrue(coordinator.hasUnreadReply)
+        XCTAssertNil(coordinator.windowVisibleConversationID,
+                     "The matching clear DOES drop it.")
     }
 
-    // MARK: - Ordered unread (most-recent wins)
-
-    func testMostRecentUnreadReturnsLatestArrival() {
-        let coordinator = MenuBarCoordinator()
-        let a = UUID(); let b = UUID()
-        coordinator.noteReplyArrived(a)
-        coordinator.noteReplyArrived(b)
-        XCTAssertEqual(coordinator.mostRecentUnreadConversationID, b,
-                       "A dot-click opens the freshest reply — last arrival wins.")
-    }
-
-    func testRenotingMovesThreadToMostRecent() {
-        let coordinator = MenuBarCoordinator()
-        let a = UUID(); let b = UUID()
-        coordinator.noteReplyArrived(a)
-        coordinator.noteReplyArrived(b)
-        coordinator.noteReplyArrived(a)   // a's thread gets a newer reply
-        XCTAssertEqual(coordinator.mostRecentUnreadConversationID, a,
-                       "A fresh reply for an already-unread thread refreshes its recency.")
-        XCTAssertEqual(coordinator.unreadReplyConversationIDs.count, 2,
-                       "Re-noting the same thread must not duplicate it.")
-    }
-
-    func testClearingOneUnreadLeavesTheDotForOthers() {
-        let coordinator = MenuBarCoordinator()
-        let a = UUID(); let b = UUID()
-        coordinator.noteReplyArrived(a)
-        coordinator.noteReplyArrived(b)
-        coordinator.clearUnread(b)
-        XCTAssertTrue(coordinator.hasUnreadReply,
-                      "Clearing one unread must leave the dot lit while another remains.")
-        XCTAssertEqual(coordinator.mostRecentUnreadConversationID, a)
-    }
-
-    func testRemoteAgentTurnDidCompleteMarksUnread() async {
-        // The share / background reply path raises the dot via
-        // `.remoteAgentTurnDidComplete` (the in-app path uses
-        // `.conversationReplyArrived`). The observer is queued on .main, so a
-        // trailing main-queue hop (FIFO ordering) guarantees it ran before we
-        // assert — no arbitrary sleep.
+    func testOpenConversationBindsTheLaneWithoutClaimingVisibility() {
         let coordinator = MenuBarCoordinator()
         let id = UUID()
-        NotificationCenter.default.post(
-            name: .remoteAgentTurnDidComplete,
-            object: nil,
-            userInfo: [NotificationDeepLink.conversationIDKey: id.uuidString]
-        )
-        let hopped = XCTestExpectation(description: "main-queue hop after the observer")
-        DispatchQueue.main.async { hopped.fulfill() }
-        await fulfillment(of: [hopped], timeout: 1.0)
-        XCTAssertTrue(coordinator.unreadReplyConversationIDs.contains(id),
-                      "A background/share reply completion must raise the unread dot.")
-        // Keep the coordinator alive until after the async observer ran.
-        withExtendedLifetime(coordinator) {}
+        coordinator.openConversation(id)
+        XCTAssertEqual(coordinator.windowViewModel?.conversationID, id,
+                       "A deep-link / sidebar pick binds the WINDOW lane.")
+        XCTAssertNil(coordinator.windowVisibleConversationID,
+                     "Binding a lane is an intent to show a thread, never proof that anything is on screen — "
+                     + "acknowledging here would retire an account-wide mark on every device for something nobody saw.")
     }
 
     // MARK: - Popover display override (read-only shared-reply glance)

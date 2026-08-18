@@ -7,7 +7,12 @@
 // entry is a top-bar magnifier (`TextFieldLink` → system text-entry screen);
 // an active query shows as a slim in-list chip with one-tap clear.
 // Rows rebind to title + `lastActivityAt` + the row's delivery state, which
-// swaps into the date slot rather than taking a line of its own.
+// swaps into the date slot rather than taking a line of its own, and the row's
+// two ATTENTION facts — an unread reply and an unacknowledged failure — which
+// ride the title's weight and a fixed-width trailing mark
+// (`WatchConversationActivityMark`). Both attention facts are account-wide,
+// read off the conversation's own mirrored columns, so the wrist agrees with
+// the phone without keeping a marker of its own.
 //
 // Backed by `WatchConversationViewModel` over the CloudKit-ready
 // `ConversationStore` — conversations from any device appear here once sync
@@ -283,12 +288,25 @@ struct WatchConversationListView: View {
     // activity: .turnStates)`) and renders as a SWAP inside the existing date
     // slot — one `Text` whose string and tint change. No extra line, no extra
     // fetch, and the row's height is identical in every state.
+    //
+    // ATTENTION state rides the same query too, on the conversation's own
+    // CloudKit-mirrored marker columns, and renders in the two places that cost
+    // no layout: the title's WEIGHT and a fixed-width trailing MARK. Neither
+    // adds a line, neither adds a fetch, and the mark's slot is reserved in
+    // every state so the title's truncation point does not move when a reply
+    // lands. One `rowState` call feeds all three renderings, so the glyph, the
+    // weight and the words are always resolved from one value.
     private func row(for conversation: ConversationRecord, showsBadge: Bool) -> some View {
-        let activity = viewModel.rowState(for: conversation).activity
+        let state = viewModel.rowState(for: conversation)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(Self.displayTitle(for: conversation))
-                    .font(.caption.weight(.semibold))
+                    // BOLD ON AN UNSEEN REPLY — the same cue the iPhone, iPad
+                    // and Mac lists use, and the wrist's only whole-row one. It
+                    // is a WEIGHT change rather than a colour change on purpose:
+                    // weight survives Always-On Display's dim and greyscale,
+                    // where a tint difference on a black background does not.
+                    .font(.caption.weight(state.hasUnseenReply ? .bold : .semibold))
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 // The gateway badge is never tinted, dimmed or overlaid by
@@ -296,10 +314,15 @@ struct WatchConversationListView: View {
                 if showsBadge {
                     WatchGatewayBadge(backendRawValue: conversation.backend)
                 }
+                // TRAILING-MOST, after the badge, so the mark occupies one fixed
+                // column at the row's edge whether or not this list badges. The
+                // badge is a whole-list decision, so putting the mark outside it
+                // keeps the attention glyph in the same place on every row.
+                WatchConversationActivityMark(state: state)
             }
-            Text(Self.metadataText(for: activity, lastActivityAt: conversation.lastActivityAt))
+            Text(Self.metadataText(for: state.activity, lastActivityAt: conversation.lastActivityAt))
                 .font(.caption2)
-                .foregroundStyle(Self.metadataTint(for: activity))
+                .foregroundStyle(Self.metadataTint(for: state))
                 // ALWAYS one line: "Waiting for a reply…" is far longer than a
                 // relative date and would wrap on a 40 mm watch, changing the
                 // row's height the moment its state changed.
@@ -314,10 +337,15 @@ struct WatchConversationListView: View {
     /// No elapsed clock and no `TimelineView`: a per-minute tick is continuous
     /// work a browse list should not spend on the smallest battery in the
     /// fleet, and the thread view already shows a clock for the turn you are
-    /// actually waiting on. `.answeredUnseen` is unreachable here (the wrist
-    /// keeps no read state and projects no tail role — see
-    /// `WatchConversationViewModel.rowState(for:)`) and falls through to the
-    /// date, which is what an idle row shows anyway.
+    /// actually waiting on.
+    ///
+    /// `.answeredUnseen` IS REACHABLE HERE, and it deliberately falls through to
+    /// the date. The wrist reads the account's `lastViewedAt` off the record and
+    /// the tail's role off the stored tail envelope, so a row with an unread
+    /// reply resolves to that state like every other surface — but the fact is
+    /// already carried by the bold title and the amber mark, and this slot's job
+    /// is to answer WHEN. Spending it on a second copy of "new reply" would cost
+    /// the only place the row says how old it is.
     private static func metadataText(
         for activity: ConversationActivity,
         lastActivityAt: Date
@@ -336,13 +364,23 @@ struct WatchConversationListView: View {
         }
     }
 
-    /// Red = a problem; everything else stays neutral. A working row is
-    /// information, not a call to action, so it must not compete with the one
-    /// colour that means something went wrong.
-    private static func metadataTint(for activity: ConversationActivity) -> Color {
-        switch activity {
+    /// Red = a problem the user has not been told about yet; everything else
+    /// stays neutral. A working row is information, not a call to action, so it
+    /// must not compete with the one colour that means something went wrong.
+    ///
+    /// AN ACKNOWLEDGED FAILURE KEEPS THE WORDS AND DROPS THE RED, mirroring what
+    /// the trailing mark does with its glyph and what the iPhone, iPad and Mac
+    /// lists already do with theirs. "Not sent" stays true after the user has
+    /// been shown the failure — the message still did not go — so the row goes
+    /// on saying it; what is spent is the URGENCY, and a row that keeps shouting
+    /// after it has been read trains the user to ignore the colour that matters.
+    /// Because the acknowledgement is a column on the conversation, the wrist
+    /// drops the red for a failure acknowledged on ANY device, and opening the
+    /// thread here drops it on all of them.
+    private static func metadataTint(for state: ConversationRowState) -> Color {
+        switch state.activity {
         case .failed:
-            return AppColors.error
+            return state.failureAcknowledged ? .secondary : AppColors.error
         case .idle, .working, .answeredUnseen:
             return .secondary
         }

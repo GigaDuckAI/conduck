@@ -730,7 +730,12 @@ final class ConversationStoreTests: XCTestCase {
             sourceDevice: "phone", status: "sending"
         )
 
-        // `olderThan: 0` → cutoff = now, so the just-appended turn qualifies.
+        // `olderThan: 0` → cutoff = now, so the appended turn qualifies. The
+        // pause is not decoration: an append's stamp is quantised to its
+        // millisecond and nudged one past the conversation's last activity, so
+        // it can sit a fraction of a millisecond in the FUTURE and miss a cutoff
+        // taken immediately after.
+        try await Task.sleep(for: .milliseconds(10))
         await store.sweepStaleSendingUserTurns(olderThan: 0)
 
         let fetched = try await store.fetchMessages(for: convo.id)
@@ -770,7 +775,11 @@ final class ConversationStoreTests: XCTestCase {
         )
 
         // `live` simulates a conversation with a LIVE background task (the
-        // delegate owns its resolution) — excluded; `dead` is swept.
+        // delegate owns its resolution) — excluded; `dead` is swept. The pause
+        // puts both appended stamps behind the cutoff: an append settles on its
+        // millisecond, one past its conversation's last activity, so it can sit
+        // a fraction of a millisecond ahead of a cutoff taken immediately after.
+        try await Task.sleep(for: .milliseconds(10))
         await store.sweepStaleSendingUserTurns(
             olderThan: 0, excludingConversationIDs: [live.id]
         )
@@ -809,6 +818,10 @@ final class ConversationStoreTests: XCTestCase {
             sourceDevice: "phone", status: "sending"
         )
 
+        // The pause keeps the last append's settled stamp behind the cutoff —
+        // an append lands on its millisecond, one past its conversation's last
+        // activity, so it can sit a fraction of a millisecond in the future.
+        try await Task.sleep(for: .milliseconds(10))
         await store.sweepStaleSendingUserTurns(olderThan: 0)
 
         let fetched = try await store.fetchMessages(for: convo.id)

@@ -4536,15 +4536,19 @@ final class ConversationDetailViewModel {
         // the window in which the composer still offered Send for a turn already
         // dispatching. EVERY early return below releases it.
         //
-        // SPEND THE FAILURE ACKNOWLEDGEMENT HERE TOO, for the same `createdAt`
-        // reason. The stamp the list compares an acknowledgement against is that
-        // same frozen `createdAt`, so it does not advance across a retry: if
-        // this turn fails again, an acknowledgement taken before the retry would
-        // still cover it and the row would never go red — silently, for every
-        // re-failure that turn ever has, and `markFailureSeen` is monotone so
-        // nothing would undo it. Asking again is also the clearest statement a
-        // user can make that they have NOT finished with this failure.
-        ReadStateStore.shared.clearFailureSeen(conversationID)
+        // NOTHING RE-ARMS THE FAILURE MARK HERE, and that absence is the
+        // design rather than an omission. The same frozen `createdAt` means a
+        // retry cannot be distinguished from its predecessor by TIME, so the
+        // account's acknowledgement names an attempt IDENTITY instead
+        // (`Message.deliveryAttemptID`), and `beginRetry`'s compare-and-set
+        // mints a fresh one in the same transaction that claims the row. The
+        // stored `Conversation.failureSeenAttemptID` is left exactly where it
+        // is and simply stops matching, so a re-failure paints red again on
+        // every device with no writer having to un-say anything. A destructive
+        // clear here would reintroduce the whole class of bug that removes: it
+        // is a racing write against an account-wide column, so a stale clear
+        // landing after a later acknowledgement — or the reverse — would
+        // silence a live failure with no way for the user to get the mark back.
         beginInFlight()
         await reload()
 
