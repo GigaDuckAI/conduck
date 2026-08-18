@@ -2954,7 +2954,7 @@ final class DiagnosticsRunner {
             status = .passed
             detail = String(
                 localized: "diagnostics.connection.defaultGateway.ok",
-                defaultValue: "New chats and GigaAction start on your default gateway."
+                defaultValue: "New chats and the GigaAction Shortcut start on your default gateway."
             )
         case .autoAdopted:
             status = .passed
@@ -2972,13 +2972,13 @@ final class DiagnosticsRunner {
             // clears its last-used memory — so this may offer it, never instruct it.
             detail = String(
                 localized: "diagnostics.connection.defaultGateway.unavailable",
-                defaultValue: "Your default gateway isn't available on this device, so new chats and GigaAction won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to a gateway that works here."
+                defaultValue: "Your default gateway isn't available on this device, so new chats and the GigaAction Shortcut won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to a gateway that works here."
             )
         case .notChosen:
             status = .failed(code: AppError.remoteAgentNotConfigured.errorCode)
             detail = String(
                 localized: "diagnostics.connection.defaultGateway.notChosen",
-                defaultValue: "Conduck doesn't know which AI new chats should use, so new chats and GigaAction won't go anywhere. Choose one in Personal AI."
+                defaultValue: "Conduck doesn't know which AI new chats should use, so new chats and the GigaAction Shortcut won't go anywhere. Choose one in Personal AI."
             )
         }
         return DiagnosticCheck(
