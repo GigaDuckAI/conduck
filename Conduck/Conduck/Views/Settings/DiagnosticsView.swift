@@ -572,16 +572,22 @@ struct DiagnosticsContent: View {
                 localized: "diagnostics.connection.defaultGateway.adopted.named",
                 defaultValue: "New chats and GigaAction start on \(name) — Conduck switched to it because \(replaced) isn't available here."
             )
+        // Both arms end on the picker callout's own sentence, verbatim
+        // (`settings.personalAI.default.picker.unavailable.body`), so the user meets
+        // the identical claim on both screens rather than two paraphrases to
+        // reconcile. Keep them aligned: switching is one-way (it clears the
+        // last-used memory), so wording that reads as an instruction argues the user
+        // out of the arrival window that would have fixed this on its own.
         case .broken:
             if count == 1 {
                 return String(
                     localized: "diagnostics.connection.defaultGateway.unavailable.named.one",
-                    defaultValue: "\(name) is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. Choose \(only) instead."
+                    defaultValue: "\(name) is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to \(only)."
                 )
             }
             return String(
                 localized: "diagnostics.connection.defaultGateway.unavailable.named",
-                defaultValue: "\(name) is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. Choose one of your \(count) working gateways instead."
+                defaultValue: "\(name) is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to one of your \(count) working gateways."
             )
         case .notChosen:
             if count == 1 {

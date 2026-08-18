@@ -2964,9 +2964,15 @@ final class DiagnosticsRunner {
             )
         case .broken:
             status = .failed(code: AppError.remoteAgentNotConfigured.errorCode)
+            // Carries the picker callout's own sentence
+            // (`settings.personalAI.default.picker.unavailable.body`), because both
+            // screens describe one fact and must not give opposite advice about it.
+            // Waiting is a real answer: the arrival window exists to heal this by
+            // itself. Switching is one-way — it overwrites this device's pointer and
+            // clears its last-used memory — so this may offer it, never instruct it.
             detail = String(
                 localized: "diagnostics.connection.defaultGateway.unavailable",
-                defaultValue: "Your default gateway isn't available on this device, so new chats and GigaAction won't go anywhere. Choose a gateway that works here."
+                defaultValue: "Your default gateway isn't available on this device, so new chats and GigaAction won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to a gateway that works here."
             )
         case .notChosen:
             status = .failed(code: AppError.remoteAgentNotConfigured.errorCode)

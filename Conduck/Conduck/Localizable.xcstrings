@@ -4,347 +4,6 @@
     "" : {
 
     },
-    "diagnostics.files.badge.disabled.failed" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads disabled — last check failed"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.disabled.inconclusive" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads disabled — last check inconclusive"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.disabled.testRequired" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads disabled — test required"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.enabled" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads enabled"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.enabled.failed" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads still enabled — last check failed"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.enabled.inconclusive" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads still enabled — last check inconclusive"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.enabled.returnUnchecked" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads enabled — returns unchecked"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.enabled.uploadsOnly" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads enabled — server can't list folders"
-          }
-        }
-      }
-    },
-    "diagnostics.files.detail.testRequired" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck won't upload files to this server until a server test passes."
-          }
-        }
-      }
-    },
-    "fileTransfer.status.saved.short.v2" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Test required"
-          }
-        }
-      }
-    },
-    "fileTransfer.status.saved.title.v2" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "File server test required"
-          }
-        }
-      }
-    },
-    "diagnostics.connection.defaultGateway.unavailable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your default gateway isn't available on this device, so new chats and GigaAction won't go anywhere. Choose a gateway that works here."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.defaultGateway.unavailable.named" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. Choose one of your %2$lld working gateways instead."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.defaultGateway.unavailable.named.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. Choose %2$@ instead."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.focused.missing.detail.v3" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This conversation's gateway isn't available on this device, so the thread can't send. Open it in Personal AI, or Clone the conversation to a gateway that works."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.none.detail.v3" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Nothing on this device can reach an AI. Connect one in Settings → Personal AI — or, if you set one up on another device, give iCloud a moment to finish syncing."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.none.v3" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No gateway can send right now"
-          }
-        }
-      }
-    },
-    "remoteAgent.error.defaultUnavailable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your default AI, %@, isn't available on this device."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.picker.empty" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No gateways are set up on this device yet. Connect one in Personal AI and it'll appear here."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.picker.unavailable.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "It's still your default, and it'll work again on its own if it's just waiting on iCloud. To use a different gateway for new chats on this device, pick one below."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.picker.unavailable.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ isn't available here"
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.picker.unavailable.watch.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "It's still the gateway your Apple Watch is pinned to, and it'll work again on its own if it's just waiting on iCloud. To pin a different one, pick it below."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.unavailable.footer.ipad" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ isn't available on this iPad, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.unavailable.footer.iphone" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ isn't available on this iPhone, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.unavailable.footer.mac" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ isn't available on this Mac, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.unavailableHere.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Some saved details for this gateway aren't available on this device. If you set it up on another device, iCloud may still be syncing them."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.unavailableHere.checkAgain" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Check again"
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.unavailableHere.defaultOnly.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "New chats on this device start here, but nothing for this gateway is stored on it. If you set it up on another device, iCloud may still be syncing — otherwise, fill it in below."
-          }
-        }
-      }
-    },
-    "settings.root.personalAI.defaultUnavailable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Default unavailable here"
-          }
-        }
-      }
-    },
-    "unconfigured.defaultNeedsSetup.body.v2" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "From the menu bar, Conduck sends to this Mac's default AI — and this Mac can't reach that one. Your other AIs still work; pick one of them as the default."
-          }
-        }
-      }
-    },
-    "unconfigured.defaultNeedsSetup.headline.v2" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your default AI isn't available here"
-          }
-        }
-      }
-    },
     "…" : {
 
     },
@@ -2601,7 +2260,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Conduck switched your default because the old one isn't set up here."
+            "value" : "Conduck switched your default because the old one isn't available here."
           }
         }
       }
@@ -2612,7 +2271,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "New chats and GigaAction start on %1$@ — Conduck switched to it because %2$@ isn't set up here."
+            "value" : "New chats and GigaAction start on %1$@ — Conduck switched to it because %2$@ isn't available here."
           }
         }
       }
@@ -2668,6 +2327,72 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "New chats and GigaAction start on %@."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default gateway isn't available on this device, so new chats and GigaAction won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to a gateway that works here."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.unavailable.named" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to one of your %2$lld working gateways."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.unavailable.named.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to %2$@."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.focused.missing.detail.v3" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This conversation's gateway isn't available on this device, so the thread can't send. Open it in Personal AI, or Clone the conversation to a gateway that works."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.none.detail.v3" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing on this device can reach an AI. Connect one in Settings → Personal AI — or, if you set one up on another device, give iCloud a moment to finish syncing."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.none.v3" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No gateway can send right now"
           }
         }
       }
@@ -2738,6 +2463,94 @@
         }
       }
     },
+    "diagnostics.files.badge.disabled.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads disabled — last check failed"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.disabled.inconclusive" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads disabled — last check inconclusive"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.disabled.testRequired" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads disabled — test required"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads enabled"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads still enabled — last check failed"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled.inconclusive" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads still enabled — last check inconclusive"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled.returnUnchecked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads enabled — returns unchecked"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled.uploadsOnly" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads enabled — server can't list folders"
+          }
+        }
+      }
+    },
     "diagnostics.files.badge.notSetUp" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2756,6 +2569,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Testing…"
+          }
+        }
+      }
+    },
+    "diagnostics.files.detail.testRequired" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck won't upload files to this server until a server test passes."
           }
         }
       }
@@ -5417,6 +5241,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The address and password are saved. Test the server before sending files."
+          }
+        }
+      }
+    },
+    "fileTransfer.status.saved.short.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Test required"
+          }
+        }
+      }
+    },
+    "fileTransfer.status.saved.title.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File server test required"
           }
         }
       }
@@ -8116,6 +7962,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Conduck doesn't know which AI to use for new chats."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.defaultUnavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default AI, %@, isn't available on this device."
           }
         }
       }
@@ -11092,6 +10949,17 @@
         }
       }
     },
+    "settings.personalAI.default.picker.empty" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No gateways are set up on this device yet. Connect one in Personal AI and it'll appear here."
+          }
+        }
+      }
+    },
     "settings.personalAI.default.picker.footer" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11136,6 +11004,39 @@
         }
       }
     },
+    "settings.personalAI.default.picker.unavailable.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It's still your default, and it'll work again on its own if it's just waiting on iCloud. To use a different gateway for new chats on this device, pick one below."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.unavailable.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ isn't available here"
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.unavailable.watch.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It's still the gateway your Apple Watch is pinned to, and it'll work again on its own if it's just waiting on iCloud. To pin a different one, pick it below."
+          }
+        }
+      }
+    },
     "settings.personalAI.default.selector.label" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11143,6 +11044,39 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Default for new chats"
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.unavailable.footer.ipad" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ isn't available on this iPad, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.unavailable.footer.iphone" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ isn't available on this iPhone, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.unavailable.footer.mac" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ isn't available on this Mac, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
           }
         }
       }
@@ -13270,6 +13204,39 @@
         }
       }
     },
+    "settings.remoteAgent.unavailableHere.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Some saved details for this gateway aren't available on this device. If you set it up on another device, iCloud may still be syncing them."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.unavailableHere.checkAgain" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check again"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.unavailableHere.defaultOnly.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New chats on this device start here, but nothing for this gateway is stored on it. If you set it up on another device, iCloud may still be syncing — otherwise, fill it in below."
+          }
+        }
+      }
+    },
     "settings.remoteAgent.url.baseHint" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13376,6 +13343,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "AI & Voice"
+          }
+        }
+      }
+    },
+    "settings.root.personalAI.defaultUnavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Default unavailable here"
           }
         }
       }
@@ -16939,9 +16917,6 @@
         }
       }
     },
-    "This chat's AI isn't set up on your iPhone. Start a new chat to use another one." : {
-
-    },
     "This gateway has no file server set up, so your file couldn't be sent. Add one in Settings, then share it again." : {
 
     },
@@ -18292,6 +18267,17 @@
         }
       }
     },
+    "unconfigured.defaultNeedsSetup.body.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "From the menu bar, Conduck sends to this Mac's default AI — and this Mac can't reach that one. Your other AIs still work; pick one of them as the default."
+          }
+        }
+      }
+    },
     "unconfigured.defaultNeedsSetup.button" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -18299,6 +18285,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Choose Default AI"
+          }
+        }
+      }
+    },
+    "unconfigured.defaultNeedsSetup.headline.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default AI isn't available here"
           }
         }
       }
@@ -18583,6 +18580,9 @@
         }
       }
     },
+    "Your default AI, %@, isn't available on this device. Open Conduck to pick a different one?" : {
+
+    },
     "Your default AI, %@, isn't set up on this device. Open Conduck to pick a different one?" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -18593,9 +18593,6 @@
           }
         }
       }
-    },
-    "Your default AI, %@, isn't set up. Choose another from the list." : {
-
     },
     "Your gateway couldn't use a photo in this chat. Start a new voice chat." : {
       "extractionState" : "manual",
