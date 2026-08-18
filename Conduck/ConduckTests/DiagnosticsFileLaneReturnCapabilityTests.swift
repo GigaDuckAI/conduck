@@ -309,4 +309,53 @@ final class DiagnosticsFileLaneReturnCapabilityTests: XCTestCase {
         XCTAssertEqual(runner.fileLaneReturnCaveat(for: lane), .uploadsOnly,
                        "the amber the gateway's File transfer page shows for the same lane")
     }
+
+    // MARK: - Evidence freshness across a rebuild
+
+    /// A readiness change made ELSEWHERE must take this screen's stale evidence with
+    /// it — the side effect of `mayCarryLaneEvidence`, exercised through the real
+    /// rebuild rather than as a pure predicate.
+    ///
+    /// The lane signature is the server's IDENTITY, so a verdict committed by the
+    /// File transfer page (or mirrored in from another device) moves availability
+    /// without moving the signature. Carrying evidence across that left this
+    /// screen's older `reachAuth` and stage checklist in place, still presented as
+    /// the last word — and the row's copy says so out loud ("last check failed"
+    /// above a lane whose newer test just passed).
+    func testARebuildDropsEvidenceWhenReadinessMovedElsewhere() async throws {
+        let ref = RemoteAgentRef.builtin(.openclaw)
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.none, for: ref)
+        await SettingsManager.shared.setRemoteAgentURL(
+            URL(string: "https://openclaw.example.test")!, for: ref)
+        try await configureLane(ref)
+
+        let runner = DiagnosticsRunner()
+        await runner.runAutoReads()
+
+        // A real staged pass in THIS session: publishes a result and arms the lane.
+        scriptStagedTest { _ in 207 }
+        await runner.runFileTransferTest(for: ref, session: makeMockSession())
+        XCTAssertNotNil(runner.fileTransferResults[ref], "precondition: this session produced a checklist")
+        var lane = try XCTUnwrap(runner.fileLanes.first { $0.ref == ref })
+        XCTAssertEqual(lane.badge, .verified, "precondition: the pass armed the lane")
+
+        // An unrelated rebuild with nothing changed must NOT disturb it — otherwise
+        // the assertion below would pass for the wrong reason.
+        await runner.refreshConfig()
+        XCTAssertNotNil(runner.fileTransferResults[ref],
+                        "a rebuild with unchanged identity AND readiness keeps this session's evidence")
+
+        // Now the revocation another surface would commit — same server, same
+        // credential, same pin, so the identity signature does not move.
+        await SettingsManager.shared.commitFileTransferVerdict(
+            available: false, folderCapable: nil, returnCapable: .preserve, for: ref)
+        await runner.refreshConfig()
+
+        lane = try XCTUnwrap(runner.fileLanes.first { $0.ref == ref })
+        XCTAssertFalse(lane.uploadRoutingEnabled, "the store now refuses uploads to this lane")
+        XCTAssertEqual(lane.badge, .configuredNotTested, "and the badge follows the store, not the old pass")
+        XCTAssertNil(runner.fileTransferResults[ref],
+                     "THE REGRESSION: the old passing checklist must not outlive the readiness that earned it")
+        XCTAssertEqual(lane.reachAuth, .notRun, "and its probe verdict is no longer presented as the last word")
+    }
 }

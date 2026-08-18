@@ -209,6 +209,22 @@ final class GatewayFileLaneStatusTests: XCTestCase {
         XCTAssertNil(GatewayFileLaneStatus.unsupported.systemImage)
     }
 
+    /// `.saved` states the REMEDY, never a claim about history. A lane whose staged
+    /// test FAILED lands back here (the commit revokes availability), and once the
+    /// session's result is gone it is indistinguishable from a lane nobody ever
+    /// tested — so "not tested yet" was a claim the app could not back, while "test
+    /// required" is true in both cases.
+    func testTheSavedStatusStatesTheRemedyNotTheHistory() throws {
+        let short = String(localized: try XCTUnwrap(GatewayFileLaneStatus.saved.shortLabel))
+        let title = String(localized: try XCTUnwrap(GatewayFileLaneStatus.saved.pageTitle))
+        XCTAssertEqual(short, "Test required")
+        XCTAssertEqual(title, "File server test required")
+        for copy in [short, title] {
+            XCTAssertFalse(copy.localizedCaseInsensitiveContains("not tested"),
+                           "a previously-failed lane derives this same state: \(copy)")
+        }
+    }
+
     /// Ready wins even if a stale `.invalid` lingers — availability is the
     /// authoritative "usable" signal (a later passing test cleared the failure).
     func testReadyOutranksStaleInvalid() {

@@ -1113,6 +1113,12 @@ struct DiagnosticsContent: View {
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
+                } else if let fallback = Self.fileLaneFallbackDetail(lane.badge) {
+                    // Only when the lane has nothing of its own to say — a real
+                    // probe result or failure remedy always outranks the static line.
+                    Text(fallback)
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
                 }
             }
         }
@@ -1150,56 +1156,130 @@ struct DiagnosticsContent: View {
             defaultValue: "Test file-server connection for \(lane.displayName)")))
     }
 
-    /// Map the model-derived `FileLaneState.Badge` to its glyph, tint, and label.
-    /// The failure-before-verified ordering lives in the model.
+    /// This lane's badge, with the runner supplying the return-direction caveat.
     private func fileLaneBadge(_ lane: FileLaneState) -> (glyph: String, tint: Color, text: LocalizedStringResource) {
-        // ONE OVERRIDE, ahead of the model's badge. A lane that moves bytes but
-        // cannot list a folder is a genuine pass in the model's terms — uploads
-        // work — and "Verified" is what the model calls that. On a diagnostics
-        // screen it over-claims: the user came here to find out why files are
-        // not coming back, and a green seal is the worst possible answer to that
-        // question. The ranking of the persisted verdict against this session's
-        // result lives in the runner (`fileLaneReturnCaveat`), where it is
-        // testable and stated once; the checklist below spells out which stage
-        // it was.
-        switch runner.fileLaneReturnCaveat(for: lane) {
-        case .uploadsOnly:
-            return ("exclamationmark.triangle.fill", AppColors.warning,
-                    LocalizedStringResource(
-                        "diagnostics.files.badge.uploadsOnly",
-                        defaultValue: "Uploads only — can't list folders"))
-        case .returnUnchecked:
-            // Same reasoning, one step weaker: the seal has to come off for "we
-            // could not check" as much as for "it cannot", because the user is
-            // on this screen asking why files are not coming back and a green
-            // Verified answers that question wrongly either way.
-            return ("exclamationmark.triangle.fill", AppColors.warning,
-                    LocalizedStringResource(
-                        "diagnostics.files.badge.returnUnchecked",
-                        defaultValue: "Uploads verified — couldn't check returns"))
-        case nil:
-            break
+        Self.fileLaneBadgeDisplay(
+            routingEnabled: lane.uploadRoutingEnabled,
+            badge: lane.badge,
+            caveat: runner.fileLaneReturnCaveat(for: lane)
+        )
+    }
+
+    /// Map a file lane to its glyph, tint, and label — PURE, and `static` so a test
+    /// can read the copy back (a `View`'s body is the one place it cannot be). The
+    /// house precedent is `GatewaySetupSuccessView.fileRowText`.
+    ///
+    /// TWO AXES, and the split is the whole design. The user's question at this row
+    /// is "will my files go to this server?", which is `routingEnabled` — the exact
+    /// condition `fileTransferReadySnapshot(for:)` gates on. The badge answers a
+    /// DIFFERENT question: what the last check found. Stating only the second is
+    /// what shipped a green "Verified" on a screen where nothing had been run, and
+    /// stating only the first would hide that an armed lane is currently failing.
+    ///
+    /// The two axes cannot always be composed blindly, so the ordering matters:
+    /// a FRESH failure/warning is spelled with a "still enabled" prefix rather than
+    /// a bare one, because a red row must not be read as "Conduck stopped sending".
+    /// The caveats need no such care — they are reachable only under `.verified`,
+    /// which implies routing is on (`FileLaneState.badge`), so "Uploads disabled —
+    /// server can't list folders" cannot be constructed.
+    static func fileLaneBadgeDisplay(
+        routingEnabled: Bool,
+        badge: FileLaneState.Badge,
+        caveat: DiagnosticsRunner.FileLaneReturnCaveat?
+    ) -> (glyph: String, tint: Color, text: LocalizedStringResource) {
+        // ONE OVERRIDE, ahead of the model's badge, and GATED on routing. A lane
+        // that moves bytes but cannot list a folder is a genuine pass in the model's
+        // terms — uploads work. On a diagnostics screen an unqualified green
+        // over-claims: the user came here to find out why files are not coming back,
+        // and a green seal is the worst possible answer to that question. The
+        // ranking of the persisted verdict against this session's result lives in
+        // the runner (`fileLaneReturnCaveat`), where it is testable and stated once;
+        // the checklist below spells out which stage it was.
+        //
+        // The `routingEnabled` guard is what makes these two sentences safe to state
+        // unconditionally. `fileLaneReturnCaveat` only ever yields a caveat under
+        // `.verified`, which implies routing — but that lives two files away, and a
+        // caller passing the pair directly would otherwise get "Uploads enabled …"
+        // over a disabled lane. Enforced here, the contradiction is unconstructible
+        // through this function rather than merely undocumented.
+        if routingEnabled {
+            switch caveat {
+            case .uploadsOnly:
+                return ("exclamationmark.triangle.fill", AppColors.warning,
+                        LocalizedStringResource(
+                            "diagnostics.files.badge.enabled.uploadsOnly",
+                            defaultValue: "Uploads enabled — server can't list folders"))
+            case .returnUnchecked:
+                // Same reasoning, one step weaker: the seal has to come off for "we
+                // could not check" as much as for "it cannot", because the user is
+                // on this screen asking why files are not coming back and an
+                // unqualified green answers that question wrongly either way.
+                return ("exclamationmark.triangle.fill", AppColors.warning,
+                        LocalizedStringResource(
+                            "diagnostics.files.badge.enabled.returnUnchecked",
+                            defaultValue: "Uploads enabled — returns unchecked"))
+            case nil:
+                break
+            }
         }
-        switch lane.badge {
+        switch badge {
         case .failed:
-            return ("xmark.circle.fill", AppColors.error,
-                    LocalizedStringResource("diagnostics.files.badge.failed", defaultValue: "Failed"))
+            // Red either way: the check genuinely failed, and a lane that is STILL
+            // armed makes that more urgent, not less.
+            return ("xmark.circle.fill", AppColors.error, routingEnabled
+                    ? LocalizedStringResource("diagnostics.files.badge.enabled.failed",
+                                              defaultValue: "Uploads still enabled — last check failed")
+                    : LocalizedStringResource("diagnostics.files.badge.disabled.failed",
+                                              defaultValue: "Uploads disabled — last check failed"))
         case .unconfirmed:
-            return ("exclamationmark.triangle.fill", AppColors.warning,
-                    LocalizedStringResource("diagnostics.files.badge.unconfirmed", defaultValue: "Unconfirmed"))
+            // "Check", not "writes": the reach probe never attempted a write, so
+            // calling the WRITES unconfirmed would discount a staged pass this lane
+            // may well still be carrying.
+            return ("exclamationmark.triangle.fill", AppColors.warning, routingEnabled
+                    ? LocalizedStringResource("diagnostics.files.badge.enabled.inconclusive",
+                                              defaultValue: "Uploads still enabled — last check inconclusive")
+                    : LocalizedStringResource("diagnostics.files.badge.disabled.inconclusive",
+                                              defaultValue: "Uploads disabled — last check inconclusive"))
         case .verified:
+            // The routing fact ALONE. An evidence clause here ("— test passed")
+            // re-committed the exact sin this row was rewritten to stop: the flag
+            // behind it may have been written by a pairing sheet months ago on
+            // another device, so any claim about a test is as undated as "Verified"
+            // was. What IS true right now is that uploads go here, and the stage
+            // checklist below reports the session's real test when there is one.
             return ("checkmark.seal.fill", AppColors.success,
-                    LocalizedStringResource("diagnostics.files.badge.verified", defaultValue: "Verified"))
+                    LocalizedStringResource("diagnostics.files.badge.enabled",
+                                            defaultValue: "Uploads enabled"))
         case .testing:
             return ("ellipsis.circle", AppColors.textSecondary,
                     LocalizedStringResource("diagnostics.files.badge.testing", defaultValue: "Testing…"))
         case .configuredNotTested:
-            return ("circle", AppColors.textSecondary,
-                    LocalizedStringResource("diagnostics.files.badge.notTested", defaultValue: "Configured — not tested"))
+            // Amber, not the resting grey it used to wear, and `needsAttention`
+            // counts it: a set-up server that silently receives nothing is a
+            // half-finished setup, not a neutral state. "Test required", never "not
+            // tested yet" — a lane whose test FAILED in a previous session derives
+            // exactly this state after a relaunch (session results gone,
+            // availability false), so the app cannot claim nothing was ever tried.
+            return ("exclamationmark.triangle.fill", AppColors.warning,
+                    LocalizedStringResource("diagnostics.files.badge.disabled.testRequired",
+                                            defaultValue: "Uploads disabled — test required"))
         case .notSetUp:
             return ("minus.circle", AppColors.textTertiary,
                     LocalizedStringResource("diagnostics.files.badge.notSetUp", defaultValue: "Not set up"))
         }
+    }
+
+    /// The row's second line when the lane carries no probe/failure detail of its
+    /// own. Only `.configuredNotTested` earns one: it is the single state whose
+    /// consequence is invisible — the lane looks set up, and Conduck silently will
+    /// not upload to it. Every other state either has a `DiagnosticsExplainer`
+    /// remedy (`.failed`) or a reach sentence that already says to run the test
+    /// (`.unconfirmed`), and a second line there would only restate the badge.
+    static func fileLaneFallbackDetail(_ badge: FileLaneState.Badge) -> LocalizedStringResource? {
+        guard badge == .configuredNotTested else { return nil }
+        return LocalizedStringResource(
+            "diagnostics.files.detail.testRequired",
+            defaultValue: "Conduck won't upload files to this server until a server test passes.")
     }
 
     // MARK: Capabilities and permissions

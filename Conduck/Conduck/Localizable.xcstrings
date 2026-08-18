@@ -4,6 +4,127 @@
     "" : {
 
     },
+    "diagnostics.files.badge.disabled.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads disabled — last check failed"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.disabled.inconclusive" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads disabled — last check inconclusive"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.disabled.testRequired" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads disabled — test required"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads enabled"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads still enabled — last check failed"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled.inconclusive" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads still enabled — last check inconclusive"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled.returnUnchecked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads enabled — returns unchecked"
+          }
+        }
+      }
+    },
+    "diagnostics.files.badge.enabled.uploadsOnly" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Uploads enabled — server can't list folders"
+          }
+        }
+      }
+    },
+    "diagnostics.files.detail.testRequired" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck won't upload files to this server until a server test passes."
+          }
+        }
+      }
+    },
+    "fileTransfer.status.saved.short.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Test required"
+          }
+        }
+      }
+    },
+    "fileTransfer.status.saved.title.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File server test required"
+          }
+        }
+      }
+    },
     "…" : {
 
     },
@@ -2595,17 +2716,6 @@
         }
       }
     },
-    "diagnostics.files.badge.failed" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed"
-          }
-        }
-      }
-    },
     "diagnostics.files.badge.notSetUp" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2617,28 +2727,6 @@
         }
       }
     },
-    "diagnostics.files.badge.notTested" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Configured — not tested"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.returnUnchecked" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads verified — couldn't check returns"
-          }
-        }
-      }
-    },
     "diagnostics.files.badge.testing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2646,39 +2734,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Testing…"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.unconfirmed" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Unconfirmed"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.uploadsOnly" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Uploads only — can't list folders"
-          }
-        }
-      }
-    },
-    "diagnostics.files.badge.verified" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Verified"
           }
         }
       }
@@ -5340,28 +5395,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The address and password are saved. Test the server before sending files."
-          }
-        }
-      }
-    },
-    "fileTransfer.status.saved.short" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not tested yet"
-          }
-        }
-      }
-    },
-    "fileTransfer.status.saved.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "File server not tested"
           }
         }
       }

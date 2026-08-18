@@ -366,22 +366,74 @@ final class DiagnosticsRunnerTests: XCTestCase {
 
     /// The reach probe never produces `reachAuth == .passed` (it tops out at
     /// `.warning` — a ranged GET can't prove uploads work); only the staged
-    /// write test sets `.passed`, always together with `writeVerified`. The
-    /// badge folds an out-of-band `.passed` to `.verified` so it can never
-    /// render weaker than the state that produced it, and a reach-OK lane
-    /// derives the amber `.unconfirmed` without registering as verified.
+    /// write test sets `.passed`, in the same hop as `writeVerified`. A reach-OK
+    /// lane derives the amber `.unconfirmed` without registering as verified.
+    ///
+    /// `.passed` WITH `writeVerified == false` is DEMOTED, not folded up. That
+    /// pairing is not durable: a rebuild carries `.passed` across (the lane
+    /// signature is its identity, which an availability flip doesn't change)
+    /// while re-reading a revoked `writeVerified`, so the state means "a test
+    /// passed, but routing is off now". Folding it to `.verified` printed a green
+    /// seal over a lane `fileTransferReadySnapshot(for:)` will refuse to upload
+    /// to — and the row's copy states routing, so that seal became a lie the
+    /// moment the badge claimed it.
     func testFileLaneReachStatesDeriveHonestBadges() {
         let reachOK = FileLaneState(
             ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
             configured: true, reachAuth: .warning, writeVerified: false, detail: nil)
-        XCTAssertEqual(reachOK.badge, .unconfirmed, "reach-OK is 'Unconfirmed' until the write test verifies")
+        XCTAssertEqual(reachOK.badge, .unconfirmed, "reach-OK is inconclusive until the write test verifies")
         XCTAssertTrue(reachOK.needsAttention)
 
         let passed = FileLaneState(
             ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
             configured: true, reachAuth: .passed, writeVerified: false, detail: nil)
-        XCTAssertEqual(passed.badge, .verified, "`.passed` exists only via the write test — folds to verified")
-        XCTAssertFalse(passed.needsAttention)
+        XCTAssertEqual(passed.badge, .configuredNotTested,
+                       "a carried `.passed` over revoked availability means routing is OFF — another test is the remedy")
+        XCTAssertTrue(passed.needsAttention, "a configured lane that receives nothing is a finding, not a rest state")
+
+        // Same carry-over, on a lane that lost its config too: it has no server to
+        // describe, so `.configuredNotTested` would misstate it.
+        let passedUnconfigured = FileLaneState(
+            ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
+            configured: false, reachAuth: .passed, writeVerified: false, detail: nil)
+        XCTAssertEqual(passedUnconfigured.badge, .notSetUp)
+    }
+
+    /// The invariant the row's routing copy rests on, both directions.
+    ///
+    /// FORWARD: `.verified` implies uploads actually route, so a green seal can
+    /// never sit over a lane the store refuses. REVERSE: deliberately false — a
+    /// fresh failure outranks the flag, so an ARMED lane can badge `.failed`,
+    /// which is what lets the row say "Uploads still enabled — latest check
+    /// failed" instead of implying Conduck stopped sending.
+    func testVerifiedImpliesRoutingButRoutingDoesNotImplyVerified() {
+        for reach: DiagnosticStatus in [.notRun, .passed, .warning, .failed(code: 46), .running] {
+            for configured in [true, false] {
+                for written in [true, false] {
+                    let lane = FileLaneState(
+                        ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
+                        configured: configured, reachAuth: reach, writeVerified: written, detail: nil)
+                    if lane.badge == .verified {
+                        XCTAssertTrue(lane.uploadRoutingEnabled,
+                                      "a verified badge must never render over a lane that won't receive uploads")
+                    }
+                }
+            }
+        }
+
+        let armedButFailing = FileLaneState(
+            ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
+            configured: true, reachAuth: .failed(code: 46), writeVerified: true, detail: nil)
+        XCTAssertTrue(armedButFailing.uploadRoutingEnabled, "the persisted flag still routes uploads here")
+        XCTAssertEqual(armedButFailing.badge, .failed, "and the badge still reports the fresh failure")
+
+        // `configured` is load-bearing in `uploadRoutingEnabled`: routing needs a
+        // complete snapshot, not just the flag.
+        let flagWithoutConfig = FileLaneState(
+            ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
+            configured: false, reachAuth: .notRun, writeVerified: true, detail: nil)
+        XCTAssertFalse(flagWithoutConfig.uploadRoutingEnabled)
+        XCTAssertNotEqual(flagWithoutConfig.badge, .verified)
     }
 
     /// The code-review HIGH finding: a lane VERIFIED in a past session
@@ -402,23 +454,121 @@ final class DiagnosticsRunnerTests: XCTestCase {
         XCTAssertTrue(unconfirmed.needsAttention)
     }
 
-    /// The neutral states stay neutral (no attention): a verified lane at rest, a
-    /// configured-but-untested lane, and an unconfigured file-capable gateway.
-    func testFileLaneNeutralStatesDoNotRegisterAttention() {
+    /// A rebuild may inherit the previous lane's probe evidence only when BOTH the
+    /// lane's identity and its readiness are unchanged.
+    ///
+    /// THE BUG IT EXISTS FOR: the lane signature is `identitySignature` — url,
+    /// credential, pin — and deliberately excludes availability. So a staged test run
+    /// on the File transfer page (or a verdict mirrored in from another device) moves
+    /// readiness without moving the signature, and an identity-only check left this
+    /// screen's older probe result in place, still presented as the LATEST check. The
+    /// row's copy says that word out loud, so the stale carry became a falsehood:
+    /// "Uploads still enabled — latest check failed" above a lane whose newer test
+    /// had just passed.
+    func testLaneEvidenceIsDroppedWhenReadinessMovesUnderAnUnchangedIdentity() {
+        let prior = FileLaneState(
+            ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
+            configured: true, reachAuth: .failed(code: 46), writeVerified: false, detail: "old remedy")
+
+        XCTAssertTrue(DiagnosticsRunner.mayCarryLaneEvidence(
+            prior: prior, priorSignature: "sig-a", signature: "sig-a",
+            available: false, testInFlight: false),
+            "same server, same readiness — this screen's probe is still the last word")
+
+        XCTAssertFalse(DiagnosticsRunner.mayCarryLaneEvidence(
+            prior: prior, priorSignature: "sig-a", signature: "sig-a",
+            available: true, testInFlight: false),
+            "readiness rose elsewhere: a newer test passed, so the old failure is no longer the last word")
+
+        let priorReady = FileLaneState(
+            ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
+            configured: true, reachAuth: .passed, writeVerified: true, detail: nil)
+        XCTAssertFalse(DiagnosticsRunner.mayCarryLaneEvidence(
+            prior: priorReady, priorSignature: "sig-a", signature: "sig-a",
+            available: false, testInFlight: false),
+            "readiness was revoked elsewhere — the carried pass would outlive the state that earned it")
+
+        XCTAssertFalse(DiagnosticsRunner.mayCarryLaneEvidence(
+            prior: priorReady, priorSignature: "sig-a", signature: "sig-b",
+            available: true, testInFlight: false),
+            "a different server's evidence never carries, whatever the readiness")
+
+        // Readiness MATCHES here, so the nil signature is the only thing that can
+        // force false — the earlier "sig-b" spelling of this case was unfalsifiable,
+        // since a nil `priorSignature` can never equal a non-optional `signature`.
+        XCTAssertFalse(DiagnosticsRunner.mayCarryLaneEvidence(
+            prior: priorReady, priorSignature: nil, signature: "sig-a",
+            available: true, testInFlight: false),
+            "a lane with no recorded signature has nothing to match against")
+    }
+
+    /// A lane testing RIGHT NOW keeps its evidence whatever the store says.
+    ///
+    /// THE RACE: `runFileTransferTest` publishes its result, commits the verdict —
+    /// which posts `settingsDidChangeRemotely`, and the view turns that into a
+    /// `refreshConfig()` — and only after a further await syncs the lane's own
+    /// `writeVerified`. A rebuild landing in that window compares the prior lane's
+    /// OLD readiness against the freshly-committed one, calls the evidence stale,
+    /// and deletes the stage checklist the user just watched succeed.
+    func testEvidenceIsNeverSweptOutFromUnderAnInFlightTest() {
+        let midTest = FileLaneState(
+            ref: .builtin(.openclaw), displayName: "OpenClaw", backendKind: "openclaw",
+            configured: true, reachAuth: .running, writeVerified: false, detail: nil)
+
+        XCTAssertTrue(DiagnosticsRunner.mayCarryLaneEvidence(
+            prior: midTest, priorSignature: "sig-a", signature: "sig-a",
+            available: true, testInFlight: true),
+            "the lane's own test is about to publish the authoritative answer — nothing else may clear it")
+
+        XCTAssertTrue(DiagnosticsRunner.mayCarryLaneEvidence(
+            prior: midTest, priorSignature: "sig-a", signature: "sig-b",
+            available: true, testInFlight: true),
+            "in-flight wins over an identity change too: the test guards its own staleness on completion")
+
+        XCTAssertFalse(DiagnosticsRunner.mayCarryLaneEvidence(
+            prior: midTest, priorSignature: "sig-a", signature: "sig-a",
+            available: true, testInFlight: false),
+            "and the override is exactly the in-flight flag — without it the same inputs drop the evidence")
+    }
+
+    /// Which resting states are neutral, and which is a finding.
+    ///
+    /// A CONFIGURED-BUT-DISABLED lane COUNTS. It looks like a rest state and is not:
+    /// a file server is set up and Conduck sends it nothing. Leaving it neutral let
+    /// the summary mint a green "Checks passed" directly above the row that says
+    /// "Uploads disabled — test required". An UNCONFIGURED gateway stays neutral —
+    /// there is no server, so there is nothing broken to report.
+    func testFileLaneRestingStatesRegisterAttentionOnlyWhenSomethingIsHalfDone() {
         let verified = FileLaneState(ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
             configured: true, reachAuth: .notRun, writeVerified: true, detail: nil)
         XCTAssertEqual(verified.badge, .verified)
-        XCTAssertFalse(verified.needsAttention)
+        XCTAssertFalse(verified.needsAttention, "a lane that routes uploads is finished, not a finding")
 
         let configured = FileLaneState(ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
             configured: true, reachAuth: .notRun, writeVerified: false, detail: nil)
         XCTAssertEqual(configured.badge, .configuredNotTested)
-        XCTAssertFalse(configured.needsAttention)
+        XCTAssertTrue(configured.needsAttention,
+                      "set up but receiving nothing — the summary must not call this passing")
 
         let notSetUp = FileLaneState(ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
             configured: false, reachAuth: .notRun, writeVerified: false, detail: nil)
         XCTAssertEqual(notSetUp.badge, .notSetUp)
         XCTAssertFalse(notSetUp.needsAttention, "an unconfigured file-capable gateway is NEUTRAL, not a warning")
+    }
+
+    /// A test in flight outranks the persisted flag. Ranking routing first left
+    /// `.running` unreachable for every ALREADY-ARMED lane — the exact lanes a
+    /// re-test is run on — so the row held its green seal for the whole probe and
+    /// then jumped to red, and `setFileLaneWriteRunning`'s spinner never appeared.
+    func testAnInFlightTestOutranksAnArmedLanesPersistedFlag() {
+        let armedMidTest = FileLaneState(ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
+            configured: true, reachAuth: .running, writeVerified: true, detail: nil)
+        XCTAssertEqual(armedMidTest.badge, .testing)
+        XCTAssertFalse(armedMidTest.needsAttention, "an in-flight probe is not yet a finding")
+
+        let unarmedMidTest = FileLaneState(ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
+            configured: true, reachAuth: .running, writeVerified: false, detail: nil)
+        XCTAssertEqual(unarmedMidTest.badge, .testing)
     }
 
     // MARK: - "Test everything" — which file lanes get the write test

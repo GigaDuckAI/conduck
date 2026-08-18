@@ -57,7 +57,11 @@ extension GatewayFileLaneStatus {
         case .needsAttention:
             return LocalizedStringResource("fileTransfer.status.needsAttention.short", defaultValue: "Needs attention")
         case .saved:
-            return LocalizedStringResource("fileTransfer.status.saved.short", defaultValue: "Not tested yet")
+            // "Test required", not "not tested yet". A lane whose staged test FAILED
+            // lands back in `.saved` (availability revoked) and, once the session's
+            // result is gone, is indistinguishable from one nobody ever tested — so
+            // the history claim is not knowable, while the remedy always is.
+            return LocalizedStringResource("fileTransfer.status.saved.short.v2", defaultValue: "Test required")
         case .recommended:
             return LocalizedStringResource("fileTransfer.status.recommended.short", defaultValue: "Recommended")
         case .optional:
@@ -140,9 +144,11 @@ extension GatewayFileLaneStatus {
                 defaultValue: "Server test failed"
             )
         case .saved:
+            // Same reason as `shortLabel` — a failed test plus a relaunch derives
+            // this state, so "not tested" is a claim the app cannot back.
             return LocalizedStringResource(
-                "fileTransfer.status.saved.title",
-                defaultValue: "File server not tested"
+                "fileTransfer.status.saved.title.v2",
+                defaultValue: "File server test required"
             )
         case .recommended:
             return LocalizedStringResource(
@@ -164,7 +170,12 @@ extension GatewayFileLaneStatus {
         case .ready: return "checkmark.circle.fill"
         case .readyUploadsOnly: return "exclamationmark.triangle.fill"
         case .needsAttention: return "xmark.circle.fill"
-        case .saved: return "clock.fill"
+        // NOT a clock. A clock means "pending, wait for it"; this state means "act" —
+        // the lane is saved, uploads are off until a test passes, and the same state
+        // is where a FAILED test lands once its session result is gone. The copy was
+        // changed from a waiting statement ("Not tested yet") to a demand ("Test
+        // required"), and a glyph telling the user to sit tight contradicts it.
+        case .saved: return "exclamationmark.circle"
         case .recommended, .optional: return "externaldrive.badge.plus"
         case .unsupported: return nil
         }

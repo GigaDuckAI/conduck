@@ -181,8 +181,13 @@ struct VoiceSetupState: Equatable, Sendable {
 ///     sweep) tops out at `.warning` ("reachable, sign-in looks OK — unconfirmed"):
 ///     it is a single ranged GET whose pass signal a read-only server or a wrong
 ///     base path can fake, so it never earns a green. `.failed` = auth rejected /
-///     unreachable. `.passed` is set ONLY by the staged write test (always
-///     together with `writeVerified`).
+///     unreachable. `.passed` is set ONLY by the staged write test, which writes it
+///     in the same hop as `writeVerified`. That pairing survives a rebuild only
+///     because `DiagnosticsRunner.mayCarryLaneEvidence` refuses to carry evidence
+///     across a readiness change — `fileLaneSignature` is the lane's IDENTITY and
+///     an availability flip does not move it, so without that guard a `.passed`
+///     could outlive the flag that earned it. `badge` still answers safely if one
+///     ever does (routing decides, evidence does not).
 ///   - `writeVerified` — the staged PUT→GET→DELETE write test passed (explicit
 ///     button), or a previously-verified lane (`snapshot.available`). The ONLY
 ///     signal that certifies attachments actually work.
@@ -212,6 +217,16 @@ struct FileLaneState: Identifiable, Equatable, Sendable {
     /// than by the coincidence that every custom is currently file-capable.
     var customOrdinal: Int? = nil
 
+    /// Whether Conduck will actually ROUTE uploads to this lane right now — the
+    /// exact condition `SettingsManager.fileTransferReadySnapshot(for:)` gates on,
+    /// named once so the badge and the row's copy read the same concept instead of
+    /// each re-deriving it.
+    ///
+    /// `configured &&` is not redundant: routing needs a complete snapshot as well
+    /// as the flag, and a directly-constructed `configured: false, writeVerified:
+    /// true` lane (reachable in tests) must not claim uploads are enabled.
+    var uploadRoutingEnabled: Bool { configured && writeVerified }
+
     /// The single derived badge state — the ONE source of truth the view (glyph +
     /// tint + label) and the summary (`attention`) both read, so they can't drift.
     enum Badge: Equatable, Sendable {
@@ -226,31 +241,52 @@ struct FileLaneState: Identifiable, Equatable, Sendable {
     /// Derive the badge. A FRESH reach/write FAILURE (or unconfirmed) is checked
     /// BEFORE the persisted `writeVerified` flag — else a lane verified in a past
     /// session whose server later goes down (or whose credential rotated) would
-    /// show a stale-green "Verified" over a host the just-run "Test connections"
-    /// proved broken, and slip past the summary's attention count. `writeVerified`
+    /// show a stale-green "Uploads enabled — test passed" over a host the just-run
+    /// "Test connections" proved broken, and slip past the summary's attention
+    /// count (it renders "Uploads still enabled — latest check failed"). `writeVerified`
     /// wins only when the current reach state is not a failure/warning.
+    ///
+    /// **`.verified` IMPLIES `uploadRoutingEnabled`, by construction.** The row's
+    /// copy states routing ("Uploads enabled / disabled") beside the evidence, and
+    /// that sentence is only safe if a green seal can never sit over a lane the
+    /// store will refuse to upload to. The converse deliberately does NOT hold: a
+    /// fresh `.failed`/`.warning` outranks the flag, so an ARMED lane can badge
+    /// `.failed` — which is the whole point, since "still enabled, latest check
+    /// failed" is the state a user most needs told.
     var badge: Badge {
         switch reachAuth {
         case .failed: return .failed
         case .warning: return .unconfirmed
+        // AHEAD of the routing check, not after it. An ALREADY-ARMED lane is the
+        // common case for a re-test, and ranking the persisted flag first left
+        // `.running` unreachable for exactly those lanes: the row kept its green
+        // seal for the whole probe instead of showing the spinner
+        // `setFileLaneWriteRunning` exists to raise, then jumped straight to red if
+        // the test failed. A test in flight outranks what the last one concluded.
+        case .running: return .testing
         default: break
         }
-        if writeVerified { return .verified }
-        switch reachAuth {
-        // Only the staged write test sets `.passed` (always with `writeVerified`,
-        // handled above); the reach probe deliberately tops out at `.warning`.
-        // Folded to `.verified` so an out-of-band `.passed` can't render weaker
-        // than the state that produced it.
-        case .passed: return .verified
-        case .running: return .testing
-        default: return configured ? .configuredNotTested : .notSetUp
-        }
+        if uploadRoutingEnabled { return .verified }
+        // Everything left means routing is OFF. `.passed` lands here only if a
+        // carried pass ever outlived its availability, which
+        // `DiagnosticsRunner.mayCarryLaneEvidence` now prevents upstream — it is
+        // folded into this arm rather than given its own, so there is no branch
+        // asserting a state the code cannot reach. Either way the answer is the
+        // same and it is the honest one: another passing staged test is both the
+        // description and the remedy.
+        return configured ? .configuredNotTested : .notSetUp
     }
 
-    /// Whether this lane registers in the Diagnostics summary's attention count —
-    /// only a genuine failure/unconfirmed reach, never a neutral "not set up".
+    /// Whether this lane registers in the Diagnostics summary's attention count.
+    ///
+    /// `.configuredNotTested` COUNTS. It looks like a resting state and is not — it
+    /// means a file server is set up and Conduck will not send a byte to it, which
+    /// is the silent outage this whole row exists to surface. Leaving it neutral let
+    /// the summary mint a green "Checks passed" directly above "Uploads disabled —
+    /// test required", so the one line a user reads first contradicted the one line
+    /// that mattered. `.notSetUp` stays neutral: no server, nothing broken.
     var needsAttention: Bool {
-        badge == .failed || badge == .unconfirmed
+        badge == .failed || badge == .unconfirmed || badge == .configuredNotTested
     }
 }
 

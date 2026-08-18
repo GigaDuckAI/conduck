@@ -850,13 +850,18 @@ final class DiagnosticsRunner {
             var detail: String?
             if carryOver,
                let prior = fileLanes.first(where: { $0.ref == ref }),
-               fileLaneSignatures[ref] == signature {
+               Self.mayCarryLaneEvidence(prior: prior,
+                                         priorSignature: fileLaneSignatures[ref],
+                                         signature: signature,
+                                         available: snap?.available ?? false,
+                                         testInFlight: fileTransferTestRunning.contains(ref)) {
                 reachAuth = prior.reachAuth
                 detail = prior.detail
             } else if carryOver {
-                // Lane config changed (or is new): the staged-checklist drill-down
-                // must reset WITH the badge — else the old config's PUT→GET→DELETE
-                // passes keep rendering under a fresh "not tested" lane.
+                // Lane config changed, readiness moved, or the lane is new: the
+                // staged-checklist drill-down must reset WITH the badge — else the
+                // old PUT→GET→DELETE passes keep rendering under a lane the badge
+                // now calls untested or disabled.
                 fileTransferResults[ref] = nil
             }
             newFileLanes.append(FileLaneState(
@@ -3250,6 +3255,45 @@ final class DiagnosticsRunner {
     /// only the not-set-up ones (nothing to write to).
     static func lanesToWrite(_ lanes: [FileLaneState]) -> [RemoteAgentRef] {
         lanes.filter(\.configured).map(\.ref)
+    }
+
+    /// Whether a rebuilt lane may INHERIT the previous lane's probe evidence — its
+    /// `reachAuth` and `detail`, and (via the caller's `else`) its staged checklist.
+    ///
+    /// PURE and separated from the rebuild for the same reason `fileLaneReturnCaveat`
+    /// is: it is the one place freshness is decided, and getting it wrong is not
+    /// visible in the rebuild's shape.
+    ///
+    /// Identity must match, obviously — evidence about the old server says nothing
+    /// about a new one. But readiness must ALSO be unchanged, because the signature
+    /// is deliberately the lane's identity (url/credential/pin) and excludes
+    /// availability. Without that second test, a verdict reached somewhere else —
+    /// the File transfer page's staged test, or an iCloud mirror from another
+    /// device — leaves this screen's older probe sitting there still presented as
+    /// the LATEST check, which the row's copy states out loud ("last check failed"
+    /// above a lane whose newer test just passed). An availability flip is proof
+    /// that something more recent than this evidence happened, so the evidence is
+    /// dropped rather than relabelled.
+    ///
+    /// `testInFlight` OVERRIDES both, and it is not an optimization — it closes a
+    /// race the readiness test would otherwise open. `runFileTransferTest` publishes
+    /// its result, commits the verdict (which posts `settingsDidChangeRemotely`, and
+    /// the view turns that into a `refreshConfig()`), and only AFTER a further await
+    /// syncs `fileLanes[i].writeVerified`. A rebuild landing in that window sees the
+    /// prior lane's OLD readiness against the newly-committed one, concludes the
+    /// evidence is stale, and deletes `fileTransferResults[ref]` — the very stage
+    /// checklist the user just watched succeed, plus the `listingUnverified` signal
+    /// that `fileLaneReturnCaveat` says exists nowhere else. A lane testing right now
+    /// is about to publish its own authoritative answer, so nothing else may clear it.
+    static func mayCarryLaneEvidence(
+        prior: FileLaneState,
+        priorSignature: String?,
+        signature: String,
+        available: Bool,
+        testInFlight: Bool
+    ) -> Bool {
+        if testInFlight { return true }
+        return priorSignature == signature && prior.writeVerified == available
     }
 
     private static func connectionCheckID(for ref: RemoteAgentRef) -> String {
