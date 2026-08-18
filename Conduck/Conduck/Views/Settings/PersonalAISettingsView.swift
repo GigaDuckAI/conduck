@@ -10,7 +10,7 @@
 //              (routing is per-conversation; the default is only the pre-pick).
 //   Gateways — one DISCRETE row per `personalAIRows` entry (built-ins then
 //              customs): name + a green check (`SettingsStatusMark`) when
-//              configured, a dimmed name + "Needs setup" or nothing when not.
+//              configured, and a dimmed name with nothing beside it when not.
 //              The "Default" caption rides ANY of those states, so a default that
 //              cannot send is still identifiable as the default — it is
 //              suppressed only while nothing at all is configured, where the
@@ -95,8 +95,7 @@ struct PersonalAISettingsView: View {
                             self.route = nil
                         }
                     },
-                    onSetUp: { ref in self.route = .configure(ref) },
-                    brokenDefaultName: viewModel.defaultSelectorBrokenName,
+                    defaultUnavailableName: viewModel.defaultSelectorUnavailableName,
                     needsDefaultChoice: viewModel.defaultSelectorNeedsChoice
                 )
             case .configure(let ref):
@@ -165,8 +164,7 @@ struct PersonalAISettingsView: View {
                 defaultName: DefaultGatewayNotice.selectorValue(
                     needsChoice: viewModel.defaultSelectorNeedsChoice,
                     displayName: viewModel.defaultSelectorDisplayName
-                ),
-                needsSetup: viewModel.defaultSelectorFlagsBroken
+                )
             )
         }
         .buttonStyle(.plain)
@@ -189,24 +187,30 @@ struct PersonalAISettingsView: View {
     }
 
     /// The footer under the selector, or nil when the default is unremarkable.
-    /// Broken first — a named gateway is the more specific fact — then the
+    /// Unavailable-and-named first — the more specific fact — then the
     /// nothing-chosen state.
+    ///
+    /// This screen MAY name the gateway: the user opened Personal AI, which is
+    /// asking. It may not call it a chore — "isn't available" rather than "isn't
+    /// set up", and no "finish setting it up", because the storage cannot tell a
+    /// key still crossing iCloud from a configuration abandoned long ago, and
+    /// only one of those has anything to finish.
     ///
     /// Two sentences only: the chooser one tap away already carries the
     /// per-conversation invariant ("Existing chats keep the one they started on")
     /// in `DefaultGatewayPicker`'s own footer, and repeating it here would make
     /// the screen argue with itself about which sentence matters.
     private var defaultSelectorFooter: String? {
-        if let name = viewModel.defaultSelectorBrokenName {
+        if let name = viewModel.defaultSelectorUnavailableName {
             if DeviceCapabilities.isiPad {
                 return String(localized: LocalizedStringResource(
-                    "settings.personalAI.default.broken.footer.ipad",
-                    defaultValue: "\(name) isn't set up on this iPad, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up \(name)."
+                    "settings.personalAI.default.unavailable.footer.ipad",
+                    defaultValue: "\(name) isn't available on this iPad, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
                 ))
             }
             return String(localized: LocalizedStringResource(
-                "settings.personalAI.default.broken.footer.iphone",
-                defaultValue: "\(name) isn't set up on this iPhone, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up \(name)."
+                "settings.personalAI.default.unavailable.footer.iphone",
+                defaultValue: "\(name) isn't available on this iPhone, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
             ))
         }
         if viewModel.defaultSelectorNeedsChoice {
@@ -283,10 +287,13 @@ struct PersonalAISettingsView: View {
 
     @ViewBuilder
     private func gatewayRow(_ row: PersonalAIRow) -> some View {
-        // Single tap → config detail. Status is DISCRETE: a configured gateway
-        // gets a quiet green check (+ a tertiary "Default" caption when it's the
-        // default pick); a half-configured one gets a quiet "Needs setup"; an
-        // un-set gateway gets nothing. Both non-configured states dim the name.
+        // Single tap → config detail. Status is DISCRETE and BINARY: a configured
+        // gateway gets a quiet green check (+ a tertiary "Default" caption when
+        // it's the default pick); everything else gets nothing at all and a dimmed
+        // name. There is no third state and none may be added — this list is a
+        // menu of optional connections, so an unconnected row is a choice not yet
+        // made, never an unfinished task. A gateway holding stored state that
+        // cannot send is explained in its OWN editor, where the user is asking.
         // The default is CHOSEN in the top selector, not by a secret row-body tap;
         // file-transfer readiness moved into the detail (Advanced).
         let configured = row.configured
@@ -303,36 +310,6 @@ struct PersonalAISettingsView: View {
 
                 SettingsStatusMark(
                     configured: configured,
-                    // A default the selector FLAGS counts as incomplete here even
-                    // when it holds no stored evidence of its own — the state a
-                    // CLEAN peer Forget leaves behind (it clears the synced URL /
-                    // scheme / model slots, so nothing is left to classify the row
-                    // as anything but untouched). Without this the selector says
-                    // "Needs setup" and the very row it sends the user to says
-                    // nothing.
-                    //
-                    // Read off `defaultSelectorFlagsBroken` rather than spelling
-                    // the membership question a second time here. A CONSISTENCY
-                    // refactor, not a behaviour fix: the flag is strictly narrower
-                    // than the question, and the one state it withholds —
-                    // `.readingUnreliable` — is one where the pointer is
-                    // unconfigured AND carries stored evidence (the verdict's
-                    // hazard arm requires exactly that), so it is already in
-                    // `incompleteRemoteAgentRefSet` and `row.incomplete` draws
-                    // "Needs setup" on its own. Same mark everywhere; one fewer
-                    // place for the two to drift apart.
-                    //
-                    // That the ROW still speaks while the selector is silent is
-                    // the intended split: this mark says "this gateway's setup
-                    // cannot be read here", which is true, where suppressing it
-                    // would be a false clean bill of health. Argued in
-                    // `selectorMaySpeak(for:)`'s doc in `SettingsViewModel.swift`
-                    // ("It does NOT gate a gateway's own readiness mark").
-                    // (`row.isDefault` is already false whenever the pointer is
-                    // one the app parked, so this term speaks only about a gateway
-                    // the user actually chose.)
-                    incomplete: row.incomplete
-                        || (row.isDefault && viewModel.defaultSelectorFlagsBroken),
                     // The "Default" caption renders on unconfigured rows too —
                     // a default that cannot send is exactly the row a user has to
                     // find. Suppressed only when NOTHING is configured: the

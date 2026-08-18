@@ -47,7 +47,7 @@ final class GatewayGateTests: XCTestCase {
         XCTAssertTrue(GatewayGate.canSendAnywhere(configured: configured),
                       "Five working gateways is not 'no AI configured', whatever the default says.")
         XCTAssertFalse(GatewayGate.isQuickCaptureReady(
-            resolution: .brokenDefault(broken: openclaw, candidates: configured, pointerIsParked: false)
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: configured, pointerIsParked: false)
         ), "…and the quick lane, which has no picker, still cannot send.")
     }
 
@@ -65,7 +65,7 @@ final class GatewayGateTests: XCTestCase {
 
     func testQuickCaptureNotReadyWhenTheDefaultIsMissingFromTheRoster() {
         XCTAssertFalse(GatewayGate.isQuickCaptureReady(
-            resolution: .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false)
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: false)
         ), "A hotkey capture mints on the DEFAULT (Decision F), so a healthy sibling doesn't help it.")
     }
 
@@ -117,7 +117,7 @@ final class GatewayGateTests: XCTestCase {
             (.usable(openclaw), [openclaw, hermes]),
             (.adopted(ref: hermes, replacing: openclaw), [hermes]),
             (.bootstrapped(custom), [custom]),
-            (.brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false), [hermes]),
+            (.defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: false), [hermes]),
             (.selectionRequired(candidates: [openclaw, hermes]), [openclaw, hermes]),
             (.nothingConfigured(pointer: openclaw), []),
             (.readingUnreliable(pointer: openclaw), []),

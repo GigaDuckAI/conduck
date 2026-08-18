@@ -101,8 +101,8 @@ final class HeadlessGatewayPreflightTests: XCTestCase {
         await SettingsManager.shared.setDefaultRemoteAgentBackend(.openrouter)
 
         let resolution = await SettingsManager.shared.resolveDefaultGateway()
-        guard case .brokenDefault(let broken, let candidates, _) = resolution else {
-            return XCTFail("Expected .brokenDefault, got \(resolution).")
+        guard case .defaultUnavailable(let broken, let candidates, _) = resolution else {
+            return XCTFail("Expected .defaultUnavailable, got \(resolution).")
         }
         XCTAssertEqual(broken, .builtin(.openrouter))
         XCTAssertEqual(candidates.count, 2, "Both working gateways must be offered as candidates.")
@@ -264,12 +264,12 @@ final class HeadlessGatewayPreflightTests: XCTestCase {
         XCTAssertEqual(CarPlaySceneDelegate.sessionOverrideRef(for: .adopted(ref: a, replacing: b)), a)
         XCTAssertEqual(CarPlaySceneDelegate.sessionOverrideRef(for: .bootstrapped(a)), a)
 
-        // Everything else: no override. `.usable` needs none; `.brokenDefault`
+        // Everything else: no override. `.usable` needs none; `.defaultUnavailable`
         // and `.selectionRequired` need the DRIVER to choose; the last three must
         // be left strictly alone.
         let noOverride: [DefaultGatewayResolution] = [
             .usable(a),
-            .brokenDefault(broken: a, candidates: [b], pointerIsParked: false),
+            .defaultUnavailable(pointer: a, candidates: [b], pointerIsParked: false),
             .selectionRequired(candidates: [a, b]),
             .nothingConfigured(pointer: a),
             .setupUnfinished(pointer: a),
@@ -294,7 +294,7 @@ final class HeadlessGatewayPreflightTests: XCTestCase {
         let other = RemoteAgentRef.builtin(.openclaw)
         let configured = [other, picked]
 
-        for resolution in [DefaultGatewayResolution.brokenDefault(broken: broken, candidates: configured, pointerIsParked: false),
+        for resolution in [DefaultGatewayResolution.defaultUnavailable(pointer: broken, candidates: configured, pointerIsParked: false),
                            .selectionRequired(candidates: configured)] {
             // Control: with no override, the refusal is exactly right — the
             // driver has not chosen anything yet.

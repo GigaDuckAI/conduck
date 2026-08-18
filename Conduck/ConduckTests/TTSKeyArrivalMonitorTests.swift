@@ -89,9 +89,9 @@ final class TTSKeyArrivalMonitorTests: XCTestCase {
         script: Script,
         posts: PostBox,
         blockingSleeper: Bool
-    ) -> TTSKeyArrivalMonitor {
-        TTSKeyArrivalMonitor(
-            probeProvider: { script.readProbe() },
+    ) -> KeyArrivalMonitor {
+        KeyArrivalMonitor(
+            probeProvider: { script.readProbe().arrivalReading },
             sleeper: { _ in
                 script.bumpSleeps()
                 if blockingSleeper {
@@ -174,16 +174,16 @@ final class TTSKeyArrivalMonitorTests: XCTestCase {
         let monitor = makeMonitor(script: script, posts: posts, blockingSleeper: false)
 
         monitor.handleDidBecomeActive()
-        let fingerprint = TTSKeyArrivalMonitor.Fingerprint(Self.missingOpenAI)
-        try await waitUntil { monitor.state == .exhausted(fingerprint) }
-        XCTAssertEqual(script.sleeps, TTSKeyArrivalMonitor.backoffSchedule.count)
+        let key = Self.missingOpenAI.arrivalReading.requirementKey
+        try await waitUntil { monitor.state == .exhausted(requirementKey: key) }
+        XCTAssertEqual(script.sleeps, KeyArrivalMonitor.backoffSchedule.count)
         XCTAssertEqual(posts.posts, 0)
 
         // Unrelated settings churn with the SAME fingerprint must not re-arm.
         let sleepsAtExhaustion = script.sleeps
         monitor.handleSettingsChanged()
         try await settle()
-        XCTAssertEqual(monitor.state, .exhausted(fingerprint))
+        XCTAssertEqual(monitor.state, .exhausted(requirementKey: key))
         XCTAssertEqual(script.sleeps, sleepsAtExhaustion)
 
         // A genuine re-activation DOES re-arm.
@@ -200,14 +200,14 @@ final class TTSKeyArrivalMonitorTests: XCTestCase {
 
         monitor.handleDidBecomeActive()
         try await waitUntil { script.sleeps == 1 }
-        XCTAssertEqual(monitor.state, .polling(.init(Self.missingOpenAI)))
+        XCTAssertEqual(monitor.state, .polling(requirementKey: Self.missingOpenAI.arrivalReading.requirementKey))
 
         monitor.handleSettingsChanged()
         try await settle()
         // Same fingerprint → the frozen window is untouched (a restart would
         // cancel the blocked sleep and enter a second one).
         XCTAssertEqual(script.sleeps, 1)
-        XCTAssertEqual(monitor.state, .polling(.init(Self.missingOpenAI)))
+        XCTAssertEqual(monitor.state, .polling(requirementKey: Self.missingOpenAI.arrivalReading.requirementKey))
     }
 
     func testFingerprintChangeRestartsWindow() async throws {
@@ -221,7 +221,7 @@ final class TTSKeyArrivalMonitorTests: XCTestCase {
         script.probe = Self.missingMistral
         monitor.handleSettingsChanged()
         try await waitUntil { script.sleeps == 2 }
-        XCTAssertEqual(monitor.state, .polling(.init(Self.missingMistral)))
+        XCTAssertEqual(monitor.state, .polling(requirementKey: Self.missingMistral.arrivalReading.requirementKey))
     }
 
     func testLocalKeySaveSettlesWindowWithoutPosting() async throws {
@@ -268,7 +268,7 @@ final class TTSKeyArrivalMonitorTests: XCTestCase {
     // MARK: - Schedule contract
 
     func testBackoffScheduleIsBoundedAndExponential() {
-        let schedule = TTSKeyArrivalMonitor.backoffSchedule
+        let schedule = KeyArrivalMonitor.backoffSchedule
         XCTAssertEqual(schedule.count, 6)
         XCTAssertEqual(schedule.first, .seconds(5))
         XCTAssertEqual(schedule.last, .seconds(160))
@@ -289,5 +289,29 @@ final class TTSKeyArrivalMonitorTests: XCTestCase {
         ).isDegraded)
         XCTAssertFalse(Self.presentOpenAI.isDegraded)
         XCTAssertFalse(Self.appleKeyless.isDegraded)
+    }
+
+    /// The erased reading the monitor actually polls, so a future edit to
+    /// `arrivalReading` cannot silently stop a degraded provider from arming a
+    /// window while `isDegraded` still says it should.
+    func testArrivalReadingMirrorsTheDegradedPredicate() {
+        XCTAssertEqual(Self.missingOpenAI.arrivalReading.reading, .degraded)
+        XCTAssertEqual(Self.presentOpenAI.arrivalReading.reading, .arrived)
+        XCTAssertEqual(Self.appleKeyless.arrivalReading.reading, .notRequired)
+    }
+
+    /// The requirement key is what decides whether a window survives. Two
+    /// providers must never share one, or switching voices would leave a window
+    /// open on the question the user just stopped asking.
+    func testRequirementKeySeparatesProviders() {
+        XCTAssertNotEqual(
+            Self.missingOpenAI.arrivalReading.requirementKey,
+            Self.missingMistral.arrivalReading.requirementKey
+        )
+        XCTAssertEqual(
+            Self.missingOpenAI.arrivalReading.requirementKey,
+            Self.presentOpenAI.arrivalReading.requirementKey,
+            "Same provider + slot: the key must be stable so an arrival closes the window it opened"
+        )
     }
 }

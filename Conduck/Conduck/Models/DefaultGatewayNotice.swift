@@ -35,14 +35,21 @@
 //     exactly one gateway could send. Nothing the user chose was overridden, so
 //     there is nothing to announce.
 //
-// Only two verdicts speak, plus the stored repair record: a default that cannot
-// send (`.brokenDefault`), no default chosen at all (`.selectionRequired`), and
-// an adoption this device performed and has not yet mentioned.
+// Only ONE verdict speaks, plus the stored repair record: no default chosen at
+// all (`.selectionRequired`), and an adoption this device performed and has not
+// yet mentioned. A parked `.defaultUnavailable` is re-read as the former, because
+// a placeholder is not a default and the user is owed the sentence about the
+// choice they still have to make, not one about a choice they never made.
 //
-// And one verdict is re-read rather than reported: a `.brokenDefault` whose
-// pointer the APP parked speaks as `.noDefaultChosen`, because a placeholder is
-// not a default and the user is owed the sentence about the choice they still
-// have to make, not an accusation about one they never made.
+//   - `.defaultUnavailable` with a pointer the USER chose is the fourth silence,
+//     and the deliberate one. The pointer really is unavailable here, and the
+//     app really does have something to say about it — but not HERE. A chat
+//     window the user opened to type in is not where an unconnected gateway
+//     gets turned into a chore, and a banner that returns every launch is
+//     exactly that. The sentence is owed where the user went looking: the
+//     "Default for new chats" picker and the gateway's own editor both name it,
+//     and every headless refusal names it too, because the user pressed a button
+//     there and a silent refusal would be worse than a named one.
 //
 // The strings live in the surfaces, not here — the same verdict is worded
 // differently in a chat banner, a Settings footer and a picker callout.
@@ -52,11 +59,6 @@ import Foundation
 /// The one sentence a conversation surface may say about this device's default
 /// gateway, or nil when there is nothing honest to say.
 enum DefaultGatewayNotice: Equatable, Sendable {
-    /// The stored default cannot send here, and the roster offers alternatives.
-    /// `ref` travels so a dismissal can be scoped to THIS gateway — a later,
-    /// different broken default must still be able to speak up.
-    case brokenDefault(ref: RemoteAgentRef, name: String)
-
     /// Nothing is stored and the device may not guess: two or more gateways can
     /// send, or one can while another is a token away. Nothing is broken and
     /// nothing was overridden — the user simply has a choice to make, and until
@@ -69,15 +71,13 @@ enum DefaultGatewayNotice: Equatable, Sendable {
 
     /// Identity a SESSION dismissal is scoped to. `.adopted` has none: it is
     /// dismissed by acknowledging the stored record, not by a session flag, so
-    /// the acknowledgment survives a relaunch and the other two do not.
+    /// the acknowledgment survives a relaunch and the other one does not.
     enum DismissalKey: Equatable {
-        case broken(RemoteAgentRef)
         case noDefaultChosen
     }
 
     var dismissalKey: DismissalKey? {
         switch self {
-        case .brokenDefault(let ref, _): return .broken(ref)
         case .noDefaultChosen: return .noDefaultChosen
         case .adopted: return nil
         }
@@ -109,10 +109,9 @@ enum DefaultGatewayNotice: Equatable, Sendable {
         roster: [CustomGateway],
         pendingAdoption: DefaultGatewayAdoptionNotice?
     ) -> DefaultGatewayNotice? {
-        // An unacknowledged repair OUTRANKS everything, including a default that
-        // has broken again since: the user is owed the news that their pointer
-        // moved before they are told the new one is unhappy, and the broken
-        // notice takes the slot over on the refresh after acknowledgment.
+        // An unacknowledged repair OUTRANKS everything: the user is owed the news
+        // that their pointer moved, and it is the only thing this banner says
+        // about a pointer that is not simply unchosen.
         //
         // The names come from the RECORD, never re-resolved against the live
         // roster: the replaced gateway may be a custom that is gone by now, and a
@@ -125,21 +124,27 @@ enum DefaultGatewayNotice: Equatable, Sendable {
         }
 
         switch resolution {
-        case .brokenDefault(let broken, let candidates, let pointerIsParked):
-            // A pointer the APP parked is a placeholder, not a default. Calling
-            // it "your default for new chats" attributes to the user a choice
-            // they never made — and the true state is exactly the one the
-            // no-default sentence already describes: nothing is chosen, several
+        case .defaultUnavailable(_, let candidates, let pointerIsParked):
+            // A pointer the APP parked is a placeholder, not a default, and the
+            // no-default sentence describes it exactly: nothing is chosen, several
             // gateways work, pick one. Candidates are non-empty by construction
             // here, so the collapse can never produce a "pick one" with nothing
             // to pick.
             if pointerIsParked {
                 return candidates.isEmpty ? nil : .noDefaultChosen(candidates: candidates)
             }
-            return .brokenDefault(
-                ref: broken,
-                name: RemoteAgentRefMetadata.displayName(for: broken, customs: roster)
-            )
+            // A pointer the USER chose, unavailable here: SAY NOTHING. This is the
+            // chat window, which the user did not open to be told about Settings.
+            // A banner on every launch turns an unconnected gateway into a chore,
+            // which is exactly what it is not — and the fact is not lost, it is
+            // moved: the picker they open and the gateway's own editor both name
+            // it, and every headless refusal still names it, because there the
+            // user pressed a button and is owed an answer.
+            //
+            // Deliberately NOT collapsed into `.noDefaultChosen` either. A pointer
+            // IS chosen; "no default yet" would be false, and it would invite the
+            // user to replace a choice that may be one iCloud sync from working.
+            return nil
 
         case .selectionRequired(let candidates):
             // Not defensive noise: with nothing to pick, "pick one" is a lie, and

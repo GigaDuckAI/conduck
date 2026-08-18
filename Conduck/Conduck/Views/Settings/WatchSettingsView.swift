@@ -96,17 +96,19 @@ struct WatchSettingsView: View {
                             self.route = nil
                         }
                     },
-                    onSetUp: { ref in self.route = .configure(ref) },
                     onFollowPhone: {
                         Task {
                             await viewModel.setWatchDefaultOverrideRef(nil)
                             self.route = nil
                         }
                     },
-                    followPhoneSelected: viewModel.watchDefaultOverrideRef == nil
+                    followPhoneSelected: viewModel.watchDefaultOverrideRef == nil,
+                    // Without this the chooser is silent about the one thing the
+                    // user needs: the gateway they pinned is filtered out of the
+                    // list (it cannot send), "Follow iPhone" is not selected
+                    // either, so NOTHING is checked and nothing says why.
+                    defaultUnavailableName: watchOverrideUnavailableName
                 )
-            case .configure(let ref):
-                RemoteAgentDetailView(viewModel: viewModel, ref: ref)
             }
         }
         .fullScreenCover(isPresented: $showWatchSetupGuide) {
@@ -139,14 +141,24 @@ struct WatchSettingsView: View {
     /// The gateway rows for the Watch chooser. Same set as `personalAIRows`, but
     /// `isDefault` reflects the WATCH override (not the iPhone default) so the
     /// amber check tracks the wrist's pinned gateway.
+    /// The pinned Watch gateway's name WHEN it cannot send from this iPhone —
+    /// the callout the chooser needs, since `offerableRows` has dropped its row.
+    ///
+    /// Names the wrist's override, not the phone's default: this screen is about
+    /// the Watch, and the phone's own default is neither shown nor chosen here.
+    private var watchOverrideUnavailableName: String? {
+        guard let ref = viewModel.watchDefaultOverrideRef,
+              !viewModel.configuredRemoteAgentRefSet.contains(ref) else { return nil }
+        return viewModel.personalAIRows.first { $0.ref == ref }?.displayName
+    }
+
     private var watchChooserRows: [PersonalAIRow] {
         viewModel.personalAIRows.map { row in
             PersonalAIRow(
                 ref: row.ref,
                 displayName: row.displayName,
                 configured: row.configured,
-                isDefault: viewModel.watchDefaultOverrideRef == row.ref,
-                incomplete: row.incomplete
+                isDefault: viewModel.watchDefaultOverrideRef == row.ref
             )
         }
     }
@@ -379,11 +391,14 @@ struct WatchSettingsView: View {
     }
 }
 
-/// Typed navigation route for the Apple Watch settings screen: the default-
-/// gateway chooser, or a per-gateway config detail (reached via "Set up…" on an
-/// unconfigured gateway in the chooser — mirrors `PersonalAIRoute`).
+/// Typed navigation route for the Apple Watch settings screen. ONE destination:
+/// the default-gateway chooser.
+///
+/// There is deliberately no per-gateway config route. The chooser used to carry
+/// "Set up…" rows that deep-linked into a gateway editor; it now lists only
+/// gateways that can send, so connecting one happens on the Personal AI catalog
+/// where it belongs. Do not re-add a setup destination here.
 private enum WatchSettingsRoute: Hashable {
     case defaultChooser
-    case configure(RemoteAgentRef)
 }
 #endif

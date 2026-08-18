@@ -171,10 +171,10 @@ struct ContentView: View {
     /// rosters. nil = nothing honest to say.
     @State private var defaultGatewayNotice: DefaultGatewayNotice?
     /// The notice the user waved off THIS SESSION, keyed to what it was ABOUT
-    /// (`.broken(ref)` / `.noDefaultChosen`) rather than to a bare Bool, so
-    /// forgetting one gateway and breaking another still speaks up. Session-scoped
-    /// on purpose: persisting a dismissal would need a storage key for a state that
-    /// fixes itself the moment the user acts.
+    /// (`.noDefaultChosen`) rather than to a bare Bool, so a later notice of a
+    /// different kind still speaks up. Session-scoped on purpose: persisting a
+    /// dismissal would need a storage key for a state that fixes itself the moment
+    /// the user acts.
     @State private var dismissedGatewayNoticeKey: DefaultGatewayNotice.DismissalKey?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass

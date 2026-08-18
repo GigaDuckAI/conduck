@@ -26,7 +26,7 @@
 // The second is strictly stronger than the first, and the gap between them is a
 // REAL state, not a transient. `SettingsManager.resolveDefaultGateway()` names
 // the shapes it takes: a stored pointer at a gateway that is not set up HERE
-// (`.brokenDefault`), no chosen default at all on a device where several
+// (`.defaultUnavailable`), no chosen default at all on a device where several
 // gateways work (`.selectionRequired`), a pointer parked on a built-in by
 // `deleteCustomGateway` so the user chooses their next gateway rather than
 // inheriting one, or a peer device's Forget arriving over iCloud. In every one

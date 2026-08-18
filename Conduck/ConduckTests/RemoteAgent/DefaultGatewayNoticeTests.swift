@@ -103,17 +103,32 @@ final class DefaultGatewayNoticeTests: XCTestCase {
 
     // MARK: - The two things worth saying
 
-    func testBrokenNoticeNamesTheStoredDefaultAndCarriesItsRef() {
+    /// The chat window is SILENT about a default the user chose that cannot send
+    /// here — the whole point of moving that sentence to where the user asks for
+    /// it. A banner returning every launch is what turned an unconnected gateway
+    /// into a chore; the picker's callout and the gateway's own editor say it
+    /// instead, and every headless refusal still names it.
+    func testAUserChosenUnavailableDefaultSaysNothingInTheChatWindow() {
         let notice = DefaultGatewayNotice.resolve(
-            resolution: .brokenDefault(broken: openclaw, candidates: [hermes, .custom(liveCustomID)], pointerIsParked: false),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes, .custom(liveCustomID)], pointerIsParked: false),
             roster: roster,
             pendingAdoption: nil
         )
 
-        XCTAssertEqual(notice, .brokenDefault(ref: openclaw, name: "OpenClaw"),
-                       "The user has to know WHICH gateway to fix.")
-        XCTAssertEqual(notice?.dismissalKey, .broken(openclaw),
-                       "A dismissal is scoped to this gateway, so a different broken default still speaks up.")
+        XCTAssertNil(notice, "The chat window is not where an unconnected gateway becomes a chore.")
+    }
+
+    /// The collapse must NOT be to `.noDefaultChosen` either: a pointer IS chosen,
+    /// so "no default yet" would be false — and it would invite the user to
+    /// replace a choice that may be one iCloud sync away from working.
+    func testAnUnavailableDefaultIsNotReportedAsNoDefaultChosen() {
+        let notice = DefaultGatewayNotice.resolve(
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: false),
+            roster: roster,
+            pendingAdoption: nil
+        )
+
+        XCTAssertNotEqual(notice, .noDefaultChosen(candidates: [hermes]))
     }
 
     /// The founder's restored-iPad state: gateways work, no default was ever
@@ -142,17 +157,18 @@ final class DefaultGatewayNoticeTests: XCTestCase {
         XCTAssertNil(notice)
     }
 
-    /// The badge roster unions RETIRED customs, so a default parked on a gateway
-    /// the user forgot resolves to its real name instead of a raw UUID.
-    func testBrokenDefaultOnARetiredCustomStillResolvesAName() {
+    /// A retired custom as the unavailable default is silent here too. The name
+    /// resolution this used to prove has moved to the surfaces that still name it;
+    /// this banner has no case left for either kind of ref.
+    func testAnUnavailableDefaultOnARetiredCustomIsAlsoSilent() {
         let retired = RemoteAgentRef.custom(retiredCustomID)
         let notice = DefaultGatewayNotice.resolve(
-            resolution: .brokenDefault(broken: retired, candidates: [hermes], pointerIsParked: false),
+            resolution: .defaultUnavailable(pointer: retired, candidates: [hermes], pointerIsParked: false),
             roster: roster,
             pendingAdoption: nil
         )
 
-        XCTAssertEqual(notice, .brokenDefault(ref: retired, name: "Old Box"))
+        XCTAssertNil(notice)
     }
 
     // MARK: - A parked pointer is not a default
@@ -165,7 +181,7 @@ final class DefaultGatewayNoticeTests: XCTestCase {
     func testParkedBrokenPointerSpeaksAsNoDefaultChosen() {
         let candidates = [hermes, RemoteAgentRef.custom(liveCustomID)]
         let notice = DefaultGatewayNotice.resolve(
-            resolution: .brokenDefault(broken: openclaw, candidates: candidates, pointerIsParked: true),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: candidates, pointerIsParked: true),
             roster: roster,
             pendingAdoption: nil
         )
@@ -175,16 +191,27 @@ final class DefaultGatewayNoticeTests: XCTestCase {
         XCTAssertEqual(notice?.dismissalKey, .noDefaultChosen)
     }
 
-    /// The control that keeps the case above from passing vacuously: the SAME
-    /// verdict with the SAME roster, unparked, still names the gateway.
-    func testUnparkedBrokenPointerIsStillNamed() {
-        let notice = DefaultGatewayNotice.resolve(
-            resolution: .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false),
+    /// The control that keeps the parked case above from passing vacuously. Both
+    /// arms are quiet in the chat window now, but for DIFFERENT reasons and with
+    /// different consequences elsewhere: parked collapses to "nothing chosen" and
+    /// is named nowhere at all, while unparked remains a real stored choice that
+    /// the picker and the headless lanes still name. Asserting the parked arm's
+    /// specific `.noDefaultChosen` is what proves the two have not been merged.
+    func testUnparkedAndParkedAreBothSilentHereButAreNotTheSameState() {
+        let unparked = DefaultGatewayNotice.resolve(
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: false),
+            roster: roster,
+            pendingAdoption: nil
+        )
+        let parked = DefaultGatewayNotice.resolve(
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: true),
             roster: roster,
             pendingAdoption: nil
         )
 
-        XCTAssertEqual(notice, .brokenDefault(ref: openclaw, name: "OpenClaw"))
+        XCTAssertNil(unparked)
+        XCTAssertEqual(parked, .noDefaultChosen(candidates: [hermes]),
+                       "A placeholder still owes the user the choice; a real choice does not.")
     }
 
     /// A parked pointer with nothing to offer says nothing at all, exactly as a
@@ -192,7 +219,7 @@ final class DefaultGatewayNoticeTests: XCTestCase {
     /// is a worse sentence than silence.
     func testParkedPointerWithNoCandidatesSaysNothing() {
         let notice = DefaultGatewayNotice.resolve(
-            resolution: .brokenDefault(broken: openclaw, candidates: [], pointerIsParked: true),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [], pointerIsParked: true),
             roster: roster,
             pendingAdoption: nil
         )
@@ -204,7 +231,7 @@ final class DefaultGatewayNoticeTests: XCTestCase {
     /// their pointer moved before anything else.
     func testAdoptionOutranksAParkedPointer() {
         let notice = DefaultGatewayNotice.resolve(
-            resolution: .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: true),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: true),
             roster: roster,
             pendingAdoption: adoptionRecord(previousRef: openclaw)
         )
@@ -231,7 +258,7 @@ final class DefaultGatewayNoticeTests: XCTestCase {
     /// after the acknowledgment.
     func testAdoptionOutranksABrokenDefaultAndNamesBothGateways() {
         let notice = DefaultGatewayNotice.resolve(
-            resolution: .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false),
+            resolution: .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: false),
             roster: roster,
             pendingAdoption: adoptionRecord(previousRef: openclaw)
         )
@@ -309,9 +336,9 @@ final class DefaultGatewayNoticeTests: XCTestCase {
 /// the synchronous set + assert cannot race the VM's async load task, because both
 /// are MainActor-isolated and no `await` yields the actor mid-test.
 @MainActor
-final class DefaultSelectorBrokenNameTests: XCTestCase {
+final class DefaultSelectorUnavailableNameTests: XCTestCase {
 
-    /// `defaultSelectorBrokenName` is DERIVED from `defaultSelectorNeedsSetup`, so
+    /// `defaultSelectorUnavailableName` is DERIVED from `defaultSelectorNeedsSetup`, so
     /// the picker callout, the selector footer and the flagged row can never name
     /// a different gateway from the one the row itself flags.
     func testBrokenNameIsNilExactlyWhenTheSelectorIsNotFlagged() {
@@ -321,12 +348,12 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
         // configured set of exactly Hermes IS the broken case.
         vm.configuredRemoteAgentRefSet = [.builtin(.hermes)]
         XCTAssertTrue(vm.defaultSelectorNeedsSetup)
-        XCTAssertEqual(vm.defaultSelectorBrokenName, vm.defaultRemoteAgentDisplayName,
+        XCTAssertEqual(vm.defaultSelectorUnavailableName, vm.defaultRemoteAgentDisplayName,
                        "The callout names the gateway the row flags, never another one.")
 
         vm.configuredRemoteAgentRefSet = [.builtin(.openclaw)]
         XCTAssertFalse(vm.defaultSelectorNeedsSetup)
-        XCTAssertNil(vm.defaultSelectorBrokenName)
+        XCTAssertNil(vm.defaultSelectorUnavailableName)
     }
 
     /// A first-run device is not broken — "Not configured" already says everything
@@ -336,7 +363,7 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
         let vm = SettingsViewModel()
         vm.configuredRemoteAgentRefSet = []
 
-        XCTAssertNil(vm.defaultSelectorBrokenName)
+        XCTAssertNil(vm.defaultSelectorUnavailableName)
     }
 
     /// The restored-install shape, and the one the raw membership predicate gets
@@ -385,9 +412,9 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
 
         XCTAssertTrue(vm.defaultSelectorNeedsSetup,
                       "The raw membership predicate is byte-identical and still answers its own question — it is asserted verbatim elsewhere.")
-        XCTAssertFalse(vm.defaultSelectorFlagsBroken,
+        XCTAssertFalse(vm.defaultSelectorFlagsUnavailable,
                        "…but nothing may be FLAGGED as broken, because nothing was chosen.")
-        XCTAssertNil(vm.defaultSelectorBrokenName,
+        XCTAssertNil(vm.defaultSelectorUnavailableName,
                      "…and above all nothing may be NAMED: the footer and the picker callout both key on this.")
         XCTAssertFalse(vm.personalAIRows.contains { $0.isDefault },
                        "No row carries the chosen check when nothing has been chosen.")
@@ -409,8 +436,8 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
             .usable(openclaw),
             .adopted(ref: hermes, replacing: openclaw),
             .bootstrapped(hermes),
-            .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false),
-            .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: true),
+            .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: false),
+            .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: true),
             .selectionRequired(candidates: [openclaw, hermes]),
             .nothingConfigured(pointer: openclaw),
             .setupUnfinished(pointer: openclaw)
@@ -474,9 +501,9 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
 
         XCTAssertTrue(vm.defaultSelectorNeedsSetup,
                       "The raw membership predicate is byte-identical and still answers its own question — it is asserted verbatim elsewhere.")
-        XCTAssertFalse(vm.defaultSelectorFlagsBroken,
+        XCTAssertFalse(vm.defaultSelectorFlagsUnavailable,
                        "A reading the resolver has declared untrustworthy may not draw the ⚠ + \"Needs setup\" line.")
-        XCTAssertNil(vm.defaultSelectorBrokenName,
+        XCTAssertNil(vm.defaultSelectorUnavailableName,
                      "…and above all may not NAME the gateway: the footer and the picker callout both key on this.")
     }
 
@@ -515,18 +542,18 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
         await vm.refreshRemoteAgentState()
 
         XCTAssertEqual(vm.defaultGatewayResolution,
-                       .brokenDefault(broken: openclaw, candidates: [hermes], pointerIsParked: false),
+                       .defaultUnavailable(pointer: openclaw, candidates: [hermes], pointerIsParked: false),
                        "Control: with the Keychain proven readable this is an ordinary broken default.")
-        XCTAssertTrue(vm.defaultSelectorFlagsBroken,
+        XCTAssertTrue(vm.defaultSelectorFlagsUnavailable,
                       "The gateway the user chose really cannot send here, and the row has to say so.")
-        XCTAssertEqual(vm.defaultSelectorBrokenName, vm.defaultRemoteAgentDisplayName,
+        XCTAssertEqual(vm.defaultSelectorUnavailableName, vm.defaultRemoteAgentDisplayName,
                        "…and the footer names it, exactly as before this silence rule existed.")
 
-        let defaultNeedsSetup = String(localized: LocalizedStringResource(
-            "settings.root.personalAI.defaultNeedsSetup",
-            defaultValue: "Default needs setup"
+        let defaultUnavailable = String(localized: LocalizedStringResource(
+            "settings.root.personalAI.defaultUnavailable",
+            defaultValue: "Default unavailable here"
         ))
-        XCTAssertEqual(vm.personalAISummaryShort, defaultNeedsSetup,
+        XCTAssertEqual(vm.personalAISummaryShort, defaultUnavailable,
                        "…and the Settings ROOT row says the same thing as the screen it opens. This is "
                        + "the control for the blackout case below: the silence is scoped to the "
                        + "untrustworthy reading, not extended to every unconfigured default.")
@@ -566,12 +593,15 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
                        "Control: exactly one gateway can send, and it is NOT the default — which is what "
                        + "made the old count subtract a gateway that was never in the set.")
 
-        let defaultNeedsSetup = String(localized: LocalizedStringResource(
-            "settings.root.personalAI.defaultNeedsSetup",
-            defaultValue: "Default needs setup"
+        // The LIVE key, not the retired `settings.root.personalAI.defaultNeedsSetup`.
+        // Asserted against a string nothing can produce, this guard passes no
+        // matter how the silence rule regresses.
+        let defaultUnavailable = String(localized: LocalizedStringResource(
+            "settings.root.personalAI.defaultUnavailable",
+            defaultValue: "Default unavailable here"
         ))
-        XCTAssertNotEqual(vm.personalAISummaryShort, defaultNeedsSetup,
-                          "The root row may not accuse a default the screen below it has been silenced "
+        XCTAssertNotEqual(vm.personalAISummaryShort, defaultUnavailable,
+                          "The root row may not report a default the screen below it has been silenced "
                           + "about. One device, one answer.")
         XCTAssertEqual(vm.personalAISummaryShort, "\(vm.defaultRemoteAgentDisplayName) +1",
                        "The silenced answer still has to be TRUE: the default keeps its name, and the "
@@ -579,30 +609,41 @@ final class DefaultSelectorBrokenNameTests: XCTestCase {
                        + "here would hide it.")
     }
 
-    /// The gateway LIST's default row derives the same accusation, so it has to
-    /// read the same gated flag. Re-asking membership there is what let one screen
-    /// carry a clean selector and a "Needs setup" row about the same gateway.
+    /// NEITHER gateway list may draw a readiness status other than the green
+    /// check. The catalog is a menu of optional connections, so its vocabulary is
+    /// "connected" and "not connected" — nothing in between, and in particular
+    /// nothing that reads as an unfinished task.
+    ///
+    /// This inverts a guard that used to require the opposite: the rows once drew
+    /// "Needs setup" and had to derive it from the same gated flag as the selector
+    /// so the two could not disagree. Consistency was the right fix for the wrong
+    /// mark; the mark itself is what is gone now, so the guard checks that neither
+    /// row reaches for a status expression at all.
     ///
     /// A source guard because the expression lives inside a SwiftUI `body`: the
     /// macOS twin is `#if os(macOS)` and this suite never compiles it, and neither
     /// row is reachable without a mounted hierarchy.
-    func testBothGatewayListsReadTheGatedFlagRatherThanReAskingMembership() throws {
+    func testNeitherGatewayListDrawsAReadinessStatusBeyondTheCheck() throws {
         let rows = [
             "Conduck/Views/Settings/PersonalAISettingsView.swift",
             "Conduck/Views/Settings/MacPersonalAICategory.swift"
         ]
         for path in rows {
             let source = try RefusalLaneSource.source(at: path)
-            XCTAssertTrue(source.contains("row.isDefault && viewModel.defaultSelectorFlagsBroken"),
-                          "\(path): the default row no longer reads the gated flag, so it can reach a "
-                          + "different verdict than the selector that sends the user to it.")
-            XCTAssertFalse(source.contains("row.isDefault && !configured"),
-                           "\(path): the membership question is re-asked here. It answers \"broken\" "
-                           + "about a healthy gateway whenever the Keychain cannot be read, which is "
-                           + "exactly what `selectorMaySpeak` exists to refuse.")
             XCTAssertTrue(source.contains("SettingsStatusMark("),
-                          "Control: this really is the row that draws the mark, or the assertions above "
+                          "Control: this really is the row that draws the mark, or the assertions below "
                           + "are checking a ghost.")
+            XCTAssertFalse(source.contains("incomplete:"),
+                           "\(path): a third row state is back. A gateway you have not connected is not "
+                           + "an unfinished chore, and the storage cannot tell an abandoned setup from a "
+                           + "key still crossing iCloud — so the list says nothing at all.")
+            XCTAssertFalse(source.contains("defaultSelectorFlagsUnavailable"),
+                           "\(path): something here derives from the unavailable flag again. That flag "
+                           + "is a licence to NAME the pointer where the user went looking (the picker "
+                           + "callout, the root summary) — not to stamp a status on a list they are "
+                           + "merely scanning, and not to reserve layout for a line that no longer "
+                           + "exists. Name it through `defaultSelectorUnavailableName` where naming is "
+                           + "wanted.")
         }
     }
 }

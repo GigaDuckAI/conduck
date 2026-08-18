@@ -92,23 +92,25 @@ struct CheckNetworkIntent: AppIntent {
         )
         if !continuesLiveConversation {
             switch snap.resolution {
-            case .brokenDefault(let broken, _, let pointerIsParked):
-                // Name the broken gateway — a DISPLAY NAME, never a URL — so the
-                // user fixes the right one. A pointer the APP parked after a
-                // Forget is not "your default AI": the user never chose it, and
-                // may never have set it up, so it takes the unnamed sentence
-                // instead of being blamed by name.
+            case .defaultUnavailable(let pointer, _, let pointerIsParked):
+                // NAME the pointer — a DISPLAY NAME, never a URL — so the user
+                // acts on the right one. The user invoked this, which is why a
+                // name is owed here even though the quiet surfaces withhold it.
+                //
+                // A pointer the APP parked after a Forget is not "your default
+                // AI": the user never chose it, so it takes the unnamed sentence
+                // instead of being named at them.
                 guard !pointerIsParked else {
                     throw await refuse(
                         .remoteAgentDefaultNeedsSetup(gatewayName: nil),
                         dialog: Self.noDefaultDialog
                     )
                 }
-                let name = RemoteAgentRefMetadata.displayName(for: broken, customs: snap.badgeRoster)
+                let name = RemoteAgentRefMetadata.displayName(for: pointer, customs: snap.badgeRoster)
                 throw await refuse(
                     .remoteAgentDefaultNeedsSetup(gatewayName: name),
                     // xcstrings
-                    dialog: String(localized: "Your default AI, \(name), isn't set up on this device. Open Conduck to pick a different one?")
+                    dialog: String(localized: "Your default AI, \(name), isn't available on this device. Open Conduck to pick a different one?")
                 )
             case .selectionRequired:
                 // Nothing to name: no default has been chosen at all.

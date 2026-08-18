@@ -554,12 +554,105 @@ struct RemoteAgentConfigBody: View {
     /// structure.
     @ViewBuilder
     private var editorSections: some View {
+        unavailableHereSection
         quickConnectSection
         connectionSection
         modelSection
         inChatsSection
         devicesSection
         destructiveSection
+    }
+
+    // MARK: - Zone 0: "not available here" (the ONE place this state is explained)
+
+    /// One quiet line, shown when this gateway cannot send from here AND the user
+    /// has reason to expect it could — either it holds saved state this device
+    /// cannot use, or it is the stored default for new chats.
+    ///
+    /// TWO CONDITIONS, not one, and the second is not redundant. Evidence-keyed
+    /// alone, the line cannot fire in the case that needs it most: another device
+    /// Forgets the gateway, which clears the synced URL and token but leaves THIS
+    /// device's local default pointer naming it. Nothing is stored any more, so
+    /// the gateway classifies as untouched — while the picker callout and the
+    /// Settings root both still say "<name> isn't available here". Tapping through
+    /// from those to a blank form with no explanation is the exact
+    /// screen-says-one-thing / row-says-another split this zone exists to close.
+    ///
+    /// Each condition gets its own sentence, because they are different facts:
+    /// one has details that will not read back, the other has no details at all.
+    ///
+    /// IT LIVES HERE AND NOWHERE ELSE. The Personal AI list shows two states
+    /// (green check or nothing), the default picker omits the gateway entirely,
+    /// and Diagnostics says nothing at all — because in each of those the user is
+    /// scanning, and a status stamped on an unconnected gateway turns an optional
+    /// connection into an unfinished chore. This screen is different: the user
+    /// tapped THIS gateway, so they are asking about exactly this, and the empty
+    /// fields below need explaining or they read as lost configuration. Without
+    /// this line the reasonable conclusion is "my setup is gone", and the
+    /// reasonable action is to re-type a token that may be seconds from arriving.
+    ///
+    /// The wording states a FACT and offers a POSSIBILITY, and the split is
+    /// load-bearing. "Isn't available on this device" is always true here.
+    /// "iCloud may still be syncing" is hedged because the app cannot know: a
+    /// Keychain item that has not arrived and one that never existed both read as
+    /// `errSecItemNotFound`, so a confident "Waiting for iCloud" would be a guess
+    /// dressed as a status — and it would be wrong every time the real answer is
+    /// an old configuration the user abandoned. No ⚠, and never the word "setup":
+    /// nothing here is a task the user has been assigned.
+    ///
+    /// "Check again" is not decoration. iCloud Keychain delivers opportunistically
+    /// and posts no app-visible arrival event, so without a manual re-read this
+    /// line can sit stale on screen while the key is already there.
+    /// Which sentence this gateway earns, or `nil` for the ordinary case of a
+    /// gateway simply not connected here — which stays silent, because an
+    /// unconnected gateway is a menu item, not a defect.
+    private var unavailableHereBody: LocalizedStringResource? {
+        if viewModel.isRemoteAgentUnavailable(ref) {
+            return LocalizedStringResource(
+                "settings.remoteAgent.unavailableHere.body",
+                defaultValue: "Some saved details for this gateway aren't available on this device. If you set it up on another device, iCloud may still be syncing them."
+            )
+        }
+        // Nothing stored, yet this device points new chats at it — so the user was
+        // told elsewhere that it "isn't available here" and has arrived to find out
+        // why. `defaultSelectorFlagsUnavailable` is the same predicate that put the
+        // sentence on those screens, so the two can never disagree.
+        if viewModel.defaultSelectorFlagsUnavailable, viewModel.defaultRemoteAgentRef == ref {
+            return LocalizedStringResource(
+                "settings.remoteAgent.unavailableHere.defaultOnly.body",
+                defaultValue: "New chats on this device start here, but nothing for this gateway is stored on it. If you set it up on another device, iCloud may still be syncing — otherwise, fill it in below."
+            )
+        }
+        return nil
+    }
+
+    @ViewBuilder
+    private var unavailableHereSection: some View {
+        if let unavailableHereBody {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(unavailableHereBody)
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        Task { await viewModel.recheckRemoteAgentAvailability() }
+                    } label: {
+                        Text(LocalizedStringResource(
+                            "settings.remoteAgent.unavailableHere.checkAgain",
+                            defaultValue: "Check again"
+                        ))
+                        .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    // The answer is usually unchanged, so an un-disabled button
+                    // reads as a dead one and gets tapped again.
+                    .disabled(viewModel.isRecheckingRemoteAgent)
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+                .settingsCardPassiveRow()
+            }
+        }
     }
 
     // A zone header is plain `Text`, styled by the container: on macOS
@@ -1704,9 +1797,12 @@ struct RemoteAgentConfigBody: View {
     /// whenever this device holds ANY stored state for it — keyed on stored
     /// state, not on a stored token tail (a keyless `.none` OpenClaw/Hermes has
     /// no token by definition and still needs its Forget), and deliberately
-    /// wider than CONFIGURED: a half-configured built-in (a URL that synced in
-    /// without its token, or a leftover slot) is precisely what Diagnostics
-    /// tells the user to come here and remove.
+    /// wider than CONFIGURED. That width is now LOAD-BEARING, not a convenience:
+    /// a half-configured built-in (a URL that synced in without its token, or a
+    /// leftover slot) is reported nowhere else in the app — Diagnostics is silent
+    /// about it and the catalog row shows nothing — so this editor is the only
+    /// route to clearing it. Narrowing this to CONFIGURED would strand that
+    /// residue with no user-reachable way to remove it.
     @ViewBuilder
     private var destructiveSection: some View {
         if viewModel.hasStoredRemoteAgentState(ref) || isCustom {

@@ -643,7 +643,7 @@ final class WatchRecordingService {
         if let name, name != RemoteAgentRefMetadata.genericCustomName {
             return String(localized: LocalizedStringResource(
                 "watch.capture.defaultGatewayNotSetUp",
-                defaultValue: "\(name) isn't set up. Choose which AI new chats use, on your iPhone."
+                defaultValue: "\(name) isn't available. Choose which AI new chats use, on your iPhone."
             ))  // xcstrings
         }
         return String(localized: LocalizedStringResource(

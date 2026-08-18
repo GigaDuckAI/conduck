@@ -303,7 +303,7 @@ struct ConverseIntent: AppIntent {
         )
         if !continuesLiveConversation {
             switch preflight.resolution {
-            case .brokenDefault(let broken, _, let pointerIsParked):
+            case .defaultUnavailable(let broken, _, let pointerIsParked):
                 // Dropping the temp file is safe: `PendingRetryStore.save(audioData:
                 // metadata:)` already wrote its own App Group copy, and the in-app
                 // retry path re-writes a fresh temp file from those bytes.

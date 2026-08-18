@@ -82,11 +82,14 @@ enum UnconfiguredCopy {
     enum DefaultNeedsSetup {
         /// Names the SITUATION and leaves the act to the button — the shape the
         /// beginner arm above already uses ("Bring your own AI" → "Connect Your
-        /// AI"). It states no fault, because there is none: the default goes stale
-        /// when a gateway is forgotten on another device.
+        /// AI"). It states no fault, because there is none: the default is not
+        /// reachable from this Mac, which happens when a gateway is forgotten on
+        /// another device and equally when its key has not finished syncing. Not
+        /// "isn't set up" — that names a chore, and only one of those two
+        /// situations has one.
         static let headline = LocalizedStringResource(
-            "unconfigured.defaultNeedsSetup.headline",
-            defaultValue: "Your default AI isn't set up"
+            "unconfigured.defaultNeedsSetup.headline.v2",
+            defaultValue: "Your default AI isn't available here"
         )
 
         /// Answers the question the user is actually asking — "but I set these
@@ -106,8 +109,8 @@ enum UnconfiguredCopy {
         /// inside one paragraph. "This Mac's" is literal, not hedging — the
         /// default pointer is device-local and does not sync.
         static let body = LocalizedStringResource(
-            "unconfigured.defaultNeedsSetup.body",
-            defaultValue: "From the menu bar, Conduck sends to this Mac's default AI — and that one isn't set up. Your other AIs still work; pick one of them as the default."
+            "unconfigured.defaultNeedsSetup.body.v2",
+            defaultValue: "From the menu bar, Conduck sends to this Mac's default AI — and this Mac can't reach that one. Your other AIs still work; pick one of them as the default."
         )
 
         /// Names the OUTCOME, like every other button on these surfaces

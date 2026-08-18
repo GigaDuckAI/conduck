@@ -206,10 +206,15 @@ enum SharedInboxRouting {
             return try await mintOnRef(snap.resolution.ref, role: .explicitPick,
                                        settings: settings, store: store)
 
-        case .brokenDefault(let broken, _, let pointerIsParked):
-            // The roster genuinely offers alternatives. Name the one that is
-            // broken — a DISPLAY NAME, never a URL — and let the user fix it in
-            // one tap. Nothing is minted and nothing is re-pointed.
+        case .defaultUnavailable(let pointer, _, let pointerIsParked):
+            // The roster genuinely offers alternatives. NAME the pointer — a
+            // DISPLAY NAME, never a URL — and let the user fix it in one tap.
+            // Nothing is minted and nothing is re-pointed.
+            //
+            // A REFUSAL is one of the few places left that names an unavailable
+            // default: the user acted, so an unnamed "something didn't work" would
+            // be worse than the name. The quiet surfaces (the chat window, the
+            // catalog rows) stay silent precisely so this one can speak.
             //
             // A pointer the APP parked after a Forget carries no name: the user
             // never chose that gateway, so "your default AI, X" would blame them
@@ -219,7 +224,7 @@ enum SharedInboxRouting {
                 throw AppError.remoteAgentDefaultNeedsSetup(gatewayName: nil)
             }
             throw AppError.remoteAgentDefaultNeedsSetup(
-                gatewayName: RemoteAgentRefMetadata.displayName(for: broken, customs: snap.badgeRoster))
+                gatewayName: RemoteAgentRefMetadata.displayName(for: pointer, customs: snap.badgeRoster))
 
         case .selectionRequired:
             // No pointer, and the device cannot honestly infer one. There is no

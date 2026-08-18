@@ -500,12 +500,19 @@ enum AppError: LocalizedError {
             return String(localized: "remoteAgent.error.notEstablished", defaultValue: "Conduck couldn't open a connection to your gateway.")
         case .remoteAgentDefaultNeedsSetup(let gatewayName):
             // Two keys, not one interpolation: a 74 reconstructed off the wire
-            // carries no name, and "Your default AI, , isn't set up" is a defect.
+            // carries no name, and "Your default AI, , isn't available" is a defect.
             // Cause only — the remedy lives in `recoverySuggestion`, because
             // `descriptionWithRecovery` concatenates the pair and a remedy baked
             // into both halves would ship twice.
+            //
+            // "isn't available", never "isn't set up". A refusal is the one place
+            // the app still NAMES an unavailable default — the user pressed a
+            // button and is owed an answer — but the storage cannot tell a key
+            // still crossing iCloud Keychain from a setup abandoned months ago, so
+            // it states the fact that holds either way rather than assigning the
+            // user a chore that may not exist.
             if let gatewayName {
-                return String(localized: "remoteAgent.error.defaultNeedsSetup", defaultValue: "Your default AI, \(gatewayName), isn't set up on this device.")
+                return String(localized: "remoteAgent.error.defaultUnavailable", defaultValue: "Your default AI, \(gatewayName), isn't available on this device.")
             }
             // Serves THREE readings and has to be true for all of them: a broken
             // default whose name could not be resolved, a device with no default

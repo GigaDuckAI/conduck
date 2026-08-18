@@ -17,11 +17,12 @@
 // the roster entry is the only place its monogram and colour exist and
 // conversations keep their `custom_<uuid>` binding forever.
 //
-// It lives outside `SettingsViewModel` because a second caller (the Diagnostics
-// leftover list) has no view model to reach, and two independently written
-// forget paths is exactly how a gateway comes back from the dead. This type owns
-// the STORAGE side only; a view model that has one still refreshes its own
-// mirrors afterwards.
+// It lives outside `SettingsViewModel` as the single storage-side owner of the
+// teardown. Two independently written forget paths is exactly how a gateway comes
+// back from the dead, and this sequence is long enough — credential wipe, badge
+// freeze, peer revocation, lane teardown — that a second copy would drift. Its
+// only caller today reaches it through a view model, which still refreshes its
+// own mirrors afterwards; that is not a reason to fold the storage side back in.
 //
 // A destructive credential wipe hangs off THIS explicit user intent and never
 // off a shared rollback helper: `deleteCustomGateway` and

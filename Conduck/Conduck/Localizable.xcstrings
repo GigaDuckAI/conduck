@@ -125,6 +125,226 @@
         }
       }
     },
+    "diagnostics.connection.defaultGateway.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default gateway isn't available on this device, so new chats and GigaAction won't go anywhere. Choose a gateway that works here."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.unavailable.named" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. Choose one of your %2$lld working gateways instead."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.defaultGateway.unavailable.named.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is your default for new chats, but it isn't available on this device — so new chats and GigaAction won't go anywhere. Choose %2$@ instead."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.focused.missing.detail.v3" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This conversation's gateway isn't available on this device, so the thread can't send. Open it in Personal AI, or Clone the conversation to a gateway that works."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.none.detail.v3" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing on this device can reach an AI. Connect one in Settings → Personal AI — or, if you set one up on another device, give iCloud a moment to finish syncing."
+          }
+        }
+      }
+    },
+    "diagnostics.connection.gateway.none.v3" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No gateway can send right now"
+          }
+        }
+      }
+    },
+    "remoteAgent.error.defaultUnavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default AI, %@, isn't available on this device."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.empty" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No gateways are set up on this device yet. Connect one in Personal AI and it'll appear here."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.unavailable.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It's still your default, and it'll work again on its own if it's just waiting on iCloud. To use a different gateway for new chats on this device, pick one below."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.unavailable.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ isn't available here"
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.picker.unavailable.watch.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "It's still the gateway your Apple Watch is pinned to, and it'll work again on its own if it's just waiting on iCloud. To pin a different one, pick it below."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.unavailable.footer.ipad" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ isn't available on this iPad, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.unavailable.footer.iphone" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ isn't available on this iPhone, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
+          }
+        }
+      }
+    },
+    "settings.personalAI.default.unavailable.footer.mac" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ isn't available on this Mac, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.unavailableHere.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Some saved details for this gateway aren't available on this device. If you set it up on another device, iCloud may still be syncing them."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.unavailableHere.checkAgain" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check again"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.unavailableHere.defaultOnly.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New chats on this device start here, but nothing for this gateway is stored on it. If you set it up on another device, iCloud may still be syncing — otherwise, fill it in below."
+          }
+        }
+      }
+    },
+    "settings.root.personalAI.defaultUnavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Default unavailable here"
+          }
+        }
+      }
+    },
+    "unconfigured.defaultNeedsSetup.body.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "From the menu bar, Conduck sends to this Mac's default AI — and this Mac can't reach that one. Your other AIs still work; pick one of them as the default."
+          }
+        }
+      }
+    },
+    "unconfigured.defaultNeedsSetup.headline.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default AI isn't available here"
+          }
+        }
+      }
+    },
     "…" : {
 
     },
@@ -965,61 +1185,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "New chats now use %@"
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.action" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose a default"
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "It's your default for new chats, so anything that starts a chat from outside the app has nowhere to go. New chats you start here are fine."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.title.ipad" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up on this iPad."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.title.iphone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up on this iPhone."
-          }
-        }
-      }
-    },
-    "chat.defaultGateway.broken.title.mac" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up on this Mac."
           }
         }
       }
@@ -2199,28 +2364,6 @@
         }
       }
     },
-    "diagnostics.action.forgetGateway" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Forget"
-          }
-        }
-      }
-    },
-    "diagnostics.action.forgetGateway.a11y" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Forget %@"
-          }
-        }
-      }
-    },
     "diagnostics.action.previewVoice" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2474,39 +2617,6 @@
         }
       }
     },
-    "diagnostics.connection.defaultGateway.broken" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your default gateway can't send, so new chats and GigaAction won't go anywhere. Choose a gateway that works, or finish setting the default one up in Personal AI."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.defaultGateway.broken.named" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ is your default for new chats, but it can't send — so new chats and GigaAction won't go anywhere. Choose one of your %2$lld working gateways, or finish setting it up in Personal AI."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.defaultGateway.broken.named.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ is your default for new chats, but it can't send — so new chats and GigaAction won't go anywhere. Choose %2$@, or finish setting it up in Personal AI."
-          }
-        }
-      }
-    },
     "diagnostics.connection.defaultGateway.notChosen" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2558,94 +2668,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "New chats and GigaAction start on %@."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.focused.missing.detail.accountWide" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Setup isn't finished for this gateway, so it can't send — finish it in Personal AI, or Clone the conversation to a gateway that works."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.incomplete.detail.accountWide" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Setup was started but never finished, so this gateway can't send. Finish it in Personal AI — or forget it, which removes its saved details from every device signed in to your iCloud."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.incomplete.detail.unreadable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck can't read this gateway's saved details right now. That usually means iCloud hasn't finished syncing them to this device — check back in a moment."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.none.detail.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Set up your AI in Settings → Personal AI — every request needs one on this device."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.none.v2" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No AI configured"
-          }
-        }
-      }
-    },
-    "diagnostics.connection.gateway.noneSendable.footer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No gateway can send on this device until you finish one above, or connect another in Personal AI."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.leftover.caption" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nothing uses these, and nothing is broken. Forgetting one removes its saved details from every device signed in to your iCloud."
-          }
-        }
-      }
-    },
-    "diagnostics.connection.leftover.header" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Leftover setup"
           }
         }
       }
@@ -8076,17 +8098,6 @@
         }
       }
     },
-    "remoteAgent.error.defaultNeedsSetup" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your default AI, %@, isn't set up on this device."
-          }
-        }
-      }
-    },
     "remoteAgent.error.defaultNeedsSetup.recovery" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11026,39 +11037,6 @@
         }
       }
     },
-    "settings.personalAI.default.broken.footer.ipad" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ isn't set up on this iPad, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.broken.footer.iphone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ isn't set up on this iPhone, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.broken.footer.mac" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@ isn't set up on this Mac, so anything that starts a chat from outside the app has nowhere to go. Pick a gateway that works here, or finish setting up %2$@."
-          }
-        }
-      }
-    },
     "settings.personalAI.default.noChoice.footer.ipad" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11114,28 +11092,6 @@
         }
       }
     },
-    "settings.personalAI.default.picker.broken.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pick a gateway below to use for new chats, or tap %@ to finish setting it up."
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.picker.broken.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ isn't set up here"
-          }
-        }
-      }
-    },
     "settings.personalAI.default.picker.footer" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11176,17 +11132,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Default for new chats"
-          }
-        }
-      }
-    },
-    "settings.personalAI.default.selector.broken.a11y" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Needs attention"
           }
         }
       }
@@ -12214,17 +12159,6 @@
         }
       }
     },
-    "settings.remoteAgent.forgetAlert.message.leftover" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Conduck will erase the saved URL, token, and pin for this gateway, plus any file-transfer setup. The URL and token are removed from every device signed in to your iCloud; the pin is only on this one."
-          }
-        }
-      }
-    },
     "settings.remoteAgent.forgetAlert.message.v2" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12232,17 +12166,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Conduck will erase the saved URL, key, and pin, plus any file-transfer setup for this gateway (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. You'll re-enter them next time."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.forgetAlert.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Forget gateway?"
           }
         }
       }
@@ -13457,17 +13380,6 @@
         }
       }
     },
-    "settings.root.personalAI.defaultNeedsSetup" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Default needs setup"
-          }
-        }
-      }
-    },
     "settings.root.personalAI.noDefaultYet" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13530,28 +13442,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Configured"
-          }
-        }
-      }
-    },
-    "settings.status.incomplete" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Needs setup"
-          }
-        }
-      }
-    },
-    "settings.status.incomplete.a11y" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Setup incomplete on this device"
           }
         }
       }
@@ -18402,17 +18292,6 @@
         }
       }
     },
-    "unconfigured.defaultNeedsSetup.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "From the menu bar, Conduck sends to this Mac's default AI — and that one isn't set up. Your other AIs still work; pick one of them as the default."
-          }
-        }
-      }
-    },
     "unconfigured.defaultNeedsSetup.button" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -18420,17 +18299,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Choose Default AI"
-          }
-        }
-      }
-    },
-    "unconfigured.defaultNeedsSetup.headline" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your default AI isn't set up"
           }
         }
       }

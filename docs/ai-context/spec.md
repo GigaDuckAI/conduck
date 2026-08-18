@@ -179,9 +179,9 @@ The gateway is chosen when a conversation starts. Once the thread has turns in i
 
 ### The pointer to where a new chat starts is repaired only when there is one honest answer
 
-Each device holds its own pointer at the gateway new conversations begin on. When that pointer names a gateway this device cannot send to, the app moves it to one it can — but only when exactly one gateway can send, only when the secret store has proved itself readable, and only when no other gateway is sitting one unsynced token away from working. Every other shape — several candidates, none, or a pointer that might merely be locked rather than broken — is handed back to the user as a choice, and nothing is written down.
+Each device holds its own pointer at the gateway new conversations begin on, and the app never rewrites it merely because this device cannot use it — a pointer left alone is one that starts working again by itself when its key finishes syncing. When that pointer names a gateway this device cannot send to, the app moves it to one it can — but only when exactly one gateway can send, only when the secret store has proved itself readable, and only when no other gateway is sitting one unsynced token away from working. Every other shape — several candidates, none, or a pointer that might merely be locked rather than broken — is handed back to the user as a choice, and nothing is written down.
 
-**Why repair at all:** the surfaces that follow this pointer have no picker in front of them — the Action Button, CarPlay, the Watch, a share drain. A pointer at a gateway that is not set up here dead-ends every one of them while a working gateway sits beside it, and the user is given no way to see why.
+**Why repair at all:** the surfaces that follow this pointer have no picker in front of them — the Action Button, CarPlay, the Watch, a share drain. A pointer at a gateway that is not available here dead-ends every one of them while a working gateway sits beside it, and the user is given no way to see why.
 
 **Why the conditions are that narrow:** a pointer the app invented is indistinguishable afterwards from one the user chose, so the app may only invent one where there is nothing to choose between. A repair that overrides a stored choice therefore records what it replaced, says so exactly once, and is one tap from being undone; where certainty is not available the user is asked instead.
 
@@ -190,6 +190,18 @@ Each device holds its own pointer at the gateway new conversations begin on. Whe
 **A device with no pointer of its own inherits the account's last synced default only when that gateway can send at the moment it is read.** Nothing ever deletes that inherited value, so an install made long afterwards would otherwise arrive pointing at a gateway nobody has used in months and keep it forever. An inconclusive reading — iCloud has not finished arriving — writes nothing and is retried rather than settled, because a wrong answer here outlives the reason for it.
 
 **Zero gateways readable is never grounds to change anything**, for the reason spelled out where the Watch teardown is authorised: a locked secret store, a restoring device and a genuinely empty one all read identically. On that reading the app repairs nothing, deletes nothing, blames nothing and refuses nothing — it fails closed and stays quiet. One gateway reading as configured is the only accepted proof that the store is open.
+
+### A gateway you have not connected is an offer, not an unfinished task
+
+The list of gateways is a menu of things you *may* connect. Not connecting one is not a defect, has nothing to finish, and is never described as though it were: no warning mark, no "needs setup", no place in any count of things needing attention. A row is either connected — a quiet green check — or it is not, and a row that is not simply says nothing.
+
+**Why it cannot be described as unfinished even when something is stored:** the app cannot tell the two apart. A key still crossing iCloud Keychain and a configuration abandoned months ago read identically, so any word stronger than "this device cannot send on it right now" is a guess. The app says the weaker thing that is always true, and lets the situation resolve itself where it can.
+
+**A gateway is only ever offered as a default if it can send.** The chooser lists what works; connecting something new happens in the gateway list, which is the screen that owns the whole catalog. A chooser that offered an unconnected gateway would be offering a choice that changes nothing.
+
+**Where the app does say a stored default is unavailable, and where it stays quiet.** The sentence is owed only where the user went looking for it: the chooser they opened, the summary line that leads there, and the gateway's own screen. A conversation window says nothing — an unconnected gateway becomes a chore precisely by being mentioned on every launch, and the pointer is untouched, so it starts working again on its own if it was only waiting on iCloud. Anything the user *pressed* — a Shortcut, the Action Button, CarPlay, the watch — still names the gateway in its refusal, because there a silent failure is worse than a named one.
+
+**Diagnostics reports faults, so it says nothing at all about an unconnected gateway.** What survives is what is genuinely broken: that no gateway on this device can send, that a specific saved conversation is bound to one that cannot, and that the default lane has nowhere to go. Clearing anything a gateway left behind is done from that gateway's own screen.
 
 ### Transport trust can only be tightened, never loosened
 

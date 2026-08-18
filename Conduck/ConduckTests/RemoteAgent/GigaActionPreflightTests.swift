@@ -127,8 +127,8 @@ final class GigaActionPreflightTests: XCTestCase {
         let store = ConversationStore(inMemory: true)
 
         let snap = await manager.newChatPickerSnapshot()
-        guard case .brokenDefault = snap.resolution else {
-            return XCTFail("Precondition: a dead pointer beside a working gateway is .brokenDefault, got \(snap.resolution).")
+        guard case .defaultUnavailable = snap.resolution else {
+            return XCTFail("Precondition: a dead pointer beside a working gateway is .defaultUnavailable, got \(snap.resolution).")
         }
 
         let row = try await store.createConversation(backend: RemoteAgentBackend.openclaw.rawValue)
@@ -226,7 +226,7 @@ final class GigaActionPreflightTests: XCTestCase {
 
     /// Forget a gateway with two customs surviving: the pointer parks on a
     /// built-in the user never chose, and here never even set up. The verdict is
-    /// `.brokenDefault`, and the snapshot says the pointer is parked so the
+    /// `.defaultUnavailable`, and the snapshot says the pointer is parked so the
     /// sentence drops the name.
     func testForgetParkedPointerIsMarkedAndGoesUnnamed() async throws {
         let defaults = InMemoryDefaultsStore()
@@ -247,7 +247,7 @@ final class GigaActionPreflightTests: XCTestCase {
                        "…and the park is recorded, because the pointer alone cannot say who wrote it.")
 
         let snap = await manager.newChatPickerSnapshot()
-        guard case .brokenDefault(let broken, _, _) = snap.resolution else {
+        guard case .defaultUnavailable(let broken, _, _) = snap.resolution else {
             return XCTFail("Precondition: the parked built-in is not configured here, got \(snap.resolution).")
         }
         XCTAssertEqual(broken, .builtin(.openclaw))
