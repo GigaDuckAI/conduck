@@ -45,6 +45,18 @@ jobs:
       - name: Check folder map
         run: scripts/check-folder-map.sh
 
+      # The docs tell every reader that the per-file header comment is where the
+      # detail lives, so a header citing a spec section that no longer exists
+      # spends the credibility of the whole arrangement.
+      - name: Check spec citations
+        run: scripts/check-spec-cites.sh
+
+      # The bundled legal text is the copy a user can actually read, so it is
+      # the copy that discharges the attribution obligation. A test pins the
+      # same equality, but it needs a simulator; `cmp` answers here in a second.
+      - name: Check bundled legal copies
+        run: scripts/check-legal-copies.sh
+
       # A job skipped by an `if` renders as neutral, and a run whose only red is
       # absent reads as a run that passed. That is the same false-green this
       # workflow already exists to close, so the skip says so out loud: the run

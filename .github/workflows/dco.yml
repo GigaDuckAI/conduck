@@ -1,0 +1,104 @@
+name: DCO
+
+# CONTRIBUTING.md requires a `Signed-off-by` trailer on every commit, and a rule
+# nothing checks is a rule a repository slowly stops satisfying. This job is the
+# check. It runs on Linux for seconds, so the cost argument that gates the macOS
+# matrix in apple-tests.yml does not apply here — this one always runs.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dco-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signoff:
+    name: Sign-off on every commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # Full history: the check walks the pull request's commits, and a shallow
+      # clone has neither the base commit nor the commits in between.
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check every commit carries a Signed-off-by trailer
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # The merge base rather than the base branch tip: when the base branch
+          # has moved on since the pull request opened, the raw range would list
+          # commits the contributor never wrote and blame them for a missing
+          # trailer they cannot add.
+          base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+
+          commits="$RUNNER_TEMP/dco-commits.txt"
+          missing="$RUNNER_TEMP/dco-missing.txt"
+          # Merge commits are exempt for the same reason .githooks/prepare-commit-msg
+          # skips them: the message is assembled from commits that already carry
+          # their own authors' sign-offs, and one on top would certify work the
+          # merger did not write.
+          git rev-list --no-merges "$base..$HEAD_SHA" > "$commits"
+          : > "$missing"
+
+          exempt=0
+          while read -r sha; do
+            [ -n "$sha" ] || continue
+
+            # Commits written by a GitHub App are exempt, and the weekly
+            # Dependabot pull request configured in .github/dependabot.yml is the
+            # one this repository actually gets. A bot cannot satisfy the rule:
+            # Dependabot's configuration can set a commit-message prefix and
+            # nothing else, so there is no way to add the trailer, and checking it
+            # would fail every dependency bump forever with no fix available to
+            # anyone. GitHub reserves the `[bot]` suffix for App identities, so
+            # this address cannot belong to a person.
+            author=$(git show -s --format='%ae' "$sha")
+            case "$author" in
+              *'[bot]@users.noreply.github.com')
+                exempt=$((exempt + 1))
+                continue
+                ;;
+            esac
+
+            trailer=$(git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$sha")
+            if [ -z "$trailer" ]; then
+              git show -s --format='  %h  %s' "$sha" >> "$missing"
+            fi
+          done < "$commits"
+
+          if [ -s "$missing" ]; then
+            echo "These commits carry no Signed-off-by trailer:" >&2
+            echo >&2
+            cat "$missing" >&2
+            cat >&2 <<'HELP'
+
+          Every commit needs one. Signing off certifies the Developer Certificate
+          of Origin 1.1 — that you wrote the change or have the right to submit it
+          under this project's license. There is no CLA and no copyright assignment.
+
+            git commit -s                 signs off the next commit
+            git commit --amend -s         fixes the most recent one
+            git rebase --signoff <base>   fixes a whole branch, then force-push
+
+          To stop it recurring, enable the tracked hook once per clone:
+
+            git config core.hooksPath .githooks
+          HELP
+            exit 1
+          fi
+
+          printf 'Every commit in this pull request carries a Signed-off-by trailer (%s checked, %s exempt as bot-authored).\n' \
+            "$(( $(wc -l < "$commits") - exempt ))" "$exempt"

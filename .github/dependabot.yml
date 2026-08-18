@@ -1,0 +1,25 @@
+# Keep the GitHub Actions used by CI current.
+#
+# The actions in `.github/workflows/` are pinned to commit SHAs rather than to
+# version tags, because a tag is a movable label its owner can repoint at other
+# code. A SHA cannot move — which is the point, and also the problem: it never
+# announces that the action it names has since been fixed. A weekly pull request
+# is that announcement, and it arrives with the changelog attached.
+#
+# The `swift` ecosystem is deliberately absent. There are three direct package
+# dependencies; one of them is a fork pinned to a bare revision, which has no
+# version for a bot to compare against. Every bump also obliges a hand-written
+# update to THIRD_PARTY_NOTICES.md and its bundled copy — a licence text and,
+# where the package embeds third-party code of its own, a section no tool can
+# generate. Automating the pull request would automate only the easy tenth of
+# that, and a stream of dependency PRs that each need an hour of legal reading
+# before they can merge is a stream that gets ignored. Swift dependencies are
+# bumped deliberately, when there is a reason to.
+
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
