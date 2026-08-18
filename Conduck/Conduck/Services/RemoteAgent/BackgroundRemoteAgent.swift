@@ -56,11 +56,11 @@
 // deployed behind several proxy names, satisfies the pin at a different host,
 // and URLSession may reuse a connection or a trust decision without raising a
 // fresh challenge at all. The contract to give users is "point Conduck at the
-// TERMINAL gateway URL, never at a redirector" (`spec.md`, Remote Agent
-// Round-Trip → Redirect policy). Rationale in full on
+// TERMINAL gateway URL, never at a redirector" (`docs/ai-context/spec.md`).
+// Rationale in full on
 // `RemoteAgentTrustEvaluator.converseTaskPin(for:metadata:)`.
 //
-// Privacy invariants (see the spec's Privacy & Security section): the bearer token is NEVER
+// Privacy invariants (see docs/ai-context/spec.md): the bearer token is NEVER
 // logged; reply bodies are never logged.
 
 import Foundation
@@ -1272,7 +1272,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         }
         let content = UNMutableNotificationContent()
         content.title = failureNotificationTitle(for: error)
-        // PRIVACY (never reveal gateway URLs — see the spec's Privacy & Security section): cases that
+        // PRIVACY (never reveal gateway URLs — see docs/ai-context/spec.md): cases that
         // interpolate an UNDERLYING error's text (`.networkError` /
         // `.decodingError` / `.unknown` wrap a URLError whose description can
         // embed the gateway hostname) are mapped to the fixed

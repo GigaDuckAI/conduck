@@ -5,7 +5,7 @@
 //
 // Network foundation. URLSessionDelegate that implements optional
 // SHA-256 public-key fingerprint pinning for the Personal AI gateway
-// (`spec.md "Remote Agent Round-Trip"`).
+// (`docs/ai-context/spec.md`).
 //
 // THE TRUST RULE, in one line: a pin is an ADDITIONAL restriction on a
 // connection the system ALREADY trusts. It can never rescue an untrusted

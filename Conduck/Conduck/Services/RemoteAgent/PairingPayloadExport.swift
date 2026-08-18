@@ -9,8 +9,8 @@
 // (e.g. an Android phone with a byte-compatible importer) without touching the
 // server.
 //
-// CONTRACT OWNER: `spec.md` "Gateway Setup & Pairing" — "Pairing payload v1
-// (LOCKED wire contract)". This emitter MUST reproduce the `conduck-connect`
+// CONTRACT OWNER: `docs/ai-context/spec.md` — the pairing payload v1 wire
+// contract is LOCKED there. This emitter MUST reproduce the `conduck-connect`
 // server wizard's python emission (the standalone `conduck-connect` repo's
 // `conduck-connect.sh` `emit_payload`, `json.dumps(p, separators=(",", ":"))`,
 // `ensure_ascii=True`)
@@ -32,7 +32,7 @@
 // escape `" \` + control chars, `\uXXXX`-escape EVERY code unit outside the
 // printable-ASCII range (0x20–0x7E, so U+007F and up), never escape "/".
 //
-// PRIVACY (non-negotiable — see the spec's Privacy & Security section): the produced string embeds
+// PRIVACY (non-negotiable — see docs/ai-context/spec.md): the produced string embeds
 // the gateway bearer token + file-server credential. NEVER log / echo / persist
 // it or any field. Fail closed: a `.bearer` gateway whose token read fails
 // throws `.tokenUnavailable` rather than emitting a keyless (token-free) code

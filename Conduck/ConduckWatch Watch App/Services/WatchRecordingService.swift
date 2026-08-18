@@ -1593,7 +1593,7 @@ final class WatchRecordingService {
             compressedAudioFormat = nil
             WatchRecordingCoordinator.shared.isRecordingFlowActive = false
 
-            // Privacy: never log the transcript itself (docs/ai-context/spec.md "Privacy & Security").
+            // Privacy: never log the transcript itself (docs/ai-context/spec.md).
             // Char count + provider + upload latency is enough to diagnose
             // without leaking content.
             WatchLog.note(.stt, "stt.decoded", [

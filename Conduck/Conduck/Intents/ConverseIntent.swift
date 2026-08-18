@@ -166,12 +166,13 @@ struct ConverseIntent: AppIntent {
         // Byte count + language only — deliberately no clip DURATION. Measuring
         // it needs an `AVURLAsset`, which needs a file URL, which means writing a
         // second plaintext copy of the user's recording into `temporaryDirectory`
-        // in Release builds to feed a DEBUG-only log line. Conduck never persists
-        // audio where it controls the storage (`spec.md` Architectural
-        // Invariants), so the ONE audio write this intent makes is the
-        // `STTClient` handoff below, which that client `defer`-deletes. It also
-        // keeps an unbounded `await asset.load(.duration)` off user-wirable
-        // Shortcut input.
+        // in Release builds to feed a DEBUG-only log line. Every audio file Conduck
+        // writes has an owner that deletes it (`docs/ai-context/spec.md`), and a
+        // copy made only to measure a duration would have none — unlike the
+        // `STTClient` handoff below, which that client `defer`-deletes, and the
+        // retry copy `PendingRetryStore` owns and expires. It also keeps an
+        // unbounded `await asset.load(.duration)` off user-wirable Shortcut
+        // input.
         #if DEBUG
         print("[Conduck] ConverseIntent")
         print("[Conduck] Audio: \(originalAudioData.count) bytes, Language: \(preferredLanguage ?? "auto")")

@@ -13,7 +13,7 @@
 //  thrown error. Retrying on the Watch foreground path would just burn
 //  more of that 2-minute window before the inevitable background fallback.
 //
-//  Privacy invariants (docs/ai-context/spec.md "Privacy & Security"):
+//  Privacy invariants (docs/ai-context/spec.md):
 //    - The API key is NEVER logged, printed, or echoed into thrown errors.
 //    - Bearer header is set on `URLRequest` only; never extracted into a
 //      String, never interpolated into a debug log.

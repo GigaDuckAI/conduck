@@ -4,7 +4,7 @@
 // PairingPayloadExportTests.swift
 //
 // Locks `PairingPayloadExport.serialize` to the `conduck-connect` wizard's
-// python emission (`spec.md` "Pairing payload v1"). The three GOLDEN VECTORS
+// python emission (`docs/ai-context/spec.md`). The three GOLDEN VECTORS
 // are byte-for-byte fixtures produced by the shell emitter for known inputs —
 // any drift (key order, escaping, base64) fails here. Plus: the python-style
 // string escaper's unit cases, structural omission rules, the OpenRouter export

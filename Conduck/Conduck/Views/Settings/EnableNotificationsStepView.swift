@@ -63,8 +63,8 @@ struct EnableNotificationsStepView: View {
             // Operating notes for the headless trigger just bound — the quick
             // capture (Action Button / Back Tap / Control Center) records inside
             // the Shortcuts process, which iOS suspends on screen lock/dim and
-            // throttles under Low Power Mode. Surfaced here per spec "Trigger
-            // Architecture" accepted entry-1 ceilings (never a user surprise).
+            // throttles under Low Power Mode. Surfaced here per the entry-1 ceilings
+            // accepted in `docs/ai-context/spec.md` (never a user surprise).
             goodToKnow
         }
         .onboardingStepLayout {

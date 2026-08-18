@@ -10,7 +10,7 @@
 // framework symbols; the Watch surface relays audio to iPhone via
 // `AppleSpeechRelayCoordinator` instead.
 //
-// Privacy invariant (see the spec's Privacy & Security section): we never log audio bytes, never
+// Privacy invariant (see docs/ai-context/spec.md): we never log audio bytes, never
 // surface the file URL in user-facing strings. Errors map to existing
 // `AppError` cases — no new "appleSpeechRuntimeFailure" case; the spec
 // folded that into `audioProcessingFailed` because the user-visible

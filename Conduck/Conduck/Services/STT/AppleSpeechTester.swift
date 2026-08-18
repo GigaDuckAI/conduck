@@ -17,8 +17,10 @@
 // trap). It DIVERGES deliberately: it transcribes through `AppleSpeechRunner`
 // with an EXPLICIT engine (so the result is attributed to the engine actually
 // tested, even before a just-flipped iCloud-KVS value propagates), and it NEVER
-// touches `activeSTTSnapshot` / `PendingRetryStore` / conversations — a test must
-// not persist audio, transcripts, or retries (privacy invariant — see the spec's Privacy & Security section).
+// touches `activeSTTSnapshot` / `PendingRetryStore` / conversations — the clip it
+// records is written to temp and `defer`-deleted on every path, and a test must
+// leave behind no audio, transcript, or retry (privacy invariant — see
+// docs/ai-context/spec.md).
 //
 // `#if !os(watchOS)` — depends on `AppleSpeechRunner` (no Speech symbols on Watch).
 

@@ -4,7 +4,7 @@
 // PairingPayloadTests.swift
 //
 // Covers `PairingPayload.parse(_:)` — the `conduck-setup:v1:<base64(JSON)>`
-// pairing-string parser (`spec.md` "Gateway Setup & Pairing"). The error
+// pairing-string parser (`docs/ai-context/spec.md`). The error
 // taxonomy is LOAD-BEARING for onboarding/Settings UI copy: notAPairingCode
 // lets the scanner ignore unrelated QR codes, unsupportedVersion drives
 // "update the app", insecureURL names the https violation, and everything

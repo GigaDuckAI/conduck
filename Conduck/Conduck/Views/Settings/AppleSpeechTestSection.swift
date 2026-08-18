@@ -12,8 +12,9 @@
 //
 // All state lives in `SettingsViewModel.appleSpeechTester` (`AppleSpeechTester`),
 // which records via the shared `AudioRecorder`, transcribes through
-// `AppleSpeechRunner` with the EXPLICIT selected engine, and never persists the
-// audio/transcript. The elapsed timer ticks inside the leaf
+// `AppleSpeechRunner` with the EXPLICIT selected engine, and leaves behind no
+// audio, transcript or retry — the clip it records is written to temp and
+// `defer`-deleted on every path. The elapsed timer ticks inside the leaf
 // `LiveRecordingStatusIndicator` (`TimelineView`), so the tester's observed
 // `state` stays stable during a capture.
 //

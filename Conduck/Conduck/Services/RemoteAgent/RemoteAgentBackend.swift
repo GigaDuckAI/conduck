@@ -7,7 +7,7 @@
 // gateway the user has configured. Under client-owned history (locked
 // 2026-05-20) there is NO wire-level per-backend dispatch — both backends
 // take the identical stateless `/v1/chat/completions` request with the
-// full `messages[]` history (`spec.md "Remote Agent Round-Trip"`).
+// full `messages[]` history (`docs/ai-context/spec.md`).
 // The only per-backend differences are the base URL + setup recipe.
 //
 // Raw values `"openclaw"` and `"hermes"` are load-bearing — they are

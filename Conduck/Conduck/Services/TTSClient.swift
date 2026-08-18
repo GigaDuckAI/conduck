@@ -11,10 +11,9 @@
 // `STTClient` dispatches on `STTProvider`.
 //
 // Differences vs STTClient (all intentional):
-//   - Returns in-memory `Data` (mp3 bytes), NEVER written to disk — this is
-//     the structural guarantee for the "audio never persisted where Conduck
-//     controls it" mandate. There is no temp-file cleanup contract because no
-//     file is ever created.
+//   - Returns in-memory `Data` (mp3 bytes), NEVER written to disk — a spoken
+//     reply therefore has no on-disk lifetime to bound at all. There is no
+//     temp-file cleanup contract because no file is ever created.
 //   - The 5 frozen cloud providers use default ATS (`URLSession.shared`). The
 //     6th, the BYO `custom-openai-tts` endpoint (`dynamicEndpointKey != nil`),
 //     mirrors custom STT: a per-call ephemeral session with a
@@ -38,7 +37,7 @@
 //     (retrying inside the window is doomed — fall back to Apple now instead
 //     of wasting the wait).
 //
-// Privacy invariants (load-bearing — see the spec.md "Privacy & Security" section):
+// Privacy invariants (load-bearing — see docs/ai-context/spec.md):
 //   - The API key is NEVER logged, printed, or surfaced in a thrown error.
 //   - The `text` (the agent reply being spoken) is NEVER logged.
 //   - The synthesis URL is NEVER logged.

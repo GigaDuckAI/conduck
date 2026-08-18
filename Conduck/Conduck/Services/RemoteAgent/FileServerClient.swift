@@ -138,7 +138,7 @@
 // staged test's write-then-byte-echo against a server the user owns, never a
 // control.
 //
-// Privacy invariants (see the spec's Privacy & Security section): the storedKey, the base
+// Privacy invariants (see docs/ai-context/spec.md): the storedKey, the base
 // URL, the basic-auth credential, and filenames are NEVER logged, printed, or
 // echoed into a thrown `AppError`. The credential appears ONLY in the
 // `Authorization` header on the request object and (separately) in the setup
@@ -201,7 +201,7 @@ enum FileProbeOutcome: Equatable, Sendable {
 /// `BackgroundFileTransfer.collectProbeEvidence`, which is the half that owns
 /// the bounded read.
 ///
-/// PRIVACY (see the spec's Privacy & Security section): this value carries the
+/// PRIVACY (see docs/ai-context/spec.md): this value carries the
 /// storedKey and up to `Constants.fileServerProbeBodySniffBytes` of file
 /// content, so it is a LOCAL value only — never logged, never thrown, never
 /// stored, and never folded into an `AppError`. Everything downstream of

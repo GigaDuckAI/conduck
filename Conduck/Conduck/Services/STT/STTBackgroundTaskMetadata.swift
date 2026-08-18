@@ -50,11 +50,11 @@ struct STTBackgroundTaskMetadata: Codable {
     ///
     /// LOAD-BEARING PRIVACY, not bookkeeping: that body embeds a complete second
     /// copy of the recording (raw bytes for multipart, base64 for JSON), and the
-    /// architecture's invariant is that captured audio is never persisted. It was
-    /// tracked ONLY in an in-memory registry, which dies with the process — and
-    /// suspend+relaunch is the DESIGNED path for a wrist background upload
+    /// architecture's invariant is that every audio file Conduck writes has an
+    /// owner that deletes it. An in-memory registry alone dies with the process,
+    /// and suspend+relaunch is the DESIGNED path for a wrist background upload
     /// (`.backgroundTask(.urlSession(...))` exists precisely for it), so every
-    /// cross-launch completion orphaned one voice recording in
+    /// cross-launch completion would orphan one voice recording in
     /// `temporaryDirectory` with no owner left to reclaim it. Carrying the path
     /// in the envelope makes the completion handler's cleanup survive the
     /// relaunch, exactly as `RemoteAgentBackgroundMetadata.bodyPath` already does

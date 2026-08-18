@@ -192,7 +192,7 @@ nonisolated final class OutputScanClaimRegistry: @unchecked Sendable {
 /// reachable from a context menu on EVERY agent turn, so the affordance exists
 /// even for the turns the breaker is currently silencing.
 ///
-/// PRIVACY (see the spec's Privacy & Security section): the lane key is an
+/// PRIVACY (see docs/ai-context/spec.md): the lane key is an
 /// opaque digest pair, never a URL and never a credential, and nothing in this
 /// type is logged, thrown, or persisted.
 nonisolated final class FileLaneScanBreaker: @unchecked Sendable {
@@ -1082,11 +1082,12 @@ final class ConversationDetailViewModel {
     ///
     /// THE THREE FOLDER-LESS TURNS THIS MUST NOT CATCH, all of which are
     /// indistinguishable from it in the persisted record (`outputScanLaneID`
-    /// set, `outputBoxKey` nil): a wrist-originated turn (the Watch holds no
-    /// file-server credential by design), a lane whose server does not implement
-    /// `PROPFIND` at all, and a row a device synced from CloudKit before the
-    /// attribute landed. None of them is a fault, and a row on any of them is a
-    /// per-turn complaint about a standing, correct configuration.
+    /// set, `outputBoxKey` nil): a turn dictated on the Watch whose lane the
+    /// phone has not couriered as ready, identified and return-capable; a lane
+    /// whose server does not implement `PROPFIND` at all; and a row a device
+    /// synced from CloudKit before the attribute landed. None of them is a
+    /// fault, and a row on any of them is a per-turn complaint about a standing,
+    /// correct configuration.
     ///
     /// SO IT IS DERIVED FROM TWO LIVE FACTS, never from the record alone: the
     /// lane must currently be failing its witness

@@ -30,7 +30,7 @@
 //     wire. Do NOT normalize in a decoder instead: the `.inProcess` dispatch
 //     below returns without touching one.
 //
-// Privacy invariants (load-bearing — see the spec.md "Privacy & Security" section):
+// Privacy invariants (load-bearing — see docs/ai-context/spec.md):
 //   - The API key is NEVER logged, printed, or surfaced in error messages.
 //   - When logging errors, redact the `Authorization` / custom-auth header.
 //

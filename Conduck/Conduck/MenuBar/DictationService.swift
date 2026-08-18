@@ -7,7 +7,7 @@
 // macOS menu-bar capture pipeline: record → STT (Mistral Voxtral) →
 // HAND THE TRANSCRIPT TO THE COORDINATOR.
 //
-// Terminal step (`spec.md "Per-Surface Behavior → macOS"`): the STT-success step
+// Terminal step (`docs/ai-context/spec.md`): the STT-success step
 // does NOT copy to clipboard, enter `.done`, or auto-dismiss.
 // Instead it invokes `onTranscript: (String) -> Void` (set by
 // `MenuBarCoordinator`) which forwards the transcript to the active
@@ -551,7 +551,7 @@ final class DictationService: RecordingExclusivityAuthority {
 
             // Clear any stale pending-retry slot — this capture succeeded.
             await PendingRetryStore.shared.clear()
-            // Terminal step (`spec.md "Per-Surface Behavior → macOS"`): hand the
+            // Terminal step (`docs/ai-context/spec.md`): hand the
             // transcript to the coordinator (→ agent round-trip) and return to
             // idle. No clipboard, no `.done`, no auto-dismiss.
             state = .idle

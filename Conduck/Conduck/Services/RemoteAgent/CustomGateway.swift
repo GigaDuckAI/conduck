@@ -9,7 +9,7 @@
 // App-Group + iCloud-KVS dual-write); the URL / bearer token / cert
 // fingerprint ride the SAME per-ref slots as the built-ins
 // (`SettingsManager.getRemoteAgentURL(for:)` etc.) — i.e. the built-in
-// storage posture, extended. See `spec.md "Settings & Storage"`.
+// storage posture, extended. See `docs/ai-context/spec.md`.
 //
 // Pure value type — shared by the app AND Watch targets (Approach A
 // membership exception in project.pbxproj).

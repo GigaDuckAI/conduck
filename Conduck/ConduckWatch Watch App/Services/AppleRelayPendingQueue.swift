@@ -686,8 +686,8 @@ final class AppleRelayPendingQueue {
     /// fixed copy, and the one case whose shared copy names the wrong device
     /// given its own wrist-and-phone wording.
     ///
-    /// PRIVACY (never reveal gateway URLs — see the spec's Privacy & Security
-    /// section): `.networkError` / `.decodingError` / `.unknown` interpolate the
+    /// PRIVACY (never reveal gateway URLs — see docs/ai-context/spec.md):
+    /// `.networkError` / `.decodingError` / `.unknown` interpolate the
     /// WRAPPED error's `localizedDescription`, and a cert-class `URLError` embeds
     /// the server hostname in that text. On the Watch that text renders on the
     /// wrist AND mirrors to the paired iPhone's lock screen — visible without an

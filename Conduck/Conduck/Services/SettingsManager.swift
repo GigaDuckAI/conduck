@@ -13,7 +13,7 @@
 // (cross-actor property access can't be both async AND settable). This type
 // exposes method pairs instead — implementation follows.
 //
-// Privacy invariant (load-bearing — see the spec.md "Privacy & Security" section): the API key is NEVER
+// Privacy invariant (load-bearing — see docs/ai-context/spec.md): the API key is NEVER
 // logged, printed, or surfaced in error messages. The only consumer of the
 // raw key string is the Mistral wire-format request inside `STTClient`.
 
@@ -2544,10 +2544,10 @@ actor SettingsManager {
     }
 
     /// Persist a SPECIFIC ref's transport hint. Pass nil / empty to remove.
-    /// App Groups ONLY (NO KVS dual-write — per `spec.md` Gateway Setup &
-    /// Pairing invariants the hint is per-device: another device may reach the
-    /// same gateway over a different transport). Posts
-    /// `.settingsDidChangeRemotely` like its per-ref siblings.
+    /// App Groups ONLY (NO KVS dual-write — per `docs/ai-context/spec.md` the
+    /// hint is per-device: another device may reach the same gateway over a
+    /// different transport). Posts `.settingsDidChangeRemotely` like its
+    /// per-ref siblings.
     func setRemoteAgentTransportHint(_ hint: String?, for ref: RemoteAgentRef) {
         let key = Constants.remoteAgentTransportHintKey(for: ref)
         if let hint, !hint.isEmpty {
@@ -2573,7 +2573,7 @@ actor SettingsManager {
     //     KVS — mirrors `getRemoteAgentCertFingerprint(for:)`).
     //   - Available flag → App Groups + iCloud KVS (non-secret).
     //
-    // Privacy (load-bearing — see the spec.md "Privacy & Security" section): the credential is NEVER logged,
+    // Privacy (load-bearing — see docs/ai-context/spec.md): the credential is NEVER logged,
     // printed, or surfaced in error messages. Its consumers are the file-server
     // wire request (basic-auth header), the setup guide's masked credential row
     // the user deliberately copies, and the LOCAL one-way lane-ID derivation
@@ -2652,7 +2652,7 @@ actor SettingsManager {
         /// RESERVED — NOTHING READS IT. No dispatch, delivery or UI path
         /// branches on this value on any surface, and none is meant to yet;
         /// there is no user control that sets it either. Do not add a
-        /// `if snapshot.autoDeliver` without the seat policy that gives it a
+        /// `if snapshot.autoDeliver` without the policy layer that gives it a
         /// meaning, and do not delete it as dead weight.
         ///
         /// It is stored, synced, carried both ways through the pairing payload
@@ -3143,7 +3143,7 @@ actor SettingsManager {
     ///
     /// `autoDeliver.` and `filenamePolicy.` ARE mirrored. They are per-gateway
     /// PROPERTIES — a decision about the gateway, like `imageHistory.policy.` —
-    /// and a user (later, a seat policy) who forbids automatic delivery on one
+    /// and a user (later, a policy layer) who forbids automatic delivery on one
     /// device means it on all of them; a permission that applied only where it
     /// was typed would be worthless as a policy. They are not device-local
     /// provenance, which is the one thing this list bans.
@@ -3519,7 +3519,7 @@ actor SettingsManager {
     /// Commit a ref's DELIVERY POLICY — the auto-deliver permission and the
     /// filename policy — in ONE actor hop, one notification. The entry point for
     /// a policy change that is not part of a config save or a staged verdict
-    /// (there is no UI for it yet; the B2B seat layer is what will call it).
+    /// (there is no UI for it yet; a later policy layer is what will call it).
     ///
     /// Deliberately NOT two per-key setters. Both fields ride
     /// `FileTransferSnapshot`, so a dispatch that read between two loose hops

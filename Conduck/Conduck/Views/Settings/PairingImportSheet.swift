@@ -22,7 +22,7 @@
 // request, nothing reaches storage before Connect, and the card is re-read and
 // compared immediately before the commit.
 //
-// PRIVACY (spec.md "Privacy & Security"): the pasted/scanned string embeds the
+// PRIVACY (docs/ai-context/spec.md): the pasted/scanned string embeds the
 // gateway bearer token + file-server credential. It is NEVER logged, echoed into
 // error text, or displayed — every error string comes from the typed
 // `PairingParseError` → key mapping, the plan's typed blocks, or the `AppError`

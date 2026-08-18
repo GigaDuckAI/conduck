@@ -51,7 +51,7 @@ final class EndpointURLPolicyTests: XCTestCase {
 
     func testCloudflareQuickTunnelDetectionReadsTheParsedHost() {
         XCTAssertTrue(EndpointURLPolicy.isCloudflareQuickTunnelURLString(
-            "https://cheap-response-recordings-concern.trycloudflare.com"
+            "https://brisk-lantern-quarry-motion.trycloudflare.com"
         ))
         XCTAssertTrue(EndpointURLPolicy.isCloudflareQuickTunnelURLString(
             "https://TRYCloudflare.com:443/path"

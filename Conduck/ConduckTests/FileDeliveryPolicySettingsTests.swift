@@ -6,7 +6,7 @@
 // Locks the two per-gateway delivery PROPERTIES — `fileServer.autoDeliver.*`
 // (may this gateway put files on my device automatically) and
 // `fileServer.filenamePolicy.*` (how a delivered name is treated). They exist
-// with no UI so the later B2B seat layer changes behaviour without touching
+// with no UI so a later policy layer changes behaviour without touching
 // storage, sync, the payload, or the Watch envelope again. Pins:
 //   • unset reads the permissive default, so no existing ref changes behaviour;
 //   • both ride `FileTransferSnapshot`, so dispatch reads them in the SAME actor

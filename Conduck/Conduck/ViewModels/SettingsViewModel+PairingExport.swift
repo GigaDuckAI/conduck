@@ -10,7 +10,7 @@
 // pure `PairingPayloadExport`; these thin MainActor entry points map its typed
 // errors to UI outcomes and reuse the editor's Test Connection machinery.
 //
-// PRIVACY (non-negotiable — spec.md "Privacy & Security"): the prepared string embeds
+// PRIVACY (non-negotiable — docs/ai-context/spec.md): the prepared string embeds
 // the gateway token + file-server credential. It is returned to the sheet and
 // held there only while revealed — NEVER logged, echoed, or written to disk.
 // The preflight reads the token to authenticate its probe but never surfaces it;

@@ -12,7 +12,7 @@
 // (https-only guard, explicit auth-scheme persist, fail-closed token write,
 // session/pointer hygiene, roster upsert).
 //
-// PRIVACY (non-negotiable — spec.md "Privacy & Security"): the payload embeds the
+// PRIVACY (non-negotiable — docs/ai-context/spec.md): the payload embeds the
 // gateway bearer token and the file-server credential. NEVER log / print /
 // retain the payload, the token, the credential, or any derived string;
 // failure messages reuse the existing `AppError` recovery copy, which never
@@ -365,7 +365,7 @@ extension SettingsViewModel {
                 // card the user approves names the destination, not the permissions —
                 // so honouring a `true` would let a scanned code quietly switch
                 // automatic delivery back on for a gateway where the user (later, a
-                // seat policy) had switched it off, and the user would have approved
+                // policy layer) had switched it off, and the user would have approved
                 // a screen that never mentioned it. Nothing is lost by refusing:
                 // `true` is already the stored default, so the only state a `true`
                 // could change is the one deliberate `false` this rule protects.

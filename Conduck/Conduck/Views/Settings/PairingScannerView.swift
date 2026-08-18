@@ -20,7 +20,7 @@
 // and `DataScannerViewController` is iOS-only — the guard is mandatory, not
 // hygiene. NOT a Watch-target member.
 //
-// PRIVACY (spec.md "Privacy & Security"): the recognized payload string embeds the
+// PRIVACY (docs/ai-context/spec.md): the recognized payload string embeds the
 // gateway bearer token + file-server credential. It is handed to `onCode` and
 // NEVER logged, echoed, or stored here.
 

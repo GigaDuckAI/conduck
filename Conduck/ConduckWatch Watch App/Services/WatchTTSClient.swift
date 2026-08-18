@@ -32,7 +32,7 @@
 //  `membershipExceptions` edit). The Apple sentinel (`apple-tts`) never reaches
 //  here — `WatchReplySpeaker` plays it on-device.
 //
-//  Privacy invariants (docs/ai-context/spec.md "Privacy & Security"):
+//  Privacy invariants (docs/ai-context/spec.md):
 //    - The API key is NEVER logged, printed, or echoed into thrown errors.
 //    - The `text` (agent reply) and the synthesis URL are NEVER logged.
 //

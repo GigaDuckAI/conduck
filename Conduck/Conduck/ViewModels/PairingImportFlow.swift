@@ -21,7 +21,7 @@
 // `PairingImportEnvironment`. The View above it renders this object and owns only
 // what SwiftUI must: layout, dismissal, and the camera viewport.
 //
-// PRIVACY (spec.md "Privacy & Security"): the scanned/pasted string embeds the
+// PRIVACY (docs/ai-context/spec.md): the scanned/pasted string embeds the
 // gateway bearer token + file-server credential. It is NEVER logged, echoed into
 // error text, or displayed — every message comes from the typed
 // `PairingParseError` mapping, the plan's typed blocks, or the `AppError`

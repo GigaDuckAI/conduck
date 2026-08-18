@@ -26,7 +26,7 @@
 //    2. the `https://` URL the server is reachable at, and
 //    3. a passing staged test of that exact tuple.
 //
-//  Privacy (spec.md "Privacy & Security"): the client-minted credential plaintext
+//  Privacy (docs/ai-context/spec.md): the client-minted credential plaintext
 //  appears ONLY in (a) Keychain, (b) the deliberately-revealed, session-only,
 //  masked-by-default credential row here, and (c) the system clipboard when the
 //  user taps Copy — which is why that copy goes through

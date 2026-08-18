@@ -510,7 +510,7 @@ final class BackgroundFileTransfer: NSObject {
     /// name search. Automatic output discovery lists one folder
     /// (`listCollection`) and never probes a name a reply wrote.
     ///
-    /// PRIVACY (see the spec's Privacy & Security section): the evidence value
+    /// PRIVACY (see docs/ai-context/spec.md): the evidence value
     /// carries the storedKey and up to a kilobyte of file content and is
     /// LOCAL — never logged, never thrown, never persisted. Only the enum
     /// escapes this function.
@@ -2011,7 +2011,7 @@ extension BackgroundFileTransfer {
     /// outright on top of that, for the repairs that leave the identity
     /// untouched (a restarted server, a fixed reverse proxy, a DNS record).
     ///
-    /// PRIVACY (see the spec's Privacy & Security section): the lane key is an
+    /// PRIVACY (see docs/ai-context/spec.md): the lane key is an
     /// opaque digest pair, never a URL and never a credential, and nothing in
     /// this type is logged, thrown, or persisted.
     nonisolated final class FileLaneWitnessBreaker: @unchecked Sendable {

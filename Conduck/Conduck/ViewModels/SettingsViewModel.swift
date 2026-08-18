@@ -3823,7 +3823,7 @@ final class SettingsViewModel {
     // but for the file-server's URL + client-minted credential + per-device cert
     // pin + the staged Test Connection result.
     //
-    // Privacy invariants (spec.md "Privacy & Security"): the minted credential
+    // Privacy invariants (docs/ai-context/spec.md): the minted credential
     // appears ONLY (a) in Keychain, (b) in the guide's masked, session-only
     // credential row the user deliberately reveals/copies (via
     // `mintedFileServerCredentials`). It is NEVER logged, NEVER read back into

@@ -10,7 +10,7 @@
 // in isolation). NOT gated `#if os(iOS)`: there is nothing CarPlay-specific in
 // the code itself, only in its intended use.
 //
-// Driver-safety / entitlement contract (`spec.md "Per-Surface Behavior → Apple CarPlay"`): the
+// Driver-safety / entitlement contract (`docs/ai-context/spec.md`): the
 // picker shows a SHORT identifier (title or first-user-turn snippet) + a
 // relative date — NEVER readable conversation content. `derive` produces only
 // that short label; it must never surface the agent reply or a full thread.

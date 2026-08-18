@@ -5,7 +5,7 @@
 //
 // Foreground actor that issues the agent
 // round-trip to the user's Personal AI gateway
-// (`spec.md "Remote Agent Round-Trip"`). Backend-agnostic by design — under client-owned history (locked
+// (`docs/ai-context/spec.md`). Backend-agnostic by design — under client-owned history (locked
 // 2026-05-20) the request is byte-shape-identical for OpenClaw and Hermes:
 // a STATELESS `POST /v1/chat/completions` carrying the FULL client-owned
 // `messages[]` history. There is NO session header,
@@ -34,7 +34,7 @@
 //   - Store-derived history. The background coordinator supplies `priorTurns` assembled from the
 //     `ConversationStore`; foreground callers pass prior turns directly.
 //
-// Privacy invariants (load-bearing — see the spec's Privacy & Security section):
+// Privacy invariants (load-bearing — see docs/ai-context/spec.md):
 //   - The bearer token is NEVER logged, printed, or surfaced in error
 //     messages.
 //   - When logging errors, redact the `Authorization` header and any
@@ -387,7 +387,7 @@ actor RemoteAgentClient {
 
     /// Build the stateless `POST /v1/chat/completions` request carrying the
     /// full client-owned history. Identical for every backend — no session
-    /// header, no `conversation` field (`spec.md "Remote Agent Round-Trip"`).
+    /// header, no `conversation` field (`docs/ai-context/spec.md`).
     private static func buildRequest(
         url: URL,
         token: String,

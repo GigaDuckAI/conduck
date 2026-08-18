@@ -10,7 +10,7 @@
 // storage-privacy rule, not just input hygiene:
 //
 //   1. `https` scheme — the only transport a bearer token / credential may
-//      ride (`spec.md` Architectural Invariants).
+//      ride (`docs/ai-context/spec.md`).
 //   2. A NON-EMPTY host — `URL(string: "https://")` and
 //      `URL(string: "https:///v1")` both parse, both carry a nil `URL.host`,
 //      and both survive `normalizedGatewayBaseURL` as the unusable string

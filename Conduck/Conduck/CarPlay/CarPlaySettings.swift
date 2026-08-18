@@ -26,7 +26,7 @@
 // reading earns, then returns to the list — no crash.
 //
 // A later revision swaps `sttAPIKey` for a gateway bearer token field added
-// beside it (per `spec.md "Per-Surface Behavior → Apple Watch + Widget"`); current callers won't churn.
+// beside it (per `docs/ai-context/spec.md`); current callers won't churn.
 
 #if os(iOS)
 import Foundation

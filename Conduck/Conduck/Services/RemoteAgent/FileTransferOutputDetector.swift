@@ -82,7 +82,7 @@ import Foundation
 /// user taps a chip and the real download has landed on disk, so the wrist gets
 /// its thumbnail / text preview at zero extra network cost.
 ///
-/// PRIVACY (see the spec's Privacy & Security section): never logs the reply
+/// PRIVACY (see docs/ai-context/spec.md): never logs the reply
 /// text, candidate filenames, storedKeys, entry names, or the snapshot. Returns
 /// the structured drafts; no `print`/`os_log` anywhere in this path.
 enum FileTransferOutputDetector {
@@ -608,7 +608,7 @@ enum FileTransferOutputDetector {
     /// instead of abandoned, which is the whole reason a turn could close on a
     /// full message and a silent remainder.
     ///
-    /// PRIVACY (see the spec's Privacy & Security section): never logs the
+    /// PRIVACY (see docs/ai-context/spec.md): never logs the
     /// collection key, entry names, storedKeys, or the snapshot. Entry names
     /// travel OUT in the return value, as they always have on a delivered draft —
     /// and only for the type-refused population, never the shape-refused one.
@@ -883,7 +883,7 @@ enum FileTransferOutputDetector {
     /// non-definitive outcome that does NOT stop the pass — see
     /// `probeFailureIsLaneWide`.
     ///
-    /// PRIVACY (see the spec's Privacy & Security section): never logs the reply
+    /// PRIVACY (see docs/ai-context/spec.md): never logs the reply
     /// text, candidate filenames, storedKeys, or the snapshot.
     static func probeNamedCandidates(
         candidates: [String],
@@ -1276,7 +1276,7 @@ enum FileTransferOutputDetector {
     /// remaining budget) skips that item and continues to later (possibly
     /// smaller) items; an exhausted budget stops the batch.
     ///
-    /// PRIVACY (see the spec's Privacy & Security section): never logs filenames, storedKeys, or bytes.
+    /// PRIVACY (see docs/ai-context/spec.md): never logs filenames, storedKeys, or bytes.
     ///
     /// `fetch` has NO default and that is deliberate: previews are built from
     /// bytes the user already asked for, so the caller has to say where the bytes
@@ -1395,7 +1395,7 @@ enum FileTransferOutputDetector {
     /// reclaims the scratch file cannot race the read. Detaching must not become
     /// fire-and-forget.
     ///
-    /// PRIVACY (see the spec's Privacy & Security section): never logs the path,
+    /// PRIVACY (see docs/ai-context/spec.md): never logs the path,
     /// filename, storedKey, or bytes.
     nonisolated static func previewPatchesForDownloadedFile(
         at url: URL,

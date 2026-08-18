@@ -270,9 +270,9 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
         // Remote Agent (Personal AI) envelope. Skip when the
         // gateway is not configured (backend OR URL missing); the Watch
         // simply keeps its previous remote-agent state until a new
-        // envelope arrives. Token IS included when present — spec
-        // §Cross-Device Sync locks "gateway token arrives via
-        // `WCSession.transferUserInfo`", same posture as the STT key.
+        // envelope arrives. Token IS included when present — the gateway
+        // token rides `WCSession.transferUserInfo` alongside the STT key,
+        // same posture, and `docs/ai-context/spec.md` explains why.
         if let remoteAgentEnvelope = await SettingsManager.shared.currentRemoteAgentEnvelope() {
             payload[Constants.remoteAgentEnvelopeKey] = remoteAgentEnvelope.encodedDict()
         }
@@ -430,7 +430,7 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     /// queued `transferUserInfo` courier actually reached the wrist (or didn't).
     /// Filtered on the settings MARKER: relay transcript replies also ride
     /// `transferUserInfo` and must not move these stamps. Stamps a DATE only —
-    /// never error content (never-log posture per the spec's Privacy & Security section; a bool "it failed" is the
+    /// never error content (never-log posture per docs/ai-context/spec.md; a bool "it failed" is the
     /// whole diagnostic). App-Group-persisted: a failing courier is exactly the
     /// fact that must outlive the process — but treated as opportunistic
     /// forensics, not an authoritative ledger (Apple doesn't promise launching

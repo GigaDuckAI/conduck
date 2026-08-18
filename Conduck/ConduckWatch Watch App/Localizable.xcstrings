@@ -1140,17 +1140,6 @@
         }
       }
     },
-    "remoteAgent.error.defaultNeedsSetup" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your default AI, %@, isn't set up on this device."
-          }
-        }
-      }
-    },
     "remoteAgent.error.defaultNeedsSetup.recovery" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -1169,6 +1158,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Conduck doesn't know which AI to use for new chats."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.defaultUnavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your default AI, %@, isn't available on this device."
           }
         }
       }

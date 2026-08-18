@@ -13,7 +13,7 @@
 // debuggability rationale as the STT body factories).
 //
 // NEVER log the `text` argument — it is the agent reply being read aloud
-// (privacy-sensitive content; see the spec.md "Privacy & Security" section).
+// (privacy-sensitive content; see docs/ai-context/spec.md).
 
 import Foundation
 

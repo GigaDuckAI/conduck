@@ -29,7 +29,7 @@
 // this helper MUST run inline on the calling (delegate) queue — an actor
 // hop would reintroduce the exact race it exists to fix. Pure FileManager
 // + URL, zero state, zero logging (file paths are privacy-scoped per
-// the spec's Privacy & Security section) — trivially unit-testable with plain file URLs
+// docs/ai-context/spec.md) — trivially unit-testable with plain file URLs
 // (ConduckTests/RelayInboxMoverTests.swift).
 
 import Foundation

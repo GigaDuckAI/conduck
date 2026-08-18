@@ -8,8 +8,8 @@
 //
 //   conduck-setup:v1:<base64(minified JSON)>
 //
-// CONTRACT OWNER: `spec.md` "Gateway Setup & Pairing (`conduck-connect` +
-// QR import)" — the JSON shape is LOCKED there; this file only PARSES it.
+// CONTRACT OWNER: `docs/ai-context/spec.md` — the JSON shape is LOCKED
+// there; this file only PARSES it.
 // Mirrors the tolerant-dict-decode posture of
 // `RemoteAgentBroadcastEnvelope.decode(from:)`: unknown keys anywhere are
 // ignored (forward-compat), required-field failures reject the whole
@@ -35,7 +35,7 @@
 // as not-yet-ready and earns readiness with its own staged Test Connection; a
 // capability the code claims is applied, a readiness it might claim is not.
 //
-// PRIVACY (non-negotiable — see the spec's Privacy & Security section): the raw pairing string
+// PRIVACY (non-negotiable — see docs/ai-context/spec.md): the raw pairing string
 // embeds the gateway bearer token + file-server credential. NEVER log /
 // echo the raw string, the decoded JSON, the token, or the credential —
 // parse errors carry NO payload content by design (`PairingParseError` is
@@ -71,7 +71,7 @@ enum PairingParseError: Error, Equatable {
     /// length cap (`sanitizedDisplayText`).
     case malformed
     /// Gateway or fileServer URL parses but its scheme isn't https — https
-    /// is mandatory (`spec.md` Architectural Invariants); surfaced as its
+    /// is mandatory (`docs/ai-context/spec.md`); surfaced as its
     /// own case so the UI can say WHY instead of a generic "bad code".
     case insecureURL
 }
@@ -128,7 +128,7 @@ struct PairingPayload: Equatable, Sendable {
         ///
         /// A PERMISSION about the gateway rather than a measurement of it, and it
         /// travels for the same reason it is mirrored through iCloud KVS: a user
-        /// (later, a seat policy) who forbids automatic delivery for a gateway means
+        /// (later, a policy layer) who forbids automatic delivery for a gateway means
         /// it wherever that gateway is set up, so a permission that stayed on the
         /// device where it was typed would be worthless as a policy.
         ///

@@ -57,7 +57,7 @@ final class CustomVoiceEndpointMigrationTests: XCTestCase {
         // makes the suite deterministic. (Pre-suspension, a defaults-only wipe let
         // a prior suite's KVS residue short-circuit the migration → "0 endpoints
         // minted" when the sim was signed into iCloud — the documented flake
-        // (spec.md Testing Seams & Isolation).)
+        // (docs/ai-context/spec.md).)
         let kvs = TestStores.kvs
         for key in [
             Constants.customVoiceEndpointMigratedKey,

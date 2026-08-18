@@ -14,7 +14,7 @@
 // "single-use" / "expiring" code — it keeps working until the user rotates the
 // token on their gateway. The warning copy says exactly that.
 //
-// PRIVACY (non-negotiable, spec.md "Privacy & Security"): the code embeds the gateway
+// PRIVACY (non-negotiable, docs/ai-context/spec.md): the code embeds the gateway
 // token + file-server credential. It is NEVER logged, and it lives in memory
 // ONLY while revealed — cleared on auto-hide (~60 s), on resign-active /
 // background, on screen capture (iOS), and on dismiss. Nothing is written to

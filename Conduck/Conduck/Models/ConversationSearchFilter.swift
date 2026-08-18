@@ -10,8 +10,8 @@
 // isolation — mirrors `MessageRecord` / `ConversationRecord` / the
 // `CarPlayConversationLabel` style for a pure shared Model file.
 //
-// Tier 1 of the unified search (`spec.md "Conversation Store"` /
-// "Per-Surface"): the INSTANT, in-memory match on `title` + first-user-line
+// Tier 1 of the unified search (`docs/ai-context/spec.md`): the INSTANT,
+// in-memory match on `title` + first-user-line
 // `titleSnippet`. Tier 2 (whole-history message-content match) is the
 // async `ConversationStore.searchConversationIDs(containing:)` predicate
 // fetch; the list unions the two. Keeping the trivial title/snippet rule here

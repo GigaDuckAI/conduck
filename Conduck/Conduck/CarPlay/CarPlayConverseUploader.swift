@@ -28,7 +28,7 @@
 // turn still active (Apple forbids unsolicited audio from a backgrounded app —
 // the unsolicited-audio guard); otherwise it is persisted + synced silently.
 //
-// Privacy invariants (see the spec's "Privacy & Security" section): the bearer
+// Privacy invariants (see docs/ai-context/spec.md): the bearer
 // token is NEVER logged; reply bodies / gateway URLs are never logged.
 
 #if os(iOS)

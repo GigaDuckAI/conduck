@@ -16,10 +16,10 @@
 //   - Tolerant decoder: missing optional fields → nil, malformed required
 //     fields → return nil rather than crash.
 //
-// Privacy invariant (spec §Cross-Device Sync): the bearer token crosses
-// WCSession in the envelope. This is by explicit spec design — "STT key
-// (and gateway token) arrive via `WCSession.transferUserInfo`"
-// — the Watch needs the token to issue converse requests directly.
+// Privacy invariant (docs/ai-context/spec.md): the bearer token crosses
+// WCSession in the envelope. This is deliberate, not incidental: the Watch
+// needs the token to issue converse requests directly, so the STT key and the
+// gateway token both ride `WCSession.transferUserInfo`.
 // Never log the token. The Watch persists it to Keychain via
 // `WatchIdentityResolver` so cold-launch survives (same posture as the
 // STT key).
@@ -187,7 +187,7 @@ struct RemoteAgentBroadcastEnvelope: Codable, Sendable {
     /// means "unstated, use the default".
     let fileTransferFilenamePolicy: String?
 
-    /// Active conversation session ID (`spec.md "Settings & Storage"`).
+    /// Active conversation session ID (`docs/ai-context/spec.md`).
     /// Optional — nil means no live session (first turn after backend /
     /// URL change clears it). Cross-device session continuity:
     /// the Watch adopts the iPhone's active session so a conversation

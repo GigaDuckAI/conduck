@@ -15,8 +15,9 @@
 //
 // All state lives in `SettingsViewModel.cloudSTTTester` (`CloudSTTTester`), which
 // records via the shared `AudioRecorder`, transcribes over the network through
-// `STTClient.transcribe` for the DISPLAYED provider, and never persists the
-// audio/transcript. The elapsed timer ticks inside the leaf
+// `STTClient.transcribe` for the DISPLAYED provider, and keeps neither audio
+// nor transcript once the test ends — the clip it hands `STTClient` is written
+// to temp and `defer`-deleted on every path. The elapsed timer ticks inside the leaf
 // `LiveRecordingStatusIndicator` (`TimelineView`), so the tester's observed
 // `state` stays stable during a capture.
 //

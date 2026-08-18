@@ -27,8 +27,10 @@
 // drops a stale UI result), resolves the PROVIDER BEING DISPLAYED (never
 // `activeSTTSnapshot()` — the user can test a non-active provider), re-reads the
 // key from Keychain at transcribe time (so a key cleared mid-record fails
-// cleanly), and never persists audio/transcript (privacy invariant — see the
-// "Privacy & Security" section of docs/ai-context/spec.md).
+// cleanly), and keeps neither audio nor transcript once the test ends: the clip
+// it hands `STTClient` is written to temp and `defer`-deleted on every path, and
+// nothing here reaches `PendingRetryStore` or a conversation (privacy invariant
+// — see docs/ai-context/spec.md).
 //
 // `#if !os(watchOS)` — the cloud provider detail screens are iOS/macOS only.
 

@@ -649,7 +649,7 @@ enum Constants {
     /// (`/v1/chat/completions`). `identityNamespace` + frozen `.watch.converse`
     /// suffix — distinct from the iOS `.converse` id AND from the `.watch.stt`
     /// id so the three delivery channels never
-    /// cross-talk (`spec.md "Remote Agent Round-Trip"`). Consumed by
+    /// cross-talk (`docs/ai-context/spec.md`). Consumed by
     /// `WatchAudioUploader.uploadConverse(...)` and the matching
     /// `ConduckWatchApp.backgroundTask(.urlSession(...))` handler — change
     /// in lockstep or the system-relaunch event won't route back to the
@@ -659,7 +659,7 @@ enum Constants {
     /// Background `URLSession` identifier for the CARPLAY agent round-trip
     /// (`/v1/chat/completions`). Distinct from the iOS `.converse` id, the
     /// `.watch.converse` id, AND the two `.stt` ids so the delivery channels
-    /// never cross-talk (`spec.md "Remote Agent Round-Trip"`). The CarPlay
+    /// never cross-talk (`docs/ai-context/spec.md`). The CarPlay
     /// converse hop routes over a background session (NOT foreground) — agent
     /// replies take 30 s–several minutes; a background session survives app
     /// suspension and is not subject to the ~30 s `beginBackgroundTask` budget,
@@ -670,7 +670,7 @@ enum Constants {
     /// converse delegate. Reuses the shared 300/600 s timeouts above.
     nonisolated static let remoteAgentCarPlayConverseSessionIdentifier = identityNamespace + ".carplay.converse"
 
-    /// CarPlay VAD speech threshold (`spec.md "Per-Surface Behavior → Apple CarPlay"`). Higher
+    /// CarPlay VAD speech threshold (`docs/ai-context/spec.md`). Higher
     /// than the in-app default (`EndOfSpeechDetector.SensitivityLevel.medium`
     /// = 0.5) to reject road / cabin noise and HFP-mic artefacts — a moving
     /// car is a far noisier capture environment than a hand-held phone. The
@@ -679,7 +679,7 @@ enum Constants {
     static let carPlayVADThreshold: Float = 0.65
 
     /// CarPlay VAD minimum-silence duration (seconds) before declaring
-    /// end-of-speech (`spec.md "Per-Surface Behavior → Apple CarPlay"`). Shorter than the
+    /// end-of-speech (`docs/ai-context/spec.md`). Shorter than the
     /// FluidAudio default (0.75 s) only marginally — ~0.8 s gives a
     /// conversational turn a brief natural pause without ending the turn on a
     /// mid-sentence breath, which matters more in a noisy cabin where false
@@ -689,7 +689,7 @@ enum Constants {
     /// CarPlay zero-input follow-up timeout (seconds). After the loop re-arms
     /// the mic for the next turn, if no `onSpeechStart` fires within this
     /// window the session speaks a brief sign-off and ends — the cabin-noise /
-    /// no-follow-up guard (`spec.md "Per-Surface Behavior → Apple CarPlay"` reversal note). Same
+    /// no-follow-up guard (`docs/ai-context/spec.md`). Same
     /// magnitude as the cold-connect `initialSilenceTimeout` (10 s) but shorter:
     /// a re-arm after a spoken reply is a deliberate "your turn" prompt, so a
     /// shorter patience window before signing off reads as conversational.
@@ -700,7 +700,7 @@ enum Constants {
     /// the Bluetooth-HFP route renegotiation that follows a playback→capture
     /// transition and crashes `engine.start()` with FourCC `'!obj'`
     /// (560947818) — the same g1 audio-race the scene delegate guards on the
-    /// initial turn (`spec.md` Per-Surface (CarPlay) g1).
+    /// initial turn (`docs/ai-context/spec.md`).
     /// (`'!int'` is the DIFFERENT code 560557684 = `CannotInterruptOthers`.)
     static let carPlayHFPSettleDelay: TimeInterval = 0.3
 
@@ -788,7 +788,7 @@ enum Constants {
 
     /// Per-request timeout for the converse hop (`timeoutIntervalForRequest`).
     /// 300 s covers typical local-LLM compute on modest hardware
-    /// (`spec.md "Remote Agent Round-Trip"`). Load-bearing — lowering this
+    /// (`docs/ai-context/spec.md`). Load-bearing — lowering this
     /// kills in-flight turns as "Network Offline" while the gateway is
     /// still computing the reply.
     static let remoteAgentConverseRequestTimeout: TimeInterval = 300
@@ -837,7 +837,7 @@ enum Constants {
     /// `RemoteAgentBackendMetadata` (`endpoint == .fixed`).
     static let openRouterBaseURLString = "https://openrouter.ai/api"
 
-    /// Context trim policy cap (`spec.md "Conversation Store"`). Under
+    /// Context trim policy cap (`docs/ai-context/spec.md`). Under
     /// client-owned history `RemoteAgentClient` sends the active
     /// conversation's prior turns plus the new user turn; only the last
     /// `contextMaxTurns` prior turns cross the wire. This is a SENT-ARRAY
@@ -925,7 +925,7 @@ enum Constants {
 
     /// Soft inter-turn quiet period (seconds) before allowing another
     /// DEVICE to issue a turn on the same active session
-    /// (`spec.md "Cross-Device Sync"`). Hint only — not a hard lock.
+    /// (`docs/ai-context/spec.md`). Hint only — not a hard lock.
     static let interTurnQuietPeriod: TimeInterval = 0.5
 
     /// Debounce (seconds) before the Tier-2 whole-history content search fires
@@ -1048,7 +1048,7 @@ enum Constants {
     /// `PairingPayload.Transport` value, e.g. `"tailscale"`), imported from a
     /// pairing payload. Format `remoteAgent.transportHint.<suffix>`.
     /// App-Group UserDefaults ONLY — NEVER iCloud KVS and NEVER the Watch
-    /// broadcast envelope (per `spec.md` Gateway Setup & Pairing invariants):
+    /// broadcast envelope (per `docs/ai-context/spec.md`):
     /// the hint drives per-device setup guidance (e.g. "install Tailscale on
     /// this device to reach your tailnet gateway"), and another device may
     /// reach the same gateway over a different transport — syncing it would
@@ -1079,8 +1079,7 @@ enum Constants {
     /// Public, auditable home of the `conduck-connect` server-side pairing
     /// wizard. The onboarding gateway step links here so a user who doesn't yet
     /// have a setup code can obtain + read the script (download over HTTPS →
-    /// read/skim → `bash`). See `docs/ai-context/spec.md` → Gateway Setup &
-    /// Pairing.
+    /// read/skim → `bash`). See `docs/ai-context/spec.md`.
     static let conduckConnectRepoURL = URL(string: "https://github.com/gigaduckai/conduck-connect")!
 
     /// Stable GitHub "latest release" base. Every asset path below redirects to
@@ -1089,8 +1088,8 @@ enum Constants {
     /// the file, never in the app or the asset filename, so this string is
     /// permanent and the script can re-version forever without an app update.
     /// NOTE: GitHub resolves `/releases/latest` only once a non-prerelease
-    /// release exists (pre-releases are excluded). See `docs/ai-context/spec.md`
-    /// → Gateway Setup & Pairing.
+    /// release exists (pre-releases are excluded). See
+    /// `docs/ai-context/spec.md`.
     private static let conduckConnectLatestBase =
         "https://github.com/gigaduckai/conduck-connect/releases/latest"
 
@@ -1333,7 +1332,7 @@ enum Constants {
     static let remoteAgentCertFingerprintKey = "remoteAgent.certFingerprint"
 
     /// UserDefaults key for the currently-active conversation session ID
-    /// (`spec.md "Settings & Storage"`). Cleared on backend / URL change
+    /// (`docs/ai-context/spec.md`). Cleared on backend / URL change
     /// or TTL expiry.
     static let remoteAgentActiveSessionKey = "remoteAgent.activeSession"
 
@@ -1452,7 +1451,7 @@ enum Constants {
     // file-server can be bound independently to each gateway (built-in OR
     // custom), keyed by `RemoteAgentRef.storageKeySuffix`.
     //
-    // Privacy (load-bearing — see the spec.md "Privacy & Security" section): the file-server credential is
+    // Privacy (load-bearing — see docs/ai-context/spec.md): the file-server credential is
     // client-minted, stored in Keychain (synchronizable), revealed ONLY in the
     // setup guide's masked credential row the user deliberately copies. Never
     // logged. The cert fingerprint is per-device (App Groups only, NEVER iCloud
@@ -1701,7 +1700,7 @@ enum Constants {
     ///
     /// A per-gateway PROPERTY, not a capability verdict: `available` and
     /// `folderCapable` say what the server CAN do, this says what the user (and
-    /// later, a B2B seat policy) PERMITS it to do. Default true keeps today's
+    /// later, a policy layer) PERMITS it to do. Default true keeps today's
     /// behaviour for every existing ref, and the only value worth storing is the
     /// user's explicit `false`.
     ///

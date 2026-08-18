@@ -12,7 +12,7 @@
 // client-owned history (locked 2026-05-20) Conduck pins no server
 // session, so it never contends OpenClaw's per-session write lock; there
 // is therefore no 423 / `remoteAgentSessionBusy` path on either backend
-// (`spec.md "Cross-Device Sync"`, `spec.md "Error Taxonomy — AppError"`). Both `RemoteAgentBackend`
+// (`docs/ai-context/spec.md`). Both `RemoteAgentBackend`
 // cases return this one map. The `statusMap` seam on the enum is retained
 // only as forward-compat for a future `.custom` backend — it is data
 // dispatch, never behaviour dispatch.

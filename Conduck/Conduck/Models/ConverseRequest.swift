@@ -5,7 +5,7 @@
 //
 // Network foundation. Wire Codables for the OpenAI-compatible
 // `/v1/chat/completions` request/response that both OpenClaw and Hermes
-// Agent gateways expose (`spec.md "Remote Agent Round-Trip"`).
+// Agent gateways expose (`docs/ai-context/spec.md`).
 //
 // Both types in one file matches the `STTBroadcastEnvelope.swift` shape
 // (one wire concept = one file). Single-file scope keeps the request +
@@ -14,7 +14,7 @@
 // with `.text` / `.parts` cases + custom encoder) as a local refactor
 // here, with no API ripple to `RemoteAgentClient` callers.
 //
-// Client-owned history (`spec.md "Remote Agent Round-Trip"`): BOTH backends
+// Client-owned history (`docs/ai-context/spec.md`): BOTH backends
 // receive the FULL client-owned conversation in `messages[]` over a
 // STATELESS request.
 // There is NO session-ID wire field — no `x-openclaw-session-key` header,
@@ -650,8 +650,8 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// consumer below also QUOTES the result, leaving the sanitized `storedKey`
     /// as the only path the block presents as authoritative.
     ///
-    /// PRIVACY: pure transform, never logs (`spec.md "Agent File Transfer"` —
-    /// never log a filename).
+    /// PRIVACY: pure transform, never logs (`docs/ai-context/spec.md` — never
+    /// log a filename).
     static func wireDisplayName(_ raw: String) -> String {
         // A name is a LEAF: keep only the last `/`-delimited segment, so a name
         // shaped like `../../.ssh/id_rsa` cannot read as a path in a block whose
@@ -1330,7 +1330,7 @@ struct ConverseResponse: Decodable, Sendable {
 /// send→done timing proves what the app emits and attributes the wall-clock to
 /// the gateway, not the device.
 ///
-/// PRIVACY (spec.md "Privacy & Security" — non-negotiable): METADATA ONLY. Never reads or logs
+/// PRIVACY (docs/ai-context/spec.md — non-negotiable): METADATA ONLY. Never reads or logs
 /// message content, image bytes, gateway URLs, or bearer tokens — only roles,
 /// content KIND (text vs parts), part/image counts, byte SIZES, elapsed time.
 /// Compiled out of Release entirely (`#if DEBUG`).

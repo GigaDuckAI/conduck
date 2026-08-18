@@ -33,7 +33,7 @@
 // Robust to `connectedRef == nil` (or an unresolved ref): the card falls back to a
 // generic "Your gateway is ready" and drops the per-ref rows.
 //
-// Privacy (spec.md "Privacy & Security"): the setup code (bearer token + file-server
+// Privacy (docs/ai-context/spec.md): the setup code (bearer token + file-server
 // credential) is handled ENTIRELY inside `PairingImportSheet`, and the OpenRouter
 // API key entirely inside `HostedModelGatewayStepView` — never read, logged, or
 // displayed here. The only value surfaced is the display name.
@@ -163,7 +163,7 @@ struct GatewaySetupSuccessView: View {
 
     /// The one forward-looking line on an otherwise backward-looking screen: this
     /// setup rides to the user's other devices (non-secrets on iCloud KVS, secrets
-    /// on the synchronizable Keychain — see Privacy & Security).
+    /// on the synchronizable Keychain — see docs/ai-context/spec.md).
     ///
     /// Deliberately OUTSIDE the summary card. That card reports only VERIFIED
     /// per-ref state (it drops the file row rather than invent one), whereas this is

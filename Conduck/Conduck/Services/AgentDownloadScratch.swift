@@ -195,8 +195,11 @@ actor AgentDownloadScratch {
 /// request bodies that embed either a second copy of a recording (`stt-body-`) or
 /// the entire client-owned conversation history in plaintext
 /// (`conduck-converse-body-`, `conduck-carplay-converse-body-`,
-/// `conduck-watch-converse-body-`). The architecture's invariant is that Conduck
-/// never persists audio where it controls the storage; an orphan contradicts it.
+/// `conduck-watch-converse-body-`). The architecture's invariant is that audio
+/// Conduck persists is bounded and owned — the failed-transcription retry store
+/// and the wrist relay queue each own their clip and expire it. An orphan in the
+/// shared temp directory has no owner left, which is exactly what contradicts
+/// the invariant.
 ///
 /// WHERE it runs: every process that writes those files — `ConduckApp` (iOS),
 /// `AppDelegate` (macOS), `ConduckWatchApp` (watchOS), each through

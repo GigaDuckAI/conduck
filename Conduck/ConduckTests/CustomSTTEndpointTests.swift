@@ -46,7 +46,7 @@ final class CustomSTTEndpointTests: XCTestCase {
     /// this suite does not LEAK into others. `setCustomSTTURL` dual-writes
     /// App-Group defaults AND iCloud KVS, so a defaults-only wipe leaves stale
     /// KVS values (and a possibly-triggered migration flag) that contaminate the
-    /// order-sensitive migration suite (spec.md Testing Seams & Isolation). Clear BOTH stores.
+    /// order-sensitive migration suite (docs/ai-context/spec.md). Clear BOTH stores.
     /// (The Keychain key slot is never written here — see the file header.)
     private func wipeCustomSTTState() async {
         let kvs = TestStores.kvs

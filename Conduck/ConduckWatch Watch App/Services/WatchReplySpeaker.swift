@@ -77,7 +77,7 @@
 // Apple voice; after first audio, the chunk queue's seam-stall grace bounds
 // the mid-turn seams instead.
 //
-// Privacy invariants (docs/ai-context/spec.md "Privacy & Security"): never log the reply text, the API key, or
+// Privacy invariants (docs/ai-context/spec.md): never log the reply text, the API key, or
 // the synthesis URL. Cloud audio is in-memory `Data`, never written to disk.
 // `WatchLog` milestones here carry metadata only (durations, byte counts,
 // error codes, reason tokens).

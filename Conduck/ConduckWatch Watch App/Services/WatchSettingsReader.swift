@@ -137,7 +137,7 @@ final class WatchSettingsReader {
     private(set) var remoteAgentCertFingerprint: String?
 
     /// Active conversation session ID
-    /// (`spec.md "Settings & Storage"`). Nil = no live session. Cross-
+    /// (`docs/ai-context/spec.md`). Nil = no live session. Cross-
     /// device continuity: Watch adopts whatever the iPhone broadcasts so
     /// a conversation started on iPhone can continue on Watch within the
     /// session-continuation policy window.

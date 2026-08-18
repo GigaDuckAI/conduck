@@ -16917,6 +16917,9 @@
         }
       }
     },
+    "This chat's AI isn't available on your iPhone. Start a new chat to use another one." : {
+
+    },
     "This gateway has no file server set up, so your file couldn't be sent. Add one in Settings, then share it again." : {
 
     },
@@ -18581,6 +18584,9 @@
       }
     },
     "Your default AI, %@, isn't available on this device. Open Conduck to pick a different one?" : {
+
+    },
+    "Your default AI, %@, isn't available. Choose another from the list." : {
 
     },
     "Your default AI, %@, isn't set up on this device. Open Conduck to pick a different one?" : {

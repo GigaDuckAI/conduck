@@ -21,7 +21,7 @@ enum FeatureFlags {
     /// The old server-session gates (concurrent-write, attachment,
     /// named-conversation × multimodal replay) DISSOLVED under client-owned
     /// history — Hermes reuses the identical stateless `RemoteAgentClient`
-    /// path (`spec.md` Remote Agent Round-Trip → Hermes). Verified
+    /// path (`docs/ai-context/spec.md`). Verified
     /// against a self-hosted Hermes instance: green at the wire level
     /// (GET /v1/models 200, model-omitted accepted, full-history turn
     /// returned "42").

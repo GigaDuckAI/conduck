@@ -45,7 +45,7 @@
 //     falls back to `transferUserInfo`); otherwise queued
 //     `transferUserInfo` (legacy Watch builds keep working byte-for-byte).
 //
-// Privacy invariant (spec.md "Privacy & Security"): never log audio bytes,
+// Privacy invariant (docs/ai-context/spec.md): never log audio bytes,
 // transcripts, file paths, request UUIDs, or language hints. DEBUG prints
 // are size/state-only.
 //

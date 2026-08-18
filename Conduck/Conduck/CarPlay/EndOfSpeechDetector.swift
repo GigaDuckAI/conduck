@@ -99,7 +99,7 @@ final class EndOfSpeechDetector {
     /// CarPlay preset init. Takes an explicit speech `threshold` (higher than
     /// the in-app default to reject road/cabin noise) and a `minSilence` (the
     /// end-of-speech segmentation pause). Both come from `Constants` so the
-    /// CarPlay tuning lives in one place (`spec.md "Per-Surface Behavior → Apple CarPlay"`).
+    /// CarPlay tuning lives in one place (`docs/ai-context/spec.md`).
     init(
         threshold: Float,
         minSilence: TimeInterval,
@@ -124,8 +124,8 @@ final class EndOfSpeechDetector {
     /// Throws on model-load failure. A throw ENDS the CarPlay session: the sole
     /// caller (`CarPlayRecordingService.startListening`) treats it as a setup
     /// bailout and calls `endSession(speak: nil)` — silent by design, because
-    /// speaking an error over a wedged audio session escalates it (see the
-    /// CarPlay section of `spec.md`). Recording never starts, so the 300 s
+    /// speaking an error over a wedged audio session escalates it (see
+    /// `docs/ai-context/spec.md`). Recording never starts, so the 300 s
     /// recorder cap is not the backstop here; the only throwing paths are a
     /// broken build (`LoadError.vadModelMissingFromBundle`) and a CoreML
     /// compile/load failure, both of which mean there is no working VAD to
