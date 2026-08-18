@@ -2727,17 +2727,6 @@
         }
       }
     },
-    "diagnostics.files.write.ok" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "File uploads verified — a test file wrote and read back."
-          }
-        }
-      }
-    },
     "diagnostics.fix.generic" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2854,7 +2843,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Reachable and signed in. This checks the model list — sending a message is the only thing that proves chat works."
+            "value" : "Reachable and signed in."
           }
         }
       }

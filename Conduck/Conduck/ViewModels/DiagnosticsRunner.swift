@@ -2558,12 +2558,19 @@ final class DiagnosticsRunner {
     /// Apply a staged-write-test outcome to its lane: on success mark verified
     /// (green), on failure record the taxonomy fix. `writeVerified` is set ONLY
     /// here + on the local read of `snapshot.available`.
+    ///
+    /// Success carries NO detail. The badge already reads "Verified" and
+    /// `FileTransferStageChecklist` itemizes the very stages a sentence here would
+    /// recite, so a third telling is duplication — and under the warning badges
+    /// (`fileLaneReturnCaveat`), where uploads passed but returns did not, a green
+    /// "uploads verified" line reads as a contradiction of the badge above it.
+    /// Failure keeps its detail: the remedy is the one thing the badge can't say.
     private func updateFileLaneAfterWrite(ref: RemoteAgentRef, success: Bool, code: Int?) {
         guard let i = fileLanes.firstIndex(where: { $0.ref == ref }) else { return }
         fileLanes[i].writeVerified = success
         if success {
             fileLanes[i].reachAuth = .passed
-            fileLanes[i].detail = String(localized: "diagnostics.files.write.ok", defaultValue: "File uploads verified — a test file wrote and read back.")
+            fileLanes[i].detail = nil
         } else {
             let resolved = code ?? AppError.fileTransferUploadFailed.errorCode
             fileLanes[i].reachAuth = .failed(code: resolved)
@@ -3442,20 +3449,17 @@ final class DiagnosticsRunner {
             )
             switch outcome {
             case .ok:
-                // Green, but SCOPED green — and the scope is the whole point. This
-                // probe asks the gateway for its model list; it never sends a turn.
-                // A user reading a bare green row concludes "chat works", then hits
-                // a wrong model / model-required / vision-unsupported failure on
-                // their first real message with nothing on this screen having
-                // hinted at it. Same honesty shape as the file lane's reach probe,
-                // which likewise refuses to let a cheap check speak for the
-                // expensive one it cannot perform.
+                // Green, but SCOPED green — this probe asks the gateway for its
+                // model list and never sends a turn, so it cannot speak for chat.
+                // The scope is stated by `chatProvenLine`, which renders "No reply
+                // received on this device yet" once per gateway directly beneath
+                // this detail; saying it twice only makes the row longer.
                 return ProbeOutcome(
                     checkID: input.checkID,
                     status: .passed,
                     detail: String(
                         localized: "diagnostics.gateway.reach.ok",
-                        defaultValue: "Reachable and signed in. This checks the model list — sending a message is the only thing that proves chat works."
+                        defaultValue: "Reachable and signed in."
                     )
                 )
             case .okNoModels:
