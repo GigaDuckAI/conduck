@@ -57,29 +57,6 @@ enum GatewayGroupCopy {
         defaultValue: "You supply the address"
     )
 
-    /// The per-row capability line, on the SAME axis as the headers above and as
-    /// `RemoteAgentFailureContext` — the snapshot the error layer dispatches its
-    /// recovery copy on. One axis for both means the picker and the failure
-    /// message can never disagree about what a lane is.
-    static func capabilitySubtitle(for ref: RemoteAgentRef) -> LocalizedStringResource {
-        guard ref.isBuiltin else {
-            return LocalizedStringResource(
-                "settings.personalAI.row.capability.custom",
-                defaultValue: "Your address · your model"
-            )
-        }
-        if ref.failureContext.hidesURLField {
-            return LocalizedStringResource(
-                "settings.personalAI.row.capability.hostedModel",
-                defaultValue: "No server · chat only"
-            )
-        }
-        return LocalizedStringResource(
-            "settings.personalAI.row.capability.selfHostedAgent",
-            defaultValue: "Your server · tools and files"
-        )
-    }
-
     /// Footer for the custom section — any OpenAI-compatible endpoint, including
     /// a self-built AI behind an adapter (the self-builder must recognize
     /// themselves here).

@@ -294,18 +294,10 @@ struct PersonalAISettingsView: View {
             route = .configure(row.ref)
         } label: {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(row.displayName)
-                        .font(.body)
-                        .foregroundStyle(configured ? AppColors.textPrimary : AppColors.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    // The capability line, so the row states what the lane can
-                    // do instead of leaving the section header to imply it.
-                    Text(GatewayGroupCopy.capabilitySubtitle(for: row.ref))
-                        .font(.caption2)
-                        .foregroundStyle(AppColors.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(row.displayName)
+                    .font(.body)
+                    .foregroundStyle(configured ? AppColors.textPrimary : AppColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Spacer()
 
