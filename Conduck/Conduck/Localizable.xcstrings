@@ -11268,39 +11268,6 @@
         }
       }
     },
-    "settings.personalAI.row.capability.custom" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your address · your model"
-          }
-        }
-      }
-    },
-    "settings.personalAI.row.capability.hostedModel" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No server · chat only"
-          }
-        }
-      }
-    },
-    "settings.personalAI.row.capability.selfHostedAgent" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your server · tools and files"
-          }
-        }
-      }
-    },
     "settings.personalAI.section.customHeader.v2" : {
       "extractionState" : "manual",
       "localizations" : {

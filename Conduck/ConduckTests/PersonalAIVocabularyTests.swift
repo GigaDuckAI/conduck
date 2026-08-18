@@ -215,7 +215,7 @@ final class PersonalAIVocabularyTests: XCTestCase {
         )
     }
 
-    // MARK: - The Personal AI list's capability axis
+    // MARK: - The Personal AI list's section vocabulary
 
     /// The three section headers state a FACT about the lane instead of asking
     /// the reader to file their own software under a category ("Full agent
@@ -233,31 +233,5 @@ final class PersonalAIVocabularyTests: XCTestCase {
             XCTAssertFalse(header.localizedCaseInsensitiveContains("gateway"),
                            "A picker header is read BEFORE the user has chosen a lane: \(header)")
         }
-    }
-
-    /// The per-row line runs on the same axis as `RemoteAgentFailureContext`,
-    /// which is what the error layer dispatches recovery copy on — so the picker
-    /// and the failure message cannot disagree about what a lane is. Three
-    /// buckets, three distinct answers.
-    func testRowCapabilitySubtitlesDifferPerLaneAndNameNoGateway() {
-        let subtitles = [
-            RemoteAgentRef.builtin(.openclaw),
-            RemoteAgentRef.builtin(.openrouter),
-            RemoteAgentRef.custom(UUID())
-        ].map { String(localized: GatewayGroupCopy.capabilitySubtitle(for: $0)) }
-
-        XCTAssertEqual(Set(subtitles).count, 3,
-                       "A subtitle that collapses across lanes tells the user nothing: \(subtitles)")
-        for subtitle in subtitles {
-            XCTAssertFalse(subtitle.isEmpty)
-            XCTAssertFalse(subtitle.localizedCaseInsensitiveContains("gateway"),
-                           "Row subtitles render above the hosted lane too: \(subtitle)")
-        }
-
-        // Hermes is the openclaw twin — same capability snapshot, so the same
-        // line. This is the assertion that fails if a future descriptor edit
-        // moves one of them off the self-hosted profile without moving the copy.
-        XCTAssertEqual(String(localized: GatewayGroupCopy.capabilitySubtitle(for: .builtin(.hermes))),
-                       subtitles[0])
     }
 }

@@ -303,16 +303,9 @@ struct MacPersonalAICategory: View {
             route = .configure(row.ref)
         } label: {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(row.displayName)
-                        .font(.body)
-                        .foregroundStyle(configured ? AppColors.textPrimary : AppColors.textSecondary)
-                    // The capability line, so the row states what the lane can
-                    // do instead of leaving the section header to imply it.
-                    Text(GatewayGroupCopy.capabilitySubtitle(for: row.ref))
-                        .font(.caption2)
-                        .foregroundStyle(AppColors.textTertiary)
-                }
+                Text(row.displayName)
+                    .font(.body)
+                    .foregroundStyle(configured ? AppColors.textPrimary : AppColors.textSecondary)
                 Spacer()
                 SettingsStatusMark(
                     configured: configured,
