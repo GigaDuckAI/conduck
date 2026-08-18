@@ -9,7 +9,7 @@
 ## Checklist
 
 - [ ] Commits are signed off with `git commit -s` (DCO 1.1, no CLA) — see [CONTRIBUTING.md](https://github.com/gigaduckai/conduck/blob/main/CONTRIBUTING.md#sign-off-your-commits-dco).
-- [ ] Builds and tests pass — `ConduckTests`, plus `ConduckWatchTests` for watchOS changes; keep the suite green.
+- [ ] Both simulator suites pass locally — `ConduckTests` and `ConduckWatchTests`. CI runs both on every pull request, and the Watch compiles a subset of main-app files, so a change that looks unrelated can still break it.
 - [ ] Tests added or updated where behavior changed.
 - [ ] No endpoint URLs/hostnames (a gateway, a hosted model, a voice endpoint, a file server — any of them), API keys, tokens, transcripts, replies or file names added to any log, error message or notification; new `print`/`debugPrint`/`dump` calls are inside `#if DEBUG` — see [CONTRIBUTING.md](https://github.com/gigaduckai/conduck/blob/main/CONTRIBUTING.md#logging-and-privacy).
 - [ ] No brand artwork or trademarks added; placeholder art only — see [TRADEMARKS.md](https://github.com/gigaduckai/conduck/blob/main/TRADEMARKS.md).

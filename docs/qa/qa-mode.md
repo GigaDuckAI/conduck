@@ -1,5 +1,7 @@
 # Conduck QA Mode
 
+The manual scenarios that use these flags: [scenarios.md](scenarios.md).
+
 Launch-arg-gated, DEBUG-only mode that boots the app into a verifiable state
 for automated QA simulator runs and ad-hoc local debugging — **without a
 working sim Keychain** (the unsigned simulator build cannot persist gateway
@@ -14,35 +16,49 @@ from the machine under test.
 
 ## What QA mode does at boot
 
-1. **Seeds the gateway config into an in-memory override** for both built-in
-   gateways (OpenClaw + Hermes) AND — when the custom flags are supplied — a
-   **user-defined custom gateway** (a roster record `{name, model?}` + url +
-   token, all in-memory; never written to the real registry/Keychain),
-   bypassing the sim Keychain that the unsigned build can't write. After
-   seeding, Settings → Personal AI shows each gateway's status pill as
-   **"Configured"** — including the named custom row, which also demonstrates
-   the "Add custom gateway" cap state (1 of `maxCustomGateways` used).
-2. **Seeds 2 (or 3) sample conversations** — one bound to OpenClaw, one to
-   Hermes, and (when a custom gateway is seeded) a third bound to the custom
-   `custom_<uuid>` — each with a few turns, so the conversation list / search /
-   swipe-delete / thread-switching / per-thread gateway badge all have content
-   from the first frame.
+1. **Seeds the gateway config into an in-memory override** for the two
+   self-hosted built-in gateways (OpenClaw + Hermes) AND — when the custom
+   flags are supplied — a **user-defined custom gateway** (a roster record
+   `{name, model?}` + url + token, all in-memory; never written to the real
+   registry/Keychain), bypassing the sim Keychain that the unsigned build
+   can't write. After seeding, Settings → Personal AI marks each seeded
+   gateway with a small green checkmark, which is the app's only "configured"
+   indicator. There is no status pill and no visible word "Configured": the
+   checkmark carries "Configured" as its VoiceOver label and nothing more, so
+   looking for that text on screen finds nothing. The named custom row gets
+   the same checkmark and also demonstrates the cap state under "Set up a
+   custom server" (one of `Constants.maxCustomGateways` used).
+2. **Seeds three sample conversations** — one bound to OpenClaw, one bound to
+   Hermes, and a second OpenClaw thread that is a long Markdown-heavy
+   scroll-stress transcript (headings, nested lists, inline code, fenced code
+   blocks) for exercising lazy bubble layout. Supplying the custom flags adds
+   a fourth, bound to the custom `custom_<uuid>`. Each thread carries several
+   turns, so the conversation list / search / swipe-delete / thread-switching /
+   per-thread gateway badge all have content from the first frame. That is the
+   `-ConduckQAMode` seed set; `-ConduckQAScreenshotMode` seeds three threads
+   too, but curated marketing ones carrying attachments instead of these.
 3. **Skips onboarding** — the app lands directly in the populated
    conversation UI rather than the Welcome → STT-chooser flow.
-4. **Sets the default gateway to OpenClaw.** Because 2 gateways are
-   configured, the title-bar gateway picker appears on a new/empty
-   conversation.
-5. **Renders a red `QA MODE` banner** above all content. If it's missing, the
-   QA build did NOT activate.
+4. **Sets the default gateway** to whatever `-ConduckQADefaultBackend` names,
+   and to OpenClaw when that flag is absent. Because the launch arguments above
+   configure two gateways, the title-bar gateway picker appears on a new/empty
+   conversation — supply both URL+token pairs, or only one gateway is seeded and
+   the picker will not appear.
+5. **Renders a red `QA MODE` banner** above all content. If it is missing on a
+   `-ConduckQAMode` launch, the QA build did NOT activate. The banner is not a
+   universal activation signal: `-ConduckQAScreenshotMode` activates QA mode
+   with the banner deliberately suppressed, because a red strip would ruin an
+   App Store capture — so on that launch its absence is expected and proves
+   nothing.
 
 ## What QA mode does NOT change
 
 The send path is real. A typed turn goes through the normal
 `RemoteAgentClient` → `POST /v1/chat/completions` to the actual gateway. The
 only difference from a production run is *where the gateway config came from*
-(in-memory override vs Keychain) and *what conversations exist at boot* (2
-seeds vs whatever the user has). Everything downstream of "config resolved" is
-production code.
+(in-memory override vs Keychain) and *what conversations exist at boot* (the
+seeded threads vs whatever the user has). Everything downstream of "config
+resolved" is production code.
 
 ## Activation
 
@@ -82,10 +98,23 @@ repository stores or reads them: you paste each onto the launch-arg line
 above. **They are never bundled into the app and never echoed to logs.** The
 gateway URLs are non-secret config.
 
-**OpenClaw** — use the value at `gateway.auth.token` in `~/.openclaw/openclaw.json`
-on your server. *Not* the token in the Docker compose `.env`: that one is only a
-setup seed and can drift from what the gateway actually checks, so it yields a
-plausible-looking token that silently fails auth.
+**OpenClaw** — read `gateway.auth.mode` in `~/.openclaw/openclaw.json` on your
+server first, because it decides which credential the gateway checks. In `token`
+mode — also the behaviour when the key is absent — the credential is
+`gateway.auth.token`. In `password` mode it is `gateway.auth.password`, which
+rides in the same bearer header. `none` means the gateway is keyless, so launch
+without a token flag at all. `trusted-proxy` means the credential belongs to the
+proxy in front of the gateway and cannot be read out of this file.
+
+Whichever key applies, what you paste must be the literal value. A `${SOME_VAR}`
+placeholder or a `{source: env|file|exec, …}` object is a *reference* to the
+secret rather than the secret, so pasting it verbatim yields a plausible-looking
+token that silently fails auth — resolve it first and paste the result.
+
+If the config carries no credential key at all, the value is
+`OPENCLAW_GATEWAY_TOKEN` in the Docker compose `.env` — that is the one case
+where the compose file holds the real credential. Otherwise the token there is
+only a setup seed and can drift from what the gateway actually checks.
 
 **Hermes** — use the value at `API_SERVER_KEY` in `~/.hermes/.env` on your
 server. Hermes does not generate one; if the key is absent, add it with a long
@@ -113,9 +142,9 @@ curl -sf https://openclaw.example.com/v1/models \
 A JSON response means live round-trips work. An HTML page means the chat
 endpoint is off; a connection failure means the machine can't reach the gateway
 (network/VPN down, or the server is down). In any failure case the run falls
-back to **config-seeded-only**: the seeded UI and gateway-pill state are still
-valid, but a typed send will surface an error from the `remoteAgent.error.*`
-family rather than a reply.
+back to **config-seeded-only**: the seeded UI and the gateway-configured
+checkmarks are still valid, but a typed send will surface an error from the
+`remoteAgent.error.*` family rather than a reply.
 
 ## Production safety
 
@@ -133,7 +162,7 @@ and live in `QA/DebugFlags.swift` (separate `#if DEBUG` namespace).
 
 | Flag | Purpose |
 |---|---|
-| `-ConduckShowOnboarding` | Force the onboarding wizard to appear on EVERY launch, regardless of the persisted `onboarding_completed` flag. The AMBIENT dev-convenience flag (lives enabled in the shared scheme for first-run iteration). The OPPOSITE of QA mode / `-ConduckSkipOnboarding`, which *skip* onboarding — and those explicit skip intents WIN if both are set (so an automated QA launch is never trapped on first-run; `RootView.init()` iOS / `AppDelegate` macOS precedence). Read-only override — never writes `UserDefaults`, so unsetting it restores normal behavior, and completing onboarding still lands you in the app for that session. Wires both iOS/iPad (`RootView`) and macOS (`AppDelegate`). Lets you iterate on first-run with a plain Cmd+R — no uninstall. Pre-added (enabled) to the `Conduck` scheme's Run ▸ Arguments; untick the checkbox to disable. |
+| `-ConduckShowOnboarding` | Force the onboarding wizard to appear on EVERY launch, regardless of the persisted `onboarding_completed` flag. The AMBIENT dev-convenience flag (pre-added to the shared scheme for first-run iteration). The OPPOSITE of QA mode / `-ConduckSkipOnboarding`, which *skip* onboarding — and those explicit skip intents WIN if both are set (so an automated QA launch is never trapped on first-run; `RootView.init()` iOS / `AppDelegate` macOS precedence). Read-only override — never writes `UserDefaults`, so unsetting it restores normal behavior, and completing onboarding still lands you in the app for that session. Wires both iOS/iPad (`RootView`) and macOS (`AppDelegate`). Lets you iterate on first-run with a plain Cmd+R — no uninstall. Pre-added to the `Conduck` scheme's Run ▸ Arguments and shipped unticked, like every argument in that block; tick the checkbox to enable it. |
 | `-ConduckSkipOnboarding` | Skip the onboarding wizard on every launch WITHOUT any of QA mode's other side effects (no seeded conversations, no gateway override, no QA banner, no Keychain skip). For QA scenarios that must exercise the REAL, unseeded app minus first-run — empty conversation state, genuine settings persistence, etc. — where full `-ConduckQAMode` would mask the thing under test. Beats `-ConduckShowOnboarding` if both are set. Read-only override (never writes `UserDefaults`). Wires both iOS/iPad (`RootView`) and macOS (`AppDelegate`). |
 
 ## Limitations / out of scope
@@ -152,3 +181,8 @@ These stay developer / hardware gates and are NOT exercised by QA mode:
 - **In-process offline mock** — deliberately deferred. Conduck QA hits the
   real gateway; there is no canned-reply path, which is why an unreachable
   gateway degrades the run to config-seeded-only.
+- **OpenRouter** — three built-in gateways ship, and OpenRouter is the hosted
+  lane rather than a server of your own. It is configured with an API key and a
+  model instead of a URL and a token, so the URL+token flags above cannot
+  express it and QA mode does not seed it. Exercising OpenRouter means
+  configuring it by hand on a signed device.

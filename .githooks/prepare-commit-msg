@@ -1,10 +1,12 @@
 #!/bin/sh
 # Append the DCO sign-off trailer unless the message already carries one.
 #
-# CONTRIBUTING.md makes `Signed-off-by` mandatory and a DCO bot enforces it on
-# `main`. Leaving that to whoever remembers `git commit -s` is how a repository
-# ends up with a required check that most of its own history does not satisfy —
-# which is the wall an outside contributor's first pull request runs into.
+# CONTRIBUTING.md makes `Signed-off-by` mandatory, and the DCO workflow fails any
+# pull request carrying an authored commit without it. Nothing checks at the moment you
+# write the commit, though, so this hook is the only thing between you and an
+# unsigned one — and the repair afterwards is a rebase across everything you have
+# written since. Relying on whoever remembers `git commit -s` is how a repository
+# ends up with a rule most of its own history does not satisfy.
 #
 # Enable once per clone (it is local config, so it cannot ship in the repo):
 #
@@ -22,9 +24,9 @@ case "$msg_source" in
 	merge|squash) exit 0 ;;
 esac
 
-# Keyed on the AUTHOR, not the committer: the DCO bot matches the trailer
-# against the commit author, the two differ on a rebase or an applied patch, and
-# only the author can certify where the change came from.
+# Keyed on the AUTHOR, not the committer: the sign-off certifies where a change
+# came from, the two identities differ on a rebase or an applied patch, and only
+# the author is in a position to make that certification.
 signoff=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
 [ -n "$signoff" ] || exit 0
 

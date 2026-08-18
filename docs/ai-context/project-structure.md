@@ -19,7 +19,7 @@ If you want to know what a particular file does, open it. Every source file carr
 | `docs/qa/` | The in-app QA harness and the manual test scenarios that go with it. |
 | `branding/` | Neutral placeholder artwork for community builds, and a README explaining how it is regenerated. |
 | `scripts/` | The checks CI runs, plus a few maintenance tools. See the verification table in `spec.md`. |
-| `.github/workflows/` | Continuous integration: the header and storage-seam checks, then the test suites. |
+| `.github/workflows/` | Continuous integration. A cheap Linux job runs the source guards — the `scripts/` checks that keep this repository's own rules true, including the one that enforces this document — and the simulator test suites are gated on it, so a one-line violation is never discovered by an expensive macOS matrix. |
 | `.githooks/` | Optional local hooks. Enable with `git config core.hooksPath .githooks`. |
 | `Conduck/` | The Xcode project and all Swift source. Everything below is inside it. |
 
@@ -36,14 +36,15 @@ If you want to know what a particular file does, open it. Every source file carr
 
 ## The main app — `Conduck/Conduck/`
 
-One target covers iPhone, iPad and Mac. The Mac build is a full Dock application *and* a menu-bar agent; both live here.
+One target covers iPhone, iPad and Mac. The Mac build is a full Dock application *and* a menu-bar agent; both live here. The target's platform settings also list visionOS, which nothing else in the repository acts on: no source file branches on it, no scheme or workflow names a visionOS destination, and no continuous-integration job builds one. Read the supported set as the three platforms above until that setting is either removed or backed by a build.
 
 | Folder | What lives there |
 |---|---|
 | *(top level)* | The app entry point and the top-level window and scene wiring shared by all three platforms. |
-| `Models/` | The plain data types the whole app agrees on — conversation and message records, the error type, the user-preference enumerations, request and reply shapes. No behaviour, only structure. Many of these are compiled into the Watch app as well. |
+| `Models/` | The data types the whole app agrees on — conversation and message records, the error type, the user-preference enumerations, request and reply shapes. Those are structure without behaviour, and many of them are compiled into the Watch app as well. One thing here is not a type at all: `Models/Conversations.xcdatamodeld`, the versioned Core Data model behind the conversation store. Each version of it is additive-only, and every earlier version is still a live upgrade path on a device that has not opened the app in a long time, which makes it the highest-risk edit in the repository. |
 | `Models/Diagnostics/` | The data behind the in-app diagnostics screen, including the plain-English explanations shown for each check. |
 | `Services/` | Everything that does work rather than draws: audio recording, the conversation store, settings, the share-sheet inbox and its drainer, permissions, iCloud sync monitoring, retry bookkeeping. |
+| `Services/KeyArrival/` | iCloud Keychain delivers a synced secret opportunistically and posts no arrival event, so a device still waiting on one has nothing to converge on and stays quietly degraded. This holds the shared, bounded, foreground-only poller that each waiting subject takes its own instance of, instead of a hand-rolled wait per subject — the bounds are settled in one place rather than in every place that can be waiting. |
 | `Services/RemoteAgent/` | Everything that talks to the user's AI. One network client serves every gateway kind; what differs between kinds is a capability descriptor, not a code path. Also holds pairing-payload import and export, certificate-trust evaluation, background upload and download, and the file-server client. |
 | `Services/STT/` | Speech to text: the provider protocol, the shared request-building and response-decoding machinery, connection testing, and the on-device Apple engine. |
 | `Services/STT/Providers/` | A file here only when a vendor cannot use the shared request and decode machinery — a bespoke probe or body factory for the ones that deviate. Vendors that fit the standard shape have no file at all. Adding a vendor means registering it in `Services/STT/STTProvider.swift` and the metadata lists beside it; a file here is the exception, not the step. |
@@ -81,6 +82,7 @@ One target covers iPhone, iPad and Mac. The Mac build is a full Dock application
 | `Conduck/ConduckTests/` | The main test suite. Includes several named drift-guard and contract tests; the verification table in `spec.md` says what each one protects. |
 | `Conduck/ConduckTests/RemoteAgent/` | Gateway tests, including the converse wire-contract test. The named drift guards live one level up, in `Conduck/ConduckTests/` itself. |
 | `Conduck/ConduckTests/Providers/` | Per-vendor speech provider tests. |
+| `Conduck/ConduckTests/Fixtures/` · `Conduck/ConduckTests/Resources/` | Test data with no Swift in it — a captured gateway reply, and DER-encoded certificates the trust-evaluation tests parse. `scripts/check-folder-map.sh` finds folders by the Swift source inside them, so it structurally cannot notice a resource-only folder. These two are mapped only because this row exists; delete it and nothing will ever report them missing. |
 | `Conduck/ConduckWatchTests/` | Watch-only logic that the main suite cannot see, hosted by the Watch app. **See the footgun below before adding a file here.** |
 
 ---
@@ -105,7 +107,9 @@ Where a file *is* shared but only partly applies, the gating happens inside it w
 
 Three build configurations exist: `Debug`, `Release`, and `Debug-Testing`. All three read their identity variables from `Conduck/Configs/Identity.xcconfig`.
 
-Two things in the project file fail silently if you touch them. The macOS share extension's embed step and its target dependency must both carry the platform filter as a **plural array** — Xcode ignores the singular macOS token, and the macOS extension then embeds into the iOS build. And no identity-bearing value may be written directly into a build setting: those come from the xcconfig, and hardcoding one defeats the community/official split without breaking anything visibly.
+Several things in the project file fail silently if you touch them. The macOS share extension's embed step and its target dependency must both carry the platform filter as a **plural array** — Xcode ignores the singular macOS token, and the macOS extension then embeds into the iOS build. No identity-bearing value may be written directly into a build setting: those come from the xcconfig, and hardcoding one defeats the community/official split without breaking anything visibly.
+
+The same split also runs through the app's entitlements, which are two files rather than one — `Conduck/Conduck/Conduck-Community.entitlements` and `Conduck/Conduck/Conduck-Official.entitlements`, selected by a build variable. Xcode's capability editor writes only to whichever variant the active configuration selects and never touches the other, so a capability added through the capabilities UI lands in one build and is silently missing from the other. Edit both files by hand, and check the variant you are not building.
 
 ---
 
@@ -117,12 +121,15 @@ Two things in the project file fail silently if you touch them. The macOS share 
 | Speech recognition, or adding a speech vendor | `Conduck/Conduck/Services/STT/` |
 | Spoken replies | `Conduck/Conduck/Services/TTS/` |
 | Conversation storage or iCloud sync | `Conduck/Conduck/Services/ConversationStore.swift` and `Services/Storage/` |
+| The conversation database schema | `Conduck/Conduck/Models/Conversations.xcdatamodeld` — add a version rather than editing a shipped one. The mirrored CloudKit schema is additive-only and permanent, so a field cannot be withdrawn once it exists, and every version still on disk somewhere is a migration a real device will run |
 | Anything persisted, synced, or kept secret | `Conduck/Conduck/Services/Storage/` — go through the seam |
 | The message thread or the composer | `Conduck/Conduck/Views/Conversation/` |
 | A settings screen | `Conduck/Conduck/Views/Settings/` — check whether the Mac hierarchy needs the same change |
 | Watch behaviour | `Conduck/ConduckWatch Watch App/` |
 | CarPlay behaviour | `Conduck/Conduck/CarPlay/` |
 | Share-sheet behaviour | Both extension folders, and the inbox drainer in `Conduck/Conduck/Services/` |
+| Voice capture | `Conduck/Conduck/Services/AudioRecorder.swift`, with `InAppAudioRecorder.swift` beside it wrapping the in-app thread flow — then check the surfaces you are *not* changing. `Conduck/Conduck/CarPlay/`, `Conduck/ConduckWatch Watch App/Services/` and `Conduck/ConduckWatch/` each own a separate recorder on purpose, so none of them inherits a fix made here |
+| A user-visible string | `Conduck/Conduck/Localizable.xcstrings`, and `Conduck/ConduckWatch Watch App/Localizable.xcstrings` if the wrist shows it too. They are two independent catalogues, so a string both sides display is written in both — including a string that lives in a file the Watch compiles from the app target, because the lookup still resolves against the Watch's own bundle |
 | A tunable limit | `Conduck/Conduck/Utilities/Constants.swift` |
 
 Before changing a subsystem, read the corresponding part of [`spec.md`](spec.md) — it records decisions that the code cannot tell you, including several designs that were deliberately rejected.

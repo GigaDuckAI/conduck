@@ -8,3 +8,7 @@ art at build time; that art is not part of this repository and is not covered by
 Regenerate (deterministic, safe to re-run): `python3 scripts/generate-placeholder-assets.py`
 (requires Pillow). Output is byte-identical on every run and must match both `placeholders/`
 and the asset catalogs.
+
+What you may do with the Conduck name and the official brand art is settled by
+[TRADEMARKS.md](../TRADEMARKS.md), not by this note — this file only covers how the
+placeholder PNGs are made.

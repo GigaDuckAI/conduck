@@ -8,10 +8,14 @@ This file is the short version for people arriving via GitHub.
 
 ## Reporting a vulnerability
 
-Email **security@gigaduck.ai**.
+Use GitHub's private vulnerability reporting on this repository — Security ▸
+Report a vulnerability. It opens a private thread with us, and it becomes the
+published advisory once the fix ships. If you prefer email, write to
+**security@gigaduck.ai**.
 
 **Please do not open a public GitHub issue for security vulnerabilities** — a
-public issue discloses the problem before a fix exists. Use email.
+public issue discloses the problem before a fix exists. Either of the two
+private routes above is the right one.
 
 A helpful report includes:
 
@@ -39,6 +43,13 @@ anonymous, you can report indirectly through CERT-EE, Estonia's national CSIRT
   or 90 days have passed since your report, whichever comes first.
 - Once a fix is available, an advisory is published; with your permission you
   are credited for the discovery. There is no monetary bug bounty at this time.
+
+## Which versions get fixes
+
+Security fixes ship in the current App Store release, built from `main`. There
+are no backports to older builds — a fix reaches you by updating the app. A
+report against an older build is still welcome; it is closed once the issue is
+confirmed fixed in the shipping version.
 
 ## Scope
 

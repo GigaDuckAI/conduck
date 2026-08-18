@@ -22,16 +22,26 @@ That's the whole agreement: there is **no CLA** and no copyright assignment.
 Forgot to sign off? `git commit --amend -s` fixes the last commit;
 `git rebase --signoff <base>` fixes a branch.
 
-Rather than rely on remembering the flag, enable the tracked hook once per clone:
+Rather than rely on remembering the flag, enable the tracked hooks once per
+clone:
 
 ```
 git config core.hooksPath .githooks
 ```
 
-`.githooks/prepare-commit-msg` then adds the trailer for you. It is keyed on the
-commit **author** (the person who can certify the change, and not always the
+That one command installs both of this repository's hooks.
+`.githooks/prepare-commit-msg` adds the sign-off trailer for you. It is keyed on
+the commit **author** (the person who can certify the change, and not always the
 committer), skipped for merge and squash messages, and idempotent — so
 `git commit -s` keeps working and never produces a duplicate line.
+
+`.githooks/pre-commit` covers the other thing that is easy to forget: it runs
+`scripts/add-spdx-headers.sh --staged`, which stamps the SPDX license tag (see
+[Style and dependencies](#style-and-dependencies)) onto the source files your
+commit adds or changes and re-stages them, so the tag lands in that same commit
+instead of as a stray follow-up. It always prints what it stamped, and it
+refuses to stamp a file that has unstaged changes sitting alongside the staged
+ones — stamping there would pull those unstaged hunks into your commit.
 
 ## Building from source
 
@@ -44,17 +54,37 @@ and watchOS 26.5.
 That's it — the community build works with **zero configuration**. It uses a
 neutral build identity (`com.example.*` bundle identifiers, no signing team),
 ships placeholder art, and displays as **"Conduck Community"**. Simulator runs
-need no signing setup at all. To run on your own hardware, create a gitignored
+need no signing setup at all.
+
+One consequence to know before you judge the app by that first run: an unsigned
+simulator build cannot write the Keychain, so a gateway you add there will not
+persist — the app forgets it. That is the platform, not a bug in the app. Either
+run on a device with a signing identity, or launch the simulator with the
+arguments in [docs/qa/qa-mode.md](docs/qa/qa-mode.md), which seed a working
+gateway into an in-memory override that bypasses the Keychain entirely.
+
+To run on your own hardware, create a gitignored
 `Conduck/Configs/Identity-Override.xcconfig` next to
-`Conduck/Configs/Identity.xcconfig` defining the same `CONDUCK_*` variables
-(including your `CONDUCK_DEVELOPMENT_TEAM`) — see the comments in that file.
+`Conduck/Configs/Identity.xcconfig`, setting `CONDUCK_DEVELOPMENT_TEAM` and your
+own `CONDUCK_BUNDLE_ID_BASE`, `CONDUCK_IDENTITY_NAMESPACE`, `CONDUCK_GROUP_ID`
+and `CONDUCK_ICLOUD_CONTAINER_ID`. A development team on its own is not enough:
+the community `com.example.*` App Group, iCloud container and push capability
+cannot provision under another team, so leaving those four identifiers at their
+community values fails to sign whichever team you name. `CONDUCK_IDENTITY_NAMESPACE` is not a provisioning identifier, but it is changed alongside them so one build's stored identity never reads another's. The remaining variables
+in `Identity.xcconfig` — the display name and the entitlements variant — can
+stay as they are; the community entitlements are the ones an arbitrary team can
+actually provision. `Identity.xcconfig` includes the override automatically when
+the file exists, so nothing in source changes, and nothing you put there is ever
+committed.
 
 Two things that are intentional, not broken:
 
 - The community entitlements omit CarPlay (a restricted, Apple-granted
   entitlement); the official App Store build carries it.
 - The real Conduck brand art is not in this repository and is not covered by
-  its license — see `branding/README.md`.
+  its license. What you may do with the name and the duck character — build for
+  yourself, redistribute under a name of your own, refer to Conduck truthfully
+  in your own docs — is set out in [TRADEMARKS.md](TRADEMARKS.md).
 
 ## Running tests
 
@@ -62,6 +92,34 @@ Two things that are intentional, not broken:
   `ConduckTests` bundle (the main app-logic suite) on an iOS Simulator.
 - watchOS-only logic has its own bundle: run the **ConduckWatchTests** scheme
   against a watchOS Simulator.
+- From a terminal — over SSH, or driving a coding agent — the same two suites
+  run through `xcodebuild`. Both need a **simulator UDID** rather than a device
+  name, because the names change with every Xcode release; list the ones you
+  actually have with `xcrun simctl list devices available` and paste the
+  identifier from the parentheses. Run these from the repository root:
+
+  ```
+  xcodebuild test \
+    -project Conduck/Conduck.xcodeproj \
+    -scheme Conduck \
+    -destination 'platform=iOS Simulator,id=<iphone-simulator-udid>'
+
+  xcodebuild test \
+    -project Conduck/Conduck.xcodeproj \
+    -scheme ConduckWatchTests \
+    -destination 'platform=watchOS Simulator,id=<watch-simulator-udid>'
+  ```
+
+  CI runs these same two commands against simulators it picks the same way,
+  adding `-derivedDataPath` to keep the build products inside the runner's
+  temporary directory — worth copying if you want yours somewhere other than
+  the shared Xcode location.
+
+  **Read the log, not the exit status.** `xcodebuild` can exit 0 on a run whose
+  tests failed. Before you believe a run passed, confirm it printed
+  `** TEST SUCCEEDED **` and an `Executed N tests, with 0 failures` line — and
+  do not pipe the output through `-quiet`, or through a formatter that hides
+  everything but errors, because those lines are the first thing they drop.
 - Certificate trust has one suite that neither of those runs:
   `RemoteAgentLiveTLSTrustTests` drives a real loopback HTTPS server, so an
   untrusted chain being refused, a pin mismatch, a cross-origin redirect, and
@@ -99,11 +157,11 @@ Keychain skip on unsigned simulator builds, and the official-identity lock
 tests skip under the community identity. Skips there are expected — failures
 are not. Please keep the suite green. Your pull request runs both complete
 simulator suites in GitHub Actions, plus the macOS compile of the live-TLS
-bundle and the source guards — SPDX headers, the storage seam, and the folder
-map. Opening the pull request is what runs them: pushing to a branch in your own
-fork runs nothing here, so run the two suites locally before you push rather
-than using CI to find out. A push to `main` runs the guards, and the full matrix
-as well in the public repository.
+bundle and the source guards under `scripts/`. Opening the pull request is
+what runs them: pushing to a branch in your own fork runs nothing here, so
+run the two suites locally before you push rather than using CI to find out.
+A push to `main` runs the guards, and the full matrix as well in the public
+repository.
 
 ### Manual testing against real providers
 
@@ -160,9 +218,9 @@ here can see the other side.
 
 ## Review model
 
-Reviews are best-effort by a small maintainer team. Expect a response, but not
-always a fast one — please be patient, and feel free to ping a quiet PR after a
-couple of weeks.
+Reviews are best-effort by one person. Expect a response, but not always a fast
+one — please be patient, and feel free to ping a quiet PR after a couple of
+weeks.
 
 ## Logging and privacy
 
@@ -220,14 +278,39 @@ so the judgement is still yours.
   The architecture document under `docs/ai-context/` deliberately does not
   describe individual files, so the header is the only place that knowledge
   lives, and the next person to open the file is the only reader who needs it.
+- **Every source file also carries an SPDX license tag, above that header
+  comment.** `// SPDX-License-Identifier: Apache-2.0` is the first line of a
+  `.swift` or `.js` file; in a `.py` or `.sh` script the `#` form goes on the
+  line straight after the shebang, which has to stay first for the kernel to
+  honour it. A blank line follows the tag either way. There is no copyright line
+  and no year — the one tag is the whole license header, and
+  `scripts/add-spdx-headers.sh` explains why. Run that script to stamp anything
+  missing one; re-running it changes nothing, and the `.githooks/pre-commit`
+  hook runs it for you at commit time. This is not optional politeness: it is
+  the first thing CI checks, on a cheap Linux runner that gates every other job,
+  so a file without the tag fails the whole run before a build even starts.
 - **No new dependencies without prior discussion in an issue.** Every
   dependency is a long-term maintenance commitment, so additions are deliberate.
-- **Adding or bumping a dependency? Update `THIRD_PARTY_NOTICES.md`.** A test
-  checks that every `Package.resolved` pin is named there, but it cannot see
-  third-party code or assets embedded *inside* a package (bundled JavaScript,
-  vendored C++, fonts). Those live in the notices under "Components embedded via
-  dependencies" and need a manual look — reproducing their notices is an
-  obligation of every distributed build, not a one-time write.
+- **Adding or bumping a dependency? Update `THIRD_PARTY_NOTICES.md` — and copy
+  it verbatim to `Conduck/Conduck/Resources/Legal/`.** The repository root holds
+  the canonical text, the app displays the bundled copy, and
+  `LegalNoticesResourceTests` fails the build if the two are not byte-identical.
+  The same holds for `LICENSE` and `NOTICE`, which the bundle carries under a
+  `.txt` extension because the app looks them up by name and extension; the contents still have to
+  match to the byte. From the repository root:
+
+  ```
+  cp THIRD_PARTY_NOTICES.md Conduck/Conduck/Resources/Legal/THIRD_PARTY_NOTICES.md
+  cp LICENSE Conduck/Conduck/Resources/Legal/LICENSE.txt
+  cp NOTICE Conduck/Conduck/Resources/Legal/NOTICE.txt
+  ```
+
+  A test also checks that every `Package.resolved` pin is named in the notices,
+  but it cannot see third-party code or assets embedded *inside* a package
+  (bundled JavaScript, vendored C++, fonts). Those live in the notices under
+  "Components embedded via dependencies" and need a manual look — reproducing
+  their notices is an obligation of every distributed build, not a one-time
+  write.
 
 ## Documentation
 
@@ -266,3 +349,8 @@ license. The Conduck™ name and the duck-character brand artwork are trademarks
 and brand assets of GigaDuck OÜ and are **not** covered by that license — which
 is why this repository ships placeholder art and community builds display
 "Conduck Community".
+
+[TRADEMARKS.md](TRADEMARKS.md) is the policy itself, and the answer to every
+question about that carve-out: what you may do with the placeholder art, why
+building for yourself needs no permission at all, and what a build you hand to
+other people has to be renamed to.

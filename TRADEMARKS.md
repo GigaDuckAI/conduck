@@ -45,6 +45,12 @@ You do not need to remove those strings from the source code, and truthful
 references in your source, documentation, and release notes (for example,
 "based on Conduck") are fine.
 
+Setting your own product name is a one-line change: it comes from
+`CONDUCK_DISPLAY_NAME` in `Conduck/Configs/Identity.xcconfig`, which a
+gitignored `Identity-Override.xcconfig` beside that file overrides. The
+build-identity notes in [CONTRIBUTING.md](CONTRIBUTING.md) cover the rest of
+what an override sets.
+
 You may redistribute and use the neutral placeholder artwork under
 Apache-2.0, including as your app icon — it contains no Conduck brand mark,
 and using it does not imply endorsement by us. The official Conduck icons and

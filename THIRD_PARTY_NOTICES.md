@@ -237,11 +237,29 @@ SOFTWARE.
 
 ### Apache-2.0-licensed packages
 
-The following packages are licensed under the Apache License 2.0. The full
-license text is identical to this repository's root LICENSE file.
-Three of these projects (SwiftASN1, Swift Crypto, SwiftNIO) publish a NOTICE
-file, reproduced verbatim below; the remaining projects publish the unmodified
-Apache-2.0 text without a project-specific copyright notice.
+The following packages are licensed under the Apache License 2.0, but they do
+not all ship the same text, and several of them carry a copyright notice of
+their own. Which is which follows.
+
+SwiftASN1, Swift Crypto and SwiftNIO publish a NOTICE file, reproduced verbatim
+below.
+
+swift-huggingface, swift-jinja and swift-transformers fill in the license
+appendix with a project copyright line: `Copyright 2025 Hugging Face SAS.` for
+swift-huggingface, and `Copyright 2022 Hugging Face SAS.` for swift-jinja and
+swift-transformers.
+
+swift-atomics, swift-collections and swift-system publish the Apache-2.0 text
+with the Swift project's Runtime Library Exception appended. That exception
+releases a redistributor from the attribution Sections 4(a), 4(b) and 4(d)
+would otherwise require for portions of the software embedded into a compiled
+binary product.
+
+FluidAudio, SwiftASN1, Swift Crypto and SwiftNIO leave the appendix unfilled,
+so their license text is the unmodified Apache-2.0 text this repository's root
+LICENSE also reproduces — Swift Crypto's and SwiftNIO's byte for byte,
+FluidAudio's and SwiftASN1's differing only in a leading or trailing blank
+line.
 
 | Package | Upstream |
 |---|---|
@@ -546,8 +564,11 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
   Speech@FIT. It sits in the `FluidAudio` library target, so it compiles into
   the app.
 - **Upstream:** <https://github.com/BUTSpeechFIT/VBx>
-- **License:** Apache License 2.0, `Copyright 2021-2024 BUT Speech@FIT`. The
-  full license text is identical to this repository's root LICENSE file.
+- **License:** Apache License 2.0. The upstream project carries the license in
+  its per-file source headers and publishes no license file of its own, so the
+  attribution comes from FluidAudio, which ships it as
+  `ThirdPartyLicenses/vbx-LICENSE.md` — the Apache-2.0 text with the appendix
+  filled in as `Copyright 2021-2024 BUT Speech@FIT (original VBx project)`.
 
 ### swiftui-math math fonts — SIL OFL-1.1 and the GUST Font License
 
@@ -581,3 +602,21 @@ The twelve fonts, with the license each declares in its own `name` table:
 | xits-math | SIL OFL-1.1 |
 | latinmodern-math | GUST Font License |
 | texgyretermes-math | GUST Font License |
+
+## Documentation and non-code content
+
+Not every file in this repository is Apache-2.0 source, and one of them carries a
+different licence outright.
+
+### CODE_OF_CONDUCT.md — Contributor Covenant 3.0, CC BY-SA 4.0
+
+`CODE_OF_CONDUCT.md` is adapted from the Contributor Covenant, version 3.0,
+© Organization for Ethical Source, licensed under the Creative Commons
+Attribution-ShareAlike 4.0 International licence. The adaptation is distributed
+under that same licence, as ShareAlike requires. It is not part of the
+Apache-2.0 source, it is not compiled into any build, and it places no condition
+on the code — the licence travels with that one document and nothing else.
+
+- **Licence:** https://creativecommons.org/licenses/by-sa/4.0/
+- **Upstream:** https://www.contributor-covenant.org/version/3/0/
+

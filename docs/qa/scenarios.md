@@ -16,7 +16,7 @@ filter, never from database queries.
 Live round-trips depend on the gateway being reachable: if the Step-2 precheck
 warned the gateway was unreachable, scenarios 1 and 3 (seeded-state / UI) still
 hold, but scenario 2 (live send) degrades to asserting on the error surface
-instead of a reply.
+instead of a reply. Scenario 4 states its own degraded path.
 
 **Targeting toolbar actions — coordinate-tap only.** SwiftUI `NavigationStack`
 toolbars collapse the entire nav bar into one opaque `AXGroup` (`children: []`)
@@ -24,11 +24,19 @@ in the live `AXUIElement` tree that `axe` (an accessibility-driver CLI used
 for simulator UI automation) reads, so the toolbar buttons are NOT
 reachable by id OR by label — do not waste turns on `tap --id`/`--label` for
 them. Tap by coordinate instead (iPhone 17 Pro, portrait, inline nav bar at
-y≈89): Conversations x≈22, centered gateway-title/Clone x≈201, New conversation x≈370. Settings is a conversation-list footer row (id `toolbar.settings`) — in the live tree, tap by id or row coordinate, not a nav-bar coordinate. (The buttons
-carry `accessibilityIdentifier`s — `toolbar.*` — but
-those surface to XCUITest/VoiceOver only, not to `axe`.) Non-toolbar controls
+y≈89): Conversations x≈22, centered gateway-title/Clone x≈201, New conversation
+x≈370. (The buttons carry `accessibilityIdentifier`s — `toolbar.*` — but those
+surface to XCUITest/VoiceOver only, not to `axe`.) Non-toolbar controls
 (composer, list rows, settings fields) ARE in the live tree — target those
 normally.
+
+Settings is not in that bar at all. On iPhone it is a leading item in the
+conversation list's own nav bar (id `toolbar.settings`), so reaching it means
+opening Conversations first and then tapping the leading edge of that list's
+bar. It is a toolbar item like the rest, so the same collapse applies — tap it
+by coordinate rather than by id, and measure that bar's y in the run instead of
+reusing the value above, which belongs to the thread view. The bottom-pinned
+Settings footer row exists only on the iPad and macOS sidebars.
 
 ---
 
@@ -39,16 +47,18 @@ Launch args: `-ConduckQAMode -ConduckQAOpenClawURL <openclaw-url> -ConduckQAOpen
 Test instruction:
 
 > Verify the red QA MODE banner is visible. Confirm the conversation list
-> shows at least 2 pre-seeded threads. Open one — its prior turns should
-> render in the thread (user bubbles plain, agent bubbles Markdown). Go to
-> Settings → Personal AI and confirm both OpenClaw and Hermes show a
-> "Configured" status pill. No live send required for this scenario.
+> shows at least three pre-seeded threads. Open one — its prior turns should
+> render in the thread (user bubbles plain, agent bubbles Markdown). Open
+> Settings from the conversation list, go to Personal AI, and confirm that
+> OpenClaw and Hermes each carry the green configured checkmark described in
+> `qa-mode.md`. No live send required for this scenario.
 
 Pass criteria:
 - Banner visible.
-- Conversation list has ≥ 2 threads.
+- Conversation list has ≥ 3 threads.
 - Opening a thread renders its seeded prior turns.
-- Both gateways show "Configured" in Settings → Personal AI.
+- OpenClaw and Hermes each carry the green configured checkmark in
+  Settings → Personal AI.
 - No errors in the app's debug log stream.
 
 ---
@@ -85,27 +95,27 @@ Launch args: same as Scenario 1.
 Because 2 gateways are configured, a new/empty conversation shows a title-bar
 gateway picker; once a conversation has turns its gateway is locked.
 
+The gateway URL is deliberately never written to a log — a guard test enforces
+it — so routing is verified from the title-bar binding, not from the log stream.
+
 Test instruction:
 
 > Verify the QA MODE banner. Start a NEW conversation. Confirm a gateway
 > picker is present in the title bar (it appears only when ≥ 2 gateways are
-> configured). Pick a gateway, send a short turn, and confirm the reply
-> routes through the chosen gateway (correlate via the log stream — the
-> request goes to the chosen gateway's URL). Then start a second new
-> conversation, pick the OTHER gateway, send a turn, confirm it routes to
-> that gateway. Reopen the first conversation and confirm its title bar now
-> shows the bound-gateway label (NOT the picker) matching the gateway you
-> originally chose; with 2 gateways configured the label carries a `chevron.down`
-> and tapping it opens the Clone & continue sheet.
+> configured). Pick a gateway and send a short turn. Then start a second new
+> conversation, pick the OTHER gateway, and send a turn there. Reopen each
+> conversation and confirm its title bar shows the bound-gateway label (NOT
+> the picker) for the gateway it was created on, and that the two
+> conversations show different labels; with 2 gateways configured the label
+> carries a `chevron.down` and tapping it opens the Clone & continue sheet.
 
 Pass criteria:
 - Title-bar gateway picker present on a new/empty conversation.
-- A turn routes to the selected gateway (log-stream evidence: request hits
-  the chosen gateway URL).
 - Each of the 2 gateways is exercisable from its own new conversation.
-- Reopening a conversation with turns shows the bound-gateway label (not the
-  picker), matching the originally chosen gateway; clone-eligible threads show a
-  `chevron.down` that opens the Clone & continue sheet.
+- Reopening each conversation shows the bound-gateway label (not the picker)
+  for the gateway it was created on, and the two conversations show different
+  labels; clone-eligible threads show a `chevron.down` that opens the
+  Clone & continue sheet.
 
 Degraded path (gateway-reachability precheck failed):
 - Routing UI (picker present, gateway bound after first turn) is still
@@ -113,26 +123,36 @@ Degraded path (gateway-reachability precheck failed):
 
 ---
 
-## Scenario 4 — Negative path: unreachable / bad gateway (future variant)
+## Scenario 4 — Negative path: unreachable gateway
 
-Status: NOT exercised by the default harness. The harness always seeds the
-GOOD, reachable gateway URLs, so it cannot produce a deterministic connection
-failure on demand.
+Launch args: Scenario 1's, with `-ConduckQAOpenClawURL` pointed at an
+unroutable host — `https://openclaw.invalid` — and the OpenClaw token left as
+it is. The host is what makes the failure deterministic rather than
+opportunistic: QA mode seeds the URL straight from the launch argument without
+running the admissibility rules the Settings editor applies, so the failure has
+to come from the address itself rather than from a rejected value — and
+`.invalid` is reserved by RFC 2606, so it can never resolve. Hermes keeps its good URL, which leaves one working
+gateway to contrast against.
 
-To verify the error surface deliberately (rather than relying on an
-opportunistic gateway outage), a future / manual variant should launch QA mode
-with a deliberately bad URL — e.g. swap `-ConduckQAOpenClawURL` for an
-unroutable host (`https://openclaw.invalid`) while keeping the token. Expected
-behavior:
+Drive this one by hand. Every other scenario here seeds the good, reachable
+URLs, which is the right default and also means none of them produces a
+connection failure on demand.
 
-> Open the OpenClaw-bound conversation, type a turn, send. The send should
-> fail and surface a `remoteAgent.error.*` recovery affordance (the retry
-> card / error copy), NOT hang indefinitely. Assert on the failure surface
-> and the presence of a retry control.
+Test instruction:
 
-Pass criteria (manual variant):
-- A bad-URL send surfaces an error with recovery copy + a retry affordance.
+> Verify the QA MODE banner. Open an OpenClaw-bound conversation, type a turn,
+> and send. The send fails and surfaces a `remoteAgent.error.*` recovery
+> affordance — the retry card and error copy — rather than hanging. Assert on
+> the failure surface and on the presence of a retry control. Then open the
+> Hermes-bound conversation and send there, to confirm the failure belongs to
+> the bad URL and not to the run.
+
+Pass criteria:
+- A bad-URL send surfaces an error with recovery copy and a retry affordance.
 - The app does not hang or crash on the failure.
+- The Hermes-bound conversation still sends, so the failure is attributable to
+  the unroutable host.
 
-Until a `-ConduckQABadBackend`-style harness lever exists, this is a manual
-launch-arg override, not an automated QA scenario.
+Degraded path (gateway-reachability precheck failed):
+- The OpenClaw half still holds — the error surface is the thing under test.
+  The Hermes contrast does not; skip that step.
