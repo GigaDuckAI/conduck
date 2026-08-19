@@ -46,10 +46,13 @@ anonymous, you can report indirectly through CERT-EE, Estonia's national CSIRT
 
 ## Which versions get fixes
 
-Security fixes ship in the current App Store release, built from `main`. There
-are no backports to older builds — a fix reaches you by updating the app. A
-report against an older build is still welcome; it is closed once the issue is
-confirmed fixed in the shipping version.
+Security fixes ship in the current App Store release. Every App Store release is
+tagged in this repository as `v<version>-<build>` — the marketing version and
+build number Apple shows — and that tag, not `main`, identifies the source the
+shipped binary was built from, because `main` moves on. There are no backports
+to older builds — a fix reaches you by updating the app. A report against an
+older build is still welcome; it is closed once the issue is confirmed fixed in
+the shipping version.
 
 ## Scope
 
