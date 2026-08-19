@@ -385,6 +385,17 @@
     "CarPlay" : {
 
     },
+    "chat.waitingForConnection" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Waiting for a connection…"
+          }
+        }
+      }
+    },
     "Clear search" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1642,6 +1653,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "The provider or something on the route is unavailable. Try again shortly."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.stoppedBeforeSend" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You stopped this message before it was sent."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.stoppedBeforeSend.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing left this device, so nothing reached your AI. Send it again whenever you like."
           }
         }
       }
