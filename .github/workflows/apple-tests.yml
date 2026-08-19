@@ -30,6 +30,12 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          # Full history, because the secret scan below works on a commit RANGE
+          # and a shallow clone has no range to work on. It cannot be repaired
+          # later in the job either: `persist-credentials: false` strips the auth
+          # header, so a `git fetch --unshallow` would fail while this repository
+          # is still private. All 175 commits cost about a second.
+          fetch-depth: 0
 
       - name: Check SPDX license headers
         run: scripts/add-spdx-headers.sh --check
@@ -57,6 +63,68 @@ jobs:
       - name: Check bundled legal copies
         run: scripts/check-legal-copies.sh
 
+      # The failure this catches is the architecture document quietly growing
+      # back into the 537 KB one it replaced — which nobody read, and which
+      # therefore shipped claims that were false. Prose said so in three places
+      # and the file still doubled in sixteen days, so the limit is a script now.
+      - name: Check spec size
+        run: scripts/check-spec-size.sh
+
+      # A public repository is the one place a leaked credential cannot be
+      # withdrawn — it is cloned, cached and indexed within minutes — so the only
+      # useful moment to catch one is before the commit lands. The pre-publication
+      # audit found this history clean; this step is what keeps it clean.
+      #
+      # Not `gitleaks/gitleaks-action`: v2 requires a GITLEAKS_LICENSE for any
+      # repository owned by an ORGANIZATION, and this one is owned by GigaDuckAI.
+      # That exemption is by account type, not visibility, so going public does
+      # not lift it. A pinned release binary sidesteps the licence and pins
+      # harder than a tag: the tag could be re-pointed, the checksum could not.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+
+      # Scans the commits this event INTRODUCES, not the whole history. Full
+      # history is about two seconds, so speed is not the argument — fixability
+      # is. A finding in a commit someone just wrote is theirs to amend; a
+      # finding in old history is nobody's, because this repository is a
+      # submodule whose pointer the parent records, which puts rewriting it out
+      # of reach. A full-history gate that ever went red would stay red on every
+      # push afterwards, for every contributor, and a permanently red check is
+      # one people learn to ignore. `workflow_dispatch` still scans everything.
+      #
+      # `--redact` because an Actions log on a public repository is world
+      # readable: printing the secret to prove a secret leaked would publish it a
+      # second time. The redacted output still names file, line, commit and rule,
+      # which is what a contributor needs to fix it.
+      - name: Scan for secrets
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request) RANGE="${PR_BASE_SHA}..HEAD" ;;
+            push)
+              if [ -z "${PUSH_BEFORE}" ] || [ "${PUSH_BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+                RANGE="--all"   # a new branch has no "before" — scan everything once
+              else
+                RANGE="${PUSH_BEFORE}..${GITHUB_SHA}"
+              fi ;;
+            *) RANGE="--all" ;;
+          esac
+          echo "Scanning commit range: ${RANGE}"
+          "$RUNNER_TEMP/gitleaks" git --log-opts="${RANGE}" \
+            --config .gitleaks.toml \
+            --redact --verbose --no-banner --exit-code 1 .
+
       # A job skipped by an `if` renders as neutral, and a run whose only red is
       # absent reads as a run that passed. That is the same false-green this
       # workflow already exists to close, so the skip says so out loud: the run
@@ -66,7 +134,7 @@ jobs:
       - name: Say so when the simulator matrix is skipped
         if: github.event_name == 'push' && github.event.repository.private == true
         run: |
-          echo "::notice title=Simulator suites NOT RUN::Source guards only. The iOS/watchOS suites and the macOS TLS bundle compile were skipped: macOS runners are billed at 10x against a private repository, so a push to main runs the guards alone. This run is NOT evidence the suites pass. Run them locally, open a pull request, or start them from Actions > Apple tests > Run workflow. They resume automatically on every push once this repository is public."
+          echo "::notice title=Simulator suites NOT RUN::Source guards only. The iOS/watchOS suites, the macOS TLS bundle compile and the iOS/macOS Release compiles were skipped: macOS runners are billed at 10x against a private repository, so a push to main runs the guards alone. This run is NOT evidence the suites pass. Run them locally, open a pull request, or start them from Actions > Apple tests > Run workflow. They resume automatically on every push once this repository is public."
 
   test:
     name: iOS and watchOS
@@ -247,4 +315,98 @@ jobs:
             bash scripts/run-live-tls-tests.sh
           else
             echo "::warning title=Live TLS trust suite NOT RUN::No code-signing identity on this runner. RemoteAgentLiveTLSTrustTests COMPILED (previous step) but did NOT execute: the macOS test host is the sandboxed Conduck app and its App Group / iCloud KVS / CloudKit entitlements cannot be ad-hoc signed, so the host crashes before the first test. Run 'scripts/run-live-tls-tests.sh' on a machine with an Apple Development certificate."
+          fi
+
+  # Every job above builds Debug, and `#if DEBUG` is the seam that makes that
+  # matter: a symbol compiled out of Release stays perfectly visible to the Debug
+  # builds and to both test bundles, so shipping code that calls one passes the
+  # entire suite and fails only in the archive. Not hypothetical — `ConverseIntent`
+  # called a `#if DEBUG` logger on a line whose own comment says it has to ship,
+  # and Release failed to compile on iOS and macOS alike while every test in both
+  # bundles stayed green. The only thing that caught it was a maintainer building
+  # an archive by hand, which is a gate a contributor's pull request never
+  # reaches. This job is that gate, moved into CI.
+  #
+  # Two destinations because the break was on both, and because the shipping code
+  # branches on `#if os(...)` throughout — each destination is a different
+  # program, and one compiling proves nothing about the other. They are matrix
+  # entries rather than two jobs so the invocation cannot drift between them, and
+  # `fail-fast: false` so a break on one platform still reports the other; that
+  # only governs cancellation, and neither entry is optional.
+  #
+  # `build`, not `build-for-testing`: the claim is that the SHIPPING target graph
+  # compiles under the configuration it ships in. The test bundles never ship, the
+  # two jobs above already compile them, and pulling them in here would let a
+  # Release-only defect in test code block a release.
+  release-compile:
+    name: Release compile (${{ matrix.platform }})
+    needs: guards
+    # Same cost gate as the jobs above.
+    if: github.event_name != 'push' || github.event.repository.private == false
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The device SDK, not the simulator one: it is what the App Store
+          # binary is compiled against, so it is also the only destination that
+          # sees `#if !targetEnvironment(simulator)` code and any build setting
+          # qualified `[sdk=iphoneos*]`. The simulator graph is already compiled
+          # by the suites above, so building it again here would buy nothing.
+          - platform: iOS device SDK
+            slug: ios
+            destination: generic/platform=iOS
+          - platform: macOS
+            slug: macos
+            destination: platform=macOS
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Signing is stripped for the same reason the macOS job above strips it: a
+      # hosted runner has no Apple Development identity, and this app's App Group
+      # and iCloud entitlements could not be provisioned under one anyway.
+      # Compiling is the whole claim, and compiling needs no identity.
+      #
+      # The iOS destination carries more than the phone app: `build` on this
+      # scheme also compiles the Watch app, the Watch widget extension and the
+      # iOS share extension, because all three are embedded in it. So the Watch
+      # gets its Release compile here rather than in a job of its own.
+      - name: Compile the shipping targets in Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project Conduck/Conduck.xcodeproj \
+            -scheme Conduck \
+            -configuration Release \
+            -destination '${{ matrix.destination }}' \
+            -derivedDataPath "$RUNNER_TEMP/conduck-release-${{ matrix.slug }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            CODE_SIGN_ENTITLEMENTS=
+
+      # The one way the step above passes having proved nothing: what it builds
+      # comes from the scheme, and a scheme that stopped naming the app still
+      # reports `** BUILD SUCCEEDED **` after compiling nothing that ships.
+      # Nothing in this repository reads the scheme files — `spec.md` says so
+      # under "What nothing checks" — so the cheap guard is to insist the product
+      # exists. Otherwise this job could go quietly hollow and stay green.
+      - name: Confirm the app was actually produced
+        shell: bash
+        run: |
+          set -euo pipefail
+          products="$RUNNER_TEMP/conduck-release-${{ matrix.slug }}/Build/Products"
+          if [ -z "$(find "$products" -maxdepth 2 -name 'Conduck.app' -print -quit 2>/dev/null)" ]; then
+            echo "::error title=Release compile proved nothing::The build reported success but produced no Conduck.app under $products. That happens when the scheme's build action no longer names the app target, which makes this job green and empty. Check Conduck/Conduck.xcodeproj/xcshareddata/xcschemes/Conduck.xcscheme."
+            exit 1
           fi

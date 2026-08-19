@@ -1,0 +1,123 @@
+title = "Conduck secret-scanning configuration"
+
+# Conduck is a public, BYO-key app with no backend: every real credential lives
+# outside this repository and nothing credential-shaped is committed here. This
+# config therefore keeps the FULL default rule set and only silences a small,
+# enumerated set of synthetic constants that the `generic-api-key` entropy rule
+# flags inside unit tests.
+#
+# Allowlist discipline: every entry below uses `condition = "AND"`, pairing the
+# exact literal string with the exact file it may appear in. Neither half is
+# sufficient on its own — a real secret dropped into one of these test files
+# will still be reported (the string won't match), and these placeholder strings
+# appearing anywhere else will still be reported (the path won't match). There
+# is deliberately no path-only or rule-disabling entry: a blanket allowlist
+# would hide the next real leak, which is the entire failure mode this file
+# exists to prevent.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = """
+  Pairing-payload wire-shape fixtures. `a1b2c3d4e5f60718` is a 16-char counting
+  pattern (a1 b2 c3 d4 e5 f6 07 18) used as the `fileServer.credential` field
+  while asserting JSON key ORDER and round-trip fidelity of a setup code. It
+  authenticates nothing: the tests never open a socket, and the paired host in
+  the same fixtures is the reserved-for-documentation `gw.tail1234.ts.net`.
+  """
+  condition = "AND"
+  regexes = ['''^a1b2c3d4e5f60718$''']
+  paths = ['''Conduck/ConduckTests/RemoteAgent/PairingPayloadExportTests\.swift$''']
+
+  [[rules.allowlists]]
+  description = """
+  SPKI SHA-256 pin fixtures — two well-formed 64-hex digests written as visible
+  counting/descending patterns (a1b2c3d4… ascending, 0f1e2d3c… descending) so a
+  reader can see they are hand-built, not captured from a real certificate. They
+  exist to prove that a pin COMPARISON distinguishes two distinct keys; any 64
+  hex chars would do. `PairingTrustDecisionTests` names them `keyA`/`keyB` under
+  the comment "Two distinct, well-formed SPKI SHA-256 digests".
+  """
+  condition = "AND"
+  regexes = [
+    '''^a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90$''',
+    '''^0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0$''',
+  ]
+  paths = [
+    '''Conduck/ConduckTests/RemoteAgent/RemoteAgentClientTests\.swift$''',
+    '''Conduck/ConduckTests/RemoteAgent/PairingTrustDecisionTests\.swift$''',
+  ]
+
+  [[rules.allowlists]]
+  description = """
+  `beef0123456789abcdef` repeated to 64 hex chars — the presented-fingerprint
+  fixture on the untrusted-certificate arm of the test-connection report. The
+  literal word "beef" marks it as the conventional junk-hex placeholder.
+  """
+  condition = "AND"
+  regexes = ['''^beef0123456789abcdefbeef0123456789abcdefbeef0123456789abcdefbeef$''']
+  paths = ['''Conduck/ConduckTests/RemoteAgent/RemoteAgentClientTests\.swift$''']
+
+  [[rules.allowlists]]
+  description = """
+  Lane-identity fixtures: `0123456789abcdef` and `fedcba9876543210`, each
+  doubled to 32 chars — the hex alphabet written forwards and backwards. Both
+  are passed as a `credential:` argument purely to assert that changing a
+  credential changes a derived lane key; the value is hashed, never sent.
+  """
+  condition = "AND"
+  regexes = [
+    '''^0123456789abcdef0123456789abcdef$''',
+    '''^fedcba9876543210fedcba9876543210$''',
+  ]
+  paths = [
+    '''Conduck/ConduckTests/RetroOutputScanCandidateTests\.swift$''',
+    '''Conduck/ConduckTests/SettingsManagerFileTransferTests\.swift$''',
+  ]
+
+  [[rules.allowlists]]
+  description = """
+  `tok_live_abc123` — a deliberately fake bearer token in URL-validation tests.
+  The `tok_live_` prefix belongs to no provider Conduck integrates with, and
+  `abc123` is its body; the requests it rides on are served by a mock URL
+  protocol against the reserved `gateway.example.test` host.
+  """
+  condition = "AND"
+  regexes = ['''^tok_live_abc123$''']
+  paths = ['''Conduck/ConduckTests/SettingsViewModelRemoteAgentURLTests\.swift$''']
+
+  [[rules.allowlists]]
+  description = """
+  Stored-object filenames, not credentials. The entropy rule keys on the hex-ish
+  prefix of `a1b2c3d4__probe.txt` / `a1b2c3d4__orphan.bin` / `e621e1f8-0__x.pdf`
+  / `qa01__duck-astronaut.png`, but each is a `storedKey` — the on-disk name of a
+  file-server object, asserted against a URL path or a metadata round-trip. Each
+  ends in a file extension, which no key does.
+  """
+  condition = "AND"
+  regexes = [
+    '''^a1b2c3d4__probe\.txt$''',
+    '''^a1b2c3d4__orphan\.bin$''',
+    '''^e621e1f8-0__x\.pdf$''',
+    '''^qa01__duck-astronaut\.png$''',
+  ]
+  paths = [
+    '''Conduck/ConduckTests/FileServerClientTests\.swift$''',
+    '''Conduck/ConduckTests/SharedInboxUploadKeyTests\.swift$''',
+    '''Conduck/Conduck/QA/QAMode\.swift$''',
+  ]
+
+  [[rules.allowlists]]
+  description = """
+  `diag.tts.outcomes.v1` — a `UserDefaults` key name, documented in the adjacent
+  comment as living in the device-local `diag.` namespace deliberately kept
+  outside every iCloud-mirrored prefix. It is an identifier the app writes, not
+  a value anyone authenticates with.
+  """
+  condition = "AND"
+  regexes = ['''^diag\.tts\.outcomes\.v1$''']
+  paths = ['''Conduck/Conduck/Services/TTS/TTSOutcomeLog\.swift$''']
