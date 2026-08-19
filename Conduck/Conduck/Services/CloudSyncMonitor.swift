@@ -144,6 +144,18 @@ final class CloudSyncMonitor {
         }
         #endif
 
+        // A process without the container entitlement (a native macOS build —
+        // unsigned in practice, but the probe reads the entitlement, not the
+        // signature; see `Constants.hasICloudContainerEntitlement`) cannot
+        // construct the CK container at all: `refreshAccountStatus()` below would raise on
+        // `CKContainer(identifier:)` and take the process with it. Stay inert and
+        // say so once, rather than crash. Never surfaces the user-facing banner —
+        // this is a build that cannot sync, not an account the user can fix.
+        guard Constants.hasICloudContainerEntitlement else {
+            log.notice("CloudSyncMonitor: inert — no iCloud container entitlement in this build")
+            return
+        }
+
         #if !targetEnvironment(simulator)
         // Live mirroring telemetry. `object: nil` — there is exactly one CK
         // container in-process; the summary is built on the (.main) delivery
@@ -198,6 +210,11 @@ final class CloudSyncMonitor {
     // MARK: - Account status
 
     private func refreshAccountStatus() async {
+        // THE construction point, and therefore where the invariant belongs:
+        // `CKContainer(identifier:)` raises on an unentitled process, so no
+        // caller — present or future — may reach it without this check. `start()`
+        // additionally declines to wire the observers that would call this.
+        guard Constants.hasICloudContainerEntitlement else { return }
         let container = CKContainer(identifier: Constants.iCloudCloudKitContainerID)
         do {
             let status = try await container.accountStatus()

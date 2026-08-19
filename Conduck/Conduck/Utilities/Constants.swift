@@ -8,6 +8,9 @@
 
 import Foundation
 import SwiftUI
+#if os(macOS)
+import Security
+#endif
 
 /// Application-wide constants
 enum Constants {
@@ -48,6 +51,51 @@ enum Constants {
     nonisolated static let iCloudCloudKitContainerID =
         Bundle.main.object(forInfoDictionaryKey: "ConduckCloudKitContainerID") as? String
             ?? "iCloud.\(identityNamespace)"
+
+    /// Whether THIS process may legally construct the CloudKit container above.
+    ///
+    /// `CKContainer(identifier:)` RAISES — it does not throw or return nil — when
+    /// the container is absent from the running process's entitlements, so every
+    /// CloudKit entry point is gated on this and degrades to a local-only store
+    /// rather than dying seconds after launch.
+    ///
+    /// macOS only, because macOS is the only platform where an unentitled build
+    /// can run: a signed build carries
+    /// `com.apple.developer.icloud-container-identifiers` from its provisioning
+    /// profile, while the ad-hoc/unsigned build `CODE_SIGNING_ALLOWED=NO`
+    /// produces — the only kind buildable without a signing account — carries no
+    /// entitlements at all. Elsewhere this is a constant `true`: an unsigned
+    /// build cannot run on an iOS/watchOS device, and the Simulator is excluded
+    /// separately (it runs CloudKit-free whatever this returns).
+    ///
+    /// UNCERTAINTY RESOLVES TO TRUE. Sync switches off only when the entitlement
+    /// list is read SUCCESSFULLY and this container is not in it; a probe that
+    /// errors leaves CloudKit on. A signed build silently losing sync to a failed
+    /// probe would be far worse than the unsigned-build crash this prevents, so
+    /// the only path to `false` is a positive reading of its absence.
+    #if os(macOS)
+    nonisolated static let hasICloudContainerEntitlement: Bool = {
+        guard let task = SecTaskCreateFromSelf(nil) else { return true }
+        var probeError: Unmanaged<CFError>?
+        let value = SecTaskCopyValueForEntitlement(
+            task, "com.apple.developer.icloud-container-identifiers" as CFString, &probeError
+        )
+        if let probeError {
+            probeError.release()
+            return true
+        }
+        // A nil value with no error is the documented "entitlement simply not
+        // present" answer — an unsigned build — and is the ONE positive reading
+        // of absence, so it is the only path that may return false here.
+        guard let value else { return false }
+        // Present but not the documented array-of-strings shape: unreadable, not
+        // absent, so it takes the fail-open branch with every other uncertainty.
+        guard let containers = value as? [String] else { return true }
+        return containers.contains(iCloudCloudKitContainerID)
+    }()
+    #else
+    nonisolated static let hasICloudContainerEntitlement = true
+    #endif
 
     // MARK: - Request Configuration
 

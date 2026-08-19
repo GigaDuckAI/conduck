@@ -45,14 +45,17 @@
 // No Spotlight indexing (`SpotlightIndexer` / the
 // `FeatureFlags` gate) — conversations are not Spotlight-surfaced in V1.
 //
-// CloudKit posture: sync is ENABLED on real device builds — the
-// `cloudKitContainerOptions` attach mirrors the local Core Data store into
-// the user's OWN private CloudKit database (developer-blind, no backend). The
-// Simulator runs LOCAL-ONLY (plain `NSPersistentContainer`, `cloudKit: false`)
-// because `NSPersistentCloudKitContainer` fatal-asserts on a sim with no
-// signed-in iCloud account / unregistered container; the in-memory/on-disk
-// test seam is local-only by definition. History tracking + remote-change
-// posting stay ON in all configurations.
+// CloudKit posture: sync is ENABLED wherever the process actually carries the
+// iCloud container entitlement — the `cloudKitContainerOptions` attach mirrors
+// the local Core Data store into the user's OWN private CloudKit database
+// (developer-blind, no backend). Every other host runs LOCAL-ONLY (plain
+// `NSPersistentContainer`, `cloudKit: false`), because
+// `NSPersistentCloudKitContainer` fatal-asserts on an unentitled host with no
+// signed-in iCloud account / unregistered container: the Simulator always, and
+// any native macOS build whose process lacks the entitlement (see
+// `Constants.hasICloudContainerEntitlement`, which probes macOS only). The in-memory/on-disk test seam
+// is local-only by definition. History tracking + remote-change posting stay
+// ON in all configurations.
 //
 // App Group store location is load-bearing: the headless Shortcut / App
 // Intent runs in a separate process and must read+write the SAME sqlite as
@@ -1205,18 +1208,28 @@ actor ConversationStore {
         }
         #endif
 
-        // On the Simulator use a plain `NSPersistentContainer`: even with
-        // `cloudKitContainerOptions` suppressed, `NSPersistentCloudKitContainer`
-        // itself reaches `CKContainer.default()` during CloudKit metadata
-        // migration once the on-disk store loads, which fatal-asserts
-        // (`CKContainer.m:748`) on a sim with no iCloud entitlement and silently
-        // kills the process. The base container exercises no CloudKit codepath.
-        // Device builds keep the CloudKit container (sync is a signed/device gate).
+        // CloudKit is attachable only where this process can actually reach the
+        // container, and the penalty for getting it wrong is a silent kill rather
+        // than an error: `NSPersistentCloudKitContainer` reaches
+        // `CKContainer.default()` during CloudKit metadata migration once the
+        // on-disk store loads, and that fatal-asserts (`CKContainer.m:748`) on an
+        // unentitled host EVEN WITH `cloudKitContainerOptions` suppressed. Two
+        // hosts qualify: the Simulator, and a native macOS build whose process
+        // does not carry the container entitlement — an unsigned one in
+        // practice, but the probe reads the entitlement rather than the
+        // signature, so a mis-provisioned signed build lands here too (see
+        // `Constants.hasICloudContainerEntitlement`; macOS sync is a signed
+        // founder gate either way). Both fall back to the plain container,
+        // which exercises no CloudKit codepath at all.
         #if targetEnvironment(simulator)
-        let container = NSPersistentContainer(name: "Conversations")
+        let cloudKitUsable = false
         #else
-        let container = NSPersistentCloudKitContainer(name: "Conversations")
+        let cloudKitUsable = Constants.hasICloudContainerEntitlement
         #endif
+
+        let container: NSPersistentContainer = cloudKitUsable
+            ? NSPersistentCloudKitContainer(name: "Conversations")
+            : NSPersistentContainer(name: "Conversations")
 
         if let description = container.persistentStoreDescriptions.first {
             // App Group store location (CRITICAL — see file header). The
@@ -1233,16 +1246,15 @@ actor ConversationStore {
             }
 
             // CloudKit mirroring fatal-asserts (EXC_BREAKPOINT in
-            // PFCloudKitContainerProvider) on a Simulator with no signed-in
-            // iCloud account / unregistered container, crashing every launch.
-            // The Simulator is never where CloudKit sync is verified — that's a
-            // signed, real-device founder gate — so run the
-            // sim local-only, matching the test seam. Device builds keep sync on.
-            #if targetEnvironment(simulator)
-            ConversationStore.configureSyncOptions(on: description, cloudKit: false)
-            #else
-            ConversationStore.configureSyncOptions(on: description, cloudKit: true)
-            #endif
+            // PFCloudKitContainerProvider) on a host with no signed-in iCloud
+            // account / unregistered container, crashing every launch. Neither
+            // the Simulator nor an unsigned build is where CloudKit sync is
+            // verified — that's a signed, real-device founder gate — so both run
+            // local-only, matching the test seam.
+            ConversationStore.configureSyncOptions(on: description, cloudKit: cloudKitUsable)
+            if !cloudKitUsable {
+                NSLog("[ConversationStore] CloudKit mirroring off (Simulator, or a build without the iCloud container entitlement) — conversations stay local to this device.")
+            }
         }
 
         self.container = container
