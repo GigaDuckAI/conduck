@@ -100,9 +100,10 @@ Before changing anything, read [the architecture document](docs/ai-context/spec.
 
 ## Documentation
 
-Two short documents cover the whole project. Both are written for people and for
-AI coding agents, and both are deliberately kept small — the code itself, through
-per-file header comments and a large test suite, is the detailed documentation.
+Two documents cover the whole project. Both are written for people and for AI
+coding agents, and neither describes individual files, by decision — the code
+itself, through per-file header comments and a large test suite, is the detailed
+documentation.
 
 - [`docs/ai-context/spec.md`](docs/ai-context/spec.md) — the architecture: what
   the boundaries are, the decisions behind them, and the alternatives that were

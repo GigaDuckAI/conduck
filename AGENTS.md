@@ -18,7 +18,11 @@ and those are the copy of record.
    decision is about.
 2. [`docs/ai-context/spec.md`](docs/ai-context/spec.md) — the decisions, the
    boundaries, and the alternatives that were deliberately rejected. It is the
-   part the code cannot tell you, and it is short enough to read whole.
+   part the code cannot tell you. Read the sections bearing on the change you
+   are making: the bulk of the file is one heading per decision, and the
+   sections around it cover a turn end to end, where the surfaces differ, what
+   leaves the device, and what is frozen — the heading list is enough to find
+   the ones you need.
 3. [`docs/ai-context/project-structure.md`](docs/ai-context/project-structure.md)
    — the folder and build-target map, ending in a "Where to start" table that
    takes a kind of change to a directory.
