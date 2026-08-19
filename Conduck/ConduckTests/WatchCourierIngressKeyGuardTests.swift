@@ -78,10 +78,19 @@ final class WatchCourierIngressKeyGuardTests: XCTestCase {
     /// distinct or the branch order in `didReceiveMessage` becomes load-bearing
     /// instead of merely tidy. Compile-time symbols here — `AttachedFileCourierWire`
     /// is cross-target, and the relay `Wire` enum has an iOS copy this host can see.
+    ///
+    /// `#if os(iOS)` because `AppleSpeechRelayCoordinator` is: the phone-side
+    /// coordinator is itself `#if os(iOS)`, so on the macOS destination the
+    /// symbol does not exist and this method stops the WHOLE test bundle from
+    /// compiling — which takes CI's `macos-tls-compile` job and
+    /// `scripts/run-live-tls-tests.sh` down with it. The pairing this asserts is
+    /// a phone/Watch one and has nothing to prove on Mac.
+    #if os(iOS)
     func testCourierAndRelayKindValuesCannotBeConfused() {
         XCTAssertNotEqual(AttachedFileCourierWire.kindValue,
                           AppleSpeechRelayCoordinator.Wire.kindValue)
         XCTAssertNotEqual(AttachedFileCourierWire.kindValue,
                           AppleSpeechRelayCoordinator.Wire.replyKind)
     }
+    #endif
 }

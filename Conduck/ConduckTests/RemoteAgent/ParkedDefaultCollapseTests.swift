@@ -243,6 +243,12 @@ final class ParkedDefaultCollapseTests: XCTestCase {
 
     // MARK: - 4. CarPlay
 
+    // `#if os(iOS)` because `CarPlaySceneDelegate` is — CarPlay exists on iOS
+    // only. Ungated, these three cases stop the WHOLE test bundle from
+    // compiling for the macOS destination, which takes CI's
+    // `macos-tls-compile` job and `scripts/run-live-tls-tests.sh` with it.
+    #if os(iOS)
+
     /// `newChatPlan`'s `broken` is what the car SPEAKS before it shows the
     /// chooser, and its own doc says the slot is non-nil "only when a stored
     /// pointer can be honestly named". A placeholder cannot be.
@@ -289,4 +295,6 @@ final class ParkedDefaultCollapseTests: XCTestCase {
         )
         XCTAssertEqual(plan, .proceed(ref: hermes, adoptAsSessionOverride: false))
     }
+
+    #endif
 }

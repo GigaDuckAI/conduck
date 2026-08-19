@@ -93,6 +93,16 @@ import UIKit
 struct ConverseIntent: AppIntent {
     static var title: LocalizedStringResource = "GigaAction"   // xcstrings
 
+    /// Always-compiled, metadata-only logger. `RemoteAgentDiagnostics.log` is
+    /// `#if DEBUG` and therefore unavailable to the one line below that has to
+    /// survive into Release; this mirrors the always-on `os.Logger` the CarPlay
+    /// and store surfaces already use. Same privacy rule: facts and codes only,
+    /// never a key, transcript, URL, or token.
+    nonisolated private static let log = Logger(
+        subsystem: Constants.identityNamespace,
+        category: "ConverseIntent"
+    )
+
     static var description: IntentDescription = IntentDescription(
         LocalizedStringResource(
             "intent.converse.description",
@@ -272,7 +282,7 @@ struct ConverseIntent: AppIntent {
                 // line carries the FACT only — no key, no transcript (I5) — and
                 // ships in Release, because a save that fails before first
                 // unlock is precisely what a DEBUG-only print never shows.
-                RemoteAgentDiagnostics.log.error("ConverseIntent: STT key blackout refused with no preserved capture")
+                Self.log.error("ConverseIntent: STT key blackout refused with no preserved capture")
             }
             try? FileManager.default.removeItem(at: audioFileURL)
             throw AppError.sttKeyUnreadable
