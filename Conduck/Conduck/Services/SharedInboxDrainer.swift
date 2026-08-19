@@ -222,11 +222,21 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
         // `recordReply` window that exists to make the reply durable. Released
         // in a `defer` so a throw releases it too; ending a token twice is a
         // no-op, and a leaked claim ages out on the registry's TTL.
+        //
+        // STAMPED AS DISPATCHED AT CLAIM TIME. This macOS branch hands the
+        // request to a foreground `URLSession`, which exposes no byte edge at
+        // all — the call returns the finished body — so claim time is the
+        // honest ceiling this transport can offer. It is a tight one: an
+        // ephemeral foreground session fails immediately instead of waiting for
+        // connectivity, so there is no park here for a row to explain.
+        let shareClaimStart = Date()
         let shareClaim = await MainActor.run {
             InFlightTurnRegistry.shared.noteBegan(
                 conversationID,
                 lane: .shareDrain,
-                isCancellable: false
+                isCancellable: false,
+                dispatchedAt: shareClaimStart,
+                at: shareClaimStart
             )
         }
         defer {

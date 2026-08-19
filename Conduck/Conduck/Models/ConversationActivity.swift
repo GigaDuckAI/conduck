@@ -46,7 +46,10 @@ nonisolated enum MessageRole: String, Sendable, Hashable {
 /// another device and mirrored here via CloudKit — this device cannot see that
 /// request and must never claim the gateway is answering.
 nonisolated enum WorkingConfidence: Sendable, Hashable {
-    /// A turn for this conversation is running on THIS device.
+    /// A turn for this conversation is running on THIS device. Says nothing
+    /// about whether it has reached the gateway: on the phone a live turn can be
+    /// parked with not one byte sent, and which of those it is belongs to the
+    /// in-flight PHASE the caller resolves alongside this.
     case live
     /// Stored `sending`, no local turn, still inside the grace window.
     case hedged
@@ -55,7 +58,10 @@ nonisolated enum WorkingConfidence: Sendable, Hashable {
 }
 
 /// The DELIVERY half of a row's state — what the mark and the status word say.
-/// `since` is the stamp the elapsed clock counts from.
+/// `since` is the stamp the elapsed clock counts from, and it is PHASE-SCOPED
+/// for a `.live` row: the hand-off once the request body has left, the claim
+/// before that, so the number beside "is answering" only ever counts time the
+/// gateway actually had.
 nonisolated enum ConversationActivity: Sendable, Hashable {
     case idle
     case working(WorkingConfidence, since: Date)
@@ -251,9 +257,17 @@ nonisolated struct ConversationActivityInputs: Sendable, Hashable {
 
 nonisolated enum ConversationActivityResolver {
     /// How long an unresolved `sending` turn stays credible without a local
-    /// turn. SINGLE SOURCE — `ConversationStore.sweepStaleSendingUserTurns`'s
+    /// claim. SINGLE SOURCE — `ConversationStore.sweepStaleSendingUserTurns`'s
     /// default reads this, so the display grace and the write grace cannot
     /// drift apart.
+    ///
+    /// NOT derived from any transport timeout, and deliberately not derivable
+    /// from one: the phone's converse hop rides a background `URLSession`, which
+    /// parks an un-sent request for as long as it takes a route to return, so no
+    /// constant bounds how long a turn can legitimately be in flight. What keeps
+    /// the sweep off a LIVE turn is the exclusion set the launch sweep collects
+    /// from the sessions themselves. This window decides only how long a row
+    /// whose owner is gone keeps hedging before it says "No reply yet".
     static let staleSendingGrace: TimeInterval = 1800
 
     /// Resolve one row's delivery + attention state.
@@ -459,7 +473,7 @@ nonisolated enum ConversationActivityResolver {
 /// own.
 enum ConversationActivityCopy {
     /// Status words for a working row.
-    ///   `.live`   → `ThinkingIndicator.label(phase: .answering, backendName:)`
+    ///   `.live`   → `ThinkingIndicator.label(phase:backendName:)`
     ///   `.hedged` → "Waiting for a reply…"
     ///   `.stale`  → "No reply yet"
     ///
@@ -467,10 +481,25 @@ enum ConversationActivityCopy {
     /// nothing is known to be running and nothing has been written. `.live`
     /// delegates so the list and the thread say the same words, including the
     /// empty-gateway-name fallback (a bare "Answering…", never " is answering…").
-    static func working(_ confidence: WorkingConfidence, gatewayName: String) -> String {
+    ///
+    /// `.live` IS NOT `.answering`. A live claim says a turn is running on this
+    /// device; the PHASE says whether its request body has actually left, and
+    /// only `.answering` may name the gateway. Every phone/Mac caller passes the
+    /// phase it resolved.
+    ///
+    /// The default exists for the wrist, and it is a KNOWN-UNFIXED instance of
+    /// the same defect rather than a surface that does not have it — the Watch's
+    /// converse hop rides a background `URLSession` that parks identically. See
+    /// `ThinkingPhase` for why the fix is a wrist-side design change and not a
+    /// parameter this file could pass.
+    static func working(
+        _ confidence: WorkingConfidence,
+        gatewayName: String,
+        phase: ThinkingPhase = .answering
+    ) -> String {
         switch confidence {
         case .live:
-            return ThinkingIndicator.label(phase: .answering, backendName: gatewayName)
+            return ThinkingIndicator.label(phase: phase, backendName: gatewayName)
         case .hedged:
             return String(localized: "activity.waitingForReply",
                           defaultValue: "Waiting for a reply…")  // xcstrings: chat-ui

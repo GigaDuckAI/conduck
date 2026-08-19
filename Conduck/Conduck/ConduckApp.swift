@@ -474,16 +474,21 @@ struct ConduckApp: App {
         //    the next launch's sweep still owns it. Live tasks re-collected at
         //    re-sweep time (the original set is stale by then).
         Task {
+            // The probes report a departure flag per conversation; the sweep
+            // only asks WHICH conversations are live, so it reads the keys. A
+            // parked turn that has sent nothing is every bit as live as one
+            // mid-upload — its delegate will still resolve it — so the flag
+            // must not narrow this set.
             let liveConverse = await BackgroundRemoteAgent.shared.liveConversationIDs()
             let liveCarPlay = await CarPlayConverseUploader.shared.liveConversationIDs()
             await ConversationStore.shared.sweepStaleSendingUserTurns(
-                excludingConversationIDs: liveConverse.union(liveCarPlay)
+                excludingConversationIDs: Set(liveConverse.keys).union(liveCarPlay.keys)
             )
             try? await Task.sleep(for: .seconds(31 * 60))
             let liveConverse2 = await BackgroundRemoteAgent.shared.liveConversationIDs()
             let liveCarPlay2 = await CarPlayConverseUploader.shared.liveConversationIDs()
             await ConversationStore.shared.sweepStaleSendingUserTurns(
-                excludingConversationIDs: liveConverse2.union(liveCarPlay2)
+                excludingConversationIDs: Set(liveConverse2.keys).union(liveCarPlay2.keys)
             )
         }
 
@@ -495,10 +500,16 @@ struct ConduckApp: App {
         //     these hand it to the registry.
         //
         //     CANCELLABILITY IS DECLARED HERE, at the site that knows which
-        //     session it is wiring — a probe returning only `Set<UUID>` cannot
-        //     carry it. A CarPlay upload is NOT cancellable through
-        //     `BackgroundRemoteAgent.cancel`, so marking it cancellable would
-        //     light a Stop button that does nothing.
+        //     session it is wiring — the probe payload is per-conversation and
+        //     cannot carry a per-session fact. A CarPlay upload is NOT
+        //     cancellable through `BackgroundRemoteAgent.cancel`, so marking it
+        //     cancellable would light a Stop button that does nothing.
+        //
+        //     The payload each probe DOES carry is per conversation: whether
+        //     that turn's request body has left the device. It is what lets a
+        //     row say "Sending…" while a background task is parked waiting for
+        //     connectivity, instead of naming a gateway that has been handed
+        //     nothing.
         InFlightTurnRegistry.shared.addProbe(lane: .backgroundConverse, isCancellable: true) {
             await BackgroundRemoteAgent.shared.liveConversationIDs()
         }

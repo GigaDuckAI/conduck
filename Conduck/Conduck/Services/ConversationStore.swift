@@ -3935,14 +3935,21 @@ actor ConversationStore {
     /// can flip the turn off `sending`, and the Retry chip requires
     /// `status == "failed"` — without this sweep the turn spins forever.
     ///
-    /// GRACE WINDOW (`ConversationActivityResolver.staleSendingGrace`, 30 min,
+    /// GRACE WINDOW (`ConversationActivityResolver.staleSendingGrace`,
     /// deliberately conservative — single-sourced there so the WRITE grace and
-    /// the list's DISPLAY grace cannot drift apart): the converse
-    /// resource timeout is 600 s (the longest a turn can legitimately be in
-    /// flight), but a `sending` turn may also have been written by ANOTHER
-    /// device and arrived via CloudKit — its in-flight task is invisible here,
-    /// so the threshold must comfortably exceed timeout + sync skew. 30 min
-    /// does; the immediate post-kill case is handled separately by the
+    /// the list's DISPLAY grace cannot drift apart). THE GRACE IS NOT WHAT
+    /// MAKES THIS SWEEP SAFE, and no duration would be: on iOS a turn dispatched
+    /// over the background session can outlive any window, because that session
+    /// waits for connectivity before it sends and nothing in the app bounds
+    /// that wait. What makes the sweep safe is `excludingConversationIDs` — the
+    /// live-task set collected from both background sessions immediately before
+    /// each pass, which covers every turn whose delegate will still resolve it.
+    ///
+    /// The grace covers the case the exclusion set CANNOT see: a `sending` row
+    /// written by ANOTHER device and arrived via CloudKit, whose in-flight task
+    /// is invisible here. It has to exceed that device's own turn duration plus
+    /// sync skew by a comfortable margin, and it is chosen for that. The
+    /// immediate post-kill case is handled separately by the
     /// resurrected-`.cancelled` mapping in the background delegates.
     ///
     /// A flip to `failed` here DECLARES that failure, so the turn is stamped

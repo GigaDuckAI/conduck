@@ -859,9 +859,19 @@ enum Constants {
     static let remoteAgentConverseRequestTimeout: TimeInterval = 300
 
     /// Resource-lifetime timeout for the converse hop
-    /// (`timeoutIntervalForResource`). 600 s budgets retries within a
-    /// single round-trip without resurrecting a session the user has
+    /// (`timeoutIntervalForResource`). Budgets the transfer's own retries
+    /// within a single round-trip without resurrecting a session the user has
     /// abandoned.
+    ///
+    /// NOT A CEILING ON HOW LONG A TURN CAN LEGITIMATELY BE IN FLIGHT, and
+    /// nothing may derive one from it. On iOS the converse hop runs on a
+    /// background `URLSession`, which waits for connectivity unconditionally
+    /// before it dispatches at all; Apple does not document whether this
+    /// interval covers a pre-dispatch park, so an offline send can outlive it
+    /// by any margin. What actually protects the launch-time stale-`sending`
+    /// sweep from flipping a live turn is the live-task exclusion set the sweep
+    /// is handed (`BackgroundRemoteAgent.liveConversationIDs`), never this
+    /// number; and what bounds a parked turn for the user is Stop, not a timer.
     static let remoteAgentConverseResourceTimeout: TimeInterval = 600
 
     /// Hard ceiling on the bytes a BACKGROUND `URLSession` delegate will

@@ -15,8 +15,23 @@ filter, never from database queries.
 
 Live round-trips depend on the gateway being reachable: if the Step-2 precheck
 warned the gateway was unreachable, scenarios 1 and 3 (seeded-state / UI) still
-hold, but scenario 2 (live send) degrades to asserting on the error surface
-instead of a reply. Scenario 4 states its own degraded path.
+hold, but scenario 2 (live send) degrades to asserting on the in-flight or error
+surface instead of a reply. Scenario 4 states its own degraded path.
+
+**An unreachable gateway on iOS does not necessarily fail — it may park, and
+that is by design.** The iPhone's gateway hop runs on a background
+`URLSession`, which waits for connectivity and re-attempts connections outside
+the app rather than surfacing a transport error. So a send to a host that is
+down, refusing, or unresolvable can sit in flight indefinitely with no error at
+all. That is not a hang and it is not a bug: the app may only fail a turn where
+non-delivery is provable, and a request that has not moved on a device with a
+route proves nothing. The honest assertion on this platform is therefore on the
+IN-FLIGHT ROW's words — "Sending…" or "Waiting for a connection…", never
+"{Gateway} is answering…", with Stop lit — and on what Stop then produces. Do
+not read a persistent in-flight row here as a failure to report, and never
+"fix" it with a client-side timeout: a drift-guard suite
+(`ParkedConverseLaneDriftGuardTests`) exists to ban exactly that. macOS is the
+platform that does fail fast; it sends on a foreground session.
 
 **Targeting toolbar actions — coordinate-tap only.** SwiftUI `NavigationStack`
 toolbars collapse the entire nav bar into one opaque `AXGroup` (`children: []`)
@@ -119,7 +134,8 @@ Pass criteria:
 
 Degraded path (gateway-reachability precheck failed):
 - Routing UI (picker present, gateway bound after first turn) is still
-  verifiable; only the actual reply degrades to an error surface.
+  verifiable; only the actual reply degrades — on iOS to a parked in-flight row
+  rather than an error surface, per the note in the setup section above.
 
 ---
 
@@ -141,18 +157,27 @@ connection failure on demand.
 Test instruction:
 
 > Verify the QA MODE banner. Open an OpenClaw-bound conversation, type a turn,
-> and send. The send fails and surfaces a `remoteAgent.error.*` recovery
-> affordance — the retry card and error copy — rather than hanging. Assert on
-> the failure surface and on the presence of a retry control. Then open the
-> Hermes-bound conversation and send there, to confirm the failure belongs to
-> the bad URL and not to the run.
+> and send. TWO outcomes are correct on iOS and the run has to accept either.
+> (a) The send fails and surfaces a `remoteAgent.error.*` recovery affordance —
+> the retry card and error copy. (b) The send PARKS: the in-flight row stays up
+> reading "Sending…" or "Waiting for a connection…" — never
+> "{Gateway} is answering…" — with the composer's Stop control lit. In case (b),
+> tap Stop and assert on the failed row it produces and its retry control. Then
+> open the Hermes-bound conversation and send there, to confirm the behaviour
+> belongs to the bad URL and not to the run.
 
 Pass criteria:
-- A bad-URL send surfaces an error with recovery copy and a retry affordance.
-- The app does not hang or crash on the failure.
-- The Hermes-bound conversation still sends, so the failure is attributable to
-  the unroutable host.
+- A bad-URL send either surfaces an error with recovery copy and a retry
+  affordance, or parks in an in-flight row that never names the gateway and
+  keeps Stop available.
+- The parked row's words never claim the gateway is answering, and its elapsed
+  clock is not attached to such a claim.
+- Stop on a parked turn produces a failed row with a retry affordance, and its
+  copy does not send the user to check a server that was never contacted.
+- The app does not crash.
+- The Hermes-bound conversation still sends, so the behaviour is attributable
+  to the unroutable host.
 
 Degraded path (gateway-reachability precheck failed):
-- The OpenClaw half still holds — the error surface is the thing under test.
-  The Hermes contrast does not; skip that step.
+- The OpenClaw half still holds — the failure-or-park surface is the thing
+  under test. The Hermes contrast does not; skip that step.

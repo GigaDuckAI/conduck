@@ -26,6 +26,46 @@
 // turn registry + the `.remoteAgentTurnDidComplete` / `.remoteAgentTurnDidFail`
 // bus — one code path, no foreground/background branch.
 //
+// WHAT THE BACKGROUND SESSION ALSO BUYS, AND WHY IT SHAPES THIS FILE. Process
+// exit is only half of what this transport does. A background session ALWAYS
+// WAITS FOR CONNECTIVITY and additionally re-attempts transport failures out of
+// process, inside `nsurlsessiond`. NEITHER IS CONFIGURABLE:
+// `waitsForConnectivity` and `urlSession(_:taskIsWaitingForConnectivity:)` are
+// documented to do nothing here, so they appear nowhere in this tree and must
+// stay that way — setting one advertises a contract that does not exist. The
+// measured consequence: with the radio off, or with a gateway URL whose host
+// refuses the connection, the upload does not fail. It parks, and the only
+// bound on the park is `timeoutIntervalForResource`, whose coverage of a
+// PRE-DISPATCH park Apple does not document.
+//
+// That is deliberate and it is good behaviour — a send made in a tunnel
+// delivers itself when the radio comes back, which is exactly what a phone
+// transport should do, and it is the reason nothing here fails an offline send
+// and nothing here re-sends anything. What was NOT acceptable was the app
+// narrating that park as "the gateway is working on it". So THIS FILE OWNS THE
+// DEPARTURE FACTS: two monotone per-task latches fed by `didSendBodyData` (with
+// the first response chunk as an unconditional backstop) and, across a
+// relaunch, by `URLSessionTask.countOfBytesSent`. Until the body has actually
+// left, the row says it is still sending — it never names the gateway. See
+// `anyBytesDepartedTaskIDs` / `bodyFullySentTaskIDs`, and `LiveTurnPhaseResolver`
+// for what the words become.
+//
+// NOTHING HERE BOUNDS AN UNDISPATCHED TURN, on purpose. Every bound the app
+// could enforce would have to reach terminal state by asking `nsurlsessiond` to
+// cancel — a request Apple documents as asynchronous and racy, and which the
+// system's own background rate limiter (undocumented, and steeper after each
+// background relaunch) would trip on turns iOS was about to send perfectly
+// well. Killing those is at-most-once-safe but is a failure the app would be
+// manufacturing out of a scheduling decision. The user's bound is Stop, which
+// is lit in every phase and — when the byte counters prove nothing left — says
+// so without blaming a machine it cannot see (`ConverseCancelVerdict`).
+//
+// THAT MAKES STOP LOAD-BEARING, so `cancel(conversationID:)` may never quietly
+// find nothing. It looks in the in-memory registry first and falls back to the
+// session's own live task set matched on recovery metadata, because the turn
+// most likely to be parked is the one that outlived a process kill — and that
+// is exactly the turn the registry cannot see.
+//
 // Trust pinning: the TASK-level `urlSession(_:task:didReceive:)` delegate
 // recovers the turn's gateway identity (`refRawValue`) from the task's
 // `taskDescription` metadata, then resolves that ref's pinned SHA-256
@@ -137,6 +177,24 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
     /// separates the third from an interception warning.
     private var trustSignalsByTaskID: [Int: RemoteAgentTrustEvaluator.AttemptTrustSignals] = [:]
 
+    /// Task identifiers this process asked to stop, kept OUTSIDE the `inFlight`
+    /// registry so a Stop works on a task that outlived a process kill.
+    ///
+    /// WHY IT CANNOT LIVE ON THE `InFlightTurn` ENTRY. A task the system
+    /// resurrected in a new process has no entry — the registry died with the
+    /// old process — and the same completion the resurrection path reads is the
+    /// one a user's Stop produces. Without a note kept apart from the registry,
+    /// `didCompleteWithError` reads `entry == nil` and takes the CROSS-LAUNCH
+    /// FAILURE branch: it pushes a notification and lights the macOS failure dot
+    /// to report the user's own tap back to them as a problem.
+    ///
+    /// A per-PROCESS set is sufficient and a durable one would be wrong: the
+    /// Stop and the completion it causes always happen in the same process, and
+    /// a note that survived a launch would silently convert a genuine
+    /// resurrection into a "you stopped this" the user never did. Queue-confined
+    /// like the sets around it, and removed on every completion path.
+    private var cancelRequestedTaskIDs = Set<Int>()
+
     /// Task identifiers whose response body exceeded
     /// `Constants.maxBackgroundResponseBytes` and were cancelled for it. Same
     /// registry pattern as `trustSignalsByTaskID`, for the same reason: a bare
@@ -144,6 +202,44 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
     /// abort the turn with a Retry chip and NO error surfaced anywhere.
     /// Queue-confined.
     private var overCapTaskIDs = Set<Int>()
+
+    /// SAFETY LATCH — task identifiers for which AT LEAST ONE request-body byte
+    /// has been reported sent. Set by `didSendBodyData` on any `totalBytesSent
+    /// > 0`, and unconditionally by the first `didReceive data:` (a response
+    /// body arriving is definitive proof the gateway has the request).
+    ///
+    /// MONOTONE: set once, never cleared until the task's own completion
+    /// removes it. That is load-bearing, and it is what makes every layer of
+    /// out-of-process retry inside `nsurlsessiond` — including the iOS-17+
+    /// high-level background upload retry, whose idempotency policy Apple does
+    /// not document — irrelevant to every decision downstream. If a retry
+    /// re-sends, the latch was already set on the first attempt and nobody
+    /// changes their mind.
+    ///
+    /// Its ONLY consumer is `ConverseCancelVerdict` — the `> 0` threshold is
+    /// what withdraws the non-delivery proof, so it must never be raised to
+    /// "the whole body went". Queue-confined, like the sets above.
+    private var anyBytesDepartedTaskIDs = Set<Int>()
+
+    /// DISPLAY LATCH — task identifiers whose request body is FULLY sent
+    /// (`totalBytesSent >= totalBytesExpectedToSend`, falling back to the
+    /// safety threshold when the expected length is unknown), or whose first
+    /// response chunk has arrived.
+    ///
+    /// A DELIBERATELY DIFFERENT THRESHOLD from the safety latch, not a
+    /// duplicate of it: a half-sent body means the gateway is still RECEIVING,
+    /// not answering, so a row that flipped to "…is answering…" on the first
+    /// byte of a large image upload would be telling a smaller version of the
+    /// same lie. Consumed by `InFlightTurnRegistry.noteDispatched`, which is
+    /// what moves the row off "Sending…".
+    ///
+    /// ACCEPTED CONSEQUENCE: if `nsurlsessiond` sends the body, the connection
+    /// resets, and the task re-parks, the row keeps saying "answering".
+    /// Un-latching would require observing a retry, for which Apple exposes no
+    /// live signal. That is smaller and rarer than the defect being fixed, and
+    /// the row still claims nothing it cannot support — bytes did leave.
+    /// Queue-confined.
+    private var bodyFullySentTaskIDs = Set<Int>()
 
     /// Body file URLs keyed by task identifier — cleaned up in
     /// `didCompleteWithError`. (Belt-and-suspenders alongside the
@@ -492,22 +588,52 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
     /// Cancel the in-flight turn for `conversationID`, if any. Cancels the
     /// underlying `URLSessionTask` so no stale reply lands later (the delegate
     /// sees `.cancelled`, drops the turn, and does NOT append an agent bubble).
+    /// TWO WAYS TO FIND THE TASK, because Stop is the ONLY bound on a wait
+    /// nothing else bounds and it may not be allowed to silently do nothing.
+    ///
+    /// The in-memory registry answers for a turn THIS process dispatched. It
+    /// cannot answer for one the system resurrected across a launch — the
+    /// registry died with the old process — and that turn is precisely the one
+    /// most likely to be parked: it survived a kill, its row comes back through
+    /// `reconcile()` as a live, cancellable claim, and the thread lights a Stop
+    /// for it. Guarding on the registry alone left that Stop inert, with no
+    /// completion, no failure and a row that kept counting forever.
+    ///
+    /// So a miss falls through to the session's own live task set, matched on
+    /// the decoded recovery metadata — the same authoritative cross-launch
+    /// source `hasLiveConverseTask` and `liveConversationIDs` read.
     func cancel(conversationID: UUID) {
         queue.async {
-            guard let entry = self.inFlight.values.first(where: { $0.conversationID == conversationID }) else {
-                return
-            }
             // Record the INTENT before asking the task to stop. The delegate
             // cannot otherwise tell our cancel from a peer-side stream reset,
             // and calling a reset a "cancel" suppresses the classification the
             // user needs — see the `.cancelled` branch in `didCompleteWithError`.
-            self.inFlight[entry.taskIdentifier]?.cancelRequested = true
-            // Find the live task by identifier and cancel it. The delegate's
-            // `didCompleteWithError` with a `.cancelled` URLError performs the
-            // continuation resume + cleanup.
+            if let entry = self.inFlight.values.first(where: { $0.conversationID == conversationID }) {
+                self.inFlight[entry.taskIdentifier]?.cancelRequested = true
+                self.cancelRequestedTaskIDs.insert(entry.taskIdentifier)
+                // Find the live task by identifier and cancel it. The delegate's
+                // `didCompleteWithError` with a `.cancelled` URLError performs the
+                // continuation resume + cleanup.
+                self.session.getAllTasks { tasks in
+                    for task in tasks where task.taskIdentifier == entry.taskIdentifier {
+                        task.cancel()
+                    }
+                }
+                return
+            }
             self.session.getAllTasks { tasks in
-                for task in tasks where task.taskIdentifier == entry.taskIdentifier {
-                    task.cancel()
+                let matches = tasks.filter { task in
+                    task.taskDescription
+                        .flatMap { try? RemoteAgentBackgroundMetadata.decode($0) }
+                        .flatMap { UUID(uuidString: $0.conversationID) } == conversationID
+                }
+                guard !matches.isEmpty else { return }
+                // Note the intent on `queue` BEFORE cancelling: the completion
+                // callback runs there too, so a note taken after `cancel()`
+                // could lose the race and be read as a resurrection.
+                self.queue.async {
+                    for task in matches { self.cancelRequestedTaskIDs.insert(task.taskIdentifier) }
+                    for task in matches { task.cancel() }
                 }
             }
         }
@@ -542,23 +668,80 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
 
     // MARK: - Launch-time stale-"sending" sweep support
 
-    /// Conversation IDs with a LIVE converse task on this background session
-    /// (running OR suspended — not yet completed). Read from
-    /// `session.allTasks` + each task's decoded `taskDescription` metadata
-    /// (the authoritative cross-launch set; the in-memory registry is empty
-    /// after a kill). The launch-time stale-`sending` sweep excludes these
-    /// conversations — their turns will be resolved authoritatively by this
-    /// delegate when the task completes.
-    func liveConversationIDs() async -> Set<UUID> {
+    /// Conversations with a LIVE converse task on this background session
+    /// (running OR suspended — not yet completed), each mapped to whether that
+    /// task's request body HAS LEFT THE DEVICE. Read from `session.allTasks` +
+    /// each task's decoded `taskDescription` metadata (the authoritative
+    /// cross-launch set; the in-memory registry is empty after a kill).
+    ///
+    /// TWO CONSUMERS, ONE WALK. The launch-time stale-`sending` sweep uses the
+    /// KEYS — those turns will be resolved authoritatively by this delegate
+    /// when the task completes, so the sweep must not touch them. The
+    /// in-flight registry uses the VALUE, which is what lets a thread row
+    /// re-opened after a relaunch say "…is answering…" for a turn that already
+    /// went out instead of regressing to "Sending…" forever.
+    ///
+    /// The departure flag is read from the TASK's own counters, not from the
+    /// in-process latches, because a task resumed in a new process will never
+    /// re-fire `didSendBodyData` for bytes it already sent. It mirrors the
+    /// display latch's threshold (whole body, falling back to any byte when the
+    /// expected length is unknown) and is OR'd with the in-process latch, which
+    /// is the only source that survives a `countOfBytesExpectedToSend` the
+    /// system reports as unknown mid-transfer.
+    func liveConversationIDs() async -> [UUID: Bool] {
         let tasks = await session.allTasks
-        return Set(tasks.compactMap { task in
-            task.taskDescription
-                .flatMap { try? RemoteAgentBackgroundMetadata.decode($0) }
-                .flatMap { UUID(uuidString: $0.conversationID) }
-        })
+        let latched = await withCheckedContinuation { (continuation: CheckedContinuation<Set<Int>, Never>) in
+            queue.async { continuation.resume(returning: self.bodyFullySentTaskIDs) }
+        }
+        var live: [UUID: Bool] = [:]
+        for task in tasks {
+            guard let id = task.taskDescription
+                .flatMap({ try? RemoteAgentBackgroundMetadata.decode($0) })
+                .flatMap({ UUID(uuidString: $0.conversationID) }) else { continue }
+            let expected = task.countOfBytesExpectedToSend
+            let sent = task.countOfBytesSent
+            let departed = latched.contains(task.taskIdentifier)
+                || (expected > 0 ? sent >= expected : sent > 0)
+            // Two tasks can share a conversation (an overlapping turn); ONE
+            // departure is enough for the row to stop saying "Sending…" —
+            // matching the registry, which reads the oldest claim and only ever
+            // fills the stamp in.
+            live[id] = (live[id] ?? false) || departed
+        }
+        return live
     }
 
     // MARK: - Registry helpers
+
+    /// Latch the DISPLAY departure fact for one task and, on its FIRST set
+    /// only, tell the in-flight registry this turn has actually dispatched.
+    /// MUST be called on `queue` (every caller is a delegate callback, which
+    /// already is).
+    ///
+    /// The conversation id comes from the in-memory entry when this process
+    /// enqueued the task, and from the recovery metadata otherwise — the only
+    /// channel a task resumed in a NEW process still has.
+    ///
+    /// NOT counted as persistence work: this writes in-memory UI state, not the
+    /// store, so holding the `.backgroundTask` closure open for it would keep
+    /// the process alive for a row nobody is looking at.
+    private func noteBodyDeparted(taskIdentifier id: Int, taskDescription: String?) {
+        guard bodyFullySentTaskIDs.insert(id).inserted else { return }
+        let conversationID = inFlight[id]?.conversationID
+            ?? taskDescription
+                .flatMap { try? RemoteAgentBackgroundMetadata.decode($0) }
+                .flatMap { UUID(uuidString: $0.conversationID) }
+        guard let conversationID else { return }
+        Task { @MainActor in
+            // Lane and cancellability are passed explicitly because this is the
+            // ONE caller whose claim can have aged out before the departure
+            // arrives — a turn parked longer than the registry's reaping horizon
+            // with no list reload in between — and the registry then has to mint
+            // one from these two facts.
+            InFlightTurnRegistry.shared.noteDispatched(
+                conversationID, lane: .backgroundConverse, isCancellable: true)
+        }
+    }
 
     private func register(
         continuation: CheckedContinuation<String, Error>?,
@@ -573,6 +756,13 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
                 continuation: continuation
             )
             self.responseBuffers[taskIdentifier] = Data()
+            // Fresh task, fresh latches. `taskIdentifier` is unique only among
+            // OUTSTANDING tasks in a session, so a leftover latch from a
+            // completed task with the same id would claim a departure that
+            // belongs to a different turn.
+            self.anyBytesDepartedTaskIDs.remove(taskIdentifier)
+            self.bodyFullySentTaskIDs.remove(taskIdentifier)
+            self.cancelRequestedTaskIDs.remove(taskIdentifier)
             self.bodyURLs[taskIdentifier] = bodyFileURL
 #if DEBUG
             self.diagSentAt[taskIdentifier] = Date()
@@ -584,9 +774,61 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
 // MARK: - URLSession delegate
 
 extension BackgroundRemoteAgent: URLSessionDataDelegate {
+
+    /// THE BYTE-DEPARTURE EDGE. The one signal that tells the app whether this
+    /// device has actually sent anything for a turn, which is the difference
+    /// between "the gateway is working on it" and "nothing has moved".
+    ///
+    /// Not a speculative bet on an undocumented callback: `BackgroundFileTransfer`
+    /// already drives a real user-visible progress bar from this exact callback,
+    /// with this exact `totalBytesExpectedToSend > 0` guard, on a
+    /// background-configured session.
+    ///
+    /// Sets the safety latch on any byte and the display latch only on the
+    /// whole body — see the two properties for why those thresholds differ. The
+    /// display latch's FIRST set is also what pushes
+    /// `InFlightTurnRegistry.noteDispatched`, so the row moves off "Sending…"
+    /// at the moment the claim becomes true and not before.
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        let id = task.taskIdentifier
+        let departed = totalBytesSent > 0
+        // Unknown expected length (`NSURLSessionTransferSizeUnknown`) degrades
+        // to the safety threshold rather than never latching: a row stuck on
+        // "Sending…" through a healthy turn would be the honest-but-useless
+        // failure mode, and any-byte is still a truthful floor.
+        let fullySent = totalBytesExpectedToSend > 0
+            ? totalBytesSent >= totalBytesExpectedToSend
+            : departed
+        guard departed else { return }
+        // `taskDescription` is read here, on the delegate queue, and carried as
+        // a plain String — decoding it is deferred to the one callback that
+        // actually needs it, so the common progress tick costs no JSON parse.
+        let description = task.taskDescription
+        queue.async {
+            self.anyBytesDepartedTaskIDs.insert(id)
+            guard fullySent else { return }
+            self.noteBodyDeparted(taskIdentifier: id, taskDescription: description)
+        }
+    }
+
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         let id = dataTask.taskIdentifier
+        let description = dataTask.taskDescription
         queue.async {
+            // BACKSTOP, and it is required rather than belt-and-braces: a
+            // response body arriving is definitive proof the gateway has the
+            // request, whatever `didSendBodyData` did or did not report for
+            // this upload. Set BEFORE the over-cap early return below, so even
+            // a fabricated over-cap reply still records that the turn departed.
+            self.anyBytesDepartedTaskIDs.insert(id)
+            self.noteBodyDeparted(taskIdentifier: id, taskDescription: description)
+
             // Already over cap and cancelled — drop straggler chunks the daemon
             // had already queued (re-accumulating them would defeat the cap).
             guard !self.overCapTaskIDs.contains(id) else { return }
@@ -689,6 +931,11 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // The exact user `Message.id` for per-message status flips; nil on old
         // taskDescription blobs / unthreaded callers → conversation-wide fallback.
         let userMessageID: UUID? = metadata?.userMessageID
+        // The URL loading system's own cumulative send counter, read once here
+        // (off the serial queue, on the task, after it terminated). It covers
+        // out-of-process attempts this process never witnessed, which is why
+        // the Stop verdict requires it ALONGSIDE the in-process latch.
+        let countOfBytesSent = task.countOfBytesSent
 
         queue.async {
             if let bodyURL = self.bodyURLs.removeValue(forKey: id) {
@@ -705,6 +952,18 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             // cannot grow.
             let trustSignals = self.trustSignalsByTaskID.removeValue(forKey: id) ?? .empty
             let responseOverCap = self.overCapTaskIDs.remove(id) != nil
+            // The safety latch, consumed on the same every-exit-path contract.
+            // Read into a local BEFORE any branch below returns — the Stop
+            // verdict is the only consumer, but the removal must happen for
+            // every completion or the set grows for the process lifetime.
+            let anyBytesDeparted = self.anyBytesDepartedTaskIDs.remove(id) != nil
+            self.bodyFullySentTaskIDs.remove(id)
+            // "This process asked for this task to stop." Consumed on the same
+            // every-exit-path contract as the notes above, and read below
+            // ALONGSIDE the registry entry rather than instead of it: an entry
+            // that survived carries the flag itself, and a resurrected task can
+            // only have this.
+            let stopWasRequested = self.cancelRequestedTaskIDs.remove(id) != nil
 
             // A turn with no awaiting continuation is FIRE-AND-FORGET (the
             // headless Action-Button intent) — or a relaunched turn whose
@@ -778,27 +1037,35 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                     }
                     if urlError.code == .cancelled {
                         // -999 is THREE different events on this lane, and the
-                        // wire cannot tell them apart. The registry can:
+                        // wire cannot tell them apart. Two local notes can —
+                        // the registry entry, and `cancelRequestedTaskIDs`,
+                        // which is kept OUTSIDE the registry precisely so a
+                        // Stop can be recognised on a task that has no entry:
                         //
-                        // entry ABSENT → this task was resurrected ACROSS A
-                        // LAUNCH (after a force-quit, ALL background tasks
-                        // come back as `.cancelled`, and the registry died
-                        // with the old process). Nobody cancelled this turn —
-                        // treating it as a cancel left the user turn stuck at
-                        // "sending" forever with no Retry. Map it to a
+                        // NO STOP ASKED FOR + entry ABSENT → this task was
+                        // resurrected ACROSS A LAUNCH (after a force-quit, ALL
+                        // background tasks come back as `.cancelled`, and the
+                        // registry died with the old process). Nobody cancelled
+                        // this turn — treating it as a cancel left the user turn
+                        // stuck at "sending" forever with no Retry. Map it to a
                         // cross-launch FAILURE: flip the turn to `failed`
                         // (Retry chip) + post the failure notification (no
                         // awaiting caller exists by definition). `error: nil`
                         // keeps the generic "wasn't delivered" copy.
                         //
-                        // entry PRESENT + `cancelRequested` → a live in-process
-                        // cancel (user tapped Stop / session teardown). No agent
-                        // bubble, no notification, NO `.remoteAgentTurnDidFail`
-                        // post — but the cancelled turn itself flips to `failed`
-                        // (below); the in-app caller's continuation receives
-                        // `CancellationError`.
+                        // A STOP WAS ASKED FOR (entry `cancelRequested`, or the
+                        // out-of-registry note for a resurrected task) → a live
+                        // in-process cancel: the user tapped Stop, or a session
+                        // teardown asked. No agent bubble, no notification, NO
+                        // `.remoteAgentTurnDidFail` post — but the cancelled turn
+                        // itself flips to `failed` (below), carrying a
+                        // client-side classification when and only when the byte
+                        // counters prove nothing left this device; the in-app
+                        // caller's continuation receives `CancellationError`
+                        // (a resurrected task has none, so that resolve is a
+                        // no-op there).
                         //
-                        // entry PRESENT + NOT `cancelRequested` → nobody here
+                        // entry PRESENT + NOTHING ASKED → nobody here
                         // asked for this. The PEER reset the stream mid-request
                         // (an HTTP/2 RST_STREAM from the gateway or something in
                         // front of it), which URLSession also reports as -999.
@@ -808,13 +1075,13 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         // as the bare "wasn't delivered" with no cause, no
                         // Troubleshoot link and no Diagnostics record. Classify
                         // it as the transport failure it is.
-                        if entry == nil {
+                        if entry == nil, !stopWasRequested {
                             if let cid = conversationID {
                                 self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: nil, notifyUser: true)
                             }
                             return
                         }
-                        if entry?.cancelRequested != true {
+                        if entry != nil, entry?.cancelRequested != true, !stopWasRequested {
                             let peerReset = AppError.remoteAgentUnreachable
                             if let cid = conversationID {
                                 self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: peerReset, notifyUser: notifyUserOnFailure)
@@ -830,15 +1097,54 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         // chip lets the user re-send. Exact-message flip when
                         // the id was threaded (a conversation-wide flip here
                         // would alias a sibling in-flight turn); NO failure
-                        // notification and NO `.remoteAgentTurnDidFail` post —
-                        // cancel is user-initiated, not a failure event.
+                        // notification and NO `.remoteAgentTurnDidFail` post,
+                        // in EITHER branch below — cancel is user-initiated,
+                        // not a failure event, so the macOS menu-bar red dot
+                        // must not light and no push may fire. That is also why
+                        // neither branch routes through `postTurnFailed`, which
+                        // does both.
+                        //
+                        // WHETHER THE FAILURE IS CLASSIFIED depends on one
+                        // question: did anything leave this device? A cancel is
+                        // not a gateway verdict — true, and that is why a turn
+                        // whose bytes departed still gets today's bare status
+                        // flip with no cause attached. But a turn with ZERO
+                        // departed bytes is a verdict about THIS DEVICE'S OWN
+                        // transport, which the client can prove and the user
+                        // deserves to read instead of an unexplained failed
+                        // row. `ConverseCancelVerdict` owns that decision and
+                        // carries the at-most-once proof; it is a pure function
+                        // precisely so the proof is testable without a socket.
                         if let cid = conversationID {
+                            let verdict = ConverseCancelVerdict.make(
+                                anyBytesDeparted: anyBytesDeparted,
+                                countOfBytesSent: countOfBytesSent,
+                                pathIsUnsatisfied: NetworkPathObserver.pathIsUnsatisfiedNow()
+                            )
                             self.beginPersistenceWork()
                             Task {
-                                if let mid = userMessageID {
-                                    await ConversationStore.shared.markPendingUserTurn(messageID: mid, to: "failed")
-                                } else {
-                                    await ConversationStore.shared.markPendingUserTurns(conversationID: cid, to: "failed")
+                                switch verdict {
+                                case .unknownDelivery:
+                                    if let mid = userMessageID {
+                                        await ConversationStore.shared.markPendingUserTurn(messageID: mid, to: "failed")
+                                    } else {
+                                        await ConversationStore.shared.markPendingUserTurns(conversationID: cid, to: "failed")
+                                    }
+                                case .provableNonDelivery(let error):
+                                    let classification = ConversationStore.TurnFailureClassification(
+                                        failureCode: error.errorCode,
+                                        wireCode: nil,
+                                        hadHistoryImages: nil
+                                    )
+                                    if let mid = userMessageID {
+                                        await ConversationStore.shared.failTurn(
+                                            messageID: mid, classification: classification
+                                        )
+                                    } else {
+                                        await ConversationStore.shared.failPendingUserTurns(
+                                            conversationID: cid, classification: classification
+                                        )
+                                    }
                                 }
                                 self.endPersistenceWork()
                             }
@@ -979,6 +1285,17 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // session's completion callback cannot read the evaluator's per-challenge
         // signals, not because the transport taxonomy differs. Change both.
         case .notConnectedToInternet:
+            // UNREACHABLE ON THIS LANE, and kept anyway. A background session
+            // waits for connectivity instead of failing, so an offline converse
+            // send parks rather than arriving here as code -1009 — measured on
+            // device with the radio off. The arm stays because this mapper is
+            // shared: `CarPlayConverseUploader` calls it too, the taxonomy must
+            // remain in lockstep with `classifyTransportError`, and deleting an
+            // arm to reflect one lane's reachability would be the kind of local
+            // truth that breaks the next caller. The offline case a USER can
+            // actually reach on this lane is a Stop over zero departed bytes —
+            // see `ConverseCancelVerdict`, which reaches the same `AppError`
+            // and therefore the same copy.
             return .noInternetConnection
         case .cannotConnectToHost,
              .cannotFindHost,

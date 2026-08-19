@@ -557,7 +557,11 @@ struct ConversationListView: View {
                             .foregroundStyle(AppColors.textEmphasis)
                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                        ConversationActivityMark(state: resolved)
+                        ConversationActivityMark(
+                            state: resolved,
+                            conversationID: convo.id,
+                            now: tick
+                        )
                     }
 
                     if let subtitle {
@@ -572,7 +576,8 @@ struct ConversationListView: View {
                         state: resolved,
                         now: tick,
                         gatewayName: gatewayName,
-                        lastActivityAt: convo.lastActivityAt
+                        lastActivityAt: convo.lastActivityAt,
+                        conversationID: convo.id
                     )
                     .padding(.top, 2)
                 }
@@ -593,7 +598,12 @@ struct ConversationListView: View {
             subtitle: subtitle,
             gatewayName: gatewayName,
             lastActivityAt: convo.lastActivityAt,
-            showsGateway: showsBadge && ref != nil
+            showsGateway: showsBadge && ref != nil,
+            // The spoken row matches the seen one, including the two phases that
+            // must not name the gateway. Resolved OUTSIDE the row's clock, like
+            // the rest of this label — a label that rewrites on a timer produces
+            // repeated announcements.
+            phase: ConversationRowActivity.livePhase(convo.id)?.phase ?? .answering
         )))
         // Keyed on the PAIR, not the id: the tail changes only when a message is
         // appended, and that bumps `lastActivityAt`. Keying on the id alone froze

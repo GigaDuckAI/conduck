@@ -24,14 +24,14 @@
 //   2. `isWorking`           → `workingView` — ONE view for the WHOLE turn,
 //                              with `workingPhase` choosing the copy: STT
 //                              (`.processing` → "Transcribing…"), the local
-//                              pre-dispatch window (`turnStarting` / the claim →
-//                              "Sending…"), and the agent wait
-//                              (`showsGatewayWaitIndicator` → "{gateway} is
-//                              answering…"). Identical layout + size across all
-//                              three (spinner + label, Cancel-X space always
-//                              reserved) so the phases NEVER resize the popover.
-//                              The X is live only in the answering phase — it
-//                              is the only one with a task to cancel.
+//                              pre-dispatch window (`turnStarting` → "Sending…"),
+//                              and the agent wait (the VM's resolved
+//                              `liveTurnPhase` → "{gateway} is answering…").
+//                              Identical layout + size across all three (spinner
+//                              + label, Cancel-X space always reserved) so the
+//                              phases NEVER resize the popover. The X is live
+//                              only in the answering phase — it is the only one
+//                              with a task to cancel.
 //   3. !isQuickCaptureReady    → `unconfiguredEmptyState` (gear → Settings), in
 //                              one of TWO wordings: the beginner "bring your own
 //                              AI" pitch when nothing is configured, and the
@@ -369,14 +369,21 @@ struct DictationPopoverView: View {
         return coordinator.quickViewModel?.isAwaitingReply == true
     }
 
-    /// Which of the three in-flight phases the working view is describing.
+    /// Which in-flight phase the working view is describing.
     ///
-    /// Order matters: `.answering` is checked BEFORE `turnStarting`, because
+    /// Order matters: the VM's own phase is asked BEFORE `turnStarting`, because
     /// `turnStarting` stays armed across the whole send and would otherwise pin
     /// the copy to "Sending…" for the entire agent wait.
+    ///
+    /// The VM answers with the phase it RESOLVED rather than a bare "a turn is
+    /// live" flag, so this surface can never claim a gateway is answering before
+    /// the request reached it. On macOS the answer is always `.answering` while a
+    /// turn is live — dispatch is stamped at turn start on an ephemeral
+    /// foreground session that fails fast and never parks — so this popover reads
+    /// exactly as it does today, and `.waitingForNetwork` is unreachable here.
     private var workingPhase: ThinkingPhase {
         if service.state == .processing { return .transcribing }
-        if coordinator.quickViewModel?.showsGatewayWaitIndicator == true { return .answering }
+        if let phase = coordinator.quickViewModel?.liveTurnPhase { return phase }
         return .sending
     }
 
@@ -604,8 +611,15 @@ struct DictationPopoverView: View {
             // Interactive ONLY in `.answering`. STT isn't cleanly cancellable,
             // and during `.sending` there is no task to cancel yet — an X there
             // would dismiss the popover while the send carried on underneath,
-            // which reads as "cancelled" and isn't. Space stays reserved in all
-            // three phases so the popover never resizes.
+            // which reads as "cancelled" and isn't. Space stays reserved in
+            // every phase so the popover never resizes.
+            //
+            // MACOS-SPECIFIC REASONING, and the phone deliberately does the
+            // opposite: an iOS send has a real background `URLSessionTask` from
+            // `resume()`, so its Stop is lit in every phase and stopping a turn
+            // whose bytes never left names why it failed. Here there is nothing
+            // to cancel until the foreground request exists, and macOS never
+            // parks, so the pre-dispatch window is too short to need an exit.
             .opacity(workingPhase == .answering ? 1 : 0)
             .allowsHitTesting(workingPhase == .answering)
         }

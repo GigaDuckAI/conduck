@@ -21,6 +21,14 @@
 // re-minted by a navigation pop (`ContentView.syncDetailVM()` mints a fresh VM
 // on every conversation switch), while the bubble row stays a plain snapshot of
 // the store.
+//
+// WHETHER a turn is live and WHAT the row may say about it are two separate
+// questions here. The first is the claim; the second is `liveTurnPhase`, which
+// adds the registry's byte-departure stamp and the network path so a turn the
+// iOS background session is still holding un-sent reads as "Sending…" or
+// "Waiting for a connection…" rather than naming a gateway that has received
+// nothing. Neither the phase nor the path reading ever gates, cancels or
+// re-enqueues a dispatch — they choose words.
 
 import Foundation
 import SwiftUI
@@ -731,22 +739,66 @@ final class ConversationDetailViewModel {
         inFlightStartedAt ?? InFlightTurnRegistry.shared.liveSince(conversationID)
     }
 
-    /// The single DISPLAY gate for the agent-side wait: the "{Gateway} is
-    /// answering…" row, the popover's answering phase, and the composer's Send
+    /// The single DISPLAY gate for the in-flight row: whether the thread shows
+    /// an indicator at all, the popover's working view, and the composer's Send
     /// gating. True once a turn has entered its gateway dispatch phase — after
     /// attachment processing, the durable write, history assembly and credential
     /// resolution, immediately before the hop.
     ///
-    /// Deliberately NOT "the gateway received it": replies are non-streamed, so
-    /// neither transport exposes an early acceptance edge (macOS `data(for:)`
-    /// returns the finished body; the iOS background task's first data callback
-    /// is already the answer). A real "accepted" event would be a wire-contract
-    /// change. This is the closest honest signal the client owns.
+    /// IT MEANS "A TURN IS LIVE HERE", NOT "THE GATEWAY IS WORKING". Those are
+    /// different claims and only `liveTurnPhase == .answering` makes the second
+    /// one: on iOS the converse hop rides a background `URLSession` that parks an
+    /// un-sent request until a route exists, so this gate can be true for minutes
+    /// with nothing dispatched. WHAT the row says is `liveTurnPhase`'s job, and
+    /// the phase is resolved from `didSendBodyData` — a genuine byte-departure
+    /// edge the client owns, and a closer signal than a wire-level "accepted"
+    /// event the non-streamed reply protocol does not carry.
     ///
     /// NOT the Stop gate — see `canStopLiveTurn`. A turn this device can SEE but
     /// cannot cancel (a macOS share drain, a CarPlay upload) shows the wait and
-    /// offers no Stop.
+    /// offers no Stop. On iOS a real background task exists from `resume()`, so
+    /// Stop is lit in EVERY phase — a user whose gateway is unreachable must
+    /// always have a way out of a wait nothing else bounds.
     var showsGatewayWaitIndicator: Bool { liveTurnStartedAt != nil }
+
+    /// When the live turn's request body actually LEFT this device, or nil while
+    /// none of it has.
+    ///
+    /// Read from the registry rather than stored here, for the same reason
+    /// `liveTurnStartedAt` is: the turn may belong to the background converse
+    /// session, CarPlay, the share drainer or a sibling VM the navigation stack
+    /// discarded, and this instance would have no way to learn about any of them.
+    /// The stamp is MONOTONE at its source — nothing ever clears it — so a row
+    /// cannot walk back out of "answering" and re-imply that nothing was sent.
+    var liveTurnDispatchedAt: Date? {
+        InFlightTurnRegistry.shared.dispatchedSince(conversationID)
+    }
+
+    /// The in-flight phase for the live turn, and the stamp its elapsed clock
+    /// counts from — nil when nothing is live on this device.
+    ///
+    /// Resolved in ONE place so the words and the number can never disagree, and
+    /// through a pure function so the honesty rule is testable without a socket.
+    /// `NetworkPathObserver` is a NARRATOR here: it may change which word the row
+    /// shows and nothing else. It never gates a dispatch, never cancels one, and
+    /// never writes — which is what keeps at-most-once dispatch a structural
+    /// property rather than something this file has to argue for.
+    private var resolvedLiveTurnPhase: (phase: ThinkingPhase, since: Date)? {
+        LiveTurnPhaseResolver.resolve(
+            liveSince: liveTurnStartedAt,
+            dispatchedAt: liveTurnDispatchedAt,
+            pathIsUnsatisfied: NetworkPathObserver.shared.isPathUnsatisfied
+        )
+    }
+
+    /// What the in-flight row may honestly SAY. Nil when nothing is live here.
+    var liveTurnPhase: ThinkingPhase? { resolvedLiveTurnPhase?.phase }
+
+    /// The stamp the in-flight elapsed clock counts from — the hand-off in
+    /// `.answering`, the claim before it. Phase-scoped deliberately: a counter
+    /// that quietly included five minutes of airplane-mode parking, sitting
+    /// beside "is answering", is the same false claim in numeric form.
+    var liveTurnPhaseSince: Date? { resolvedLiveTurnPhase?.since }
 
     /// Whether the UI may offer Stop. True only for a turn THIS DEVICE holds a
     /// usable handle to: this VM's own `inFlightTask`, or a registry claim
@@ -787,6 +839,15 @@ final class ConversationDetailViewModel {
         inFlightStartedAt = date
         inFlightClaim = InFlightTurnRegistry.shared.noteBegan(
             conversationID, lane: .viewModel, isCancellable: true, at: date)
+        #if os(macOS)
+        // macOS sends on an ephemeral FOREGROUND session: it fails fast when
+        // there is no route, `data(for:)` exposes no byte edge, and nothing ever
+        // parks. Turn start is therefore that platform's honest ceiling on "the
+        // gateway has it", and stamping here keeps every macOS surface reading
+        // exactly what it reads today.
+        InFlightTurnRegistry.shared.noteDispatched(
+            conversationID, lane: .viewModel, isCancellable: true, at: date)
+        #endif
     }
 
     /// Leave the in-flight state. Safe to call twice for one turn — the token is

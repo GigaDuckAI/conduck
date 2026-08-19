@@ -34,11 +34,16 @@ final class InFlightTurnRegistry {
 
     // MARK: - Types
 
-    /// Probes report only conversation ids, so LANE AND CANCELLABILITY ARE
-    /// DECLARED AT REGISTRATION — the registration site knows which session it
-    /// is wiring. A CarPlay upload is not cancellable through
-    /// `BackgroundRemoteAgent.cancel`, so it must not light a Stop button.
-    typealias Probe = @Sendable () async -> Set<UUID>
+    /// Probes report, per live conversation, whether that conversation's
+    /// request body has DEPARTED this device — the fact the thread row needs to
+    /// stop claiming a gateway is working while nothing has been sent. Keys are
+    /// the live conversations; the `Bool` is the departure flag.
+    ///
+    /// LANE AND CANCELLABILITY ARE STILL DECLARED AT REGISTRATION, not carried
+    /// per entry — the registration site knows which session it is wiring, and
+    /// a CarPlay upload is not cancellable through `BackgroundRemoteAgent.cancel`,
+    /// so it must not light a Stop button.
+    typealias Probe = @Sendable () async -> [UUID: Bool]
 
     enum Lane: Sendable, Hashable {
         /// Foreground view-model dispatch (macOS, and the iOS pre-dispatch window).
@@ -64,6 +69,16 @@ final class InFlightTurnRegistry {
         let startedAt: Date
         let lane: Lane
         let isCancellable: Bool
+        /// When this turn's request body left the device, or nil while nothing
+        /// has been sent yet. MONOTONE: set once and never cleared, which is
+        /// what makes the system's out-of-process connection retries irrelevant
+        /// to every reader — a retry that re-sends changes nothing, because the
+        /// stamp was already taken on the first attempt.
+        ///
+        /// Distinct from `startedAt` because on iOS the two can be minutes
+        /// apart: a background session waits for connectivity unconditionally,
+        /// so a turn can be claimed long before a byte moves.
+        var dispatchedAt: Date?
     }
 
     private struct RegisteredProbe {
@@ -76,10 +91,29 @@ final class InFlightTurnRegistry {
 
     static let shared = InFlightTurnRegistry()
 
-    /// == `Constants.remoteAgentConverseResourceTimeout` — the longest a turn
-    /// can legitimately be in flight. A view model deallocated mid-flight cannot
-    /// detach its own claim, so a leaked claim ages out instead of pinning a
-    /// spinner forever.
+    /// REAPING HORIZON FOR AN ORPHANED CLAIM — not a ceiling on turn duration,
+    /// and it never was one. A view model deallocated mid-flight cannot detach
+    /// its own claim, so a leaked claim ages out instead of pinning a spinner
+    /// forever. A claim whose turn is genuinely still running can never age out:
+    /// `reconcile()` re-mints one for every conversation its lane's probe still
+    /// reports, stamped `now`, and `noteDispatched` mints one outright when a
+    /// departure arrives for a conversation whose claims have all aged away.
+    ///
+    /// MEASURED FROM THE MOST RECENT EVIDENCE OF LIFE, not from the claim's
+    /// birth — see `isExpired`. A departure stamp IS such evidence, and this
+    /// distinction is load-bearing rather than cosmetic: with the horizon
+    /// anchored to `startedAt` alone, a turn that parked and then departed lost
+    /// its stamp at the horizon while the row was still on screen, and the
+    /// thread walked BACKWARDS out of "…is answering…" into "Sending…" beside a
+    /// clock that jumped. On the surfaces that stamp at claim time (macOS and
+    /// the share drain, where the two dates are the same instant) the anchor is
+    /// unchanged, so nothing about the horizon they have always had moves.
+    ///
+    /// The value is borrowed from `Constants.remoteAgentConverseResourceTimeout`
+    /// because a claim outliving the converse budget by that margin is the leak
+    /// this exists for — NOT because a turn cannot outlive it. On iOS a turn can:
+    /// the background session waits for connectivity with no bound anyone here
+    /// owns.
     static let claimTTL: TimeInterval = Constants.remoteAgentConverseResourceTimeout
 
     // MARK: - State
@@ -131,6 +165,14 @@ final class InFlightTurnRegistry {
     /// Under-reporting is the deliberate direction: the alternative, anchoring
     /// to the durable turn's `createdAt`, over-reports by hours on a RETRY,
     /// which re-fires an old message row without touching its `createdAt`.
+    /// The SAME limit extends to `dispatchedAt`: an adopted claim whose probe
+    /// reports the body departed is stamped `now` too — we know THAT it
+    /// dispatched, not WHEN.
+    ///
+    /// `dispatchedAt` on a SURVIVING claim is filled in here when the probe now
+    /// reports departure and the claim has none, and is NEVER cleared —
+    /// monotone, matching the delegate-side latches. Filling it in changes the
+    /// entry, so the `next != current` guard below fires and the row updates.
     func reconcile() async {
         pruneExpired(now: Date())
         for registered in probes {
@@ -139,7 +181,9 @@ final class InFlightTurnRegistry {
             var next: [ClaimToken: Entry] = [:]
             var covered: Set<UUID> = []
             for (token, entry) in entries where entry.lane == registered.lane {
-                guard reported.contains(entry.conversationID) else { continue }
+                guard let departed = reported[entry.conversationID] else { continue }
+                var entry = entry
+                if entry.dispatchedAt == nil, departed { entry.dispatchedAt = now }
                 if let existing = next.first(where: { $0.value.conversationID == entry.conversationID }) {
                     // Keep the oldest claim for a conversation — it is the turn
                     // the user has been waiting on.
@@ -149,12 +193,13 @@ final class InFlightTurnRegistry {
                 next[token] = entry
                 covered.insert(entry.conversationID)
             }
-            for id in reported where !covered.contains(id) {
+            for (id, departed) in reported where !covered.contains(id) {
                 next[ClaimToken()] = Entry(
                     conversationID: id,
                     startedAt: now,
                     lane: registered.lane,
-                    isCancellable: registered.isCancellable
+                    isCancellable: registered.isCancellable,
+                    dispatchedAt: departed ? now : nil
                 )
             }
             let current = entries.filter { $0.value.lane == registered.lane }
@@ -167,11 +212,19 @@ final class InFlightTurnRegistry {
 
     // MARK: - Claims
 
+    /// - Parameter dispatchedAt: pass a stamp ONLY from a lane whose dispatch
+    ///   is already a fact at registration time — the macOS foreground
+    ///   transports, which hand the request to `URLSession.data(for:)` with no
+    ///   byte edge to observe, so turn start IS their honest ceiling. The iOS
+    ///   background lane must leave this nil and let `noteDispatched` stamp it
+    ///   when bytes actually depart; passing it here would restore exactly the
+    ///   claim this change exists to remove.
     @discardableResult
     func noteBegan(
         _ id: UUID,
         lane: Lane,
         isCancellable: Bool,
+        dispatchedAt: Date? = nil,
         at: Date = Date()
     ) -> ClaimToken {
         // Prune relative to `at`, not to a second reading of the wall clock:
@@ -183,9 +236,74 @@ final class InFlightTurnRegistry {
             conversationID: id,
             startedAt: at,
             lane: lane,
-            isCancellable: isCancellable
+            isCancellable: isCancellable,
+            dispatchedAt: dispatchedAt
         )
         return token
+    }
+
+    /// Record that this conversation's request body has left the device.
+    ///
+    /// Stamps the EARLIEST non-expired claim for the conversation IN ANY LANE,
+    /// not the caller's own lane: on iOS the composer mints a `.viewModel`
+    /// claim several awaits before the background delegate sees the first byte,
+    /// and that earlier claim is the one every surface reads. Stamping the
+    /// background lane's own (later, reconcile-minted) claim instead would
+    /// leave the row the user is watching permanently unstamped.
+    ///
+    /// CONVERSATION-SCOPED, NOT TURN-SCOPED — stated plainly because the
+    /// distinction shows up when two turns overlap in one conversation. The
+    /// departure of the younger turn lands on the older turn's claim, exactly
+    /// as `BackgroundRemoteAgent.liveConversationIDs` OR-folds departure across
+    /// the tasks sharing a conversation. That is the accepted design: the
+    /// registry's whole vocabulary is per conversation, and the alternative —
+    /// threading a task identity from the transport through to a claim token —
+    /// buys a sharper answer for a rare shape at the cost of coupling the two.
+    ///
+    /// TOTAL: a departure is never dropped. When no non-expired claim survives
+    /// — the turn parked longer than `claimTTL` and no list reload ran
+    /// `reconcile()` in between — this MINTS one rather than returning. The
+    /// caller's departure edge fires once per task and never again, so a
+    /// dropped stamp is permanent for that turn: the row would say "Sending…"
+    /// for the entire time the gateway was actually answering. The minted claim
+    /// under-reports `startedAt` (it begins now), which is the same honest limit
+    /// an adopted claim carries in `reconcile()` and the same safe direction.
+    ///
+    /// IDEMPOTENT and MONOTONE — a second call on an already-stamped claim
+    /// writes nothing, so the `@Observable` storage is not invalidated by the
+    /// repeated progress callbacks that drive it, and an out-of-process retry
+    /// can never move the stamp forward.
+    ///
+    /// - Parameters:
+    ///   - lane/isCancellable: used ONLY when a claim has to be minted. The
+    ///     defaults name the one lane that can reach that case — the iOS
+    ///     background converse session, whose claim can age out while its task
+    ///     is still parked. The foreground transports stamp inside the same
+    ///     call that creates their claim, so they always find one.
+    func noteDispatched(
+        _ id: UUID,
+        lane: Lane = .backgroundConverse,
+        isCancellable: Bool = true,
+        at: Date = Date()
+    ) {
+        pruneExpired(now: at)
+        let candidate = entries
+            .filter { $0.value.conversationID == id && !Self.isExpired($0.value, now: at) }
+            .min { $0.value.startedAt < $1.value.startedAt }
+        guard let candidate else {
+            entries[ClaimToken()] = Entry(
+                conversationID: id,
+                startedAt: at,
+                lane: lane,
+                isCancellable: isCancellable,
+                dispatchedAt: at
+            )
+            return
+        }
+        guard candidate.value.dispatchedAt == nil else { return }
+        var updated = candidate.value
+        updated.dispatchedAt = at
+        entries[candidate.key] = updated
     }
 
     /// Release one claim. Ending an already-ended (or expired-and-pruned) token
@@ -204,6 +322,32 @@ final class InFlightTurnRegistry {
             .filter { $0.conversationID == id && !Self.isExpired($0, now: now) }
             .map(\.startedAt)
             .min()
+    }
+
+    /// When the request body for the turn `liveSince` names left this device,
+    /// or nil while nothing has been sent yet.
+    ///
+    /// Reads the SAME claim `liveSince` picks — deliberately, so the words and
+    /// the number on a row always describe one claim. If that claim is unstamped
+    /// but a LATER sibling claim in the same conversation carries a stamp of its
+    /// own (a lane that stamps at creation), this returns nil rather than
+    /// borrowing it.
+    ///
+    /// THE GUARANTEE THAT BUYS IS NARROWER THAN IT LOOKS, and the honest
+    /// statement of it is: the stamp is conversation-scoped. `noteDispatched`
+    /// writes a departure onto the conversation's OLDEST live claim whichever
+    /// turn departed, and the background lane's probe OR-folds departure across
+    /// the tasks sharing a conversation before `reconcile()` ever sees it. So
+    /// with two overlapping turns the younger one's departure does move this
+    /// row, and the read side cannot undo that — it only declines to reach
+    /// ACROSS claims for a stamp. Sharpening it would mean carrying a task
+    /// identity from the transport into a claim token, which is a design change
+    /// and not a doc fix.
+    func dispatchedSince(_ id: UUID, now: Date = Date()) -> Date? {
+        entries.values
+            .filter { $0.conversationID == id && !Self.isExpired($0, now: now) }
+            .min { $0.startedAt < $1.startedAt }?
+            .dispatchedAt
     }
 
     /// Whether ANY non-expired claim on this conversation carries a handle this
@@ -238,8 +382,21 @@ final class InFlightTurnRegistry {
 
     // MARK: - Expiry
 
+    /// Anchored on the LATER of the claim's birth and its departure stamp.
+    ///
+    /// A departure is the strongest evidence this file ever gets that a turn is
+    /// real and running — the device demonstrably put bytes on the wire for it —
+    /// so reaping a claim a shorter interval after that than after a claim
+    /// nothing has confirmed would have the horizon backwards. Anchoring on
+    /// `startedAt` alone let a parked-then-departed turn lose its stamp while
+    /// its row was still on screen, which walked the thread backwards out of
+    /// "…is answering…" and re-implied that nothing had been sent.
+    ///
+    /// The lanes that stamp at claim time are unaffected: their two dates are
+    /// the same instant, so `max` returns what the old expression returned.
     private static func isExpired(_ entry: Entry, now: Date) -> Bool {
-        now.timeIntervalSince(entry.startedAt) > claimTTL
+        let anchor = max(entry.startedAt, entry.dispatchedAt ?? entry.startedAt)
+        return now.timeIntervalSince(anchor) > claimTTL
     }
 
     /// Drop aged-out claims. Purely hygiene — every query already filters on

@@ -8,8 +8,10 @@
 // + composed VoiceOver label, with a `carplay` case in the device icon/label
 // maps.
 //
-// The thinking-stage selector lives here too (pure function of elapsed
-// seconds + prior-turn count) so it is unit-testable independent of SwiftUI.
+// The in-flight indicator's pure pieces live here too — the `m:ss` clock, the
+// phase vocabulary with its labels, and `LiveTurnPhaseResolver`, which decides
+// whether a live turn is yet entitled to say its gateway is answering — so all
+// of it is unit-testable independent of SwiftUI and of any transport.
 //
 // EVERY STRING THAT REACHES A ROW IS PROJECTED HERE, AT THE RENDER BOUNDARY.
 // A conversation's headline comes from a persisted `titleSnippet` derived from
@@ -247,6 +249,11 @@ enum MessageRowFormatters {
     /// - Parameter showsGateway: mirrors the row's badge visibility. The gateway
     ///   is named as its own component only when the badge is on screen AND the
     ///   status sentence did not already name it.
+    /// - Parameter phase: the resolved in-flight phase for a `.live` working
+    ///   row, so the spoken sentence matches the seen one — including the two
+    ///   phases that must NOT name the gateway. Defaults to `.answering` for the
+    ///   surfaces that resolve no phase (the wrist) and for the suites that
+    ///   assert the settled wording.
     static func rowAccessibilityLabel(
         state: ConversationRowState,
         title: String,
@@ -254,6 +261,7 @@ enum MessageRowFormatters {
         gatewayName: String,
         lastActivityAt: Date,
         showsGateway: Bool,
+        phase: ThinkingPhase = .answering,
         now: Date = Date()
     ) -> String {
         var parts: [String] = []
@@ -267,8 +275,13 @@ enum MessageRowFormatters {
         if case .working(let confidence, _) = state.activity {
             // The status sentence mirrors what the metadata line actually says,
             // so the spoken row and the seen row agree.
-            let sentence = ConversationActivityCopy.working(confidence, gatewayName: gateway)
-            statusNamedTheGateway = confidence == .live && !gateway.isEmpty
+            let sentence = ConversationActivityCopy.working(
+                confidence, gatewayName: gateway, phase: phase)
+            // Only `.answering` puts the gateway's name INTO the sentence, so
+            // only `.answering` may suppress the separate gateway component —
+            // otherwise a parked turn would drop the badge's name from the label
+            // and the row would announce no gateway at all.
+            statusNamedTheGateway = confidence == .live && phase == .answering && !gateway.isEmpty
             parts.append(sentence.trimmingCharacters(in: sentenceTail))
         }
         if showsGateway, !gateway.isEmpty, !statusNamedTheGateway {
@@ -448,22 +461,60 @@ enum ThinkingStage {
 /// any per-platform type so the label logic is unit-testable from the
 /// cross-target test bundle (mirrors `WatchAutoSpeakVerdict`).
 ///
-/// Not every surface shows every phase: the Watch maps its recording state
-/// machine onto `.transcribing`/`.answering`, the phone/Mac thread shows only
-/// `.answering` (its pre-dispatch window is carried by the user bubble's own
-/// sending dot), and the menu-bar popover is the one surface that shows all
-/// three.
+/// Not every surface shows every phase. The menu-bar popover shows
+/// `.transcribing`, `.sending` and `.answering`; macOS sends on a foreground
+/// session that fails fast when there is no route, so nothing there ever parks
+/// and `.waitingForNetwork` is unreachable. The iOS/iPadOS thread and the
+/// conversation list show `.sending`, `.waitingForNetwork` and `.answering`,
+/// resolved by `LiveTurnPhaseResolver`.
+///
+/// THE WATCH IS A KNOWN-UNFIXED INSTANCE OF THE SAME DEFECT, not a surface that
+/// does not have it. `WatchConversationThreadView.inFlightPhase` maps its
+/// recording state machine's `.waiting` straight to `.answering`, and
+/// `WatchAudioUploader.converseSession` is a background `URLSession` with the
+/// same request/resource pair as the phone's — so a dictated turn on a wrist
+/// with no route out reads "{Gateway} is answering…" beside an unbounded clock
+/// while nothing has been sent, exactly as the phone did.
+///
+/// It is not fixed HERE because the fix is not this file's: `.waiting` is
+/// entered on two different paths, the wrist's own background hop AND the
+/// phone-relayed hop, and only the first has a byte-departure edge the wrist can
+/// observe. Mapping `.waiting` to `.sending` wholesale would strand every
+/// relayed turn on "Sending…" for its entire life, which is the mirror-image
+/// lie. Closing it properly means a departure latch on the wrist's converse
+/// delegate plus a way to tell the two paths apart — a design change, not a
+/// rewording. `ThinkingPhase` and `ThinkingIndicator` already compile on the
+/// Watch target, so nothing here blocks it.
+///
+/// THE PHONE NEEDS THE SPLIT BECAUSE ITS TRANSPORT PARKS. The converse hop rides
+/// a background `URLSession`, which holds an un-sent request until a route
+/// exists rather than failing it, so a row that said "answering" from the moment
+/// the user tapped Send would be naming a gateway that has received nothing —
+/// beside an elapsed clock counting a wait the gateway never had. While one of
+/// these rows is on screen the user bubble's own sending dot is suppressed, so
+/// the row is the single in-flight signal and has to carry the whole truth.
 enum ThinkingPhase: Equatable {
     /// Speech-to-text in flight — the dictated text doesn't exist yet, so no
     /// user bubble and no elapsed clock (the phase is brief).
     case transcribing
-    /// The turn exists locally but has not reached its gateway dispatch phase —
-    /// attachments, the durable write, history assembly, credential resolution.
-    /// Deliberately distinct from `.answering`: nothing has been sent yet, so
-    /// claiming the gateway is working would be a lie.
+    /// The turn exists locally and no request-body byte has left the device —
+    /// attachments, the durable write, history assembly, credential resolution,
+    /// and on iOS the upload itself until it starts moving. Deliberately
+    /// distinct from `.answering`: nothing has reached the gateway yet, so
+    /// claiming it is working would be a lie.
     case sending
-    /// The agent request is in flight — the user bubble is on screen; surfaces
-    /// pair this with an elapsed `m:ss` clock from the turn's start.
+    /// Nothing has left the device AND this device has no usable network path,
+    /// so the parked request cannot move until one returns. NEVER names a
+    /// gateway: the user's server is not the thing that is unreachable, their
+    /// radio is, and naming the server would implicate it for the phone's own
+    /// state. The wait is unbounded by design and the user ends it with Stop —
+    /// nothing in the app cancels it on a timer, because a client-owned deadline
+    /// would kill turns the system was about to send.
+    case waitingForNetwork
+    /// The request body has left the device — the gateway holds the turn.
+    /// Surfaces pair this with an elapsed `m:ss` clock counted from the HAND-OFF,
+    /// so the number means "the gateway has had this for m:ss" and never
+    /// silently folds in minutes of parked waiting.
     case answering
 }
 
@@ -472,17 +523,24 @@ enum ThinkingPhase: Equatable {
 /// `ThinkingIndicatorTests` covers the empty-name fallback without
 /// referencing any UI.
 enum ThinkingIndicator {
-    /// The indicator label for a phase. During `.answering` the bound gateway's
-    /// name leads ("OpenClaw is answering…"); an EMPTY or whitespace name (the
-    /// brief window before the bound ref resolves — draft adoption, list-cache
-    /// refresh, a freshly minted VM still on its default name) falls back to a
-    /// bare "Answering…" — NEVER " is answering…".
+    /// The indicator label for a phase. `.answering` is the ONLY phase that names
+    /// the bound gateway ("OpenClaw is answering…") — it is also the only phase
+    /// in which the gateway has been handed anything. An EMPTY or whitespace name
+    /// (the brief window before the bound ref resolves — draft adoption,
+    /// list-cache refresh, a freshly minted VM still on its default name) falls
+    /// back to a bare "Answering…" — NEVER " is answering…".
     static func label(phase: ThinkingPhase, backendName: String) -> String {
         switch phase {
         case .transcribing:
             return String(localized: "Transcribing…")  // xcstrings: chat-ui
         case .sending:
             return String(localized: "Sending…")  // xcstrings: chat-ui
+        case .waitingForNetwork:
+            // Explicit key, not a bare source string: "Waiting for a reply…"
+            // already ships as `activity.waitingForReply`, and two source
+            // strings this close collide into one symbol in `xcstringstool`.
+            return String(localized: "chat.waitingForConnection",
+                          defaultValue: "Waiting for a connection…")  // xcstrings: chat-ui
         case .answering:
             let name = backendName.trimmingCharacters(in: .whitespacesAndNewlines)
             if name.isEmpty {
@@ -490,5 +548,53 @@ enum ThinkingIndicator {
             }
             return String(localized: "\(name) is answering…")  // xcstrings: chat-ui
         }
+    }
+}
+
+// MARK: - Live-turn phase (pure, unit-testable)
+
+/// Which phase a turn that is live ON THIS DEVICE is actually in, decided from
+/// the two facts the client can prove: when the turn claimed the conversation,
+/// and whether any of its request body has left the device.
+///
+/// PURE AND FOUNDATION-ONLY, so the honesty rule is testable with no socket, no
+/// `URLSession` and no view (mirrors `WatchConverseCompletionVerdict`). The
+/// connectivity reading arrives as a plain `Bool`: this type never reaches for
+/// `NetworkPathObserver`, which is a main-app-target member and would not
+/// compile on the wrist, and keeping it a parameter is also what makes the
+/// "unknown path" case expressible at all.
+///
+/// `dispatchedAt` OUTRANKS the connectivity reading, deliberately. If the body
+/// left and the path dropped afterwards, the gateway may well hold the turn and
+/// be working on it, so "Waiting for a connection…" there would be an implicit
+/// claim of non-delivery this client cannot make. The opposite mistake is cheap:
+/// a row that says "Sending…" about a turn already in flight under-reports for a
+/// moment and then corrects itself, so every ambiguous reading falls to the
+/// un-dispatched side.
+enum LiveTurnPhaseResolver {
+    /// - Parameter liveSince: when a turn on this device claimed the
+    ///   conversation, or nil when nothing is live here.
+    /// - Parameter dispatchedAt: when the first request-body byte left the
+    ///   device, or nil while none has. Monotone at its source — once stamped it
+    ///   is never cleared — so this resolver can never walk a row back out of
+    ///   `.answering` into a phase that implies nothing was sent.
+    /// - Parameter pathIsUnsatisfied: true ONLY for `NWPath.Status.unsatisfied`.
+    ///   An unknown path is false, because "we do not know" must never render as
+    ///   "offline"; `.satisfied` authorises nothing here beyond declining to say
+    ///   the device is offline.
+    /// - Returns: the phase and the stamp its elapsed clock counts from, or nil
+    ///   when nothing is live on this device. The stamp is PHASE-SCOPED, which is
+    ///   half the honesty fix: a counter that quietly included five minutes of
+    ///   airplane-mode parking, sitting beside "is answering", is the same false
+    ///   claim in numeric form.
+    static func resolve(
+        liveSince: Date?,
+        dispatchedAt: Date?,
+        pathIsUnsatisfied: Bool
+    ) -> (phase: ThinkingPhase, since: Date)? {
+        guard let liveSince else { return nil }
+        if let dispatchedAt { return (.answering, dispatchedAt) }
+        if pathIsUnsatisfied { return (.waitingForNetwork, liveSince) }
+        return (.sending, liveSince)
     }
 }

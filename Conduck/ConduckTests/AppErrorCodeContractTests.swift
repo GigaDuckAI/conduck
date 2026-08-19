@@ -135,6 +135,7 @@ final class AppErrorCodeContractTests: XCTestCase {
         // is EMPTY — a claim that is false on any device that has rebooted and
         // not yet been unlocked.
         ("sttKeyUnreadable",              .sttKeyUnreadable,                 75),
+        ("turnStoppedBeforeSend",         .turnStoppedBeforeSend,            76),
         ("unknown",                       .unknown(NSError(domain: "test", code: 0)), 99),
     ]
 
@@ -209,28 +210,29 @@ final class AppErrorCodeContractTests: XCTestCase {
     // MARK: - Completeness guard
 
     func testForwardTableIsExhaustiveOverEmittedCodes() {
-        // The getter emits codes 1...75 with 27 omitted (reserved gap), plus
-        // the catch-all 99 — that is 74 + 1 = 75 distinct codes. If a NEW case
+        // The getter emits codes 1...76 with 27 omitted (reserved gap), plus
+        // the catch-all 99 — that is 75 + 1 = 76 distinct codes. If a NEW case
         // is added to AppError without a row in `forwardTable`, this count
         // diverges and forces a test update. (Computed independently of the
         // table to avoid the table validating itself.)
         //
         // The range grew to 74 because `.remoteAgentDefaultNeedsSetup` claimed
-        // that slot, and to 75 because `.sttKeyUnreadable` claimed the next one.
+        // that slot, to 75 because `.sttKeyUnreadable` claimed the next one, and
+        // to 76 because `.turnStoppedBeforeSend` claimed the one after that.
         // This guard is written for exactly that event — a new case landing with
-        // no wire row — so it did its job both times: the fix is to RECORD the
+        // no wire row — so it did its job each time: the fix is to RECORD the
         // new code here, never to loosen the assertion.
-        let expectedDistinctCodes = Set((1...75).filter { $0 != 27 }).union([99])
-        XCTAssertEqual(expectedDistinctCodes.count, 75,
-                       "Sanity: 1...75 minus the 27 gap plus 99 = 75 distinct codes.")
+        let expectedDistinctCodes = Set((1...76).filter { $0 != 27 }).union([99])
+        XCTAssertEqual(expectedDistinctCodes.count, 76,
+                       "Sanity: 1...76 minus the 27 gap plus 99 = 76 distinct codes.")
 
         let tableCodes = Self.forwardTable.map(\.code)
         XCTAssertEqual(Set(tableCodes).count, tableCodes.count,
                        "Forward table must have no duplicate codes (each case owns a unique slot).")
         XCTAssertEqual(Set(tableCodes), expectedDistinctCodes,
-                       "Forward table must cover EXACTLY the codes the getter emits (1...75 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
-        XCTAssertEqual(Self.forwardTable.count, 75,
-                       "Forward table must enumerate all 75 emittable codes — a new AppError case without a row here is a wire-contract gap.")
+                       "Forward table must cover EXACTLY the codes the getter emits (1...76 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
+        XCTAssertEqual(Self.forwardTable.count, 76,
+                       "Forward table must enumerate all 76 emittable codes — a new AppError case without a row here is a wire-contract gap.")
     }
 
     // MARK: - Locked isRetryable flags (load-bearing)

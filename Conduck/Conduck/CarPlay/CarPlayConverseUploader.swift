@@ -182,17 +182,38 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
         for waiter in waiters { waiter() }
     }
 
-    /// Conversation IDs with a LIVE converse task on this background session
-    /// (running OR suspended). Mirrors `BackgroundRemoteAgent.liveConversationIDs`
-    /// — consumed by the launch-time stale-`sending` sweep so it never flips a
-    /// turn whose task is still in flight.
-    func liveConversationIDs() async -> Set<UUID> {
+    /// Conversations with a LIVE converse task on this background session
+    /// (running OR suspended), each mapped to whether that task's request body
+    /// has LEFT THE DEVICE. Mirrors `BackgroundRemoteAgent.liveConversationIDs`
+    /// — consumed by the launch-time stale-`sending` sweep (which reads the
+    /// keys, so it never flips a turn whose task is still in flight) and by the
+    /// in-flight registry (which reads the value).
+    ///
+    /// CARRYING THE FLAG IS REQUIRED HERE, not optional, even though nothing on
+    /// the head unit changes: this probe feeds the SAME registry the phone
+    /// thread reads, so a CarPlay-owned turn that reported no departure fact
+    /// would render "Sending…" on the phone for its whole life. The threshold
+    /// matches the phone lane's display latch — whole body, falling back to any
+    /// byte when the expected length is unknown — because a single registry
+    /// field read by a single row cannot mean two different things depending on
+    /// which session filled it in.
+    ///
+    /// This lane keeps NO in-process latch: the task counters are the only
+    /// source, which is correct for a surface whose delegate does not observe
+    /// upload progress and whose turns the driver cannot stop.
+    func liveConversationIDs() async -> [UUID: Bool] {
         let tasks = await session.allTasks
-        return Set(tasks.compactMap { task in
-            task.taskDescription
-                .flatMap { try? RemoteAgentBackgroundMetadata.decode($0) }
-                .flatMap { UUID(uuidString: $0.conversationID) }
-        })
+        var live: [UUID: Bool] = [:]
+        for task in tasks {
+            guard let id = task.taskDescription
+                .flatMap({ try? RemoteAgentBackgroundMetadata.decode($0) })
+                .flatMap({ UUID(uuidString: $0.conversationID) }) else { continue }
+            let expected = task.countOfBytesExpectedToSend
+            let sent = task.countOfBytesSent
+            let departed = expected > 0 ? sent >= expected : sent > 0
+            live[id] = (live[id] ?? false) || departed
+        }
+        return live
     }
 
     // MARK: - Active service registration (main-actor only)

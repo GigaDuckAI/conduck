@@ -16,19 +16,23 @@
 // its existing date slot (it has neither the width for a mark nor the budget for
 // a clock), and CarPlay renders a phrase. `InFlightTurnRegistry` is not a Watch
 // target member either — the wrist has no local claim to probe, it keeps its own
-// App-Group in-flight marker — so this file's re-resolution could not compile
-// there. `ReadStateStore` IS one: what the user has already seen is an account
-// fact, so the wrist reads and writes it through the same store every other
-// surface does, and only the claim probe stays phone-and-Mac-shaped.
+// App-Group in-flight marker — and neither is `NetworkPathObserver`, which would
+// read a paired iPhone's proxied path and answer confidently wrong on the wrist.
+// So this file's re-resolution could not compile there. `ReadStateStore` IS a
+// Watch member: what the user has already seen is an account fact, so the wrist
+// reads and writes it through the same store every other surface does, and only
+// the claim probe and the path reading stay phone-and-Mac-shaped.
 
 import SwiftUI
 
 // MARK: - Shared derivation
 
 /// The ONE place a conversation-list row's state is derived from the
-/// device-local sources the resolver needs.
+/// device-local sources the resolver needs: the in-flight claim, whether that
+/// claim's request body has left the device, the network path, and the optimistic
+/// read marker.
 ///
-/// There is exactly one of those left, and the asymmetry is the design.
+/// Exactly one of them is an OVERLAY, and that asymmetry is the design.
 /// `lastViewed` is an OPTIMISTIC OVERLAY — this device's most recent local
 /// intent, folded by `max` with the account-wide marker riding on the record so
 /// that backing out of a thread un-bolds the row on the same runloop turn
@@ -65,12 +69,39 @@ enum ConversationRowActivity {
     ) -> ConversationRowState {
         ConversationActivityResolver.resolve(
             inputs,
-            locallyLiveSince: InFlightTurnRegistry.shared.liveSince(conversationID, now: now),
+            // The PHASE-APPROPRIATE stamp, not the raw claim: a `.live` row's
+            // elapsed clock counts from the hand-off once the request body has
+            // left, and from the claim before that. The resolver's own signature
+            // stays untouched — it is handed one stamp and asks no questions
+            // about which one, so nothing downstream of it churns.
+            locallyLiveSince: livePhase(conversationID, now: now)?.since,
             lastViewedAt: ReadStateStore.shared.lastViewed(
                 conversationID,
                 stored: inputs.storedLastViewedAt
             ),
             now: now
+        )
+    }
+
+    /// The in-flight phase for a conversation with a live LOCAL claim, and the
+    /// stamp that phase's clock counts from — nil when nothing is running here.
+    ///
+    /// The two registry reads and the path reading are taken TOGETHER, in one
+    /// place, so the words on the row and the number beside them can never come
+    /// from two different answers to "has this turn been sent yet".
+    ///
+    /// Both singletons are `@Observable`, so calling this from inside a `body`
+    /// registers real SwiftUI dependencies on the claim AND on the network path:
+    /// a row flips between "Sending…" and "Waiting for a connection…" the moment
+    /// the radio changes, rather than waiting out the once-a-minute tick.
+    static func livePhase(
+        _ conversationID: UUID,
+        now: Date = Date()
+    ) -> (phase: ThinkingPhase, since: Date)? {
+        LiveTurnPhaseResolver.resolve(
+            liveSince: InFlightTurnRegistry.shared.liveSince(conversationID, now: now),
+            dispatchedAt: InFlightTurnRegistry.shared.dispatchedSince(conversationID, now: now),
+            pathIsUnsatisfied: NetworkPathObserver.shared.isPathUnsatisfied
         )
     }
 }
@@ -148,6 +179,17 @@ struct ConversationActivityMark: View {
     /// can never be resolved a minute apart.
     let state: ConversationRowState
 
+    /// Re-resolves the in-flight PHASE for this row's own conversation, exactly
+    /// as `ConversationActivityLine` does and from the same tick, so the GLYPH
+    /// and the WORDS can never contradict each other. Carried as an id rather
+    /// than a resolved phase for the same reason it is there: the read belongs
+    /// inside this `body`, where it registers the observation dependency on the
+    /// smallest subtree that cares.
+    let conversationID: UUID
+    /// The tick the row's state was resolved at — the phase is read at the same
+    /// instant as the words beside it, never at a second reading of `Date()`.
+    let now: Date
+
     /// Scales with Dynamic Type so the mark keeps its proportion to the headline
     /// beside it at AX5 instead of shrinking to a speck.
     @ScaledMetric private var slot: CGFloat = 18
@@ -191,6 +233,14 @@ struct ConversationActivityMark: View {
         switch activity {
         case .idle:
             Color.clear
+
+        case .working(.live, _) where livePhase == .waitingForNetwork:
+            // STATIC, for `.stale`'s reason applied one state earlier: an
+            // animated spinner beside "Waiting for a connection…" asserts motion
+            // next to copy asserting that nothing is moving. The thread's
+            // in-flight row makes the same swap, to the same symbol, so the two
+            // surfaces agree on the picture as well as the words.
+            symbol("antenna.radiowaves.left.and.right.slash", tint: neutral)
 
         case .working(.live, _), .working(.hedged, _):
             // NEUTRAL, not amber. The list is a triage surface: a working row is
@@ -246,6 +296,13 @@ struct ConversationActivityMark: View {
     private var neutral: Color {
         contrast == .increased ? AppColors.textPrimary : AppColors.textSecondary
     }
+
+    /// nil when nothing is live on this device — which is every state except
+    /// `.working(.live, _)`, so the one arm that reads it is the only one that
+    /// can be affected.
+    private var livePhase: ThinkingPhase? {
+        ConversationRowActivity.livePhase(conversationID, now: now)?.phase
+    }
 }
 
 // MARK: - Metadata line
@@ -269,8 +326,16 @@ struct ConversationActivityLine: View {
     /// " is answering…".
     let gatewayName: String
     let lastActivityAt: Date
+    /// Re-resolves the in-flight PHASE for this row's own conversation.
+    ///
+    /// Carried rather than passed as a resolved phase so the read happens inside
+    /// this `body`, which is what registers the `NetworkPathObserver` dependency
+    /// on the smallest subtree that cares: the words repaint on a radio change
+    /// without the whole list re-running its filters.
+    let conversationID: UUID
 
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         content(state, at: now)
@@ -286,9 +351,20 @@ struct ConversationActivityLine: View {
                 .lineLimit(1)
 
         case .working(let confidence, let since):
+            // The list says exactly what the thread says, because both read the
+            // same registry facts through the same pure resolver: a parked turn
+            // reads "Sending…" / "Waiting for a connection…" here too, and
+            // neither of those names the gateway.
+            let words = ConversationActivityCopy.working(
+                confidence,
+                gatewayName: gatewayName,
+                phase: ConversationRowActivity.livePhase(conversationID, now: date)?.phase
+                    ?? .answering
+            )
             HStack(spacing: 6) {
-                Text(ConversationActivityCopy.working(confidence, gatewayName: gatewayName))
+                Text(words)
                     .foregroundStyle(statusColor)
+                    .contentTransition(.opacity)
                 // No elapsed beside "No reply yet": `.stale` is a statement about
                 // the send, and a running clock next to it would imply something
                 // is still being waited on.
@@ -301,6 +377,10 @@ struct ConversationActivityLine: View {
             }
             .font(.caption)
             .lineLimit(1)
+            // Sub-second crossfade between phases, never a delay before the
+            // words appear: holding them back would leave a spinner beside a
+            // blank on every healthy send. Instant under Reduce Motion.
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: words)
 
         case .failed:
             // The words are the same either way — the message did not go, and

@@ -317,6 +317,28 @@ enum AppError: LocalizedError {
     // undecodable payload — is this code. Nothing infers absence from a nil.
     case sttKeyUnreadable                                    // 75 — the Keychain could not answer for the STT key
 
+    // The user stopped a turn before one byte of it left the device (76). It
+    // is a CLIENT-SIDE fact and deliberately not a gateway verdict, which is
+    // the whole reason it is not 73.
+    //
+    // 73 asserts that a connection was attempted and did not open, and its
+    // remedy sends the reader to check their address and their server. On the
+    // phone's converse lane the app cannot support that: the request rides a
+    // background `URLSession` that holds an un-sent body until the system
+    // schedules it, so zero departed bytes is equally a refused host, a
+    // captive portal that still reads as connected, and a perfectly healthy
+    // gateway the transfer daemon had simply not started pushing to yet. The
+    // byte counters prove only that nothing left; they say nothing about why,
+    // and naming a cause the counters did not prove points the user's remedy
+    // at a machine that may never have been involved.
+    //
+    // So this code claims exactly what is proven and nothing more: the user
+    // stopped it, and it never left. Retryable — sending again is the only
+    // thing to do, and it costs nothing because the first attempt spent
+    // nothing. NOT troubleshootable: Diagnostics has nothing to diagnose about
+    // a user's own tap.
+    case turnStoppedBeforeSend                               // 76 — stopped with nothing yet sent
+
     // Catch-all (99)
     case unknown(Error)
 
@@ -416,6 +438,13 @@ enum AppError: LocalizedError {
             return String(localized: "audio.error.tooLarge", defaultValue: "Recording too long. Keep it under 5 minutes.")
         case .sttMissingAPIKey:
             return String(localized: "stt.error.missingKey", defaultValue: "No STT API key set. Open Conduck → Settings to add one.")
+        case .turnStoppedBeforeSend:
+            // Names the user's own action, because that is what happened, and
+            // names no machine at the other end, because the byte counters
+            // prove nothing about one. Lane-agnostic by construction: there is
+            // no branch to make, on any lane.
+            return String(localized: "remoteAgent.error.stoppedBeforeSend",
+                          defaultValue: "You stopped this message before it was sent.")
         case .sttKeyUnreadable:
             // Says what is TRUE (the key could not be read) and never what is
             // merely likely (that there is no key). Carries its own instruction
@@ -728,6 +757,12 @@ enum AppError: LocalizedError {
             return String(localized: "api.error.failure.recovery", defaultValue: "Should be back in a minute or two.")
         case .sttMissingAPIKey:
             return String(localized: "stt.error.missingKey.recovery", defaultValue: "Open Settings → STT API Key to add one.")
+        case .turnStoppedBeforeSend:
+            // States the delivery fact the counters DID prove, then invites the
+            // send the user is free to make. No instruction to go and check
+            // anything: there is nothing to check.
+            return String(localized: "remoteAgent.error.stoppedBeforeSend.recovery",
+                          defaultValue: "Nothing left this device, so nothing reached your AI. Send it again whenever you like.")
         case .sttKeyUnreadable:
             // An EXPLICIT arm rather than the generic "Try again.": the fix is a
             // specific act (unlock the device) that a bare retry invitation does
@@ -1072,6 +1107,10 @@ enum AppError: LocalizedError {
              // Never a loop: `maxAttempts` leaves it at 1, so the retry is the
              // user's tap and nothing spins against a locked Keychain.
              .sttKeyUnreadable,
+             // 76 is retryable for the simplest reason in the enum: nothing was
+             // sent, so nothing was spent, and the only way forward is to send
+             // it. `maxAttempts` leaves it at 1 — the retry is the user's tap.
+             .turnStoppedBeforeSend,
              .ttsProviderUnreachable, .ttsEmptyAudio, .ttsRateLimited,
              .fileTransferUploadFailed, .fileTransferUnreachable,
              .fileTransferServerError:
@@ -1204,6 +1243,13 @@ enum AppError: LocalizedError {
         case .audioInvalid, .audioMissingData, .settingsLoadFailed,
              .noSpeechDetected, .audioTooLarge, .audioProcessingFailed,
              .audioMicBusy, .remoteAgentVisionUnsupported, .remoteAgentImageTooLarge,
+             // 76 joins the deny-list because the environment was never the
+             // problem: the user stopped the turn themselves. Offering
+             // Troubleshoot there sends them to read a connectivity report
+             // about a request that was never attempted — and puts the row into
+             // the Diagnostics recent-failure list as evidence against a
+             // gateway that answered nothing because nothing was asked.
+             .turnStoppedBeforeSend,
              .remoteAgentContextTooLong, .ttsContentBlocked:
             return false
         default:
@@ -1310,6 +1356,7 @@ enum AppError: LocalizedError {
         // true on its own.
         case 74: return .remoteAgentDefaultNeedsSetup(gatewayName: nil)
         case 75: return .sttKeyUnreadable
+        case 76: return .turnStoppedBeforeSend
         case 99: return .apiFailure(message: message ?? "")       // unknown(Error) — Error not reconstructible
         default:
             return .apiFailure(message: message ?? "")
@@ -1408,6 +1455,7 @@ extension AppError: CustomNSError {
         case .remoteAgentNotEstablished: return 73
         case .remoteAgentDefaultNeedsSetup: return 74
         case .sttKeyUnreadable: return 75
+        case .turnStoppedBeforeSend: return 76
         case .unknown: return 99
         }
     }

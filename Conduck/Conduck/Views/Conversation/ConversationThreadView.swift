@@ -7,7 +7,8 @@
 // bubbles). Renders one conversation's messages (createdAt-ascending) from
 // `ConversationDetailViewModel`, plus the EPHEMERAL in-flight UX:
 //   - optimistic user bubble (already in the store via `sendUserTurn`)
-//   - staged "thinking" indicator + live elapsed timer (TimelineView)
+//   - phase-aware in-flight indicator ("Sending…" / "Waiting for a
+//     connection…" / "{Gateway} is answering…") + a phase-scoped elapsed timer
 //   - Cancel affordance (cancels the real URLSessionTask)
 //   - smart scroll: auto-scroll only when pinned to bottom; otherwise a
 //     floating "↓ New reply below" badge that snaps to bottom on tap
@@ -69,6 +70,11 @@ struct ConversationThreadView: View {
     /// takeable. The gate itself reads UIKit live (`threadIsExposed`), because
     /// this value is frozen inside the deferred retry's `.task`.
     @Environment(\.scenePhase) private var scenePhase
+
+    /// Reduce Motion turns the in-flight row's phase crossfade into a hard cut —
+    /// the same gating `DictationPopoverView.workingView` and
+    /// `ConversationActivityMark` already apply to their own state transitions.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// A marker write this view owed and could not take, because the thread was
     /// not exposed at the moment the event that owed it arrived. Drives the
@@ -471,11 +477,14 @@ struct ConversationThreadView: View {
                         }
                     }
 
-                    // Gated on the DISPATCH flag, never on `isAwaitingReply`:
+                    // Gated on the LIVE-TURN gate, never on `isAwaitingReply`:
                     // on macOS the latter is claimed several awaits before the
                     // user's turn is written, which rendered this row ABOVE the
-                    // bubble that provoked it. The pre-dispatch window is
-                    // carried by the user bubble's own sending dot instead.
+                    // bubble that provoked it. The window between those two
+                    // moments is carried by the user bubble's own sending dot.
+                    // Once this row is up it says which phase the turn is in
+                    // (`thinkingIndicator`), so it can own the whole wait —
+                    // including one the background session has not sent yet.
                     if viewModel.showsGatewayWaitIndicator {
                         thinkingIndicator
                             .id(Self.thinkingAnchorID)
@@ -720,33 +729,69 @@ struct ConversationThreadView: View {
 
     // MARK: - Thinking indicator (borderless, left-aligned)
 
-    /// Borderless in-flight indicator: a small spinner + "{Backend} is
-    /// answering…" + a subtle elapsed clock that appears only after ~3s (so it
-    /// doesn't flicker at 0:00). No card chrome, no inline Cancel — the
-    /// composer's trailing Stop control owns cancellation.
+    /// Borderless in-flight indicator: a leading glyph + the phase's words + a
+    /// subtle elapsed clock that appears only after ~3s (so it doesn't flicker at
+    /// 0:00). No card chrome, no inline Cancel — the composer's trailing Stop
+    /// control owns cancellation, and it is lit in EVERY phase, because on iOS
+    /// this row can be a wait nothing else bounds.
+    ///
+    /// IT RENDERS THE RESOLVED PHASE, never a hard-coded `.answering`. The phone
+    /// dispatches on a background `URLSession`, which parks an un-sent request
+    /// until a route exists instead of failing it, so this row can be on screen
+    /// for minutes with nothing sent. "{Gateway} is answering…" there names a
+    /// server that has received nothing, and the clock beside it counts a wait
+    /// the gateway never had. The fallback is `.sending`, the conservative
+    /// direction: under-claiming corrects itself a moment later, over-claiming
+    /// invites a user to blame their own server for their own radio.
     private var thinkingIndicator: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .progressViewStyle(.circular)
-                .scaleEffect(0.8)
+        let phase = viewModel.liveTurnPhase ?? .sending
+        let label = ThinkingIndicator.label(
+            phase: phase,
+            backendName: viewModel.backendDisplayName
+        )
+        return HStack(spacing: 10) {
+            // A STATIC glyph while the wait is parked, a spinner while something
+            // is moving — the same argument the list's `.stale` mark already
+            // makes: an animated spinner beside "Waiting for a connection…" is
+            // internally contradictory, and this is the one phase in which
+            // nothing at all is in flight.
+            if phase == .waitingForNetwork {
+                Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                    .font(.callout)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .frame(width: 16)
+            } else {
+                // Unframed, exactly as before: a healthy send must look
+                // byte-identical to today, so the spinner keeps its intrinsic
+                // footprint and the glyph above is sized to sit close to it.
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .scaleEffect(0.8)
+            }
 
             // Shared resolver, so an unresolved gateway name falls back to a
-            // bare "Answering…" rather than rendering " is answering…".
-            Text(ThinkingIndicator.label(
-                phase: .answering,
-                backendName: viewModel.backendDisplayName
-            ))
+            // bare "Answering…" rather than rendering " is answering…", and so
+            // the thread and the list row say the same words for one state.
+            Text(label)
                 .font(.callout)
                 .foregroundStyle(AppColors.textSecondary)
+                .contentTransition(.opacity)
 
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                // `liveTurnStartedAt`, not this instance's own stamp: the row
-                // above renders for any turn live on this device, including one
-                // a sibling VM, the background session, CarPlay or the share
+                // `liveTurnPhaseSince`, not this instance's own stamp: the row
+                // renders for any turn live on this device, including one a
+                // sibling VM, the background session, CarPlay or the share
                 // drainer dispatched. Reading the stored stamp would map those
                 // to `nil` → 0, so the `elapsed > 3` branch never fired and a
                 // re-minted thread showed the words with no clock beside them.
-                let elapsed = viewModel.liveTurnStartedAt.map {
+                //
+                // PHASE-SCOPED, so the number means what the words beside it
+                // say: in `.answering` it counts from the hand-off ("the gateway
+                // has had this for m:ss"), before that from the claim ("this
+                // turn has been waiting m:ss"). It therefore RESTARTS when a
+                // parked turn finally departs, which is correct — the gateway's
+                // clock did not start until then.
+                let elapsed = viewModel.liveTurnPhaseSince.map {
                     context.date.timeIntervalSince($0)
                 } ?? 0
                 if elapsed > 3 {
@@ -759,7 +804,7 @@ struct ConversationThreadView: View {
             // Hidden from VoiceOver: the clock's text changes every second, and
             // an accessible label that rewrites itself on a timer produces a
             // stream of repeated announcements over the whole wait. The label
-            // beside it already says a reply is in flight.
+            // beside it already says what state the turn is in.
             .accessibilityHidden(true)
 
             Spacer(minLength: 0)
@@ -767,6 +812,11 @@ struct ConversationThreadView: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Crossfade phase changes, never delay them: a spinner beside a blank
+        // for three seconds reads as a broken row, and on a large attachment the
+        // "Sending…" window is genuinely informative. Instant under Reduce
+        // Motion, matching the popover's identical treatment.
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: label)
     }
 
     // MARK: - New-reply badge
@@ -2576,12 +2626,13 @@ private struct MessageBubble: View, Equatable {
             switch message.status {
             case "sending":
                 // Suppress the per-message sending spinner once the turn is
-                // dispatched — the borderless "answering…" indicator is the
-                // single in-flight signal from then on. This dot owns the window
-                // BEFORE that: attachment processing, the durable write, history
-                // assembly, credential resolution. On macOS that window is the
-                // long one, so this is the user's only "it went through" cue
-                // until the gateway hop actually starts.
+                // LIVE — the borderless indicator is the single in-flight signal
+                // from then on, and it names the phase rather than assuming one,
+                // so nothing is lost by handing it the whole wait. This dot owns
+                // the window BEFORE that: attachment processing, the durable
+                // write, history assembly, credential resolution. On macOS that
+                // window is the long one, so this is the user's only "it went
+                // through" cue until the gateway hop actually starts.
                 if !showsGatewayWaitIndicator {
                     ProgressView()
                         .progressViewStyle(.circular)

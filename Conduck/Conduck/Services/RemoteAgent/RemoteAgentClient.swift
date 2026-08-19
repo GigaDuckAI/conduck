@@ -542,8 +542,23 @@ actor RemoteAgentClient {
             // code 3 (only `persistentNetworkFailure` and two STT cases are
             // true), so nothing gets queued into `PendingRetryStore`; and no
             // gateway send path reads `maxAttempts`, so its value of 3 cannot
-            // resurrect automatic retries here. The never-silent-retry invariant
-            // holds — retry stays a user tap.
+            // resurrect automatic retries here.
+            //
+            // THE THIRD MECHANISM, and the one this audit originally missed:
+            // the SYSTEM's own transfer service. On iOS the converse hop runs
+            // on a background `URLSession`, which holds an undispatched request
+            // until connectivity returns and re-attempts a failed CONNECTION
+            // out of process — neither behaviour configurable, and neither
+            // visible to this file. It does not breach the invariant, and the
+            // distinction is worth stating precisely: that is ONE dispatch
+            // whose bytes have not left yet, not a second send of a turn the
+            // app already delivered. Never-silent-retry governs re-sending, and
+            // nothing in the app re-enqueues a converse turn under any
+            // condition. What the app owes the user there is honesty about the
+            // wait, not a bound on it — see `BackgroundRemoteAgent`'s header
+            // and `LiveTurnPhaseResolver`.
+            //
+            // The invariant holds on every lane — retry stays a user tap.
             return AppError.noInternetConnection
         case .untrustedCert:
             // This device rejected the chain. NOT a mismatch: no pin disagreed,
