@@ -1,0 +1,182 @@
+# Changelog
+
+Notable changes to the Conduck app for iPhone, iPad, Mac, Apple Watch and
+CarPlay. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
+Each section is named for one App Store release — the marketing version and the
+build number Apple shows — and matches the tag that release carries in this
+repository, `v<version>-<build>`.
+
+## [1.3-9] — the file lane, attention and trust release
+
+App Store release, 19 August 2026. Tagged `v1.3-9`.
+
+Roughly 240 commits since 1.2 (16 July 2026). This repository's history opens
+partway through that cycle — the app's source moved here on 22 July 2026 — so
+the earlier 1.3 commits are not in this log's history, and there is no `v1.2`
+tag here to compare against.
+
+This is the engineering long form. The App Store "What's New" for 1.3 is the
+short, user-facing version of the same release.
+
+### Files — the agent-file return lane rebuilt
+
+- Per-conversation output folders; every dispatch names its own folder and creates nothing
+- A reply's files come from the folder it was given, never parsed from its prose (an agent's refusal could previously mint four downloads, one from another conversation)
+- Nothing downloads before a tap — up to 8 MB used to move on its own into a store that syncs to iCloud and the Watch
+- Returned files keep their real name; Quick Look preview for file chips both roles; a file Conduck won't open can still be saved
+- File-delivery capability is a property of each gateway; an upload-only server keeps the uploads it can do
+- The folder check reads the server's answer, not just its envelope; a hand-back is believed only when the server can also say no
+- Clone carries its attachments and offers to resend the unanswered turn
+- Existence used to be decided from a status code, so an SSO login page or an nginx `try_files` fallback minted a convincing chip for a file that was never written (a textbook 206 with a valid Content-Range included). Probes read the BODY now, and no "exists" verdict survives without a universal negative control: a key that cannot exist must come back missing on the same lane first
+- A miss used to be permanent — one 404 stamped the turn scanned forever, so an agent whose file landed a second after its sentence lost the delivery. A miss now leaves the turn eligible, the retro scan retries, and only a probe past the grace horizon closes it; auth/certificate/5xx failures are separated from failures that actually say something about the file
+- FileLaneScanBreaker measures a lane with a key that cannot exist rather than counting stalls, and backs off 5/15/30/60 min rather than latching
+- The AGENT creates the output folder, not the client — measured across nine agent frameworks, a client-created folder belongs to whoever runs the file server and locks the agent out on the two gateways most people use. The old instruction block is gone: it read as an injected command to a well-aligned model, one of which refused file transfer outright and stayed hostile for the rest of the thread
+- A conversation's identifier is minted when the composer opens, so the first attachment lands in its own chat's folder instead of pooling in a shared root every conversation could read; images keep the filename they arrived with instead of being renamed by position
+- The inbound name gate was `[A-Za-z0-9._-]`, so `the blue whale.MD`, `Übersicht.md`, `café.pdf` and every CJK name were listed, seen and discarded in silence. Now a positive Unicode policy, with every separator/prefix/component read on UTF-8 BYTES — grapheme-level comparison meant a `/` fused with a combining mark was not `/` while Foundation and the filesystem still saw U+002F. Refusals are reported as a census rather than dropped
+- The output allowlist is a what-Conduck-opens policy, not a safety boundary, and behaves like one: refusals are classified, shown without a tap, and offer Save anyway. heic/mp4/mov join; webm stays out (no system decoder)
+- Only a structural refusal of the listing method (405/501 against a folder that certainly exists) proves a server cannot list — a timeout, 401, 429, 5xx, redirect or non-multistatus body proves nothing and disables nothing. Test Connection also stops leaving a probe folder behind in the agent's working directory
+- A turn that got no output folder says so ONLY when that is news — a wrist turn, a gateway with no file server and a lane already known incapable stay silent; a configured, tested server that has now stopped answering gets one row
+- Watch shows a returned file while you're looking at it — the phone hands its name, size and stored key straight over the WatchConnectivity link (a live test measured seven minutes for the iCloud mirror path); no bytes and no credential travel, pinned by a test on the exact allowed key set
+- The wrist stops naming output folders on a lane that cannot read them; a missing capability value means capable, so an older paired phone keeps working
+- A pairing code carries the file server's measured capabilities, so a new device does not rediscover them; old codes import as not-yet-measured rather than capable
+- A 16 MiB reply of newlines produced ~16.8M Substrings and half a gigabyte of live allocation inside claim ordering, while persisting a message — a crash CloudKit would have synced to every device. Ordering is bounded, off the main actor, and measures its own ceiling
+- Long filenames no longer break attachments in three separate places: a storage key too long for the file server (upload refused outright), a staging copy with a fixed 53-byte prefix (attachment dropped with no chip, no error and no upload on one route, silently degraded to inline text on the other), and a 200-CHARACTER download bound that a 200-character CJK name blew past (Quick Look failed to open). All three are bounded in BYTES on a character boundary, extension preserved; a no-op for names that already fit
+- macOS: drop a file anywhere on the conversation, not only on the composer
+
+### Attention — the conversation list
+
+- Rows resolve to working / answered-unseen / failed / idle; sort direction is legible with several agents dispatched
+- Unread + failure acknowledgement are account facts, mirrored across devices and reaching the Watch (acknowledgement keyed by delivery-attempt identity, so a retry re-arms it)
+- A failure is reported only while it is still the conversation's last activity
+- A new chat starts on the gateway the last one used, not on the Settings default
+- macOS gains a reply notification, a quit-mid-turn confirmation, and burst coalescing
+- Watch writes its own sending status
+- Per-row gateway badges follow what the HISTORY spans (configured set UNION the gateways the listed conversations were created with), not what is configured right now — down to one configured gateway a history spanning four rendered as identical rows on iPhone, iPad, Mac and CarPlay while the wrist still showed all four
+- A forgotten CUSTOM gateway keeps two characters and a palette colour so its archive does not go blank; retirement is DERIVED, never replicated, because a monogram can carry organization identity and syncing tombstones would follow the user into their next iCloud account
+- The Stop morph moved to the dispatch gate — during macOS's pre-dispatch window `inFlightTask` was nil and a tapped Stop did nothing; that window is a disabled Send now. The menu-bar popover gains Transcribing… → Sending… → "{gateway} is answering…", its ✕ live only in the last phase
+- The elapsed clock is hidden from VoiceOver — text that rewrites itself every second announces itself every second
+
+### Trust and security
+
+- A publicly-trusted (ATS-admissible) certificate is now REQUIRED; a pin is an optional additional restriction on a chain the system already trusts. TOFU, the certificate-consent UI and every pin-as-authorisation path are deleted; certFP is gone from conduck-setup:v1
+- Three certificate outcomes separated with their own codes, copy and remedy: untrusted chain / pin mismatch / key outside the SPKI prefix table
+- A scanned setup code says where it points and has its certificate claim checked before anything is persisted
+- Setup codes masked at rest; per-platform import sheet
+- A deleted voice endpoint takes its key with it; remote text renders as nothing more than text
+- Cross-host / scheme-downgrading redirects are REFUSED rather than replayed — a redirect no longer resends conversation history, images, audio, file bytes and the auth token to an address the user never configured; same rule on the file-transfer lane
+- Markdown image and emoji loading in agent replies is blocked outright, so a reply cannot cause a fetch to a third-party address; links go through an explicit tap policy
+- Persisted gateway / file-server URLs must be https, with a real host and no embedded user:password@ credentials — enforced on READ as well as write, so a bad address arriving from an older build or another device via iCloud sync is refused rather than used
+- macOS conversation sends ran on a session that structurally could not carry a pin, silently dropping a configured pin on the send path while Settings' Test Connection did pin — all Mac send paths now share one correctly-configured recipe
+- Agent-supplied filenames render quoted and single-line, so a crafted name cannot disguise itself in the UI
+- A third of temp writes (raw microphone audio, full-fidelity images, request bodies carrying conversation history) were unreclaimable if the app was killed mid-operation; every temp write is now claimable and swept, the sweeper runs on watchOS for the first time, and it is off the main thread
+- Stored-key path components and staged attachment leaves are bounded
+- Forgetting the LAST gateway now reaches the Watch — `currentRemoteAgentMultiEnvelope()` returned nil for an empty configured set, so the wrist kept a live route (URL, auth scheme, roster, Keychain token) to a gateway the user believed disconnected, across reboots. Teardown is authorized by RECORDED USER INTENT via a latch armed at the Forget site, never inferred from a read (an empty set is equally a restored device before iCloud downloads, or a locked Keychain before first unlock)
+- Migrating the single custom voice endpoint into the roster COPIED rather than moved, and nothing retired the copy: voice recovery walked Keychain accounts rather than the roster, so a recording plus its bearer token could reach a server the user had deleted. Legacy slots and the synchronizable item are retired on explicit deletion, keyed by the migration's uuid
+- Untrusted text — an agent reply, a transcript from a configured endpoint — is projected before it reaches a notification body, a conversation headline, a CarPlay row or a VoiceOver label: formatting controls out, right-to-left script untouched, cap applied AFTER the projection so truncation cannot strand a control. Stored content and what replays on the wire stay byte-exact
+- A synced gateway name that runs long is truncated rather than replaced, so editing one gateway can no longer rename another
+- Cancelling dictation or speech preserves cancellation instead of burning retry attempts
+- A certificate refusal in a background transfer lane shows as a certificate error rather than an unexplained cancel
+- ErrorSurfaceDriftGuardTests: fails the suite when a surface renders a cause without its remedy, or draws Retry without consulting isRetryable
+
+### Sync and multi-device correctness
+
+- The XCTest suite had been writing into the REAL App-Group container, iCloud KVS and synchronizable Keychain, leaving fixture gateways (`https://gateway.example.test`) synced to every paired device and emptying the real custom-gateway roster — Diagnostics reported "2 gateways synced to this device are missing their key or model here" for gateways the user had removed. A storage seam (`Services/Storage/`, `SettingsDependencies`, a `Debug-Testing` configuration defining `CONDUCK_TESTING`, a `precondition` trap and `scripts/check-storage-seam.sh` in CI) closes it
+- `performInitialSync` pushed local gateway URLs UP into KVS, so a device offline during a peer's Forget resurrected the gateway for everyone; gateway URL/model sync is hydrate-only now, and deliberately does NOT delete on absence (silence at launch is not evidence of a remote delete)
+- `remoteAgent.model.*` had no inbound mirror, so a peer's Forget left every other device holding a stale model forever — permanently amber for OpenRouter, whose URL is app-fixed
+- Built-in `remoteAgent.authScheme.*` had no inbound mirror and no launch hydration, so flipping a built-in to keyless on one device left every peer demanding a token that no longer existed
+- A BUILT-IN default pointer is now always honoured: healing the fresh fallback sent the adopt-first bootstrap straight to the surviving custom, silently moving every message to another server
+- `defaultRemoteAgentRef()` could point at a gateway that no longer existed; it self-heals on stored evidence, which fails safe on an unreadable Keychain rather than deleting the user's default during a locked-device read
+- A peer's Forget arrives as bare key removals, so the inbound mirror now drops a default pointer whose sync-owned definition was present before the change and absent after, and lets the bootstrap choose — dropping rather than re-pointing, so it is safe to run unattended
+- `LiveKVSChangeSource` required `NSUbiquitousKeyValueStoreChangedKeysKey`, which Foundation supplies only for server and initial-sync changes, so account-change and quota notifications were dropped and the Watch settings reader went stale for the rest of the process on an iCloud account switch
+- Forget was gated on CONFIGURED, so a half-configured built-in had no Forget button and its row's advice led nowhere; `deleteCustomGateway` now purges the whole per-uuid key family from both stores
+- The versioned orphan sweep was DELETED rather than repaired — both roster readers are fail-open, so one malformed record could have erased every gateway's URL, model, auth scheme and file-server config from every device with no journal and no undo. Out-of-band collection moved to `scripts/cleanup-orphan-slots.sh` (dry-run default, typed confirmation, never touches KVS)
+- A signed test host was rewriting every title snippet in the real App-Group sqlite and exporting it to the developer's private CloudKit zone; the one-shot flag is gated on the STORE now
+
+### Performance
+
+- Reply rendering scans that were quadratic in reply length are single passes now, and display scanning stopped materializing the whole string — a 4 MB reply went from 16.4 MiB to 48 KiB of transient allocation
+- The filename-detection pattern that took ~8 s on a 32 KB unbroken token run is bounded; deeply nested math falls back to a plain code block past a complexity budget rather than locking the UI
+
+### Setup and pairing
+
+- Copy conversation — one-tap whole-thread copy as plain text (iPhone/iPad/Mac); attachments as bracket placeholders, never bytes or extracted text
+- File-transfer editor gains Test Connection (draft probe) + top-right Save + discard guard, killing the Save&Test flicker
+- Quick connect deep-link honored on the FIRST tap, with no chooser detour
+- Per-turn file-delivery instruction defeats gateway MEDIA:-stripping on any gateway; MKCOL before nested PUT; 409 create-parent handshake; iCloud sync mirror + silent folder re-probe
+- macOS menu-bar dots suppressed for the thread visible in the active window
+- Setup-code review screen redesigned; readiness step no longer an entry step on any path
+- "I already have a code" reaches the import sheet in one tap; quick connect on a never-configured custom gateway opens the lane, not a bare command
+- A setup code declares what the file server can actually do
+- File-transfer settings screen redesigned; Advanced disclosure flattened
+- Honest gateway commits and Back-not-Cancel in buffered editors
+- An unconnected gateway is an offer, not an unfinished task
+- The readiness step stopped gating on something the next step supplies: it asked "Can Conduck reach your AI?" while the helper step one screen later is what sets up reach, so an Ollama-on-localhost owner could not honestly claim reach and was routed to the adapter brief for a problem they did not have. It asks "Is your AI running as a server?" now, and says out loud that it need not be reachable yet
+- The command step's iOS handoff line told a quick-connect user to "come back here", presuming a trip to a computer that only the guided path takes
+- The Mac window asked whether the DEFAULT gateway could send and rendered the beginner "bring your own AI" screen on the answer — on a Mac holding five verified gateways whose default pointed at a built-in another device had forgotten, that screen was false and took the toolbar with it. `GatewayGate` holds both questions as pure functions both platforms call. The menu bar keeps the stricter question but refuses a capture BEFORE the recorder starts, rather than after a paid transcription is spent and a conversation permanently sealed to a gateway that must refuse it
+- The macOS sidebar was laid out 1399pt tall inside a 949pt window and centred, spilling 225pt off each end — each split-view column is hosted in its own `NSHostingView`, which probes minimum size by proposing ZERO width, and a `.fixedSize` Text answers with its string set one character per line. Declaring each column's real width makes the probe measure what the user sees
+- Starting a new conversation from iPad stops a capture that is still running, the way the Mac window already did — otherwise the outgoing thread's mic kept going and its transcript landed in the new chat's composer
+- The About screen, README and issue templates carried a raw discord.gg invite code that had expired; a lapsed code is not merely a dead link, it becomes claimable by anyone as their own vanity URL, and a code baked into a shipped binary can only be corrected through a full App Review cycle. All surfaces point at conduck.com/discord now, so rotating it is a deploy
+- Esc inside a pushed macOS Settings editor raised the CONTAINER's discard confirm, whose Discard tore down all of Settings and landed the user on the chat UI; Esc now targets the innermost editor only, the two dialogs read differently, and Esc no longer closes Settings from any depth with nothing unsaved
+- Pairing a gateway from inside its own editor left the editor stuck (Save greyed, "Discard changes?" on exit, empty Name under a populated title) — fixed via a commit receipt the editor checks on dismissal
+- A refused gateway save (address rejected, roster at cap) used to return silently as if it had worked; partial commits roll back, and a pairing test no longer falls back to the setup-code payload when storage comes up empty and paints a false green "Connected"
+- Save is enabled only on a real change to a valid form, is inert during an in-flight save, and an untouched form announces "No changes to save." to VoiceOver rather than downgrading "Connected" to "Saved"
+- The three pushed editors say "Back" rather than "Cancel"; iOS swipe-back is suppressed there because it was a silent discard
+- The tailnet callout names iCloud Private Relay, gives the Settings path to turn it off, and suggests the Safari check that separates a name-resolution problem from an app problem
+- Onboarding and Personal AI copy stop selling gateway-side memory — Conduck sends the whole conversation every message, so a gateway keeping its own history bills the context twice (measured 13.3k prompt tokens vs 540 on the same turn); the footer now states the send-context-every-message fact plainly
+- Pairing sheet has exactly one paste path — the stacked "Use copied code" clipboard button is gone (QR scan unchanged on iOS); guided-cover deep-link made race-free (item-based presentation)
+- Community/official build-identity split (Identity.xcconfig + private Identity-Override.xcconfig)
+
+### Errors and diagnostics
+
+- WS-D declined-turn UX: the adapter contract's 1.3 error vocabulary is consumed and PERSISTED (Core Data v4, additive) — a failed turn keeps WHY across a relaunch instead of a transient banner; a photo-related refusal no longer poisons every later turn, and offers resend-without-photo
+- Out of credits and rate-limited keep their Try again; a 403 no longer asserts the bearer token is wrong
+- Every error names the AI the user actually configured
+- Diagnostics report what the wire did: persisted failure codes, per-gateway chat-proof records, scoped recheck, four-lane error parity
+- Transport failures split by whether the request could have reached the server: an unmapped HTTP status keeps its code instead of collapsing to a generic retry; gateway/tunnel outages (502/503/504/530, Cloudflare 521-526) are separated from a server that errored; connection-never-opened (refused/DNS) is separated from may-have-arrived-then-dropped. Test Connection and a failed send finally agree
+- Per-gateway recheck — a free, non-mutating check scoped to one gateway, on the focused card and every gateway row, instead of only the billable "Test everything"
+- Copy Diagnostics carries `Recent failed sends:` (up to five, deduped per gateway/code/device) and `Chat proven:`; a green gateway row states its own scope (it checked the model list; only sending proves chat)
+- Chat-proven recorded against the wrong config in two cases (a custom gateway always recorded a nil model; a gateway edit landing mid-send could store one gateway's success as proof for another) — both now read the config the request actually used
+- Cancelled messages are no longer reported as gateway send failures in the support report
+- CarPlay routed every non-certificate transport failure to a blanket "gateway unreachable", telling a driver to investigate a gateway that was never contacted — it now uses the same mapping as the other three lanes
+- Watch surfaces coded failures (image not supported, model not found, context overflow) with their specific message instead of a generic status error; send-error banners name the gateway and the device
+- Long errors are fully reachable: the Watch banner is a two-line summary with a chevron to a scrollable detail sheet at any Dynamic Type size, and both macOS dictation popover footers wrap instead of capping at three lines
+- A trycloudflare.com gateway address warns at setup that it is disposable
+- A leftover gateway is named, marked and counted ONCE — readiness ("can this gateway send?") and removability ("would Forget erase anything?") are separate axes from one classification pass, so the header count and the rows cannot disagree; each incomplete gateway gets its own row, named on screen but carrying only its KIND into the copyable report
+- A turn that failed carrying a file and not one word says so, as a quiet footnote under the verdict — some agents produce no reply when there is nothing to answer, and where a tunnel replaces the body the explanation never arrives. Gated to the generic arm, a genuinely wordless turn, and only the four classes meaning the gateway's own program answered and failed
+- On iOS the converse hop runs on a background URLSession that waits for connectivity out of process; the row claimed "{Gateway} is answering…" with an elapsed clock the whole time — measured as two and a half minutes of airplane mode, and as a refused connection that never surfaced. The wait stays; the false assertion does not
+- The Watch's out-of-credits error rendered its remedy twice ("…then try again. Add credits with your provider, then try again.") and mirrored that to the paired iPhone's lock screen — the split into cause + recovery updated the iOS catalog and left the Watch one holding the pre-split value
+- A passing row states its news once; the file-server row says whether uploads are on, not what a test once found
+- The unavailable-default row offers a switch rather than ordering one
+
+### macOS and iPad
+
+- MacPointerTargets: every mouse-reachable custom-drawn control is properly clickable
+- One settings rail, full-bleed sub-screen rows, persistent back chrome, live Guided Setup row
+- Sidebar fits the window it is in; compose moves inside the sidebar and sizes to its own glyph
+- The Mac window asks whether ANY gateway can send, not whether the default one can
+- iPad: compose lives on whichever column's bar is on screen; sidebar separates its rows and squares its search field
+- macOS 26 stale titlebar-glass band repaired at root cause; "Personal AI" header flicker killed on conversation switch (memo warmed at launch); transcript + sidebar opt out of the top scroll-edge effect
+
+### Voice and Watch
+
+- Typed TTS playback outcomes — undecodable bytes, refused starts, didFinish(false) and mid-clip decode errors are FAILURES routed to the Apple fallback with transparency, where they previously terminated the turn in silence; delegate-identity guards + per-turn generation in ReplyVoice
+- TTS key-sync convergence UX — device-local key readiness banner (missing vs unreadable), TTSKeyArrivalMonitor (bounded 5s→160s foreground re-check, iCloud Keychain has no arrival event), explicit "Send Settings to Apple Watch" recovery
+- Quick Look for inline text attachments (zero network); Watch text-attachment viewer; retroactive output-file detection for CarPlay/Watch turns
+- An unreadable STT key is not an absent one — the recording outlives the refusal
+- CarPlay hears the truth about STT; a route yields to what the user asked for next
+- A queued Watch capture the iPhone could not read is kept, not thrown away
+- Watch: say the out-of-credits remedy once, not twice
+- Composer stops decoding full camera files on the main actor
+
+### Project
+
+- Apache-2.0 licensing, SPDX headers on every tracked source file, THIRD_PARTY_NOTICES, in-app Open Source Licenses screen
+- DCO sign-off hook; issue forms built around the in-app diagnostics report
+- CI source guards on Linux; macOS TLS test bundle compiled unconditionally
+
+### Release-gating fixes made in this build
+
+- ConverseIntent referenced DEBUG-only RemoteAgentDiagnostics in a line meant to ship — Release failed to compile on both platforms; it now uses an always-compiled os.Logger
+- Two test files referenced iOS-only symbols ungated (AppleSpeechRelayCoordinator, CarPlaySceneDelegate), breaking the macOS test-bundle compile and with it the live TLS trust suite
+
+Verified: iOS 3925 tests / 0 failures · watchOS 206 / 0 · live TLS 16 / 0 · Release builds green on iOS and macOS · SBOM notices gate clean
