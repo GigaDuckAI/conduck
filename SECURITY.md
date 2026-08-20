@@ -1,7 +1,7 @@
 # Security Policy
 
 The canonical vulnerability disclosure policy — including the full scope rules and
-safe-harbor terms — is published at **<https://conduck.com/security>**. A
+safe-harbor terms — is published at **<https://conduck.com/security/>**. A
 machine-readable summary lives at
 [`/.well-known/security.txt`](https://conduck.com/.well-known/security.txt).
 This file is the short version for people arriving via GitHub.
@@ -108,7 +108,7 @@ one.
 ## Safe harbor
 
 Security research conducted in good faith and in line with the policy at
-<https://conduck.com/security> is considered **authorized**: no legal action or
+<https://conduck.com/security/> is considered **authorized**: no legal action or
 law-enforcement complaints will be initiated against you for your research or
 your report. The full safe-harbor terms, including what it can and cannot cover,
 are on that page.
