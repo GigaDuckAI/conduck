@@ -77,15 +77,12 @@ DOC_DIR="docs/ai-context"
 # PER DECISION — a decision that cannot be stated, justified, and have its
 # rejected alternatives recorded in this many words is usually two decisions.
 # ---------------------------------------------------------------------------
-FILE_CEILING=19000
+FILE_CEILING=16900
 DECISION_CEILING=650
 
 # `words:heading` — the exact count each section measures today. Growth fails.
 # See "WHY TWO DECISIONS ARE EXEMPT AND NAMED" above.
-GRANDFATHERED=(
-  "4028:A file the agent produces comes back in a folder the app named for that one reply"
-  "1453:What the user has already seen is a fact about the account, and it syncs"
-)
+GRANDFATHERED=()
 
 # The complete contents of docs/ai-context/. There is no third document.
 EXPECTED_DOCS=(
@@ -158,6 +155,7 @@ fi
 
 allowance_for() {
   local heading="$1" entry
+  [ "${#GRANDFATHERED[@]}" -gt 0 ] || return 1
   for entry in "${GRANDFATHERED[@]}"; do
     [ "${entry#*:}" = "$heading" ] && { echo "${entry%%:*}"; return 0; }
   done
