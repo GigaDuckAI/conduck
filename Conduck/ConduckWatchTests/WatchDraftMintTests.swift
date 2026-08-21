@@ -6,6 +6,12 @@
 // the one-shot Ask hint binds the mint to the CAPTURE-TIME gateway choice
 // and survives a parallel bound send untouched).
 //
+// ALSO the draft-ADOPTION contract: a mint is stamped with the capture request
+// that owns it and that record outlives the live pin, so a draft suspended
+// across its own mint can still identify its conversation afterwards — and a
+// mint owned by nobody (a deferred drain replaying an older capture) can never
+// be adopted by whatever draft happens to be on screen.
+//
 // The hops run against an injected in-memory store + never-configured custom
 // refs, so every path stops at the not-configured gate AFTER the resolver —
 // the mint mechanics execute with zero network. Shared App-Group state (Ask
@@ -78,6 +84,9 @@ final class WatchDraftMintTests: XCTestCase {
         let conversations = try await store.fetchConversations()
         XCTAssertEqual(conversations.count, 0,
                        "An empty transcript must mint nothing (guardrail 1/2 — no orphan in the synced store).")
+        XCTAssertEqual(service.captureMintCount, 0,
+                       "A discard must never read as a mint — the counter is a draft's cue to look for its id.")
+        XCTAssertNil(service.lastMintOutcome)
         XCTAssertNil(WatchSettingsReader.shared.consumePendingInAppNewConversationBackend(),
                      "The empty-transcript reset drops the one-shot hint.")
         XCTAssertEqual(service.state, .idle)
@@ -112,5 +121,83 @@ final class WatchDraftMintTests: XCTestCase {
                        "The bound resolver branch must leave the Ask hint untouched.")
         let conversations = try await store.fetchConversations()
         XCTAssertEqual(conversations.count, 1, "A bound send mints nothing new.")
+    }
+
+    // MARK: - Draft adoption (mint outcome)
+
+    func testMintOutcomeCarriesTheOwningRequestID() async throws {
+        let request = UUID()
+        WatchSettingsReader.shared.setPendingInAppNewConversationBackend("custom_\(UUID().uuidString)")
+        // Arms the mic and takes ownership of the turn; the hop below then
+        // mints under that ownership.
+        service.startCapture(boundTo: .new(backendRef: "ignored"), requestID: request)
+
+        await service.startConverseHop(transcript: "hello wrist")
+
+        let mintedRows = try await store.fetchConversations()
+        let minted = try XCTUnwrap(mintedRows.first?.id)
+        XCTAssertEqual(service.captureMintCount, 1)
+        XCTAssertEqual(service.lastMintOutcome,
+                       WatchCaptureMintOutcome(requestID: request, conversationID: minted),
+                       "The mint must be stamped with the request that owns it — adoption is a match, not a read.")
+
+        // Tear the armed machine down before its permission Task advances.
+        service.cancelRecording()
+    }
+
+    func testMintOutcomeSurvivesTheTerminalClearThatWipesThePin() async throws {
+        let request = UUID()
+        WatchSettingsReader.shared.setPendingInAppNewConversationBackend("custom_\(UUID().uuidString)")
+        service.startCapture(boundTo: .new(backendRef: "ignored"), requestID: request)
+        await service.startConverseHop(transcript: "hello wrist")
+        let mintedRows = try await store.fetchConversations()
+        let minted = try XCTUnwrap(mintedRows.first?.id)
+
+        // `dismissError()` runs the same terminal-clear block the reply path
+        // reaches through `clearInFlight()` — the boundary that wipes the pin.
+        // It is used here because it is the one such boundary a test can reach
+        // without a live converse hop.
+        service.dismissError()
+
+        XCTAssertNil(service.inFlightConversationID,
+                     "The live pin is transient by design — this is the state a suspended draft resumes into.")
+        XCTAssertEqual(service.lastMintOutcome?.conversationID, minted,
+                       "The OUTCOME must outlive the pin, or a draft that missed the window can never find its thread.")
+        XCTAssertEqual(service.lastMintOutcome?.requestID, request)
+    }
+
+    func testDeferredMintIsOwnedByNobodyAndRecordsNoOutcome() async throws {
+        // A LIVE capture request holds the machine — the state a mounted draft
+        // is in. The deferred drain must still own nothing: a claim-nil reset
+        // can hand the machine over without passing a terminal boundary, so the
+        // hop clears the request itself rather than trusting its caller.
+        service.startCapture(boundTo: .new(backendRef: "ignored"), requestID: UUID())
+        service.cancelRecording()
+        // A deferred relay drain replays a capture taken earlier: it sets the
+        // pin directly and never calls `startCapture`, so nothing owns it.
+        await service.startDeferredConverseHop(transcript: "an older ask", boundTo: nil)
+
+        let conversations = try await store.fetchConversations()
+        XCTAssertEqual(conversations.count, 1, "The deferred hop still mints (it has a transcript to send).")
+        XCTAssertEqual(service.captureMintCount, 1)
+        XCTAssertNil(service.lastMintOutcome,
+                     "An unowned mint must be adoptable by NO draft — otherwise a draft waiting on its own turn "
+                     + "would show the user a conversation belonging to an older, unrelated one.")
+    }
+
+    func testDeferredMintIsUnownedEvenWhenARequestStillHoldsTheMachine() async throws {
+        // The claim-nil "superseded" resets hand the machine over WITHOUT
+        // passing a terminal boundary, so a draft's request can still be
+        // latched when the deferred hop runs. Its mint must remain unadoptable
+        // — otherwise that draft opens an older turn's conversation.
+        let draftRequest = UUID()
+        service.startCapture(boundTo: .new(backendRef: "ignored"), requestID: draftRequest)
+
+        await service.startDeferredConverseHop(transcript: "an older ask", boundTo: nil)
+
+        let conversations = try await store.fetchConversations()
+        XCTAssertEqual(conversations.count, 1)
+        XCTAssertNil(service.lastMintOutcome,
+                     "A deferred hop must never stamp its mint with a draft's request id.")
     }
 }

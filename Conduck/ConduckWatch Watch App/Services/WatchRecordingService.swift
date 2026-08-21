@@ -66,8 +66,8 @@ enum WatchRecordingState: Equatable {
 /// `.existing` targets an already-persisted conversation; `.new` is a DRAFT
 /// shell that has NO conversationID yet — persistence is deferred to the first
 /// non-empty transcript (the lazy mint in `resolveActiveConversationAndBackend`),
-/// at which point the draft adopts the real id via
-/// `WatchRecordingService.inFlightConversationID`.
+/// at which point the draft adopts the real id by matching its own capture
+/// request against `WatchRecordingService.lastMintOutcome`.
 enum WatchCaptureTarget: Hashable {
     case existing(UUID)
     /// A brand-new conversation to be minted lazily, bound to `backendRef`
@@ -118,6 +118,51 @@ enum WatchHeadlessCaptureResolution: Equatable {
 struct WatchGatewayRefusal: Error, LocalizedError {
     let message: String
     var errorDescription: String? { message }
+}
+
+/// What `startCapture(boundTo:requestID:)` did — an OUTCOME the caller can act
+/// on, never a state the caller has to re-derive.
+///
+/// The distinction that matters is `alreadyRunning` vs `refusedBusy`, and it
+/// exists because ONE capture is deliberately started TWICE. The headless
+/// `.pushAndStart` arm starts the service at the push site (spec: Watch
+/// recording is service-driven, independent of navigation) and the pushed
+/// thread's auto-start `.task` starts it AGAIN — the second call is the healthy
+/// belt-and-suspenders duplicate, not a failure. Without the request id both
+/// arrive at the same `guard state == .idle` refusal, so a draft that reacted to
+/// "refused" by dismissing itself would dismiss every headless capture the
+/// instant it appeared. Matching the request id tells the two apart, which is
+/// what makes reacting to a GENUINE refusal safe.
+enum WatchCaptureStartOutcome: Equatable {
+    /// The mic is arming for this request.
+    case started
+    /// This exact request is already live (the deliberate duplicate start).
+    /// The caller owns the turn — proceed exactly as for `.started`.
+    case alreadyRunning
+    /// A DIFFERENT turn owns the machine. Nothing was armed, no pin was
+    /// touched; a draft pushed for this request has nothing to wait for.
+    case refusedBusy
+}
+
+/// The conversation a capture request minted, stamped with the request that
+/// owns it — the durable half of the draft-adoption contract.
+///
+/// A draft thread shell is pushed BEFORE its conversation exists and has to
+/// learn the real id later. Reading the live pin cannot do that job: the pin is
+/// non-nil only between the mint and the reply, so a draft that is not
+/// rendering across that whole window observes nil → nil and waits forever.
+/// This value is written at the mint and NEVER cleared, so the draft can read
+/// it late — on a resume, on a remount, on any invalidation edge.
+///
+/// The `requestID` is what makes never-clearing safe. Adoption is a match, not
+/// a read: a draft takes this id only when the outcome carries ITS request, so
+/// a mint belonging to some other turn — a deferred relay drain replaying an
+/// older capture, a relaunched background-STT process — can never be adopted by
+/// a draft that happens to be on screen with a nil id.
+struct WatchCaptureMintOutcome: Equatable {
+    /// The capture request that minted it (the `WatchRoute.capture` nonce).
+    let requestID: UUID
+    let conversationID: UUID
 }
 
 @Observable
@@ -357,11 +402,36 @@ final class WatchRecordingService {
     private var pendingPinStampsQuickPointer = false
 
     /// The conversation id minted by the lazy resolver for a `.new` capture
-    /// target (where `pendingConversationID` started nil). Lets a DRAFT thread
-    /// shell adopt the real id the moment the service creates it, so the open
-    /// thread can bind its busy banner + reply refresh to "this" conversation.
-    /// Cleared on every terminal/reset boundary alongside `pendingConversationID`.
+    /// target (where `pendingConversationID` started nil). Binds the OPEN
+    /// thread's busy banner + capture overlay to "this" conversation while the
+    /// turn is live. Cleared on every terminal/reset boundary alongside
+    /// `pendingConversationID` — it is a live pin, not a record of what
+    /// happened, so a draft must never depend on catching it (see
+    /// `lastMintOutcome`, which is the durable half).
     private var mintedConversationID: UUID?
+
+    /// The capture request that owns the live turn — the `WatchRoute.capture`
+    /// nonce the trigger minted, threaded through `startCapture`. Cleared on
+    /// every terminal/reset boundary alongside `pendingConversationID`, which is
+    /// the load-bearing part: a hop that never went through `startCapture` (the
+    /// deferred-relay drain, a relaunched background-STT process) then owns
+    /// NOTHING, so its mint is stamped with no request and no draft can adopt it.
+    private var captureRequestID: UUID?
+
+    /// The last mint, stamped with the request that owns it. Written at the mint
+    /// and DELIBERATELY NEVER CLEARED — a draft that was suspended across its
+    /// own mint→reply window has to be able to read this after the fact, and
+    /// every clear boundary is inside exactly that window. Staleness is harmless
+    /// because adoption matches on `requestID` rather than merely reading the id.
+    private(set) var lastMintOutcome: WatchCaptureMintOutcome?
+
+    /// Monotonic count of conversations minted by a capture. Purely an
+    /// INVALIDATION EDGE for a draft that was not rendering: an increment leaves
+    /// a durable difference a resumed view still sees (old ≠ new), where the
+    /// pin's nil → id → nil returns to its old reading and is observed as no
+    /// change at all. Correctness comes from the `requestID` match in
+    /// `lastMintOutcome`, never from this counter — it only says "look again".
+    private(set) var captureMintCount = 0
 
     /// True iff the in-flight turn is a typed (no-audio) send. Drives the
     /// `watch-text` modality stamp on the user-turn append; voice path leaves
@@ -428,6 +498,26 @@ final class WatchRecordingService {
         pendingConversationID ?? mintedConversationID
     }
 
+    /// Record a lazy mint. The three values move TOGETHER — the live pin, the
+    /// durable outcome, and the invalidation edge — so no caller can bump one
+    /// without the others and leave a draft reading a half-written mint.
+    ///
+    /// The outcome is stamped only when a capture request owns the turn. A
+    /// deferred-relay drain or a relaunched background-STT hop reaches the same
+    /// resolver without ever calling `startCapture`, so `captureRequestID` is
+    /// nil there and the mint is recorded as belonging to nobody — which is
+    /// exactly right: a draft on screen waiting for its OWN turn must not adopt
+    /// a conversation minted for an older, unrelated one.
+    private func recordMint(_ conversationID: UUID) {
+        mintedConversationID = conversationID
+        captureMintCount += 1
+        guard let requestID = captureRequestID else { return }
+        lastMintOutcome = WatchCaptureMintOutcome(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+    }
+
     /// True iff a preserved audio capture exists to re-run. Drives the error
     /// view's affordance label: every converse-stage failure has NO file (STT
     /// success deletes it) and the relay paths hand the file to the pending
@@ -447,12 +537,27 @@ final class WatchRecordingService {
     // resolver mints + binds to the captured ref at the first non-empty
     // transcript. An `.existing` target pins the converse hop to that id.
 
-    /// Start an audio capture bound to `target`. Drives `.arming` → `.recording`
-    /// from the service independent of navigation (never gate the mic on the
-    /// thread finishing its load). A lingering `.error` is superseded so a fresh
-    /// capture is never bricked (mirrors iOS `recorder.dismissError()`).
-    func startCapture(boundTo target: WatchCaptureTarget) {
-        if case .error = state { dismissError() }
+    /// Start an audio capture bound to `target`, on behalf of the capture
+    /// request `requestID` (the `WatchRoute.capture` nonce the trigger minted).
+    /// Drives `.arming` → `.recording` from the service independent of
+    /// navigation (never gate the mic on the thread finishing its load). A
+    /// lingering `.error` is superseded so a fresh capture is never bricked
+    /// (mirrors iOS `recorder.dismissError()`).
+    ///
+    /// ONE request is deliberately started TWICE — at the push site and again
+    /// by the pushed thread's auto-start `.task` — so the refusal branch reports
+    /// `.alreadyRunning` for the caller's OWN request and `.refusedBusy` only
+    /// when a different turn owns the machine. See `WatchCaptureStartOutcome`.
+    @discardableResult
+    func startCapture(boundTo target: WatchCaptureTarget, requestID: UUID) -> WatchCaptureStartOutcome {
+        // Supersede a lingering error from a DIFFERENT turn, so a fresh capture
+        // is never bricked — but NEVER this request's own. The push site starts
+        // the capture and the pushed view starts it again; arming is async, so
+        // the first attempt can already have failed ("Microphone access is
+        // required", "Could not start recording") by the time the second call
+        // lands. Superseding there would swallow the reason and silently re-arm,
+        // turning one honest failure into two silent ones.
+        if case .error = state, captureRequestID != requestID { dismissError() }
         // Guard-first (mirrors `startRecording(boundTo:)`): refuse BEFORE
         // mutating the pins/tag, so the direct-start headless path (the
         // no-remount fix) can never re-pin / re-label a turn that is already
@@ -462,9 +567,18 @@ final class WatchRecordingService {
         // above already reset a stale `.error` to `.idle`, so a recoverable
         // error still proceeds.
         guard state == .idle else {
+            // The caller's OWN request is already live — the deliberate
+            // duplicate start, not a refusal. Reported as such so a draft can
+            // safely dismiss itself on a genuine refusal without dismissing
+            // every healthy headless capture.
+            if let live = captureRequestID, live == requestID {
+                WatchLog.note(.capture, "capture.duplicate", ["via": "startCapture", "state": state.phaseKind])
+                return .alreadyRunning
+            }
             WatchLog.note(.capture, "capture.refused", ["via": "startCapture", "state": state.phaseKind])
-            return
+            return .refusedBusy
         }
+        captureRequestID = requestID
         inFlightTurnID = UUID()
         switch target {
         case .existing(let id):
@@ -497,6 +611,7 @@ final class WatchRecordingService {
         mintedConversationID = nil
         logCaptureStart("startCapture")
         _startRecording()
+        return .started
     }
 
     /// Trigger-time resolution for a HEADLESS capture (Action Button /
@@ -1072,6 +1187,7 @@ final class WatchRecordingService {
         // would inherit it and land in the wrong thread.
         pendingConversationID = nil
         mintedConversationID = nil
+        captureRequestID = nil
         pendingTypedSend = false
         captureSource = nil
         inFlightTurnID = nil
@@ -1328,8 +1444,17 @@ final class WatchRecordingService {
                 compressedAudioData = nil
                 compressedAudioFormat = nil
                 WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+                // This turn is over here — the path that won the claim owns it
+                // now. Clear rather than merely resetting `state`: a surviving
+                // `captureRequestID` would let the winner's mint be stamped with
+                // THIS turn's request. And bump the discard counter, because a
+                // `.new` draft mounted for this capture will now never see a mint,
+                // a refusal or an error — without it the draft holds the capture
+                // overlay until the user swipes back.
+                clearInFlight()
                 state = .idle
                 recordingTime = 0
+                captureDiscardCount += 1
                 return
             }
             compressedAudioData = nil
@@ -1406,8 +1531,17 @@ final class WatchRecordingService {
                     compressedAudioData = nil
                     compressedAudioFormat = nil
                     WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+                    // This turn is over here — the path that won the claim owns it
+                    // now. Clear rather than merely resetting `state`: a surviving
+                    // `captureRequestID` would let the winner's mint be stamped with
+                    // THIS turn's request. And bump the discard counter, because a
+                    // `.new` draft mounted for this capture will now never see a mint,
+                    // a refusal or an error — without it the draft holds the capture
+                    // overlay until the user swipes back.
+                    clearInFlight()
                     state = .idle
                     recordingTime = 0
+                    captureDiscardCount += 1
                     return
                 }
                 compressedAudioData = nil
@@ -1423,8 +1557,17 @@ final class WatchRecordingService {
                 compressedAudioData = nil
                 compressedAudioFormat = nil
                 WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+                // This turn is over here — the path that won the claim owns it
+                // now. Clear rather than merely resetting `state`: a surviving
+                // `captureRequestID` would let the winner's mint be stamped with
+                // THIS turn's request. And bump the discard counter, because a
+                // `.new` draft mounted for this capture will now never see a mint,
+                // a refusal or an error — without it the draft holds the capture
+                // overlay until the user swipes back.
+                clearInFlight()
                 state = .idle
                 recordingTime = 0
+                captureDiscardCount += 1
                 return
             }
             compressedAudioData = nil
@@ -1759,6 +1902,7 @@ final class WatchRecordingService {
             }
             pendingConversationID = nil
             mintedConversationID = nil
+            captureRequestID = nil
             pendingTypedSend = false
             captureSource = nil
             inFlightTurnID = nil
@@ -1947,6 +2091,14 @@ final class WatchRecordingService {
         // speaking it unprompted minutes later would be a jump-scare, so
         // deferred replies must stay silent (nil source fails the verdict).
         captureSource = nil
+        // OWN NOTHING. `recordMint` stamps its outcome with whatever request
+        // holds the machine, and a deferred drain replays a capture from
+        // MINUTES ago — if a live draft's request were still latched here, its
+        // mint would be stamped with that draft's id and the draft would adopt
+        // an older turn's conversation. The four terminal boundaries normally
+        // clear this, but the claim-nil resets do not go through them, so the
+        // invariant is asserted HERE rather than assumed of every caller.
+        captureRequestID = nil
         pendingConversationID = conversationID
         // Deferred drains are EXPLICIT for pointer purposes (they replay an
         // old turn; they must not retarget where the next headless capture
@@ -2015,7 +2167,7 @@ final class WatchRecordingService {
             // LAZY-MINT ADOPTION: a `.new` draft shell pushed onto the nav stack
             // started with a nil conversationID — publish the real id NOW so the
             // open thread binds its overlay / busy banner / reply refresh to it.
-            mintedConversationID = record.id
+            recordMint(record.id)
             return (record.id, ref, true)
         }
         if let pointerID = WatchSettingsReader.shared.resolveActiveConversationID() {
@@ -2054,7 +2206,7 @@ final class WatchRecordingService {
         }
         let record = try await store.createConversation(backend: defaultRef)
         WatchSettingsReader.shared.recordActiveConversation(record.id)
-        mintedConversationID = record.id
+        recordMint(record.id)
         return (record.id, defaultRef, true)
     }
 
@@ -2177,13 +2329,34 @@ final class WatchRecordingService {
             inFlightTurnID = UUID(uuidString: raw)
         }
 
+        let generation = captureGeneration
+
         Task {
             // If the agent reply already landed (last message is an agent turn
             // newer than startedAt), the thread already shows it as a bubble —
             // just clear in-flight + stay idle. Otherwise restore the thinking
             // state so the busy banner reappears above the composer.
-            if let records = try? await store.fetchMessages(for: conversationID),
-               let last = records.last,
+            let records = try? await store.fetchMessages(for: conversationID)
+
+            // RE-CHECK AFTER THE AWAIT. The `state == .idle` guard above was
+            // read before this fetch, and the fetch is the whole window in
+            // which the user can start a capture — this method runs from
+            // `WatchNoteView.onAppear`, i.e. the exact moment they come back to
+            // the app and press Ask. `startCapture` enters `.arming`
+            // synchronously, so a stomp here is not theoretical: writing
+            // `.idle` (or an OLD turn's `.waiting`) over it would strand the
+            // new draft on a spinner with no recording behind it, and
+            // `clearInFlight()` would take the new turn's pins down with it.
+            // `startDeferredConverseHop` documents this same hazard and answers
+            // it by occupying the machine synchronously; restore cannot do that
+            // (it does not yet know whether there is anything to restore), so it
+            // yields to whoever took the machine instead.
+            guard state == .idle, generation == captureGeneration else {
+                WatchLog.note(.capture, "restore.superseded", ["state": state.phaseKind])
+                return
+            }
+
+            if let last = records?.last,
                last.role == "agent",
                last.createdAt >= startedAt {
                 clearInFlight()
@@ -2289,6 +2462,7 @@ final class WatchRecordingService {
         // later capture.
         pendingConversationID = nil
         mintedConversationID = nil
+        captureRequestID = nil
         pendingTypedSend = false
         captureSource = nil
     }
@@ -2330,6 +2504,7 @@ final class WatchRecordingService {
         WatchSettingsReader.shared.clearPendingInAppNewConversationBackend()
         pendingConversationID = nil
         mintedConversationID = nil
+        captureRequestID = nil
         pendingTypedSend = false
         captureSource = nil
         state = .idle

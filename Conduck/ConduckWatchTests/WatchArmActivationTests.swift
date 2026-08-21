@@ -142,7 +142,7 @@ final class WatchArmActivationTests: XCTestCase {
         let gate = ActivationGate()
         service.recordSessionActivator = { await gate.wait() }
 
-        service.startCapture(boundTo: .existing(UUID()))
+        service.startCapture(boundTo: .existing(UUID()), requestID: UUID())
         XCTAssertEqual(service.state, .arming, "The capture arms synchronously.")
         await waitForActivationEntry(gate)
         let entered = await gate.entered
@@ -183,7 +183,7 @@ final class WatchArmActivationTests: XCTestCase {
         let service = makeService(coordinator: coordinator)
         service.recordSessionActivator = { throw SeamError() }
 
-        service.startCapture(boundTo: .existing(UUID()))
+        service.startCapture(boundTo: .existing(UUID()), requestID: UUID())
         await settle { service.state.phaseKind == "error" }
 
         guard case .error = service.state else {
@@ -218,7 +218,7 @@ final class WatchArmActivationTests: XCTestCase {
         coordinator.claim(.playback)
         XCTAssertEqual(coordinator.current?.owner, .playback)
 
-        service.startCapture(boundTo: .existing(UUID()))
+        service.startCapture(boundTo: .existing(UUID()), requestID: UUID())
         await settle { service.state.phaseKind == "error" }
 
         guard case .error = service.state else {
@@ -243,7 +243,7 @@ final class WatchArmActivationTests: XCTestCase {
         let service = makeService(coordinator: coordinator)
         service.recordSessionActivator = {}
 
-        service.startCapture(boundTo: .existing(UUID()))
+        service.startCapture(boundTo: .existing(UUID()), requestID: UUID())
         await settle { service.state == .recording }
 
         XCTAssertEqual(service.state, .recording)
@@ -269,7 +269,7 @@ final class WatchArmActivationTests: XCTestCase {
         let playback = coordinator.claim(.playback)
         XCTAssertEqual(coordinator.current?.owner, .playback)
 
-        service.startCapture(boundTo: .existing(UUID()))
+        service.startCapture(boundTo: .existing(UUID()), requestID: UUID())
 
         // The claim flip is SYNCHRONOUS in `_startRecording` — the gate is
         // still closed, so activation provably has not completed.
@@ -293,7 +293,7 @@ final class WatchArmActivationTests: XCTestCase {
         let service = makeService(coordinator: coordinator)
         service.recordSessionActivator = {}
 
-        service.startCapture(boundTo: .existing(UUID()))
+        service.startCapture(boundTo: .existing(UUID()), requestID: UUID())
         await settle { service.state == .recording }
         XCTAssertTrue(coordinator.isClaimed)
 
@@ -315,7 +315,7 @@ final class WatchArmActivationTests: XCTestCase {
         let service = makeService(coordinator: coordinator)
         service.recordSessionActivator = {}
 
-        service.startCapture(boundTo: .existing(UUID()))
+        service.startCapture(boundTo: .existing(UUID()), requestID: UUID())
         await settle { service.state == .recording }
         XCTAssertTrue(coordinator.isClaimed)
 

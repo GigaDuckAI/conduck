@@ -65,8 +65,12 @@ struct WatchNoteView: View {
                 switch route {
                 case .conversations:
                     WatchConversationListView(viewModel: conversationViewModel)
-                case .capture(let target, _):
-                    WatchConversationThreadView(captureTarget: target, viewModel: conversationViewModel)
+                case .capture(let target, let nonce):
+                    WatchConversationThreadView(
+                        captureTarget: target,
+                        requestID: nonce,
+                        viewModel: conversationViewModel
+                    )
                 case .thread(let id):
                     WatchConversationThreadView(conversationID: id, viewModel: conversationViewModel)
                 case .attachmentText(let conversationID, let messageID, let attachmentID):
@@ -220,7 +224,9 @@ struct WatchNoteView: View {
                 if case .existing(let id) = target {
                     WatchLog.note(.capture, "actionbtn.directstart", ["id": WatchLog.shortID(id)])
                 }
-                recordingService.startCapture(boundTo: target)
+                // No route is pushed here, so no draft can adopt anything — a
+                // fresh id simply gives the turn an owner.
+                recordingService.startCapture(boundTo: target, requestID: UUID())
 
             case .pushAndStart:
                 clearAskHintForHeadlessEntry()
@@ -230,17 +236,19 @@ struct WatchNoteView: View {
                 // `.task` re-runs) even on a rapid re-press that would otherwise
                 // reset-then-re-append a value-equal route (the "nothing happens"
                 // no-remount bug).
-                let route = WatchRoute.capture(target, nonce: UUID())
+                let nonce = UUID()
+                let route = WatchRoute.capture(target, nonce: nonce)
                 WatchLog.info(.nav, "nav.push", ["route": route.logLabel])
                 path.append(route)
                 // Belt-and-suspenders: drive the capture from the SERVICE too
                 // (spec: Watch recording is service-driven, independent of
                 // navigation), so the mic is deterministic even if the pushed
                 // view's `.task` is delayed/cancelled by a racing re-trigger.
-                // `startCapture` guards on `state == .idle`, so the thread's
-                // redundant `.task` call becomes a safe no-op (logs
-                // `capture.refused`), and the pins this set are preserved.
-                recordingService.startCapture(boundTo: target)
+                // The pushed thread starts the SAME request id, so its
+                // redundant `.task` call reports `.alreadyRunning` rather than a
+                // refusal — which is what lets that view treat a genuine
+                // refusal as a reason to dismiss itself.
+                recordingService.startCapture(boundTo: target, requestID: nonce)
             }
         }
     }
@@ -289,6 +297,9 @@ struct WatchNoteView: View {
     /// Distinct from the headless triggers, which continue-or-new per the
     /// session-continuation policy.
     private func beginInAppAsk() {
+        // Refuse before the chooser, so the user is never asked to pick a
+        // gateway for a capture that cannot start.
+        guard !refuseAskIfBusy() else { return }
         let configured = settingsReader.configuredBackendRefs()
         if configured.count >= 2 {
             askGatewayRefs = configured
@@ -298,11 +309,42 @@ struct WatchNoteView: View {
         }
     }
 
-    /// Push a new draft thread bound to `ref` and let it auto-start recording.
+    /// Push a new draft thread bound to `ref` and start recording into it.
+    ///
+    /// THE CHOKE POINT for both in-app Ask paths (single-gateway tap and the
+    /// chooser), so the busy check lives here as well as in `beginInAppAsk` —
+    /// the chooser can be answered seconds later, by which time a headless turn
+    /// may own the machine.
     private func pushNewCapture(ref: String) {
-        let route = WatchRoute.capture(.new(backendRef: ref), nonce: UUID())
+        guard !refuseAskIfBusy() else { return }
+        let target = WatchCaptureTarget.new(backendRef: ref)
+        let nonce = UUID()
+        let route = WatchRoute.capture(target, nonce: nonce)
         WatchLog.info(.nav, "nav.push", ["route": route.logLabel])
         path.append(route)
+        // Start at the PUSH SITE, mirroring the headless `.pushAndStart` arm.
+        // The check above and this start are both synchronous with no `await`
+        // between them, so nothing can occupy the machine in the gap; leaving
+        // the start to the pushed view's `.task` reopens exactly that gap (an
+        // idle-edge deferred drain slipping in, and the draft stranded on a
+        // spinner). The view starts the same request id and gets
+        // `.alreadyRunning`.
+        recordingService.startCapture(boundTo: target, requestID: nonce)
+    }
+
+    /// Refuse an in-app Ask while another turn owns the state machine, matching
+    /// the headless trigger's own ordering rule — `isBusy` is exactly
+    /// `HeadlessDrainDecision`'s refuse set, so the Action Button and the Ask
+    /// button now refuse under identical conditions.
+    ///
+    /// Refusing at the TRIGGER rather than letting the draft cope is what keeps
+    /// the fix out of the pushed view: `.pushAndStart` deliberately starts one
+    /// capture twice, so "the draft saw a refusal" is not by itself a defect
+    /// signal. No refused draft is ever pushed from here.
+    private func refuseAskIfBusy() -> Bool {
+        guard recordingService.isBusy else { return false }
+        WatchLog.note(.capture, "ask.refused", ["state": recordingService.state.phaseKind])
+        return true
     }
 
     /// Display name for a ref string in the Ask chooser. Built-in →
@@ -356,16 +398,26 @@ struct WatchNoteView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.orange)
-                    .confirmationDialog(
-                        "Ask which gateway?",  // xcstrings
-                        isPresented: $showGatewayChooser,
-                        titleVisibility: .visible
-                    ) {
-                        ForEach(askGatewayRefs, id: \.self) { ref in
-                            Button(displayName(forRef: ref)) {
-                                pushNewCapture(ref: ref)
+                    // Legible BEFORE the tap. A haptic on the tap was the other
+                    // option and is what the headless trigger uses, but that
+                    // trigger has no on-screen affordance to grey out — here a
+                    // dead-looking button with a reason under it beats a buzz
+                    // with none. (A disabled Button never receives the tap, so
+                    // the two cannot be combined.)
+                    .disabled(recordingService.isBusy)
+
+                    if recordingService.isBusy {
+                        Group {
+                            if recordingService.isCapturing {
+                                Text("Recording…")  // xcstrings
+                            } else {
+                                Text("Still answering your last question.")  // xcstrings
                             }
                         }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 6)
                     }
                 } else {
                     Text("Turned off for Apple Watch. Enable it in iPhone Settings.")  // xcstrings
@@ -380,6 +432,24 @@ struct WatchNoteView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+        // Deliberately NOT on the Ask button: that button carries
+        // `.disabled(isBusy)`, and `isEnabled` propagates through the
+        // environment into presented content — so an Action-Button press while
+        // this chooser was open (accepted, because the machine was idle when it
+        // opened) would leave every gateway row dead with only Cancel alive.
+        // `pushNewCapture` still refuses a busy pick, which is the authoritative
+        // check either way.
+        .confirmationDialog(
+            "Ask which gateway?",  // xcstrings
+            isPresented: $showGatewayChooser,
+            titleVisibility: .visible
+        ) {
+            ForEach(askGatewayRefs, id: \.self) { ref in
+                Button(displayName(forRef: ref)) {
+                    pushNewCapture(ref: ref)
+                }
             }
         }
     }

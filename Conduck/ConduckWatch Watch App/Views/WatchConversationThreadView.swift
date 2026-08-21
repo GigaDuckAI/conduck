@@ -29,6 +29,17 @@ struct WatchConversationThreadView: View {
     /// an existing thread for browsing, not capture).
     private let autoCaptureTarget: WatchCaptureTarget?
 
+    /// Identity of the capture request this view was pushed for — the
+    /// `WatchRoute.capture` nonce, which already existed to force a fresh
+    /// remount per trigger. Nil for the browse entries.
+    ///
+    /// IT LIVES IN THE ROUTE VALUE, NOT IN `@State`, and that is why adoption
+    /// can survive a remount: SwiftUI rebuilds this view from the same route
+    /// value, so the nonce comes back identical while every `@State` here
+    /// resets. It is also what scopes adoption — a mint stamped with a
+    /// different request belongs to a different turn and must be ignored.
+    private let captureRequestID: UUID?
+
     @Bindable var viewModel: WatchConversationViewModel
 
     /// Browse entry (list tap / suspended-reply deep-link): open an EXISTING
@@ -36,6 +47,7 @@ struct WatchConversationThreadView: View {
     init(conversationID: UUID, viewModel: WatchConversationViewModel) {
         self._conversationID = State(initialValue: conversationID)
         self.autoCaptureTarget = nil
+        self.captureRequestID = nil
         self.viewModel = viewModel
     }
 
@@ -43,7 +55,7 @@ struct WatchConversationThreadView: View {
     /// thread shell and auto-start recording bound to `target`. A `.existing`
     /// target resolves its id immediately; a `.new` target starts as a draft
     /// (nil id) and adopts the minted id during the hop.
-    init(captureTarget: WatchCaptureTarget, viewModel: WatchConversationViewModel) {
+    init(captureTarget: WatchCaptureTarget, requestID: UUID, viewModel: WatchConversationViewModel) {
         switch captureTarget {
         case .existing(let id):
             self._conversationID = State(initialValue: id)
@@ -51,6 +63,7 @@ struct WatchConversationThreadView: View {
             self._conversationID = State(initialValue: nil)
         }
         self.autoCaptureTarget = captureTarget
+        self.captureRequestID = requestID
         self.viewModel = viewModel
     }
 
@@ -535,6 +548,12 @@ struct WatchConversationThreadView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: isCapturingHere)
         .task(id: resolvedConversationID) {
+            // Draft adoption hook — mount/remount. A remount rebuilds this view
+            // from the same route value, so the request id returns while every
+            // `@State` resets to nil: without a read here a draft remounted
+            // AFTER its own mint would see no counter change and no phase
+            // change, and would have no edge left to reconcile on.
+            adoptMintedIDIfNeeded()
             // Bind the open-thread pointer + load history for whichever id is
             // resolved (nil while a `.new` draft hasn't minted — load is a no-op
             // then, and re-runs when the id adopts).
@@ -564,17 +583,37 @@ struct WatchConversationThreadView: View {
             // `!didPopDraft`: a cancel that raced a not-yet-run autostart
             // (headless entry starts the service at the push site) must not
             // restart capture on a view that is dismissing itself.
-            guard let target = autoCaptureTarget, !didAutoStartCapture, !didPopDraft else { return }
+            guard let target = autoCaptureTarget, let request = captureRequestID,
+                  !didAutoStartCapture, !didPopDraft else { return }
             didAutoStartCapture = true
             WatchLog.info(.nav, "thread.autostart")
             // Stop any TTS the thread was playing before the mic activates
             // (guardrail 7 — this thread's own ThreadSpeaker, distinct from the
             // service's synthesizer).
             speaker.stop()
-            recordingService.startCapture(boundTo: target)
+            switch recordingService.startCapture(boundTo: target, requestID: request) {
+            case .started, .alreadyRunning:
+                // `.alreadyRunning` is the healthy duplicate: the push site
+                // already started THIS request (the headless `.pushAndStart`
+                // belt-and-suspenders). We own the turn either way.
+                break
+            case .refusedBusy:
+                // A DIFFERENT turn owns the machine, so nothing will ever
+                // record here and no mint will ever carry our request. A draft
+                // left mounted would spin forever — pop instead. Reacting to
+                // this is only safe because `.alreadyRunning` is a distinct
+                // outcome; a bare "refused" would also fire on every healthy
+                // headless start.
+                WatchLog.note(.nav, "thread.autostartRefused")
+                popDraftIfNeeded()
+            }
         }
-        .onChange(of: recordingService.inFlightConversationID) { _, newID in
-            adoptMintedIDIfNeeded(newID)
+        .onChange(of: recordingService.captureMintCount) { _, _ in
+            // A mint happened somewhere. Look again — `adoptMintedIDIfNeeded`
+            // decides whether it was OURS. This is the edge that survives a
+            // suspension, where the live pin's nil → id → nil is observed as no
+            // change at all.
+            adoptMintedIDIfNeeded()
         }
         .onChange(of: recordingService.captureDiscardCount) { _, _ in
             // Catches the service-internal discards a tap can't announce
@@ -620,6 +659,11 @@ struct WatchConversationThreadView: View {
             // much-later raise finds the request expired → stays a tappable
             // notification, no jump-scare).
             if newPhase == .active {
+                // Draft adoption hook — the wrist came back to an app that was
+                // suspended across its own mint. Nothing observable changed
+                // while we were away (the pin was set and cleared unseen), so
+                // the resume edge is where a stranded draft reconciles.
+                adoptMintedIDIfNeeded()
                 resumeAfterDimIfNeeded()
                 attemptAutoSpeak()
                 // Read-state hook 3 — the wrist came back up on an already-open
@@ -676,15 +720,22 @@ struct WatchConversationThreadView: View {
     /// load when a `.new` draft adopts its minted id.
     private var resolvedConversationID: UUID? { conversationID }
 
-    /// Adopt the id the recording service minted for a `.new` draft shell. Only
-    /// fires while THIS thread is still a draft (nil id) AND a capture is in
-    /// flight for it — so an unrelated headless mint in another context can't
-    /// hijack the draft. Idempotent.
-    private func adoptMintedIDIfNeeded(_ newID: UUID?) {
-        guard conversationID == nil,
-              autoCaptureTarget != nil,
-              let id = newID else { return }
-        conversationID = id
+    /// Adopt the conversation the service minted FOR THIS VIEW'S CAPTURE
+    /// REQUEST. Idempotent, and safe to call from any edge — it is a match, not
+    /// a read.
+    ///
+    /// Matching on `requestID` is the whole guarantee. A draft is on screen with
+    /// a nil id for as long as its turn takes, and other things mint during that
+    /// window: a deferred relay drain replaying an older capture, a relaunched
+    /// background-STT process. Any of those would satisfy "nil draft + something
+    /// got minted", and adopting one shows the user a conversation they never
+    /// asked for. Only a mint stamped with OUR request is ours.
+    private func adoptMintedIDIfNeeded() {
+        guard conversationID == nil, !didPopDraft,
+              let request = captureRequestID,
+              let outcome = recordingService.lastMintOutcome,
+              outcome.requestID == request else { return }
+        conversationID = outcome.conversationID
     }
 
     /// A `.new` draft whose capture retired without minting has nothing to

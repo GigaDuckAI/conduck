@@ -163,13 +163,15 @@ final class WatchRecordingLifecycleTests: XCTestCase {
     func testGuardFirstRefusalPreservesFirstCapturePins() {
         let service = WatchRecordingService()
         let a = UUID()
-        service.startCapture(boundTo: .existing(a))
+        service.startCapture(boundTo: .existing(a), requestID: UUID())
         XCTAssertEqual(service.state, .arming, "The first capture arms synchronously.")
         XCTAssertEqual(service.inFlightConversationID, a)
 
         // A genuinely different second trigger while `.arming` — refused
         // BEFORE any pin/hint mutation.
-        service.startCapture(boundTo: .new(backendRef: "custom_refused"))
+        XCTAssertEqual(service.startCapture(boundTo: .new(backendRef: "custom_refused"), requestID: UUID()),
+                       .refusedBusy,
+                       "A different request while a turn is live is a genuine refusal.")
 
         XCTAssertEqual(service.inFlightConversationID, a,
                        "A refused second trigger must not clobber the live turn's pin.")
@@ -180,5 +182,60 @@ final class WatchRecordingLifecycleTests: XCTestCase {
         // bails at its supersede guard).
         service.cancelRecording()
         XCTAssertEqual(service.state, .idle)
+    }
+
+    // MARK: - Capture-start outcomes
+
+    func testSameRequestIDIsADuplicateNotARefusal() {
+        let service = WatchRecordingService()
+        let request = UUID()
+
+        XCTAssertEqual(service.startCapture(boundTo: .existing(UUID()), requestID: request), .started)
+        // The headless `.pushAndStart` arm starts one capture TWICE — at the
+        // push site and again from the pushed thread's auto-start task. The
+        // second call must be reported as the duplicate it is: the pushed view
+        // dismisses itself on `.refusedBusy`, so mislabelling this would pop
+        // every healthy headless draft the instant it appeared.
+        XCTAssertEqual(service.startCapture(boundTo: .existing(UUID()), requestID: request), .alreadyRunning)
+
+        service.cancelRecording()
+        XCTAssertEqual(service.state, .idle)
+    }
+
+    func testIsBusyMatchesTheHeadlessRefuseSet() {
+        // The in-app Ask trigger gates on `isBusy`; the Action Button gates on
+        // `HeadlessDrainDecision`. They must refuse under identical conditions,
+        // or one entry point starts turns the other would have declined.
+        let service = WatchRecordingService()
+        let live: [WatchRecordingState] = [
+            .arming, .recording, .uploading, .waiting(startedAt: Date())
+        ]
+        let free: [WatchRecordingState] = [.idle, .error(message: "x")]
+
+        for state in live {
+            service.state = state
+            XCTAssertTrue(service.isBusy, "\(state.phaseKind) must read as busy.")
+            XCTAssertEqual(
+                HeadlessDrainDecision.make(target: .new(backendRef: ""),
+                                           displayedConversationID: nil,
+                                           state: state,
+                                           watchEnabled: true),
+                .refuse,
+                "\(state.phaseKind) must also refuse the headless trigger."
+            )
+        }
+        for state in free {
+            service.state = state
+            XCTAssertFalse(service.isBusy, "\(state.phaseKind) must not read as busy.")
+            XCTAssertNotEqual(
+                HeadlessDrainDecision.make(target: .new(backendRef: ""),
+                                           displayedConversationID: nil,
+                                           state: state,
+                                           watchEnabled: true),
+                .refuse,
+                "\(state.phaseKind) must not refuse the headless trigger."
+            )
+        }
+        service.state = .idle
     }
 }
