@@ -519,6 +519,7 @@ struct PairingImportSheet: View {
     private func destinationSection(_ model: PairingReviewModel) -> some View {
         Section {
             VStack(alignment: .leading, spacing: 14) {
+                let gatewayWarning = reviewWarning(for: model.gatewayDestination)
                 reviewRow(
                     value: model.gatewayDestination,
                     monospaced: true,
@@ -526,7 +527,8 @@ struct PairingImportSheet: View {
                         localized: "settings.pairing.review.default.value",
                         defaultValue: "New chats will use this gateway."
                     ) : nil,
-                    warning: temporaryTunnelWarning(for: model.gatewayDestination)
+                    warning: gatewayWarning?.text,
+                    warningSymbol: gatewayWarning?.symbol ?? Self.defaultWarningSymbol
                 )
 
                 if let previous = model.previousGatewayDestination {
@@ -549,6 +551,7 @@ struct PairingImportSheet: View {
                 if let fileLane = model.fileLane {
                     switch fileLane {
                     case .incoming(let destination, let replacing):
+                        let fileWarning = reviewWarning(for: destination)
                         reviewRow(
                             label: String(localized: "settings.pairing.review.files",
                                           defaultValue: "Files go to"),
@@ -561,9 +564,11 @@ struct PairingImportSheet: View {
                                     previous
                                 )
                             },
-                            warning: temporaryTunnelWarning(for: destination)
+                            warning: fileWarning?.text,
+                            warningSymbol: fileWarning?.symbol ?? Self.defaultWarningSymbol
                         )
                     case .keepsExisting(let destination):
+                        let keptWarning = reviewWarning(for: destination)
                         reviewRow(
                             label: String(localized: "settings.pairing.review.files.kept",
                                           defaultValue: "Files keep going to"),
@@ -571,7 +576,8 @@ struct PairingImportSheet: View {
                             monospaced: true,
                             caption: String(localized: "settings.pairing.review.files.kept.caption",
                                             defaultValue: "This code doesn't set up file transfer, so your current setup stays."),
-                            warning: temporaryTunnelWarning(for: destination)
+                            warning: keptWarning?.text,
+                            warningSymbol: keptWarning?.symbol ?? Self.defaultWarningSymbol
                         )
                     }
                 }
@@ -583,6 +589,41 @@ struct PairingImportSheet: View {
                                          defaultValue: "Gateway"))
         }
     }
+
+    /// Warns that an accepted plain-http address is readable on the network it
+    /// rides. The address itself is the consent surface: there is no toggle, so
+    /// this line and the Connect button are the whole of it.
+    ///
+    /// ORDERING against `temporaryTunnelWarning`, written down so nobody has to
+    /// rediscover it: the two cannot co-occur. A `trycloudflare.com` host is a
+    /// dotted DNS name, so plain http toward it is refused at parse time and
+    /// never reaches review. This one is resolved first anyway, because an
+    /// unencrypted address is the graver fact of the two.
+    private func plainHTTPWarning(for destination: String) -> String? {
+        guard EndpointURLPolicy.isAdmittedPlainHTTPURLString(destination) else { return nil }
+        return String(localized: LocalizedStringResource(
+            "settings.endpoint.plainHTTP.warning.v2",
+            defaultValue: "Not encrypted — anyone on this network can read your messages and your key. Works only on this network — not in the car or out with the Watch."
+        ))
+    }
+
+    /// The warning shown for `destination`, and the symbol that names its KIND.
+    /// One derivation so all four review rows resolve the same pair — a rotating
+    /// address and an unencrypted one are different facts and must not share an
+    /// icon.
+    private func reviewWarning(for destination: String) -> (text: String, symbol: String)? {
+        if let plain = plainHTTPWarning(for: destination) {
+            return (plain, "lock.open")
+        }
+        if let tunnel = temporaryTunnelWarning(for: destination) {
+            return (tunnel, Self.defaultWarningSymbol)
+        }
+        return nil
+    }
+
+    /// The rotating-address symbol, and the slot's default — named once so the
+    /// four review rows cannot drift on it.
+    private static let defaultWarningSymbol = "clock.badge.exclamationmark"
 
     private func temporaryTunnelWarning(for destination: String) -> String? {
         guard EndpointURLPolicy.isCloudflareQuickTunnelURLString(destination) else {
@@ -753,7 +794,11 @@ struct PairingImportSheet: View {
         value: String,
         monospaced: Bool,
         caption: String? = nil,
-        warning: String? = nil
+        warning: String? = nil,
+        // The slot serves TWO facts now, and they do not share a symbol: a
+        // rotating address is a clock, an unencrypted one is an open lock. The
+        // default keeps the tunnel case reading exactly as it did.
+        warningSymbol: String = PairingImportSheet.defaultWarningSymbol
     ) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             if let label {
@@ -768,7 +813,7 @@ struct PairingImportSheet: View {
                 .textSelection(.enabled)
             if let warning {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Image(systemName: "clock.badge.exclamationmark")
+                    Image(systemName: warningSymbol)
                         .accessibilityHidden(true)
                     Text(warning)
                         .fixedSize(horizontal: false, vertical: true)

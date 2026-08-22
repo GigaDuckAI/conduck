@@ -34,12 +34,19 @@ final class SettingsViewModelRemoteAgentURLTests: XCTestCase {
     /// the contract these tests assert against; if the source string changes,
     /// update both in lockstep.
     private let urlInvalidMessage = String(localized: "Enter the full gateway URL including https://.")
+    /// A plain-http address toward a DOTTED NAME is still refused — the URL guard
+    /// fires exactly as before — but it now earns copy that names the real
+    /// constraint and both fixes rather than the generic "include https://"
+    /// prompt (which would be false: iOS accepts plain http toward a LOCAL
+    /// address, so "always use https" is not the rule the platform applies).
+    private let plainHTTPRemoteMessage = SettingsViewModel.plainHTTPRemoteMessage
 
     private let openclaw: RemoteAgentRef = .builtin(.openclaw)
     private let hermes: RemoteAgentRef = .builtin(.hermes)
 
-    /// `http://` URLs must be rejected at the URL guard — bearer token must
-    /// never travel in cleartext.
+    /// `http://` toward a DOTTED NAME must be rejected at the URL guard — the
+    /// token would otherwise travel in cleartext, and iOS refuses the request
+    /// before any connect anyway.
     func testHTTPSchemeRejected() async {
         let vm = SettingsViewModel()
         await vm.validateRemoteAgent(
@@ -50,8 +57,46 @@ final class SettingsViewModelRemoteAgentURLTests: XCTestCase {
         )
         XCTAssertEqual(
             vm.remoteAgentRowState(for: openclaw),
-            .invalid(message: urlInvalidMessage),
-            "http:// must be rejected at the URL guard — the token would otherwise leave the device in cleartext."
+            .invalid(message: plainHTTPRemoteMessage),
+            "http:// toward a name must be rejected at the URL guard, with copy that names the fix."
+        )
+    }
+
+    /// The carve-out, at the same guard: plain http toward an address only the
+    /// local network can reach PASSES. Fed an empty token so the failure comes
+    /// from the token guard — proving the URL itself was accepted without
+    /// reaching the network.
+    func testPlainHTTPToALocalAddressPassesTheURLGuard() async {
+        let vm = SettingsViewModel()
+        await vm.validateRemoteAgent(
+            ref: openclaw,
+            url: "http://192.168.1.10:11434",
+            token: "   ",
+            fingerprint: nil
+        )
+        guard case .invalid(let message) = vm.remoteAgentRowState(for: openclaw) else {
+            return XCTFail("Expected an .invalid state from the empty-token guard, got \(vm.remoteAgentRowState(for: openclaw)).")
+        }
+        XCTAssertNotEqual(message, urlInvalidMessage)
+        XCTAssertNotEqual(message, plainHTTPRemoteMessage,
+                          "A LAN address must pass the URL guard — the failure has to come from the token guard.")
+    }
+
+    /// And a saved fingerprint paired with that same local http address is
+    /// refused as a TUPLE, with its own copy: nothing hands over a certificate,
+    /// so the pin could never be compared.
+    func testPinOnAPlainHTTPAddressIsRefusedAtTheGuard() async {
+        let vm = SettingsViewModel()
+        await vm.validateRemoteAgent(
+            ref: openclaw,
+            url: "http://192.168.1.10:11434",
+            token: "tok_live_abc123",
+            fingerprint: String(repeating: "ab", count: 32)
+        )
+        XCTAssertEqual(
+            vm.remoteAgentRowState(for: openclaw),
+            .invalid(message: SettingsViewModel.pinOnPlainHTTPMessage),
+            "Honouring the address and silently dropping the pin is the one forbidden outcome."
         )
     }
 
@@ -93,7 +138,7 @@ final class SettingsViewModelRemoteAgentURLTests: XCTestCase {
         )
         XCTAssertEqual(
             vm.remoteAgentRowState(for: openclaw),
-            .invalid(message: urlInvalidMessage),
+            .invalid(message: plainHTTPRemoteMessage),
             "OpenClaw should hold the URL-guard failure."
         )
         XCTAssertEqual(

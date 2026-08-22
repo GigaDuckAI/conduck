@@ -304,6 +304,12 @@ enum STTConnectionTestSuite {
                 // offer that would make the connection work. Name the fix on the
                 // server instead.
                 update(.reachability, .failed(reason: Self.untrustedCertReason))
+            case .blockedByATS:
+                // NOT reachability: iOS refused the address before any connect,
+                // so the server never had a chance to answer and
+                // `unreachableReason`'s "couldn't reach the server" would name
+                // the wrong thing. The remedy is the address.
+                update(.reachability, .failed(reason: Self.insecureBlockedReason))
             }
             // Reachability did not cleanly pass → auth + transcription cannot
             // run. Mark them skipped with a dependency reason.
@@ -527,6 +533,14 @@ enum STTConnectionTestSuite {
     // story about an unfingerprintable key.
     static var certKeyUnpinnableReason: String {
         CertificateTrustCopy.keyUnpinnableRefusalWithRemedy
+    }
+    // The lane-neutral -1022 remedy, shared word-for-word with
+    // `AppError.insecureConnectionBlocked`'s recovery so the voice-endpoint test
+    // and a failed transcription cannot tell one user two stories.
+    private static var insecureBlockedReason: String {
+        AppError.insecureConnectionBlocked.recoverySuggestion
+            ?? String(localized: "remoteAgent.error.insecureBlocked",
+                      defaultValue: "iOS blocked this unencrypted connection.")
     }
     private static var invalidResponseReason: String {
         String(localized: "stt.test.reachability.invalidResponse",

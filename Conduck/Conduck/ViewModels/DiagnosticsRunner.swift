@@ -3278,6 +3278,12 @@ final class DiagnosticsRunner {
             // remedy above nor the interception warning applies.
             let code = AppError.fileTransferCertKeyUnpinnable.errorCode
             return (.failed(code: code), DiagnosticsExplainer.explain(code: code).fix)
+        case .insecureBlocked:
+            // Lane-neutral code: iOS refused the address, which is the same fact
+            // on the gateway, the file lane and a voice endpoint, and the fix is
+            // the address rather than anything on the server.
+            let code = AppError.insecureConnectionBlocked.errorCode
+            return (.failed(code: code), DiagnosticsExplainer.explain(code: code).fix)
         }
     }
 
@@ -3286,7 +3292,15 @@ final class DiagnosticsRunner {
     /// leaks the host — the caller has already reduced locality to a bool.
     private static func appendLocalNetworkHint(_ detail: String?) -> String? {
         #if os(iOS)
-        let hint = String(localized: "diagnostics.hint.localNetwork", defaultValue: "If this is a local address, check Conduck's Local Network permission in Settings.")
+        // One owner for the sentence — `SettingsViewModel` renders the identical
+        // string beside the gateway editor's Test Connection, and two spellings
+        // of one fact would be two chances to drift.
+        //
+        // SCOPE, stated rather than guessed: iOS only. macOS 15+ has its own
+        // local-network gate, but that was NOT measured here (`ConduckTests` will
+        // not compile for a macOS destination), and widening an unmeasured claim
+        // is what this app's copy rules forbid. Open question.
+        let hint = SettingsViewModel.localNetworkPermissionHint
         guard let detail, !detail.isEmpty else { return hint }
         return "\(detail) \(hint)"
         #else

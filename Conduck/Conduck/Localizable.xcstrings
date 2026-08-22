@@ -2760,13 +2760,13 @@
         }
       }
     },
-    "diagnostics.hint.localNetwork" : {
-      "extractionState" : "extracted_with_value",
+    "diagnostics.hint.localNetwork.v2" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "If this is a local address, check Conduck's Local Network permission in Settings."
+            "state" : "translated",
+            "value" : "If this address is on your own network, check Conduck's Local Network permission in Settings — when it's off, the connection just times out."
           }
         }
       }
@@ -8153,6 +8153,50 @@
         }
       }
     },
+    "remoteAgent.error.insecureBlocked" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iOS blocked this unencrypted connection."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.insecureBlocked.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plain http:// only reaches an address on your own network. Use the server's IP address, or put it behind https://."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.insecureBlocked.recovery.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plain http:// only reaches an address on your own network. Use the server's IP address or its .local name, or put it behind https://."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.insecureBlocked.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple blocked this unencrypted address."
+          }
+        }
+      }
+    },
     "remoteAgent.error.invalidResponse" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9618,6 +9662,61 @@
         }
       }
     },
+    "settings.endpoint.pin.plainHTTP" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A saved fingerprint can't be checked on an http:// address — nothing hands over a certificate. Clear the fingerprint, or use an https:// address."
+          }
+        }
+      }
+    },
+    "settings.endpoint.plainHTTP.warning" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not encrypted — anyone else on this network can read your messages and the key sent with them."
+          }
+        }
+      }
+    },
+    "settings.endpoint.plainHTTP.warning.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not encrypted — anyone on this network can read your messages and your key. Works only on this network — not in the car or out with the Watch."
+          }
+        }
+      }
+    },
+    "settings.endpoint.url.plainHTTPRemote" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iOS only allows plain http:// to an address on your own network. Use the server's IP address instead, or put it behind https://."
+          }
+        }
+      }
+    },
+    "settings.endpoint.url.plainHTTPRemote.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple allows plain http:// only to an address on your own network. Use the server's IP address or its name ending in .local, or put it behind https://."
+          }
+        }
+      }
+    },
     "settings.error.loadFailed" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10065,6 +10164,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Setup codes must use https:// URLs."
+          }
+        }
+      }
+    },
+    "settings.pairing.error.insecureURL.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iOS only allows plain http:// to an address on your own network. Re-run conduck-connect with the server's IP address, or put it behind https://."
+          }
+        }
+      }
+    },
+    "settings.pairing.error.insecureURL.v3" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple allows plain http:// only to an address on your own network. Re-run conduck-connect with the server's IP address, or put it behind https://."
           }
         }
       }
@@ -11686,6 +11807,17 @@
         }
       }
     },
+    "settings.remoteAgent.customCheck.body.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On the server, download the script: %@. Then run bash conduck-connect.sh --check-server — or --check-adapter if this is an adapter built for Conduck. It only sends test requests; nothing on the server changes."
+          }
+        }
+      }
+    },
     "settings.remoteAgent.customCheck.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -11693,6 +11825,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Choose the matching server check"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.customCheck.title.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Run a server check"
           }
         }
       }
@@ -18530,6 +18673,28 @@
     },
     "Watch" : {
 
+    },
+    "watch.error.insecureBlocked" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iOS blocked this connection — the address isn't encrypted. Fix it on your iPhone."
+          }
+        }
+      }
+    },
+    "watch.error.insecureBlocked.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple blocked this connection — the address isn't encrypted. Fix it on your iPhone."
+          }
+        }
+      }
     },
     "We'll walk you through it, step by step." : {
 

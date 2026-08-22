@@ -15,6 +15,7 @@
 		3B3369FEAAD168D055C48147 /* TaskDeadlineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 346CBAB7BF95F11E04B690E2 /* TaskDeadlineTests.swift */; };
 		3CDFE6DF6134706F3C5989D8 /* WatchSettingsPullTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AAC5754C441E19A321BA922 /* WatchSettingsPullTests.swift */; };
 		49336A39A8433FC8127DBFCF /* ConduckShareExtensionMac.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 279EE628C4491511540B6F33 /* ConduckShareExtensionMac.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		4F2AD362126125855445A095 /* WatchEndpointPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0EF64500663EC6EE41C8B53 /* WatchEndpointPolicyTests.swift */; };
 		621F6DCF4F851CF5CD688390 /* WatchAudioSessionOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28B3F3EB66D5E3FB9A523616 /* WatchAudioSessionOwnershipTests.swift */; };
 		630432D82FB759DC00994EC0 /* ConduckWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 630432CE2FB759DB00994EC0 /* ConduckWatch Watch App.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		630432E42FB75BAE00994EC0 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 630432E32FB75BAE00994EC0 /* WidgetKit.framework */; };
@@ -167,6 +168,7 @@
 		CE5777E15559EA6B1951DE08 /* WatchRecordingLifecycleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchRecordingLifecycleTests.swift; sourceTree = "<group>"; };
 		E411F3AF5A7364E4CCE5578D /* WatchConversationViewModelRefreshTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchConversationViewModelRefreshTests.swift; sourceTree = "<group>"; };
 		E87595BE862314620EF226B1 /* ConduckWatchSmokeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConduckWatchSmokeTests.swift; sourceTree = "<group>"; };
+		F0EF64500663EC6EE41C8B53 /* WatchEndpointPolicyTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchEndpointPolicyTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -229,6 +231,8 @@
 				Services/ConversationStore.swift,
 				Services/DataURIBuilder.swift,
 				Services/RemoteAgent/CustomGateway.swift,
+				Services/RemoteAgent/EndpointURLPolicy.swift,
+				Services/RemoteAgent/LocalNetworkHost.swift,
 				Services/RemoteAgent/RemoteAgentAuthScheme.swift,
 				Services/RemoteAgent/RemoteAgentBackend.swift,
 				Services/RemoteAgent/RemoteAgentBackgroundMetadata.swift,
@@ -471,6 +475,7 @@
 				63C0DE110000000000000031 /* WatchSTTKeyBlackoutTests.swift */,
 				63C0DE110000000000000041 /* WatchRelayQueueRetryabilityTests.swift */,
 				63C0DE110000000000000051 /* WatchConversationRowStateTests.swift */,
+				F0EF64500663EC6EE41C8B53 /* WatchEndpointPolicyTests.swift */,
 			);
 			path = ConduckWatchTests;
 			sourceTree = "<group>";
@@ -809,6 +814,7 @@
 				63C0DE110000000000000032 /* WatchSTTKeyBlackoutTests.swift in Sources */,
 				63C0DE110000000000000042 /* WatchRelayQueueRetryabilityTests.swift in Sources */,
 				63C0DE110000000000000052 /* WatchConversationRowStateTests.swift in Sources */,
+				4F2AD362126125855445A095 /* WatchEndpointPolicyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

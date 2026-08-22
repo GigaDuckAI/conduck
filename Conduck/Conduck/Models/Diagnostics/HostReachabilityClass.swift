@@ -14,6 +14,33 @@
 // Privacy: the classifier reduces a host string to a locality ENUM; ONLY the
 // enum (never the host) crosses into the runner / a check detail / the copy
 // block. The raw host never leaves this call.
+//
+// IT OWNS NO ADDRESS PARSER. Numeric literals are parsed by `LocalNetworkHost`,
+// the app's single `inet_aton`/`inet_pton` front end, and this type keeps only
+// its own RANGE TABLE on top. The two classifiers are SUPPOSED to disagree,
+// but only in ONE DIRECTION:
+//
+//   • THIS type may call local what `LocalNetworkHost` refuses. CGNAT
+//     `100.64.0.0/10` (a denied Local Network permission really does explain a
+//     dead tailnet host, while iOS refuses plain http to it — measured,
+//     -1022), single-label names, `0.0.0.0/8` with its v6 twin `::`, and
+//     deprecated site-local `fec0::/10` all diverge this way. Harmless by construction: the app
+//     refuses to SAVE those shapes as plain-http endpoints, so the worst case
+//     is a soft hint about an address the user was already refused — while an
+//     https URL with the same host IS saveable and genuinely breaks under a
+//     denied grant, which is exactly when the hint earns its keep.
+//
+//   • The REVERSE is forbidden. A row `LocalNetworkHost` admits over plain
+//     http (loopback, RFC1918, 169.254/16, ULA, link-local, `localhost`,
+//     `.local`) must be local HERE too: an address the app admits but this
+//     type calls public is one whose timeout gets NO Local-Network-permission
+//     hint, and that hint is the only thing that explains the timeout a
+//     denied grant produces.
+//   • They must NOT disagree about what a STRING IS. One parser, so
+//     `2130706433`, `0x7f.0.0.1` and `::ffff:192.168.1.1` mean the same address
+//     to both — and so the text-prefix bug that called `fe8::1` link-local
+//     cannot come back (`fe8::1` parses to `0fe8:…`; every range test below is
+//     byte-exact).
 
 import Foundation
 
@@ -71,60 +98,77 @@ enum HostReachabilityClass: Equatable, Sendable {
         }
 
         guard var host = host?.lowercased(), !host.isEmpty else { return .unknown }
-        // Strip IPv6 brackets (`[fe80::1]` → `fe80::1`).
+        // Strip IPv6 brackets (`[fe80::1]` → `fe80::1`). Kept here rather than in
+        // `LocalNetworkHost`: that type's input contract is `URL.host`, which
+        // Foundation has already unbracketed, while this one is also handed
+        // display-shaped strings.
         if host.hasPrefix("["), host.hasSuffix("]") {
             host = String(host.dropFirst().dropLast())
         }
+        // Zone id + at most one trailing dot, through the shared canonicaliser —
+        // `fe80::1%en0` parses to a DIFFERENT address with the zone attached.
+        host = LocalNetworkHost.canonicalized(host)
+        guard !host.isEmpty else { return .unknown }
 
         // mDNS / Bonjour.
         if host == "local" || host.hasSuffix(".local") { return .mdnsLocal }
 
-        if let octets = parseIPv4(host) { return classifyIPv4(octets) }
-        if host.contains(":") { return classifyIPv6(host) }
-
-        // A hostname that is neither an IP nor `.local` → treat as public.
-        return .publicHost
-    }
-
-    // MARK: - IPv4
-
-    /// Parse dotted-quad IPv4 into four octets, or nil if the string isn't a
-    /// well-formed IPv4 literal (rejects leading zeros / out-of-range octets so a
-    /// hostname like `10.example.com` never mis-parses).
-    private static func parseIPv4(_ s: String) -> (Int, Int, Int, Int)? {
-        let parts = s.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 4 else { return nil }
-        var octets: [Int] = []
-        for part in parts {
-            guard let n = Int(part), (0...255).contains(n), String(n) == part else { return nil }
-            octets.append(n)
+        if let bytes = LocalNetworkHost.parseIPv6(host) {
+            // A private v4 address wearing v6 clothing (`::ffff:192.168.1.1`)
+            // is that v4 address for locality purposes.
+            if let embedded = LocalNetworkHost.unwrappedIPv4(fromIPv6: bytes) {
+                return classifyIPv4(embedded)
+            }
+            return classifyIPv6(bytes)
         }
-        return (octets[0], octets[1], octets[2], octets[3])
-    }
+        if let address = LocalNetworkHost.parseIPv4(host) { return classifyIPv4(address) }
 
-    private static func classifyIPv4(_ o: (Int, Int, Int, Int)) -> HostReachabilityClass {
-        // Tailscale CGNAT 100.64.0.0/10 → 100.64.x.x – 100.127.x.x.
-        if o.0 == 100, (64...127).contains(o.1) { return .tailscale }
-        // RFC1918 private ranges.
-        if o.0 == 10 { return .localLAN }
-        if o.0 == 172, (16...31).contains(o.1) { return .localLAN }
-        if o.0 == 192, o.1 == 168 { return .localLAN }
-        // Loopback + IPv4 link-local.
-        if o.0 == 127 { return .localLAN }
-        if o.0 == 169, o.1 == 254 { return .localLAN }
+        // `localhost`, and any name with no dot in it — when such a name
+        // resolves at all it is via mDNS or this device's own search domain,
+        // both the local link, and a denied Local Network grant is exactly what
+        // makes `https://nas:8443` time out with nothing to attribute it to.
+        // `LocalNetworkHost` REFUSES a bare label over plain http (a real
+        // one-label TLD can answer at the public root) — that is the sanctioned
+        // one-way divergence in the header: the plain-http spelling was never
+        // saveable, while the https spelling is, and it is the https one this
+        // hint exists for.
+        if !host.contains(".") { return .localLAN }
+
+        // A dotted hostname that is not `.local` → treat as public.
         return .publicHost
     }
 
-    // MARK: - IPv6
+    // MARK: - Range tables (parsing lives in `LocalNetworkHost`)
 
-    private static func classifyIPv6(_ host: String) -> HostReachabilityClass {
-        // Drop any zone id (`fe80::1%en0`).
-        let addr = (host.split(separator: "%").first.map(String.init) ?? host).lowercased()
-        if addr == "::1" { return .localLAN }                       // loopback
-        if addr.hasPrefix("fc") || addr.hasPrefix("fd") { return .localLAN }  // ULA fc00::/7
-        // Link-local fe80::/10 → fe80..febf (first hextet 0xfe8–0xfeb).
-        if addr.hasPrefix("fe8") || addr.hasPrefix("fe9")
-            || addr.hasPrefix("fea") || addr.hasPrefix("feb") { return .localLAN }
+    private static func classifyIPv4(_ address: UInt32) -> HostReachabilityClass {
+        let (o0, o1, _, _) = LocalNetworkHost.ipv4Octets(address)
+        // Tailscale CGNAT 100.64.0.0/10 → 100.64.x.x – 100.127.x.x. FIRST, and
+        // deliberately NOT what `LocalNetworkHost` answers — see the header.
+        if o0 == 100, (64...127).contains(o1) { return .tailscale }
+        // RFC1918 private ranges.
+        if o0 == 10 { return .localLAN }
+        if o0 == 172, (16...31).contains(o1) { return .localLAN }
+        if o0 == 192, o1 == 168 { return .localLAN }
+        // Loopback + IPv4 link-local.
+        if o0 == 127 { return .localLAN }
+        if o0 == 169, o1 == 254 { return .localLAN }
+        // "This network" 0.0.0.0/8 — `http://0/` reaches THIS host on Darwin.
+        // `LocalNetworkHost` refuses it over plain http (unmeasured, routable),
+        // but local HERE: whatever a request to it fails against, it is not the
+        // public internet — the sanctioned one-way divergence in the header.
+        if o0 == 0 { return .localLAN }
+        return .publicHost
+    }
+
+    /// Byte-exact, never a text prefix: `fe8::1` parses to `0fe8:…` and is a
+    /// perfectly ordinary global address.
+    private static func classifyIPv6(_ bytes: [UInt8]) -> HostReachabilityClass {
+        guard bytes.count == 16 else { return .publicHost }
+        if bytes.allSatisfy({ $0 == 0 }) { return .localLAN }                           // unspecified ::
+        if bytes[0..<15].allSatisfy({ $0 == 0 }), bytes[15] == 1 { return .localLAN }  // ::1
+        if bytes[0] & 0xFE == 0xFC { return .localLAN }                                 // ULA fc00::/7
+        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { return .localLAN }               // link-local fe80::/10
+        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0xC0 { return .localLAN }               // site-local fec0::/10
         return .publicHost
     }
 }

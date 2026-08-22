@@ -395,6 +395,33 @@ final class SettingsManagerRemoteAgentTests: XCTestCase {
         )
     }
 
+    // MARK: - The pin-on-plain-http read fence
+
+    /// A saved fingerprint over a plain-`http` address can never be compared —
+    /// no TLS handshake happens, so no challenge reaches the trust evaluator.
+    /// This build cannot create the pair (editor and pairing parser both refuse
+    /// it), but a version-skewed peer can sync one in through KVS, so the READ
+    /// side fails closed. Honouring the address with the pin silently dropped is
+    /// the one forbidden outcome: it leaves a protection believed to be in force
+    /// that never runs.
+    func testStoredPinOnPlainHTTPURLResolvesToNil() async {
+        await SettingsManager.shared.setRemoteAgentURL(URL(string: "http://192.168.1.10:11434")!, for: .openclaw)
+        let unpinned = await SettingsManager.shared.remoteAgentSnapshot(for: .openclaw)
+        XCTAssertNotNil(unpinned,
+                        "Precondition: a local plain-http URL with NO pin is a perfectly good configuration.")
+
+        await SettingsManager.shared.setRemoteAgentCertFingerprint(String(repeating: "ab", count: 32), for: .openclaw)
+        let pinnedOverHTTP = await SettingsManager.shared.remoteAgentSnapshot(for: .openclaw)
+        XCTAssertNil(pinnedOverHTTP,
+                     "URL + pin over plain http must resolve to nil — the not-configured path, exactly as an inadmissible URL already does.")
+
+        // And the fence is about the PAIR, not the pin: the same fingerprint over
+        // https resolves normally.
+        await SettingsManager.shared.setRemoteAgentURL(URL(string: "https://gw.example.test:18789")!, for: .openclaw)
+        let pinnedOverHTTPS = await SettingsManager.shared.remoteAgentSnapshot(for: .openclaw)
+        XCTAssertNotNil(pinnedOverHTTPS)
+    }
+
     func testResolveStoredURLRejectsHostlessValue() {
         XCTAssertNil(
             SettingsManager.resolveStoredURL(local: "https://", iCloud: nil, iCloudAvailable: true),
@@ -408,8 +435,32 @@ final class SettingsManagerRemoteAgentTests: XCTestCase {
     func testResolveStoredURLRejectsNonHTTPSValue() {
         XCTAssertNil(
             SettingsManager.resolveStoredURL(local: "http://gw.example.test", iCloud: nil, iCloudAvailable: true),
-            "https-only is a storage invariant, not just a save-time one."
+            "A plain-http DOTTED NAME is refused as a storage invariant, not just a save-time one — iOS refuses it before any connect, so persisting it would resolve into a request that cannot leave the device."
         )
+    }
+
+    /// The storage read fence moves WITH the policy. A stored plain-http address
+    /// on the local network is exactly the value this change exists to allow, so
+    /// it must resolve — a fence that kept refusing it would leave the setting
+    /// savable and unusable.
+    func testResolveStoredPlainHTTPLocalURLResolves() {
+        XCTAssertEqual(
+            SettingsManager.resolveStoredURL(local: "http://192.168.1.10:11434", iCloud: nil, iCloudAvailable: true)?.absoluteString,
+            "http://192.168.1.10:11434"
+        )
+        XCTAssertEqual(
+            SettingsManager.resolveStoredURL(local: "http://mac-mini.local:11434", iCloud: nil, iCloudAvailable: true)?.absoluteString,
+            "http://mac-mini.local:11434"
+        )
+    }
+
+    /// And a stored plain-http REMOTE address is still dropped — including the
+    /// CGNAT range an overlay VPN hands out, which iOS refuses over plain http.
+    func testResolveStoredPlainHTTPRemoteURLIsDropped() {
+        XCTAssertNil(SettingsManager.resolveStoredURL(local: "http://gateway.myhomelab.test", iCloud: nil, iCloudAvailable: true))
+        XCTAssertNil(SettingsManager.resolveStoredURL(local: "http://100.64.0.1:11434", iCloud: nil, iCloudAvailable: true))
+        XCTAssertNil(SettingsManager.resolveStoredURL(local: "http://u:p@192.168.1.10", iCloud: nil, iCloudAvailable: true),
+                     "Userinfo stays refused on both schemes.")
     }
 
     /// An inadmissible value must be SKIPPED, not terminal. A contaminated local

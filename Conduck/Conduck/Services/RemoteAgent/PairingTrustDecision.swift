@@ -142,6 +142,15 @@ enum PairingTrustDecision {
             // system-trusted in every path that produces this class.
             return .unreachable(.certKeyUnpinnable)
 
+        case .blockedByATS:
+            // NOT a trust verdict: iOS refused the address from its STRING before
+            // any handshake, so nothing about the server's certificate was ever
+            // learned. Carried through verbatim so the sheet can name the real
+            // cause instead of reporting a dead host — the address is admissible
+            // to the parser and still unusable to the platform, which is a
+            // distinction only this class preserves.
+            return .unreachable(.blockedByATS)
+
         case .timeout:
             return .unreachable(.timeout)
 

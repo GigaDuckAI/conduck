@@ -171,6 +171,11 @@ enum CustomOpenAISTTProbe: STTProbe {
             // pin was never compared. Its own code — the probe must not report
             // a possible interception it has no evidence for.
             return .sttCustomCertKeyUnpinnable
+        case .blockedByATS:
+            // -1022: refused from the URL string before any connect, so it is
+            // neither a certificate verdict nor a retryable reachability one.
+            // Lane-neutral code — the remedy is the address on every lane.
+            return .insecureConnectionBlocked
         case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
             // No certificate verdict. A cold tunnel's generic
             // `.secureConnectionFailed` lands here (both signals are POSITIVE)

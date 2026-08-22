@@ -371,6 +371,11 @@ extension RemoteAgentClient {
             // mislabeled "untrusted certificate". Bearer header is on the request
             // object; we never echo request material into the thrown error.
             switch RemoteAgentTrustEvaluator.classifyTransportError(error.code, signals: signals()) {
+            case .blockedByATS:
+                // -1022: the address never left the URL layer, so this is not a
+                // verdict about the server and Test Connection must not report
+                // one. The remedy is the address itself.
+                throw AppError.insecureConnectionBlocked
             case .timeout:
                 throw AppError.remoteAgentTimeout
             case .unreachable:

@@ -310,6 +310,12 @@ enum FileReachabilityOutcome: Equatable, Sendable {
     /// connection may be intercepted, and sharing `.certUntrusted` would send
     /// them to replace a certificate the device already accepts.
     case certKeyUnpinnable
+    /// iOS refused the request from the URL STRING before any connect — a plain
+    /// `http` address it does not consider local. Its own outcome for the same
+    /// reason the three certificate ones are: the host was never contacted, so
+    /// `.unreachable`'s "check your file server is running" points at a machine
+    /// that had no chance to answer, and the remedy is the address.
+    case insecureBlocked
 }
 
 /// One entry from a PROPFIND `Depth: 1` directory listing.
@@ -2896,6 +2902,9 @@ enum FileServerClient {
             case .untrustedCert: return .certUntrusted
             case .certMismatch: return .certMismatch
             case .certKeyUnpinnable: return .certKeyUnpinnable
+            // Never folded into `.unreachable`: -1022 is decided from the URL
+            // before any connect, so the host neither answered nor failed to.
+            case .blockedByATS: return .insecureBlocked
             case .timeout, .unreachable, .notEstablished, .offline, .cancelled: return .unreachable
             }
         }
@@ -3541,6 +3550,10 @@ enum FileServerClient {
             case .untrustedCert: self = .untrusted
             case .certMismatch: self = .mismatch
             case .certKeyUnpinnable: self = .keyUnpinnable
+            // NOT a certificate refusal — no handshake happened, so there was
+            // nothing to refuse. `mapTransportError` answers it directly, ahead
+            // of this type, so the file lane still names it.
+            case .blockedByATS: return nil
             case .timeout, .unreachable, .notEstablished, .offline, .cancelled: return nil
             }
         }
@@ -3840,7 +3853,15 @@ enum FileServerClient {
         _ error: Error,
         signals: RemoteAgentTrustEvaluator.AttemptTrustSignals
     ) -> AppError {
-        certificateRefusal(error, signals: signals)?.fileTransferError ?? .fileTransferUnreachable
+        // -1022 FIRST, and lane-neutral: `CertificateRefusal` correctly declines
+        // it (nothing was refused because nothing shook hands), and the
+        // unreachable fallback would send the user to check a server that was
+        // never contacted.
+        if let urlError = error as? URLError,
+           urlError.code == .appTransportSecurityRequiresSecureConnection {
+            return .insecureConnectionBlocked
+        }
+        return certificateRefusal(error, signals: signals)?.fileTransferError ?? .fileTransferUnreachable
     }
 }
 

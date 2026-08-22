@@ -1184,6 +1184,13 @@ final class BackgroundFileTransfer: NSObject {
         guard let evaluator, let urlError = error as? URLError else { return .transport }
         let signals = evaluator.attemptSignals
         guard signals != .empty else { return .transport }
+        // -1022 carries no trust signals of its own, so it can only be reached
+        // here on an attempt that ALSO recorded one. Answered as plain transport:
+        // a listing refused before any connect is not a certificate claim, and
+        // this type's vocabulary has no other honest word for it.
+        guard urlError.code != .appTransportSecurityRequiresSecureConnection else {
+            return .transport
+        }
         guard let refusal = FileServerClient.CertificateRefusal(
             RemoteAgentTrustEvaluator.classifyTransportError(urlError.code, signals: signals)
         ) else {
@@ -1345,6 +1352,10 @@ final class BackgroundFileTransfer: NSObject {
         // Chain trusted, pin never compared — its own code so this lane never
         // borrows the mismatch warning for a certificate that is fine.
         case .certKeyUnpinnable: return .fileTransferCertKeyUnpinnable
+        // Not a certificate verdict, but still a definite, terminal one that
+        // names the ADDRESS — so it is returned rather than handed back as nil
+        // to the caller's unreachable fallback.
+        case .blockedByATS: return .insecureConnectionBlocked
         case .timeout, .unreachable, .notEstablished, .offline, .cancelled: return nil
         }
     }
@@ -1592,7 +1603,12 @@ extension BackgroundFileTransfer: URLSessionTaskDelegate {
     /// Delegates the origin compare to `RemoteAgentTrustEvaluator.sameOrigin`,
     /// the app's ONE definition, so this lane cannot drift from the sessions that
     /// install the evaluator directly (Test Connection, the probe/delete/MKCOL
-    /// ephemeral sessions, macOS foreground converse).
+    /// ephemeral sessions, macOS foreground converse). `sameOrigin` compares the
+    /// SCHEME too, which is the whole no-downgrade rule — an https origin cannot
+    /// redirect to http — so no separate "target must be https" clause belongs
+    /// here; one would only refuse an admitted plain-`http` local server its own
+    /// routine trailing-slash 301. The target is re-checked for admissibility
+    /// instead, the same treatment the evaluator's own handler applies.
     ///
     /// SCOPE — read this before trusting it: URLSession delivers this callback
     /// only on the macOS build, whose transfer session is a `.default`
@@ -1613,7 +1629,7 @@ extension BackgroundFileTransfer: URLSessionTaskDelegate {
         guard let target = request.url,
               let source = from,
               RemoteAgentTrustEvaluator.sameOrigin(source, target),
-              target.scheme?.lowercased() == "https"
+              EndpointURLPolicy.isAdmissible(target)
         else {
             // nil completes the task with the 3xx itself, which
             // `completionError(statusCode:isUpload:)` already maps to a plain

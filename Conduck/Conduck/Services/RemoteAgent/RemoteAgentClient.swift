@@ -526,6 +526,12 @@ actor RemoteAgentClient {
         isTaskCancelled: Bool
     ) -> Error {
         switch RemoteAgentTrustEvaluator.classifyTransportError(code, signals: signals) {
+        case .blockedByATS:
+            // -1022: refused from the URL string before any connect, so nothing
+            // was sent and no gateway was involved. Reported as its own code
+            // rather than as unreachable — "check your server is running" would
+            // send the user to a machine that was never contacted.
+            return AppError.insecureConnectionBlocked
         case .timeout:
             return AppError.remoteAgentTimeout
         case .unreachable:

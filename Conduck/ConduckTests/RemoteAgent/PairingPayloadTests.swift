@@ -422,7 +422,47 @@ final class PairingPayloadTests: XCTestCase {
         assertFails("conduck-setup:v1:\(base64)", with: .malformed)
     }
 
-    // MARK: - https enforcement
+    // MARK: - https enforcement (and the local-network carve-out)
+
+    /// A code carrying a LAN address imports. This is the whole point of the
+    /// change: a self-hoster running Ollama on their home network can pair by QR
+    /// instead of being told the code is broken.
+    func testHTTPGatewayURLToALocalAddressImports() {
+        var dict = minimalDict()
+        dict["gateway"] = [
+            "kind": "openclaw",
+            "url": "http://192.168.1.10:11434",
+            "auth": "bearer",
+            "token": "tok-test-123",
+        ]
+        let payload = assertParses(pairingString(dict))
+        XCTAssertEqual(payload?.url.absoluteString, "http://192.168.1.10:11434")
+    }
+
+    func testHTTPFileServerURLToALocalAddressImports() {
+        var dict = minimalDict()
+        dict["fileServer"] = [
+            "url": "http://192.168.1.10:8444",
+            "credential": "cred-test-456",
+        ]
+        let payload = assertParses(pairingString(dict))
+        XCTAssertEqual(payload?.fileServer?.url.absoluteString, "http://192.168.1.10:8444")
+    }
+
+    /// Userinfo stays absolutely refused, on BOTH schemes — a local http host
+    /// passes the scheme guard and then still meets the userinfo rule, and the
+    /// WHOLE payload is rejected rather than half-imported.
+    func testUserinfoOnALocalHTTPGatewayURLIsMalformed() {
+        var dict = minimalDict()
+        dict["gateway"] = [
+            "kind": "openclaw",
+            "url": "http://u:p@192.168.1.10",
+            "auth": "bearer",
+            "token": "tok-test-123",
+        ]
+        assertFails(pairingString(dict), with: .malformed,
+                    "userinfo is refused on both schemes; the whole payload goes")
+    }
 
     func testHTTPGatewayURLIsInsecure() {
         var dict = minimalDict()
@@ -433,7 +473,7 @@ final class PairingPayloadTests: XCTestCase {
             "token": "tok-test-123",
         ]
         assertFails(pairingString(dict), with: .insecureURL,
-                    "http gateway must surface .insecureURL, not generic .malformed")
+                    "A DOTTED-NAME http gateway still surfaces .insecureURL, not generic .malformed — this pins that .insecureRemoteHost did NOT become .malformed.")
     }
 
     func testHTTPFileServerURLIsInsecure() {
@@ -443,6 +483,21 @@ final class PairingPayloadTests: XCTestCase {
             "credential": "cred-test-456",
         ]
         assertFails(pairingString(dict), with: .insecureURL)
+    }
+
+    /// The CGNAT row, and the split-horizon row — both are addresses a
+    /// well-meaning wizard might mint and iOS refuses before any connect.
+    func testHTTPGatewayURLToACGNATOrDNSNameIsInsecure() {
+        for url in ["http://100.64.0.1:11434", "http://192.168.1.50.nip.io:8899"] {
+            var dict = minimalDict()
+            dict["gateway"] = [
+                "kind": "openclaw",
+                "url": url,
+                "auth": "bearer",
+                "token": "tok-test-123",
+            ]
+            assertFails(pairingString(dict), with: .insecureURL, url)
+        }
     }
 
     // MARK: - URL userinfo (BOTH URLs reject — one policy, no exceptions)

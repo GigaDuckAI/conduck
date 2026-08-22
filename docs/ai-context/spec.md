@@ -219,7 +219,7 @@ The list of gateways is a menu of things you *may* connect. Not connecting one i
 
 ### Transport trust can only be tightened, never loosened
 
-The gateway must present a certificate the device already trusts. A self-signed certificate, or one from a private authority the device does not know, is refused — and Conduck cannot offer an "accept anyway" toggle even if it wanted to.
+The gateway must present a certificate the device already trusts on an encrypted address. A self-signed certificate, or one from a private authority the device does not know, is refused — and Conduck cannot offer an "accept anyway" toggle even if it wanted to.
 
 **Why this is not a policy choice:** App Transport Security, the platform rule Apple applies to every app's network traffic, permits an app to make certificate evaluation *stricter* and refuses to let it make evaluation looser. An untrusted certificate on a remote host fails inside the platform, below the app.
 
@@ -230,6 +230,18 @@ A pin can only ever be typed in by a human. The pairing payload deliberately car
 The same object also carries the app's **cross-origin redirect refusal**, and the two live together for a reason: a redirect that changes host would carry the request body, the Authorization header and the user's pin scope somewhere they never configured. Know the scope, though — the refusal applies on the sessions that install this object as their delegate (connection tests, model discovery, custom voice endpoints, file-server probes, the Mac's converse session). The iOS background sessions do not go through it.
 
 **Do not propose** a trust-override setting or a developer mode. It cannot be built.
+
+### Encryption is required, except toward an address only the local network can reach
+
+Every address the app stores must be an `https` one, with a single carve-out: plain `http` is accepted when the host is one that only the local network can reach — a loopback or private address literal, or a Bonjour name. A dotted domain name never qualifies, however private the machine behind it is; neither does a bare single-label name, because the public DNS root can answer one of those and an unencrypted request carries the key with it; and neither does the carrier-grade NAT range an overlay VPN hands out.
+
+**Why the carve-out exists:** a large part of the self-hosting world serves plain HTTP on the local network and cannot be configured to do anything else, and refusing that outright shuts those users out of the product.
+
+**Why the boundary sits exactly there, and why it is not the app's opinion:** the platform decides this from the address string before any connection is attempted. It permits the private literals and refuses everything else — a domain name resolving onto the same private network included. The rule the app applies is therefore a *prediction* of the platform's answer, made while the user is still looking at the address rather than delivered later as an unexplained failure. Where the app refuses, it names the things that do work: the server's address as a literal or its Bonjour name, or encryption in front of it.
+
+**Being told is the whole of the consent.** An accepted plain address carries a warning wherever it is reviewed, naming what others on that network can read. **Rejected:** a settings toggle, and binding an address to the network it is accepted on.
+
+**A certificate pin on an unencrypted address is refused, never ignored.** Nothing hands over a certificate, so honouring the address and quietly dropping the pin would leave a protection believed to be in force that is not.
 
 ### Apple's on-device engines are the default and the fallback
 

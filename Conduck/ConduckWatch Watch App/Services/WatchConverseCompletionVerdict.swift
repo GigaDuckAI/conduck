@@ -58,6 +58,14 @@ enum WatchConverseCompletionVerdict {
         /// would warn about an interception that nothing here is evidence of.
         /// Also terminal: the key is the same on every attempt.
         case certificateKeyUnpinnable
+        /// App Transport Security refused the address before any connect — plain
+        /// `http` toward a host iOS does not consider local. Grouped with the
+        /// three certificate kinds because it shares their one load-bearing
+        /// property, TERMINALITY: the verdict is computed from the URL string, so
+        /// every attempt produces it and nothing on the wrist can change the
+        /// outcome. It is NOT a certificate claim and must never borrow one — no
+        /// handshake happened, so nothing was refused and nothing disagreed.
+        case insecureConnectionBlocked
         /// `.cancelled` with NO registry entry: the task was resurrected
         /// ACROSS A LAUNCH (after a force-quit every background task comes
         /// back as `.cancelled`, and the registry died with the old process).
@@ -157,6 +165,11 @@ enum WatchConverseCompletionVerdict {
                     return .failure(kind: .certificatePinMismatch, conversationID: conversationID)
                 case .certKeyUnpinnable:
                     return .failure(kind: .certificateKeyUnpinnable, conversationID: conversationID)
+                case .blockedByATS:
+                    // With the TERMINAL group, never with the retryable
+                    // transport classes below: -1022 is decided from the URL
+                    // string, so a retry is guaranteed to fail identically.
+                    return .failure(kind: .insecureConnectionBlocked, conversationID: conversationID)
                 case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
                     // Non-certificate classes fall through untouched, exactly as
                     // before: this arm exists so a trust note left on a task that

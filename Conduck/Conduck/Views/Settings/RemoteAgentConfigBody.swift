@@ -939,12 +939,12 @@ struct RemoteAgentConfigBody: View {
                 amberCallout(
                     systemImage: "stethoscope",
                     title: LocalizedStringResource(
-                        "settings.remoteAgent.customCheck.title",
-                        defaultValue: "Choose the matching server check"
+                        "settings.remoteAgent.customCheck.title.v2",
+                        defaultValue: "Run a server check"
                     ),
                     body: LocalizedStringResource(
-                        "settings.remoteAgent.customCheck.body",
-                        defaultValue: "On that machine, download the script with \(Constants.conduckConnectDownloadCommand), then run the matching check. Already running OpenAI-compatible software? Run bash conduck-connect.sh --check-server. If this is an adapter built for Conduck, run bash conduck-connect.sh --check-adapter instead. Both send live test requests without changing server configuration. After a PASS, the interactive script can continue into setup."
+                        "settings.remoteAgent.customCheck.body.v2",
+                        defaultValue: "On the server, download the script: \(Constants.conduckConnectDownloadCommand). Then run bash conduck-connect.sh --check-server — or --check-adapter if this is an adapter built for Conduck. It only sends test requests; nothing on the server changes."
                     )
                 )
             }
@@ -1161,6 +1161,18 @@ struct RemoteAgentConfigBody: View {
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                 }
+                if let plainHTTPHint {
+                    // BEFORE the tunnel hint, and warning-tinted for the same
+                    // reason: the other two hints CONFIRM what the user typed,
+                    // while these two state a consequence. An unencrypted address
+                    // is the graver of the two facts, and they cannot co-occur
+                    // anyway (a `trycloudflare.com` host is a dotted name, so
+                    // plain http toward it is refused before it can be saved).
+                    Text(plainHTTPHint)
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let temporaryTunnelHint {
                     // Warning-tinted rather than tertiary: the other two hints
                     // CONFIRM what the user typed, while this one predicts a
@@ -1174,18 +1186,24 @@ struct RemoteAgentConfigBody: View {
                 // The custom lane's variant adds the base-address contract — pasting
                 // the full endpoint out of a vendor's docs is that lane's natural
                 // mistake, and `endpointSuffixHint` only catches it AFTER the paste.
-                Text(isCustom
-                    ? LocalizedStringResource(
-                        "settings.remoteAgent.url.footer.custom",
-                        defaultValue: "Paste the https:// address your server is reachable at — just the base address, Conduck adds /v1/… itself."
-                    )
-                    : LocalizedStringResource(
-                        "settings.remoteAgent.url.footer",
-                        defaultValue: "Paste the https:// address your gateway is reachable at."
-                    ))
-                    .font(.caption2)
-                    .foregroundStyle(AppColors.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // HIDDEN while an admitted plain-http address is typed: "paste the
+                // https:// address" directly under an accepted http one reads as a
+                // contradiction, and its paste guidance has done its job by then.
+                // (The footer still never SUGGESTS http — see `plainHTTPHint`.)
+                if plainHTTPHint == nil {
+                    Text(isCustom
+                        ? LocalizedStringResource(
+                            "settings.remoteAgent.url.footer.custom",
+                            defaultValue: "Paste the https:// address your server is reachable at — just the base address, Conduck adds /v1/… itself."
+                        )
+                        : LocalizedStringResource(
+                            "settings.remoteAgent.url.footer",
+                            defaultValue: "Paste the https:// address your gateway is reachable at."
+                        ))
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .settingsCardPassiveRow()
         }
@@ -1197,12 +1215,19 @@ struct RemoteAgentConfigBody: View {
     /// the client request `…/v1/chat/completions/v1/chat/completions`).
     /// `SettingsViewModel.normalizedGatewayBaseURL` trims it either way; saying so
     /// beats trimming invisibly, which reads as the field eating what was typed.
+    ///
+    /// GATED ON ADMISSIBILITY, NOT ON `https`. `normalizedGatewayBaseURL` is
+    /// scheme-agnostic, so an http URL is trimmed exactly like an https one — and
+    /// `http://192.168.1.10:11434/v1/chat/completions` is the single likeliest
+    /// paste on this screen, because it is what an Ollama page shows. A scheme
+    /// test here would hide the announcement from precisely the address that
+    /// needs it and leave the trim invisible.
     private var endpointSuffixHint: String? {
         let trimmed = (viewModel.remoteAgentURLStrings[ref] ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let url = URL(string: trimmed),
-              url.scheme?.lowercased() == "https"
+              EndpointURLPolicy.isAdmissible(url)
         else { return nil }
         let normalized = SettingsViewModel.normalizedGatewayBaseURL(url)
         guard normalized.absoluteString != url.absoluteString else { return nil }
@@ -2175,6 +2200,14 @@ struct RemoteAgentConfigBody: View {
             }
             // Row action for the uncovered inset band — see `secretRow`.
             .settingsCardRowControl { showingCertSheet = true }
+            if let pinOnPlainHTTPBlocker {
+                Text(pinOnPlainHTTPBlocker)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .settingsCardPassiveRow()
+            }
         }
     }
 
@@ -2662,6 +2695,49 @@ struct RemoteAgentConfigBody: View {
             "settings.remoteAgent.url.temporaryTunnelHint",
             defaultValue: "This is a temporary tunnel address. It normally changes when the tunnel restarts, and this gateway then stops working until you set it up again."
         ))
+    }
+
+    // MARK: - Plain-http hints
+
+    /// Warns that an accepted plain-http address is readable by anyone else on
+    /// the network it rides. The SAME string the pairing review card shows — one
+    /// fact, and two spellings would be two chances to drift.
+    ///
+    /// The address itself is the consent surface: there is deliberately no toggle
+    /// and no opt-in switch, matching the Cloudflare-tunnel warning pattern
+    /// above it. Advisory only — it never gates saving, because the platform has
+    /// already decided this address is one it will send to.
+    ///
+    /// The placeholder still says `https://`, and the footer never offers
+    /// `http` — plain http is accepted when typed, never suggested; a footer
+    /// offering it would be the app choosing it for the user. While an admitted
+    /// plain-http address is in the field the footer HIDES instead: "paste the
+    /// https:// address" under an accepted http one reads as a contradiction,
+    /// and its paste guidance has done its job by then.
+    private var plainHTTPHint: String? {
+        let trimmed = (viewModel.remoteAgentURLStrings[ref] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard EndpointURLPolicy.isAdmittedPlainHTTPURLString(trimmed) else { return nil }
+        return String(localized: LocalizedStringResource(
+            "settings.endpoint.plainHTTP.warning.v2",
+            defaultValue: "Not encrypted — anyone on this network can read your messages and your key. Works only on this network — not in the car or out with the Watch."
+        ))
+    }
+
+    /// The always-visible refusal for a saved fingerprint paired with a
+    /// plain-http address. Derived from the two BUFFERS, not from a probe, so the
+    /// pair announces itself the moment the screen opens rather than only after
+    /// the user presses Save into a refusal. Same string as the VM's own save
+    /// guard, so the pre-emptive blocker and the post-Save message cannot diverge.
+    private var pinOnPlainHTTPBlocker: String? {
+        let trimmedURL = (viewModel.remoteAgentURLStrings[ref] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPin = (viewModel.remoteAgentCertFingerprints[ref] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPin.isEmpty,
+              let url = URL(string: trimmedURL),
+              EndpointURLPolicy.pinCannotApply(to: url) else { return nil }
+        return SettingsViewModel.pinOnPlainHTTPMessage
     }
 
     // MARK: - Port-hint logic

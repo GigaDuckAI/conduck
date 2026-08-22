@@ -560,6 +560,12 @@ extension BackgroundSTT: URLSessionDataDelegate {
                             // accepted and the pin was never compared.
                             continuation.resume(throwing: AppError.sttCustomCertKeyUnpinnable)
                             return
+                        case .blockedByATS:
+                            // -1022: refused from the URL string before any
+                            // connect. Lane-neutral, and terminal — it must not
+                            // fall through to the retryable transport arms below.
+                            continuation.resume(throwing: AppError.insecureConnectionBlocked)
+                            return
                         case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
                             break
                         }

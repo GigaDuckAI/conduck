@@ -1253,6 +1253,13 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // one must not borrow the interception warning.
             WatchLog.error(.converse, "converse.bg.certKeyUnpinnable")
             return WatchNetworkFailureCopy.certificateKeyUnpinnableMessage
+        case .insecureConnectionBlocked:
+            // The SAME wrist string the transport arm renders for -1022, because
+            // it is the same fact arriving by a different route — this kind is
+            // only reachable when a trust note happened to be left on the task.
+            WatchLog.error(.converse, "converse.bg.insecureBlocked")
+            return String(localized: "watch.error.insecureBlocked.v2",
+                          defaultValue: "Apple blocked this connection — the address isn't encrypted. Fix it on your iPhone.")
         case .cancelledAcrossLaunch, .missingHTTPResponse:
             return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
         case .classifiedBody(let classified):
@@ -1334,8 +1341,8 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             guard let error = RemoteAgentStatusMap.unified.map(status) else { return nil }
             return ConversationStore.TurnFailureClassification(failureCode: error.errorCode)
         case .transport, .responseOverCap, .certificateUntrusted, .certificatePinMismatch,
-             .certificateKeyUnpinnable, .cancelledAcrossLaunch, .missingHTTPResponse,
-             .undecodableReply, .noConversationID:
+             .certificateKeyUnpinnable, .insecureConnectionBlocked, .cancelledAcrossLaunch,
+             .missingHTTPResponse, .undecodableReply, .noConversationID:
             return nil
         }
     }

@@ -765,8 +765,10 @@ struct FileTransferSetupContent: View {
             urlField
             urlInvalidRow
             // The footer says what to DO; WHY the file server has its own address
-            // (a second service beside the gateway) lives in the field tip.
-            if state != .ready {
+            // (a second service beside the gateway) lives in the field tip. Hidden
+            // while an admitted plain-http address is typed — same contradiction
+            // rule as the gateway editor's footer.
+            if state != .ready, plainHTTPHint == nil {
                 Text(LocalizedStringResource(
                     "fileTransfer.url.footer.manual.v3",
                     defaultValue: "Paste the https:// address your file server is reachable at."
@@ -782,12 +784,28 @@ struct FileTransferSetupContent: View {
         .settingsCardPassiveRow()
     }
 
+    /// Warns that an accepted plain-http address is readable by anyone else on
+    /// the network it rides. The SAME key and SAME string every other endpoint
+    /// field uses (`EndpointURLPolicy` admits all three the same way), so one
+    /// fact has one wording. Advisory only — the platform has already decided it
+    /// will send to this address.
+    private var plainHTTPHint: String? {
+        let trimmed = (viewModel.fileServerURLStrings[ref] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard EndpointURLPolicy.isAdmittedPlainHTTPURLString(trimmed) else { return nil }
+        return String(localized: LocalizedStringResource(
+            "settings.endpoint.plainHTTP.warning.v2",
+            defaultValue: "Not encrypted — anyone on this network can read your messages and your key. Works only on this network — not in the car or out with the Watch."
+        ))
+    }
+
+    @ViewBuilder
     private var urlField: some View {
         let binding = Binding<String>(
             get: { viewModel.fileServerURLStrings[ref] ?? "" },
             set: { viewModel.fileServerURLStrings[ref] = $0 }
         )
-        return TextField(
+        TextField(
             "",
             text: binding,
             // NOT the gateway's address — the file server is a separate service on
@@ -811,6 +829,13 @@ struct FileTransferSetupContent: View {
             // (matching the gateway editor's fields) so nothing reads as a blue link.
             .foregroundStyle(AppColors.textPrimary)
             .tint(AppColors.brandAmber)
+        if let plainHTTPHint {
+            Text(plainHTTPHint)
+                .font(.caption2)
+                .foregroundStyle(AppColors.warning)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     /// Only the URL-format error (e.g. missing https://). Connection success/failure

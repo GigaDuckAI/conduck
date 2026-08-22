@@ -26,6 +26,15 @@
 	<string>$(CONDUCK_ICLOUD_CONTAINER_ID)</string>
 	<key>ConduckIdentityNamespace</key>
 	<string>$(CONDUCK_IDENTITY_NAMESPACE)</string>
+	<!-- Same key, same reason, same prohibition as the phone's Info.plist. Do
+	     not add NSAllowsArbitraryLoads here either. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Conduck connects to the personal AI gateway you run on your local network, when you configure one at a local address.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Conduck records audio on your Watch for voice transcription using the speech provider you have configured.</string>
 	<key>UIBackgroundModes</key>

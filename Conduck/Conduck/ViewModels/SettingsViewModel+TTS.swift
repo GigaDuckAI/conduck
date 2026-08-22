@@ -448,19 +448,30 @@ extension SettingsViewModel {
         // LOUD on an empty/invalid URL with a friendly, specific message rather
         // than silently substituting Apple — matches the always-tappable contract.
         let trimmedURL = (customSTTURLStrings[uuid] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // `EndpointURLPolicy`, the SAME gate the Save path applies, and the SAME
+        // derived copy. A raw `scheme == "https"` test here would refuse a
+        // plain-`http` LAN address the editor accepts — and would refuse it by
+        // telling the user to add `https://` to a string the app itself stored.
         guard !trimmedURL.isEmpty,
               let base = URL(string: trimmedURL),
-              base.scheme?.lowercased() == "https" else {
-            ttsPreviewStates[providerID] = .invalid(message: String(
-                localized: "settings.stt.custom.url.invalid",
-                defaultValue: "Enter the full endpoint URL including https://."
-            ))
+              EndpointURLPolicy.isAdmissible(base) else {
+            ttsPreviewStates[providerID] = .invalid(
+                message: SettingsViewModel.customSTTURLRejectionMessage(trimmedURL)
+            )
             return
         }
         let speechURL = base.appending(path: "v1/audio/speech")
 
         let auth = customSTTAuthSchemes[uuid] ?? .bearer
         let trimmedFingerprint = (customSTTCertFingerprints[uuid] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // A pin on a plain-`http` address can never be compared — no handshake
+        // happens — so the preview refuses the TUPLE exactly as Save does rather
+        // than auditioning the endpoint with the pin silently dropped. A green
+        // earned that way would be a verdict about a protection that never ran.
+        if !trimmedFingerprint.isEmpty, EndpointURLPolicy.pinCannotApply(to: base) {
+            ttsPreviewStates[providerID] = .invalid(message: SettingsViewModel.pinOnPlainHTTPMessage)
+            return
+        }
         let model = (customTTSModels[uuid] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let config = CustomTTSConfig(
             url: speechURL,

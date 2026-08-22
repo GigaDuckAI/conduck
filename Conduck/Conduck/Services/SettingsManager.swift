@@ -865,11 +865,13 @@ actor SettingsManager {
             if let uuid = STTProvider.customEndpointUUID(fromPresetID: id) {
                 customConfig = customSTTConfig(for: uuid)
             } else {
+                let fenced = Self.fencedVoiceEndpoint(customSTTTranscribeURL(),
+                                                      pin: getCustomSTTCertFingerprint())
                 customConfig = CustomSTTConfig(
-                    url: customSTTTranscribeURL(),
+                    url: fenced.url,
                     model: getCustomSTTModel(),
                     auth: getCustomSTTAuthScheme(),
-                    certFingerprint: getCustomSTTCertFingerprint()
+                    certFingerprint: fenced.pin
                 )
             }
         } else {
@@ -1386,12 +1388,38 @@ actor SettingsManager {
     /// model is TTS-specific. Mirrors how `activeSTTSnapshot()` assembles
     /// `CustomSTTConfig`.
     func customTTSConfig() -> CustomTTSConfig {
-        CustomTTSConfig(
-            url: customTTSSpeechURL(),
+        let fenced = Self.fencedVoiceEndpoint(customTTSSpeechURL(),
+                                              pin: getCustomSTTCertFingerprint())
+        return CustomTTSConfig(
+            url: fenced.url,
             model: getCustomTTSModel(),
             auth: getCustomSTTAuthScheme(),
-            certFingerprint: getCustomSTTCertFingerprint()
+            certFingerprint: fenced.pin
         )
+    }
+
+    /// The custom voice lane's READ FENCE for the pin + plain-`http` pair — the
+    /// third twin of the ones in `remoteAgentSnapshot(for:)` and
+    /// `fileTransferSnapshot(for:)`, and it stands for the identical reason. A
+    /// saved fingerprint can never be compared on a plain-`http` address: no TLS
+    /// handshake happens, so no challenge reaches `RemoteAgentTrustEvaluator` and
+    /// the digest is compared against nothing. The editor refuses the combination
+    /// on write and the pairing parser refuses it on import, which leaves a
+    /// version-skewed peer syncing one in through KVS as the remaining route.
+    ///
+    /// REFUSES THE TUPLE — both halves come back nil, so the lane resolves as
+    /// "not configured" rather than transcribing and speaking over an address
+    /// whose pin was silently dropped. Nil-ing only the pin would be the one
+    /// forbidden outcome: it leaves the user believing a protection is in force
+    /// that never runs.
+    ///
+    /// Both directions of the lane share ONE base URL, ONE key and ONE pin, so a
+    /// single fence applied at every config builder covers STT and TTS together.
+    static func fencedVoiceEndpoint(_ url: URL?, pin: String?) -> (url: URL?, pin: String?) {
+        guard let url, pin != nil, EndpointURLPolicy.pinCannotApply(to: url) else {
+            return (url, pin)
+        }
+        return (nil, nil)
     }
 
     // MARK: - Custom voice endpoints (BYO) — per-uuid accessors (Phase B)
@@ -1510,22 +1538,26 @@ actor SettingsManager {
 
     /// Resolve the full per-uuid custom STT config (URL + model + auth + cert).
     func customSTTConfig(for uuid: UUID) -> CustomSTTConfig {
-        CustomSTTConfig(
-            url: customSTTTranscribeURL(for: uuid),
+        let fenced = Self.fencedVoiceEndpoint(customSTTTranscribeURL(for: uuid),
+                                              pin: getCustomSTTCertFingerprint(for: uuid))
+        return CustomSTTConfig(
+            url: fenced.url,
             model: getCustomSTTModel(for: uuid),
             auth: getCustomSTTAuthScheme(for: uuid),
-            certFingerprint: getCustomSTTCertFingerprint(for: uuid)
+            certFingerprint: fenced.pin
         )
     }
 
     /// Resolve the full per-uuid custom TTS config (URL + model + shared auth +
     /// shared cert). Mirrors `customTTSConfig()` (singleton).
     func customTTSConfig(for uuid: UUID) -> CustomTTSConfig {
-        CustomTTSConfig(
-            url: customTTSSpeechURL(for: uuid),
+        let fenced = Self.fencedVoiceEndpoint(customTTSSpeechURL(for: uuid),
+                                              pin: getCustomSTTCertFingerprint(for: uuid))
+        return CustomTTSConfig(
+            url: fenced.url,
             model: getCustomTTSModel(for: uuid),
             auth: getCustomSTTAuthScheme(for: uuid),
-            certFingerprint: getCustomSTTCertFingerprint(for: uuid)
+            certFingerprint: fenced.pin
         )
     }
 
@@ -3375,6 +3407,14 @@ actor SettingsManager {
         // Unreachable from the two real callers (both pre-validate), which is
         // the point: it is a backstop, not a user-facing path.
         guard EndpointURLPolicy.isAdmissible(url) else { return }
+        // The ONE storage-side writer that commits URL and pin as a TUPLE, so it
+        // is the one place a pin fence belongs on the write side. There is
+        // deliberately no per-setter fence: `setFileServerURL` and
+        // `setFileServerCertFingerprint` are two writes in a caller-chosen order,
+        // so a guard in either one refuses half a change and commits the other —
+        // a half-state, and worse than either whole outcome. Do not "fix" that
+        // by adding one.
+        guard pin == nil || !EndpointURLPolicy.pinCannotApply(to: url) else { return }
 
         // Fail-closed durability order for a mid-write crash: a NOT-available
         // commit revokes availability BEFORE the tuple lands (a crash leaves
@@ -3569,11 +3609,18 @@ actor SettingsManager {
               let credential = getFileServerCredential(for: ref) else {
             return nil
         }
+        let certFingerprint = getFileServerCertFingerprint(for: ref)
+        // Same read fence as `remoteAgentSnapshot(for:)`, for the same reason and
+        // with the same treatment — see that method for why the pin+http pair is
+        // refused rather than honoured with the pin dropped.
+        if certFingerprint != nil, EndpointURLPolicy.pinCannotApply(to: url) {
+            return nil
+        }
         return FileTransferSnapshot(
             baseURL: url,
             username: Constants.fileServerUsername,
             credential: credential,
-            certFingerprintHex: getFileServerCertFingerprint(for: ref),
+            certFingerprintHex: certFingerprint,
             available: getFileTransferAvailable(for: ref),
             folderCapable: getFileServerFolderCapable(for: ref),
             returnCapable: getFileServerReturnCapable(for: ref),
@@ -5194,6 +5241,19 @@ actor SettingsManager {
         guard let url = getRemoteAgentURL(for: ref) else {
             return nil
         }
+        let certFingerprint = getRemoteAgentCertFingerprint(for: ref)
+        // READ FENCE, the backstop for a pair this build cannot create. A saved
+        // fingerprint on a plain-`http` address can never be compared — no TLS
+        // handshake happens, so no challenge reaches `RemoteAgentTrustEvaluator`
+        // — and the editor and the pairing parser both refuse the combination.
+        // A version-skewed peer syncing one in through KVS is the remaining
+        // route, and it takes the same treatment an inadmissible URL already
+        // gets, for the identical stated reason: whatever put the value there, an
+        // inadmissible configuration never resolves into something the app will
+        // request. Nil routes to the existing not-configured path.
+        if certFingerprint != nil, EndpointURLPolicy.pinCannotApply(to: url) {
+            return nil
+        }
         return RemoteAgentSnapshot(
             backend: statusBackend,
             ref: ref,
@@ -5201,7 +5261,7 @@ actor SettingsManager {
             token: getRemoteAgentToken(for: ref),
             authScheme: getRemoteAgentAuthScheme(for: ref),
             model: model,
-            certFingerprintHex: getRemoteAgentCertFingerprint(for: ref),
+            certFingerprintHex: certFingerprint,
             activeSessionID: getRemoteAgentActiveSession()
         )
     }

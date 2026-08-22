@@ -370,8 +370,31 @@ struct CustomSTTConfigBody: View {
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
             }
+            if let plainHTTPHint {
+                // Warning-tinted rather than tertiary: the hints above CONFIRM
+                // what the user typed, this one states a consequence.
+                Text(plainHTTPHint)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .settingsCardPassiveRow()
+    }
+
+    /// Warns that an accepted plain-http address is readable by anyone else on
+    /// the network it rides. The SAME key and SAME string every other endpoint
+    /// field uses (`EndpointURLPolicy` admits all three the same way), so one
+    /// fact has one wording. Advisory only — the platform has already decided it
+    /// will send to this address.
+    private var plainHTTPHint: String? {
+        let trimmed = (viewModel.customSTTURLStrings[uuid] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard EndpointURLPolicy.isAdmittedPlainHTTPURLString(trimmed) else { return nil }
+        return String(localized: LocalizedStringResource(
+            "settings.endpoint.plainHTTP.warning.v2",
+            defaultValue: "Not encrypted — anyone on this network can read your messages and your key. Works only on this network — not in the car or out with the Watch."
+        ))
     }
 
     /// Inline Toggle for the two auth schemes the BYO endpoint supports
@@ -1007,8 +1030,32 @@ struct CustomSTTConfigBody: View {
             ))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
+            if let pinOnPlainHTTPBlocker {
+                Text(pinOnPlainHTTPBlocker)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.top, 4)
+    }
+
+    /// The always-visible refusal for a saved fingerprint paired with a
+    /// plain-http address — the twin of `RemoteAgentConfigBody`'s, reading the
+    /// same two BUFFERS this screen edits so the pair announces itself the moment
+    /// Advanced is opened rather than only after Save refuses. Same string as the
+    /// VM's own save guard, so the pre-emptive blocker and the post-Save message
+    /// cannot diverge.
+    private var pinOnPlainHTTPBlocker: String? {
+        let trimmedURL = (viewModel.customSTTURLStrings[uuid] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPin = (viewModel.customSTTCertFingerprints[uuid] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPin.isEmpty,
+              let url = URL(string: trimmedURL),
+              EndpointURLPolicy.pinCannotApply(to: url) else { return nil }
+        return SettingsViewModel.pinOnPlainHTTPMessage
     }
 
     // MARK: - Port-hint logic

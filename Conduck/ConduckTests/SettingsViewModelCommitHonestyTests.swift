@@ -100,6 +100,17 @@ final class SettingsViewModelCommitHonestyTests: XCTestCase {
                      "A refused write must leave the slot untouched.")
     }
 
+    /// A LOCAL plain-http URL is now admissible, so the fence must let it
+    /// through — this is the boundary move, asserted at the storage layer where
+    /// it actually lives.
+    func testSetRemoteAgentURLAcceptsALocalPlainHTTPAddress() async {
+        let local = URL(string: "http://192.168.1.10:11434")!
+        let accepted = await SettingsManager.shared.setRemoteAgentURL(local, for: openclaw)
+        XCTAssertTrue(accepted, "Plain http toward an address only the local network can reach is admissible.")
+        let stored = await SettingsManager.shared.getRemoteAgentURL(for: openclaw)
+        XCTAssertEqual(stored?.absoluteString, local.absoluteString)
+    }
+
     /// The happy path still reports true, so `false` genuinely means refused
     /// rather than "this setter always returns false".
     func testSetRemoteAgentURLReportsSuccess() async {

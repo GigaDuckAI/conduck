@@ -472,6 +472,11 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
         // snapshot — the loose-Bool form drops `pinComparisonUnsupported` and
         // this verdict silently becomes a mismatch.
         case .certKeyUnpinnable: return .remoteAgentCertKeyUnpinnable
+        // NOT a certificate verdict, but it RETURNS THE ERROR rather than nil:
+        // -1022 is terminal and names the address, and the lane's own fallback
+        // arms would tell the driver to go and check a gateway that was never
+        // contacted.
+        case .blockedByATS: return .insecureConnectionBlocked
         // Returning nil hands the failure to this lane's own arms, which is
         // where the non-certificate transport classes get their copy.
         case .timeout, .unreachable, .notEstablished, .offline, .cancelled: return nil

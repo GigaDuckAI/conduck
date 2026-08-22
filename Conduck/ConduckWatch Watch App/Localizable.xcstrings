@@ -1052,6 +1052,9 @@
         }
       }
     },
+    "Recording…" : {
+
+    },
     "remoteAgent.error.authFailed.recovery.hosted" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1345,6 +1348,50 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Try a smaller image."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.insecureBlocked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "iOS blocked this unencrypted connection."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.insecureBlocked.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Plain http:// only reaches an address on your own network. Use the server's IP address, or put it behind https://."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.insecureBlocked.recovery.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plain http:// only reaches an address on your own network. Use the server's IP address or its .local name, or put it behind https://."
+          }
+        }
+      }
+    },
+    "remoteAgent.error.insecureBlocked.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple blocked this unencrypted address."
           }
         }
       }
@@ -2180,6 +2227,9 @@
     "Starting…" : {
 
     },
+    "Still answering your last question." : {
+
+    },
     "Stop" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2905,6 +2955,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Dismiss"
+          }
+        }
+      }
+    },
+    "watch.error.insecureBlocked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "iOS blocked this connection — the address isn't encrypted. Fix it on your iPhone."
+          }
+        }
+      }
+    },
+    "watch.error.insecureBlocked.v2" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple blocked this connection — the address isn't encrypted. Fix it on your iPhone."
           }
         }
       }

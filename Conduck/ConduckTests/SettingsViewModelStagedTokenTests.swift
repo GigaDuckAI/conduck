@@ -128,7 +128,8 @@ final class SettingsViewModelStagedTokenTests: XCTestCase {
     }
 
     /// `.typed` routes into `validateRemoteAgent` with the typed value — proven
-    /// via the URL guard (an http:// URL is rejected before any network).
+    /// via the URL guard (plain http toward a DOTTED NAME is rejected before any
+    /// network).
     func testTestConnectionTypedRoutesToValidate_urlGuardFires() async {
         let vm = await makeVM()
         vm.remoteAgentURLStrings[openclaw] = "http://gw.example.test:18789"
@@ -137,7 +138,7 @@ final class SettingsViewModelStagedTokenTests: XCTestCase {
 
         XCTAssertEqual(
             vm.remoteAgentRowState(for: openclaw),
-            .invalid(message: String(localized: "Enter the full gateway URL including https://.")),
+            .invalid(message: SettingsViewModel.plainHTTPRemoteMessage),
             ".typed must reach validateRemoteAgent's URL guard, proving the probe path was taken."
         )
     }

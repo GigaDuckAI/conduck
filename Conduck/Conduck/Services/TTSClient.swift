@@ -362,6 +362,12 @@ actor TTSClient {
                     // this key algorithm — its own code, so the remedy names
                     // the key type instead of raising an interception warning.
                     throw AppError.ttsCustomCertKeyUnpinnable
+                case .blockedByATS:
+                    // -1022: iOS refused the address before any connect, so this
+                    // is neither a certificate verdict nor a reachability one.
+                    // Lane-neutral code — the remedy is the same address advice
+                    // on every lane.
+                    throw AppError.insecureConnectionBlocked
                 case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
                     // No certificate verdict — fall through to the code mapping
                     // that owns the TTS taxonomy. A cold tunnel's generic

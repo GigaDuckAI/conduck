@@ -582,6 +582,17 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchec
         /// returns the connection to ordinary system trust, which is already
         /// passing. Do not "correct" this back.
         case certKeyUnpinnable
+        /// App Transport Security refused the request from the URL STRING,
+        /// before any TCP connect (`NSURLErrorAppTransportSecurityRequires
+        /// SecureConnection`, -1022). Plain `http` toward a host iOS does not
+        /// consider local: a dotted DNS name, a CGNAT address, or a public one.
+        ///
+        /// NOT a reachability fact and never uncertain about delivery — nothing
+        /// left the device — so it is never retried and never grouped with
+        /// `.timeout` / `.unreachable`. Measured: an unroutable PUBLIC literal
+        /// returns it in 0.01 s, which is what proves the decision precedes the
+        /// connect. The remedy is the address itself, not the server.
+        case blockedByATS
         case cancelled
     }
 
@@ -616,6 +627,20 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchec
         let systemTrustRejected = signals.systemTrustRejected
         let pinRejected = signals.pinRejected
         switch code {
+        case .appTransportSecurityRequiresSecureConnection:
+            // -1022, FIRST. Decided from the URL string BEFORE any TCP connect —
+            // measured: an unroutable public literal returns it in 0.01 s. So it
+            // is never a reachability fact, never uncertain about delivery, and
+            // never retried. No trust signal may alter it either: no handshake
+            // happened, so any verdict in `signals` belongs to a different
+            // attempt.
+            //
+            // Every consumer of `TransportErrorClass` enumerates the classes
+            // explicitly with NO `default:`, which is what made adding this case
+            // a compile error at all thirteen call sites rather than a silent
+            // misdiagnosis. A `default:` at any of them restores the bug; do not
+            // add one.
+            return .blockedByATS
         case .timedOut:
             return .timeout
         case .notConnectedToInternet:
@@ -984,8 +1009,18 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchec
     /// a reverse proxy canonicalising a path, adding/removing a trailing slash,
     /// or a WebDAV server relocating a collection. Compared on
     /// `(scheme, host, effective port)`, not host alone: `:443` → `:8443` on the
-    /// same name is a different service, and https is mandatory app-wide so a
-    /// 3xx must never be able to downgrade the hop.
+    /// same name is a different service.
+    ///
+    /// SCHEME EQUALITY IS THE NO-DOWNGRADE RULE, and `sameOrigin` already carries
+    /// it — an https origin can only redirect to https, so a 3xx can never strip
+    /// the encryption off a hop. A standalone "target must be https" clause on
+    /// top of it would add nothing there and would break the ONE case it newly
+    /// applies to: an admitted plain-`http` local endpoint following its own
+    /// same-origin redirect, which is ordinary traffic (a WebDAV collection
+    /// gaining a trailing slash, a reverse proxy canonicalising `/v1`). The
+    /// target is re-checked against `EndpointURLPolicy` instead, so a hop can
+    /// never land somewhere the app would refuse to store — userinfo smuggled
+    /// into the redirect target included.
     ///
     /// Scope: every session that installs this evaluator as its delegate
     /// inherits the policy — Test Connection, model discovery, custom STT/TTS,
@@ -1011,7 +1046,7 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchec
         guard let target = request.url,
               let source = from,
               Self.sameOrigin(source, target),
-              target.scheme?.lowercased() == "https"
+              EndpointURLPolicy.isAdmissible(target)
         else {
             completionHandler(nil)
             return

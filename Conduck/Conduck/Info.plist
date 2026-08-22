@@ -32,6 +32,24 @@
 	<string>public.app-category.utilities</string>
 	<key>LSUIElement</key>
 	<false/>
+	<!-- ATS: NSAllowsLocalNetworking ONLY, and never NSAllowsArbitraryLoads.
+	     Measured on iOS 26.5 (sim, build 23F77): shipping both keys yields the
+	     RESTRICTIVE behaviour, not arbitrary loads — the local-networking key
+	     SUPPRESSES the arbitrary-loads key, so http://example.com is refused
+	     -1022 with both present but succeeds with arbitrary-loads alone. A
+	     future engineer adding NSAllowsArbitraryLoads here would get nothing
+	     and have no way to know why. It is also one of the five keys Apple
+	     lists as requiring an App Review justification; this one is not.
+	     Why ship a key that measured as a no-op: it is the documented
+	     declaration that pairs with NSLocalNetworkUsageDescription, it makes
+	     the RFC1918-literal exemption contractual rather than an OS default,
+	     and it reads correctly to a reviewer who sees plain-http gateway URLs.
+	     Full rationale + the measured matrix: Services/RemoteAgent/EndpointURLPolicy.swift -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Conduck uses the camera to attach a photo to your message.</string>
 	<key>NSFaceIDUsageDescription</key>

@@ -1025,6 +1025,11 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         // passed and the pin was never compared, so neither a
                         // server fix nor an interception warning applies.
                         case .certKeyUnpinnable: certError = .remoteAgentCertKeyUnpinnable
+                        // -1022 is not a certificate verdict — no handshake
+                        // happened — but it IS terminal and it IS this lane's
+                        // answer, so it resolves here rather than falling into
+                        // the `.cancelled` disambiguation below.
+                        case .blockedByATS: certError = .insecureConnectionBlocked
                         case .timeout, .unreachable, .notEstablished, .offline, .cancelled: certError = nil
                         }
                         if let certError {
@@ -1278,6 +1283,13 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     /// for every non-certificate transport failure in the first place.
     static func mapURLError(_ error: URLError) -> AppError {
         switch error.code {
+        case .appTransportSecurityRequiresSecureConnection:
+            // -1022, FIRST, in lockstep with `classifyTransportError`. The URL
+            // string was refused before any connect, so this names the address
+            // rather than the server — and it must not fall into the
+            // `default:` unreachable arm, which would tell the user to go and
+            // check a machine nothing ever contacted.
+            return .insecureConnectionBlocked
         case .timedOut:
             return .remoteAgentTimeout
         // Kept in lockstep with `RemoteAgentTrustEvaluator.classifyTransportError`'s

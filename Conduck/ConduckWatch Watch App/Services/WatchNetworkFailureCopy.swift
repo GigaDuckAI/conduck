@@ -57,6 +57,16 @@ enum WatchNetworkFailureCopy {
             // -1001 / -1004 / -1005 — connectivity, but not specific enough to point
             // at the companion iPhone. Broader hint, no over-claim (constraint 2).
             return String(localized: "Couldn't reach the internet. Check your connection and try again.")
+        case .appTransportSecurityRequiresSecureConnection:
+            // -1022. RECOGNISED and deterministic, so it earns an arm rather
+            // than the `fallback` constraint 3 sends unknown codes to: the
+            // platform decided this from the URL string before any connect, so
+            // it is never a connectivity fact and the connection-hint arms
+            // above would point the reader at a network that is working.
+            // Compact, and it sends the fix to the phone, which is the only
+            // surface that can edit the address.
+            return String(localized: "watch.error.insecureBlocked.v2",
+                          defaultValue: "Apple blocked this connection — the address isn't encrypted. Fix it on your iPhone.")
         case .serverCertificateUntrusted, .serverCertificateHasUnknownRoot,
              .serverCertificateHasBadDate, .serverCertificateNotYetValid:
             // -1202 / -1203 / -1201 / -1204 — the trust layer named the certificate,

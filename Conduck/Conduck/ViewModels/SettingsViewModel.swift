@@ -2761,6 +2761,18 @@ final class SettingsViewModel {
             }
         }
 
+        // A saved fingerprint over a plain-`http` address cannot be checked:
+        // there is no TLS handshake, so no challenge ever reaches
+        // `RemoteAgentTrustEvaluator` and the digest is compared against nothing.
+        // REFUSE THE TUPLE — neither the URL nor the pin is written. Honouring
+        // the address and silently dropping the pin is the one forbidden
+        // outcome: it leaves a protection believed to be in force that is not,
+        // and it inverts the standing rule that a pin may only tighten.
+        if effectiveFingerprint != nil, EndpointURLPolicy.pinCannotApply(to: parsedURL) {
+            remoteAgentValidationStates[ref] = .invalid(message: Self.pinOnPlainHTTPMessage)
+            return
+        }
+
         remoteAgentValidationStates[ref] = .checking
         // A probe is in flight: the previous verdict (green mark + error code) is
         // now unproven, so retract BOTH before we know the new answer. Without
@@ -2868,6 +2880,15 @@ final class SettingsViewModel {
             // `nil` prefix hint (every self-hosted backend) → always false.
             let keyShapeLooksWrong = descriptor.tokenPrefixHint
                 .map { !trimmedToken.hasPrefix($0) } ?? false
+            // Locality of the address under test, reduced to a Bool HERE where
+            // the URL lives — the host itself never crosses into the copy layer,
+            // the same rule the key-shape hint follows. `HostReachabilityClass`
+            // (not `LocalNetworkHost`) is the right question here: this asks
+            // "would a denied Local Network permission explain this?", for which
+            // a tailnet address correctly counts.
+            let hostIsLocalNetwork = parsedURL.host
+                .map { HostReachabilityClass.classify($0).suggestsLocalNetworkPermission }
+                ?? false
             remoteAgentValidationStates[ref] = .invalid(
                 message: Self.friendlyGatewayMessage(
                     for: error,
@@ -2882,7 +2903,8 @@ final class SettingsViewModel {
                     // `.optional`). `resolve` is the one mapping that answers
                     // for THIS ref.
                     context: RemoteAgentFailureContext.resolve(ref),
-                    keyShapeLooksWrong: keyShapeLooksWrong
+                    keyShapeLooksWrong: keyShapeLooksWrong,
+                    hostIsLocalNetwork: hostIsLocalNetwork
                 )
             )
         } catch {
@@ -3051,6 +3073,18 @@ final class SettingsViewModel {
                 )
                 return false
             }
+        }
+
+        // A saved fingerprint over a plain-`http` address cannot be checked:
+        // there is no TLS handshake, so no challenge ever reaches
+        // `RemoteAgentTrustEvaluator` and the digest is compared against nothing.
+        // REFUSE THE TUPLE — neither the URL nor the pin is written. Honouring
+        // the address and silently dropping the pin is the one forbidden
+        // outcome: it leaves a protection believed to be in force that is not,
+        // and it inverts the standing rule that a pin may only tighten.
+        if effectiveFingerprint != nil, EndpointURLPolicy.pinCannotApply(to: parsedURL) {
+            remoteAgentValidationStates[ref] = .invalid(message: Self.pinOnPlainHTTPMessage)
+            return false
         }
 
         // Staged reuse resolves here — every synchronous buffer read is done, so
@@ -3602,11 +3636,21 @@ final class SettingsViewModel {
     ///   delegated arms then offer "pick a different model" in an editor that
     ///   shows no model. There is deliberately no default: the compiler asking
     ///   the question at every call site is the only guard that cannot rot.
+    /// - Parameter hostIsLocalNetwork: whether the address under test is one only
+    ///   the local network can reach. A `Bool`, computed at the call site where
+    ///   the URL lives and crossing alone — exactly the shape `keyShapeLooksWrong`
+    ///   uses, and for the same privacy reason: the host itself must never reach
+    ///   the copy layer. When true, the three "nothing answered" arms append the
+    ///   Local-Network-permission hint, because on a real device a DENIED grant
+    ///   presents as a TIMEOUT and is otherwise indistinguishable from a dead
+    ///   server. Apple exposes no readable permission status, so the hint never
+    ///   asserts a denial — it names a thing to go and check.
     static func friendlyGatewayMessage(
         for error: AppError,
         named instanceName: String,
         context: RemoteAgentFailureContext,
-        keyShapeLooksWrong: Bool = false
+        keyShapeLooksWrong: Bool = false,
+        hostIsLocalNetwork: Bool = false
     ) -> String {
         // Every lane fact is read off the CONTEXT, so the editor-scoped arms and
         // the delegated ones can never answer for different lanes.
@@ -3622,6 +3666,18 @@ final class SettingsViewModel {
             : trimmedName
         func remedy(_ error: AppError) -> String {
             error.recoverySuggestion(in: context) ?? error.errorDescription(in: context) ?? generic
+        }
+        // iOS only. macOS 15+ has its own local-network gate, but that was NOT
+        // measured here (`ConduckTests` will not compile for a macOS
+        // destination), and widening an unmeasured claim is exactly what this
+        // app's copy rules forbid. Open question, deliberately left open.
+        func withLocalNetworkHint(_ message: String) -> String {
+            #if os(iOS)
+            guard hostIsLocalNetwork else { return message }
+            return "\(message) \(Self.localNetworkPermissionHint)"
+            #else
+            return message
+            #endif
         }
         switch error {
         case .remoteAgentAuthFailed:
@@ -3656,8 +3712,8 @@ final class SettingsViewModel {
                 return String(localized: "remoteAgent.editor.unreachable.hosted.v2",
                               defaultValue: "Couldn't reach \(name). Check your internet connection, then test again.")
             }
-            return String(localized: "remoteAgent.editor.unreachable.selfHosted",
-                          defaultValue: "Couldn't reach \(name). Check the gateway is running and reachable from this device, then test again.")
+            return withLocalNetworkHint(String(localized: "remoteAgent.editor.unreachable.selfHosted",
+                          defaultValue: "Couldn't reach \(name). Check the gateway is running and reachable from this device, then test again."))
         case .remoteAgentTimeout, .requestTimeout:
             // NO repeat-work-and-cost warning. The shared arm earns that sentence
             // because a converse turn may be mid-flight on the user's own key; a
@@ -3667,8 +3723,8 @@ final class SettingsViewModel {
                 return String(localized: "remoteAgent.editor.timeout.hosted",
                               defaultValue: "The test timed out waiting for \(name). Test again in a moment.")
             }
-            return String(localized: "remoteAgent.editor.timeout.selfHosted",
-                          defaultValue: "The test timed out waiting for \(name). Check the gateway is running, then test again.")
+            return withLocalNetworkHint(String(localized: "remoteAgent.editor.timeout.selfHosted",
+                          defaultValue: "The test timed out waiting for \(name). Check the gateway is running, then test again."))
         case .remoteAgentServerError:
             if hosted {
                 return String(localized: "remoteAgent.editor.serverError.hosted.v2",
@@ -3710,7 +3766,6 @@ final class SettingsViewModel {
              .remoteAgentEndpointNotFound, .remoteAgentModelRequired,
              .remoteAgentModelUnavailable, .remoteAgentContextTooLong,
              .remoteAgentUnexpectedStatus, .remoteAgentServiceUnavailable,
-             .remoteAgentNotEstablished,
              .remoteAgentOutOfCredits, .remoteAgentRateLimited:
             // These describe a MISCONFIGURED-but-reachable gateway, or a reachable
             // provider refusing THIS request (no credits / rate-limited), so the
@@ -3732,6 +3787,13 @@ final class SettingsViewModel {
             // "Check the Gateway URL is your server's base address" once rendered
             // inside the OpenRouter editor, a screen with no URL field at all.
             return remedy(error)
+        case .remoteAgentNotEstablished:
+            // Split out of the delegated group above ONLY so the Local-Network
+            // hint can reach it — the copy is otherwise the identical delegated
+            // remedy, and with no hint to add this arm is byte-for-byte what the
+            // group produced. 73 belongs in the set: "nothing was established" is
+            // exactly the shape a denied Local Network grant wears.
+            return withLocalNetworkHint(remedy(error))
         default:
             // Context-resolved, like every arm above: the cause half dispatches
             // on the same capabilities the remedy half does, so an uncurated
@@ -3924,8 +3986,77 @@ final class SettingsViewModel {
         // A hostless verdict is only worth naming when the string already IS an
         // https URL (`https://`, `https:///v1`). Otherwise the scheme is the
         // actionable defect.
+        //
+        // `.insecureRemoteHost` PASSES THROUGH and must never collapse into the
+        // generic prompt: it can only arise from a string carrying an EXPLICIT
+        // `http://`, which is unambiguous about what the user meant, so it earns
+        // copy that names the real constraint and both fixes. The schemeless
+        // correction above is untouched and still right — `gw.example.com` and
+        // `gw.example.com:18789` parse with no scheme and no host, answer
+        // `.noHost`, and keep landing on the "include https://" prompt.
         if rejection == .noHost, url.scheme?.lowercased() != "https" { return nil }
         return rejection
+    }
+
+    /// The soft Local-Network-permission hint, owned HERE and rendered by both
+    /// surfaces a user actually diagnoses on: the Diagnostics row
+    /// (`DiagnosticsRunner.appendLocalNetworkHint`) and the gateway editor's Test
+    /// Connection. One owner, because it is one fact.
+    ///
+    /// It carries the half the original wording left out, and that half is the
+    /// whole point: WHY the failure looked like a dead server. Put beside the
+    /// -1022 copy, the pair reads as the two failures they are — one is instant
+    /// and about encryption, the other is a timeout and about permission.
+    ///
+    /// It never ASSERTS a denial. Apple exposes no readable Local-Network
+    /// permission status, so the app can only observe that the host is a local
+    /// one; inventing a cause it cannot see would be a confident wrong answer.
+    /// The `.v2` key is required rather than a reword: the catalog value wins
+    /// over `defaultValue:`, so rewording the old key would ship the old string.
+    static var localNetworkPermissionHint: String {
+        String(localized: "diagnostics.hint.localNetwork.v2",
+               defaultValue: "If this address is on your own network, check Conduck's Local Network permission in Settings — when it's off, the connection just times out.")
+    }
+
+    /// The `.insecureRemoteHost` copy — ONE string for all three URL fields.
+    ///
+    /// The three sibling derivations below are per-field because each names its
+    /// own example host and its own home for the secret; this message names
+    /// neither, so a per-field spelling would be three chances to drift with
+    /// nothing gained. "The server's IP address" is equally true of a gateway, a
+    /// file server and a voice endpoint.
+    ///
+    /// It names Apple as the refuser, not Conduck — the app did not choose this
+    /// and implying otherwise invites the user to hunt for a setting that does
+    /// ("Apple", not "iOS": the same string renders on the Mac). It gives the
+    /// fixes in the order a self-hoster will try them, and it uses no jargon
+    /// (not "ATS", not "App Transport Security", not "-1022", not "DNS name",
+    /// not "RFC1918"). `.v2` key: the catalog value wins over `defaultValue:`,
+    /// so the reword away from "iOS" required a new key.
+    ///
+    /// DELIBERATELY NOT SAID, so it does not get "improved" back in: nothing
+    /// about what would have been readable on the network. The user is being
+    /// REFUSED, not warned — the risk sentence belongs on the address that is
+    /// ACCEPTED, and pairing a refusal with a lecture is how people learn to
+    /// skim refusals.
+    static var plainHTTPRemoteMessage: String {
+        String(localized: "settings.endpoint.url.plainHTTPRemote.v2",
+               defaultValue: "Apple allows plain http:// only to an address on your own network. Use the server's IP address or its name ending in .local, or put it behind https://.")
+    }
+
+    /// The refusal shown when a saved certificate fingerprint is paired with a
+    /// plain-`http` address. Refuses the TUPLE — neither half is written — because
+    /// honouring the address and quietly dropping the pin would leave the user
+    /// believing a protection is in force that never runs.
+    ///
+    /// This is ONE OF THE TWO PLACES in the app where telling the user to clear a
+    /// pin is legitimate (the other is `.certKeyUnpinnable`): nothing was caught,
+    /// because nothing was compared. Everywhere else that phrase means "switch
+    /// off the control that just caught something" and is banned. Do not
+    /// "correct" this.
+    static var pinOnPlainHTTPMessage: String {
+        String(localized: "settings.endpoint.pin.plainHTTP",
+               defaultValue: "A saved fingerprint can't be checked on an http:// address — nothing hands over a certificate. Clear the fingerprint, or use an https:// address.")
     }
 
     /// The inline `.invalid` copy for a custom voice-endpoint URL the app won't
@@ -3933,6 +4064,8 @@ final class SettingsViewModel {
     /// same policy, same one-story-per-string rule across Test and Save.
     static func customSTTURLRejectionMessage(_ trimmedURL: String) -> String {
         switch namedURLRejection(trimmedURL) {
+        case .insecureRemoteHost?:
+            return Self.plainHTTPRemoteMessage
         case .carriesUserinfo?:
             return String(localized: "settings.stt.custom.url.userinfo",
                           defaultValue: "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your endpoint's key goes in the API key field.")
@@ -3952,6 +4085,8 @@ final class SettingsViewModel {
     /// same string (twin of `fileServerURLRejectionMessage`).
     static func remoteAgentURLRejectionMessage(_ trimmedURL: String) -> String {
         switch namedURLRejection(trimmedURL) {
+        case .insecureRemoteHost?:
+            return Self.plainHTTPRemoteMessage
         case .carriesUserinfo?:
             return String(localized: "settings.remoteAgent.url.userinfo",
                           defaultValue: "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your gateway's token goes in the Token field.")
@@ -3968,8 +4103,14 @@ final class SettingsViewModel {
     /// otherwise (which defect gets named: `namedURLRejection`). ONE derivation
     /// so the save path and the Test path can never tell the user two different
     /// stories about the same string.
-    private static func fileServerURLRejectionMessage(_ trimmedURL: String) -> String {
+    /// Internal (not private) for the same reason its two twins are: the suite
+    /// asserts that all three fields answer the SAME string for
+    /// `.insecureRemoteHost`, and a per-field spelling is exactly the drift that
+    /// assertion exists to catch.
+    static func fileServerURLRejectionMessage(_ trimmedURL: String) -> String {
         switch namedURLRejection(trimmedURL) {
+        case .insecureRemoteHost?:
+            return Self.plainHTTPRemoteMessage
         case .carriesUserinfo?:
             return String(localized: "fileTransfer.url.userinfo",
                           defaultValue: "Don't include a username or password in the URL — Conduck manages the credential for you. Use the address only, and give the generated password to your server.")
@@ -4010,6 +4151,18 @@ final class SettingsViewModel {
                 message: String(localized: "settings.remoteAgent.fingerprint.invalid",
                                 defaultValue: "That fingerprint should be 64 hex characters.")
             )
+            return
+        }
+
+        // A saved fingerprint over a plain-`http` address cannot be checked:
+        // there is no TLS handshake, so no challenge ever reaches
+        // `RemoteAgentTrustEvaluator` and the digest is compared against nothing.
+        // REFUSE THE TUPLE — neither the URL nor the pin is written. Honouring
+        // the address and silently dropping the pin is the one forbidden
+        // outcome: it leaves a protection believed to be in force that is not,
+        // and it inverts the standing rule that a pin may only tighten.
+        if pin != nil, EndpointURLPolicy.pinCannotApply(to: parsedURL) {
+            fileServerValidationStates[ref] = .invalid(message: Self.pinOnPlainHTTPMessage)
             return
         }
 
@@ -4199,6 +4352,10 @@ final class SettingsViewModel {
         case .valid(let hex): pin = hex
         case .invalid: return nil
         }
+        // Same reason as the garbage-pin arm above: a draft Save would refuse
+        // this tuple, so it must not be Testable either — a green earned against
+        // a pin that can never be compared would be a verdict about nothing.
+        if !pin.isEmpty, EndpointURLPolicy.pinCannotApply(to: parsedURL) { return nil }
         return FileTransferTestSignature(
             url: parsedURL.absoluteString,
             pin: pin,
@@ -4647,8 +4804,8 @@ final class SettingsViewModel {
         }
 
         let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        // `EndpointURLPolicy` — https (so a bearer key can never leave the
-        // device in cleartext), a real host, and no `user:password@`. This URL
+        // `EndpointURLPolicy` — `https`, or plain `http` toward a host only the
+        // local network can reach; a real host; no `user:password@`. This URL
         // dual-writes to App-Group defaults + iCloud KVS exactly like the
         // gateway's, so it is held to the same rule; the storage read fence
         // (`SettingsManager.resolveStoredURL`) would refuse anything looser,
@@ -4677,6 +4834,18 @@ final class SettingsViewModel {
         let effectiveFingerprint: String? = trimmedFingerprint.isEmpty ? nil : trimmedFingerprint
         let effectiveModel = Self.sanitizeModelTag(model)
         let resolvedModel = effectiveModel.isEmpty ? "whisper-1" : effectiveModel
+
+        // A saved fingerprint over a plain-`http` address cannot be checked:
+        // there is no TLS handshake, so no challenge ever reaches
+        // `RemoteAgentTrustEvaluator` and the digest is compared against nothing.
+        // REFUSE THE TUPLE — neither the URL nor the pin is written. Honouring
+        // the address and silently dropping the pin is the one forbidden
+        // outcome: it leaves a protection believed to be in force that is not,
+        // and it inverts the standing rule that a pin may only tighten.
+        if effectiveFingerprint != nil, EndpointURLPolicy.pinCannotApply(to: parsedURL) {
+            customSTTValidationStates[uuid] = .invalid(message: Self.pinOnPlainHTTPMessage)
+            return
+        }
 
         customSTTValidationStates[uuid] = .checking
 
@@ -4717,8 +4886,9 @@ final class SettingsViewModel {
 
     /// Commit ALL buffers for a custom voice endpoint — the SINGLE persistence
     /// point (no test required; Save commits even if untested). Reuses the same
-    /// guards as `validateCustomSTT` (name non-empty, `https://`-only URL,
-    /// model sanitize) but skips the staged suite. Persists in the order the
+    /// guards as `validateCustomSTT` (name non-empty, `EndpointURLPolicy`-
+    /// admissible URL, no pin on a plain-`http` address, model sanitize) but
+    /// skips the staged suite. Persists in the order the
     /// per-uuid slots expect: roster upsert → URL → auth → STT model → cert pin →
     /// API key (only if a key was typed AND auth ≠ `.none`) → TTS model → TTS
     /// voice. Then refreshes the derived snapshots so the list re-renders.
@@ -4772,6 +4942,18 @@ final class SettingsViewModel {
         let resolvedModel = effectiveModel.isEmpty ? "whisper-1" : effectiveModel
         let trimmedTTSModel = (customTTSModels[uuid] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedVoice = pendingTTSVoiceToPersist(for: uuid)
+
+        // A saved fingerprint over a plain-`http` address cannot be checked:
+        // there is no TLS handshake, so no challenge ever reaches
+        // `RemoteAgentTrustEvaluator` and the digest is compared against nothing.
+        // REFUSE THE TUPLE — neither the URL nor the pin is written. Honouring
+        // the address and silently dropping the pin is the one forbidden
+        // outcome: it leaves a protection believed to be in force that is not,
+        // and it inverts the standing rule that a pin may only tighten.
+        if effectiveFingerprint != nil, EndpointURLPolicy.pinCannotApply(to: parsedURL) {
+            customSTTValidationStates[uuid] = .invalid(message: Self.pinOnPlainHTTPMessage)
+            return false
+        }
 
         // Persist in order — roster first so per-uuid slots have a home.
         if let existing = customVoiceEndpoints.first(where: { $0.id == uuid }) {
@@ -4909,12 +5091,17 @@ final class SettingsViewModel {
         // always-tappable fail-loud contract: tapping Test with no URL points at
         // the URL, not the key.
         let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The SAME admissibility gate the Save path applies, and the SAME derived
+        // copy. A raw `scheme == "https"` test here would refuse a plain-`http`
+        // LAN address that `saveCustomVoiceEndpoint` accepts, and would refuse it
+        // with a message telling the user to add `https://` to a string the app
+        // itself stored — the two paths telling one user two stories about one
+        // string, which `customSTTURLRejectionMessage` exists to prevent.
         guard !trimmedURL.isEmpty,
               let parsed = URL(string: trimmedURL),
-              parsed.scheme?.lowercased() == "https" else {
+              EndpointURLPolicy.isAdmissible(parsed) else {
             customSTTValidationStates[uuid] = .invalid(
-                message: String(localized: "settings.stt.custom.url.invalid",
-                                defaultValue: "Enter the full endpoint URL including https://.")
+                message: Self.customSTTURLRejectionMessage(trimmedURL)
             )
             return
         }

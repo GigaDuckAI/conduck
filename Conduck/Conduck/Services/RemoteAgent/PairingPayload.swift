@@ -70,9 +70,14 @@ enum PairingParseError: Error, Equatable {
     /// (`name`, `model`) carrying control or bidi scalars or exceeding its
     /// length cap (`sanitizedDisplayText`).
     case malformed
-    /// Gateway or fileServer URL parses but its scheme isn't https — https
-    /// is mandatory (`docs/ai-context/spec.md`); surfaced as its
-    /// own case so the UI can say WHY instead of a generic "bad code".
+    /// Gateway or fileServer URL parses, but its scheme isn't https AND it
+    /// isn't a plain-http address only the local network can reach — encryption
+    /// is mandatory everywhere else (`docs/ai-context/spec.md`,
+    /// `EndpointURLPolicy`). Surfaced as its own case so the UI can say WHY
+    /// instead of a generic "bad code". Deliberately COARSE: both scheme
+    /// verdicts land here, because both are one sentence to the reader ("this
+    /// address isn't one iOS will send an unencrypted request to") with one
+    /// remedy; only its user-facing string distinguishes them.
     case insecureURL
 }
 
@@ -287,7 +292,7 @@ struct PairingPayload: Equatable, Sendable {
             throw PairingParseError.malformed
         }
 
-        let url = try requireHTTPSURL(gateway["url"])
+        let url = try requireAdmissibleURL(gateway["url"])
 
         // auth — absent defaults to .bearer (fail closed, same posture as
         // `RemoteAgentAuthScheme.from(rawValue:)`). Bearer REQUIRES a
@@ -323,7 +328,7 @@ struct PairingPayload: Equatable, Sendable {
             guard let fsDict = fileServerValue as? [String: Any] else {
                 throw PairingParseError.malformed
             }
-            let fsURL = try requireHTTPSURL(fsDict["url"])
+            let fsURL = try requireAdmissibleURL(fsDict["url"])
             guard let credential = fsDict["credential"] as? String, !credential.isEmpty else {
                 throw PairingParseError.malformed
             }
@@ -358,14 +363,18 @@ struct PairingPayload: Equatable, Sendable {
     }
 
     /// Required URL field: must be a string that parses, and then satisfy
-    /// `EndpointURLPolicy` — https, a non-empty host, and no `user:password@`
-    /// userinfo. BOTH URLs in the payload go through it; there is deliberately
-    /// no per-field opt-out (see `EndpointURLPolicy` for why the gateway URL is
-    /// not an exception, and what capability that removes).
+    /// `EndpointURLPolicy` — an encrypted transport (or plain http toward an
+    /// address only the local network can reach), a non-empty host, and no
+    /// `user:password@` userinfo. BOTH URLs in the payload go through it; there
+    /// is deliberately no per-field opt-out (see `EndpointURLPolicy` for why the
+    /// gateway URL is not an exception, and what capability that removes).
     ///
     /// The policy's rejection maps onto the two error cases so the UI can name
-    /// the real problem: a non-https URL is `.insecureURL` ("this code points
-    /// somewhere unencrypted"), everything else is `.malformed`.
+    /// the real problem: either SCHEME verdict is `.insecureURL` ("this code
+    /// points somewhere iOS won't send an unencrypted request"), everything else
+    /// is `.malformed`. The two scheme verdicts share one error case on purpose —
+    /// the enum is coarse by design and a third case would buy the reader
+    /// nothing that the string does not already say.
     ///
     /// Rejecting the whole payload (rather than dropping the offending half) is
     /// the honest outcome: a half-import leaves the user with a silently
@@ -380,7 +389,7 @@ struct PairingPayload: Equatable, Sendable {
     /// wizard-minted code carrying userinfo is reachable today and lands here as
     /// `.malformed`. Aligning the wizard is tracked separately — do not weaken
     /// this parser on the assumption that it has happened.
-    private static func requireHTTPSURL(_ value: Any?) throws -> URL {
+    private static func requireAdmissibleURL(_ value: Any?) throws -> URL {
         guard
             let urlString = value as? String,
             let url = URL(string: urlString)
@@ -389,7 +398,7 @@ struct PairingPayload: Equatable, Sendable {
         }
         guard let rejection = EndpointURLPolicy.rejection(for: url) else { return url }
         switch rejection {
-        case .notHTTPS:
+        case .notHTTPS, .insecureRemoteHost:
             throw PairingParseError.insecureURL
         case .noHost, .carriesUserinfo:
             throw PairingParseError.malformed

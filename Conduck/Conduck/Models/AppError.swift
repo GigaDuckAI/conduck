@@ -339,6 +339,26 @@ enum AppError: LocalizedError {
     // a user's own tap.
     case turnStoppedBeforeSend                               // 76 — stopped with nothing yet sent
 
+    // iOS refused a plain-http address it does not consider local (77). App
+    // Transport Security adjudicates from the URL STRING before any TCP
+    // connect — measured: an unroutable PUBLIC literal returns -1022 in 0.01 s —
+    // so the request never left the device and no server was ever involved.
+    //
+    // LANE-NEUTRAL by name and by copy. One code serves the gateway, the file
+    // server and the BYO voice endpoint, because `EndpointURLPolicy` admits a
+    // local-http address for all three and the remedy is identical on all three.
+    // It joins the unprefixed family (`networkError`, `invalidURL`,
+    // `noInternetConnection`) rather than the `remoteAgent*` one for that
+    // reason. No `hidesURLField` branch either: the only fixed-URL lane is
+    // OpenRouter, whose address the app owns and which is always https, so the
+    // arm cannot fire there.
+    //
+    // NOT retryable, and deliberately absent from `isRetryable` / `maxAttempts`:
+    // the verdict is computed from the URL string, so a second attempt is
+    // guaranteed to produce the same answer and a Try Again button could only
+    // ever fail again.
+    case insecureConnectionBlocked                           // 77 — iOS refused a plain-http address it does not consider local
+
     // Catch-all (99)
     case unknown(Error)
 
@@ -445,6 +465,16 @@ enum AppError: LocalizedError {
             // no branch to make, on any lane.
             return String(localized: "remoteAgent.error.stoppedBeforeSend",
                           defaultValue: "You stopped this message before it was sent.")
+        case .insecureConnectionBlocked:
+            // Names Apple as the refuser, not Conduck: the app did not choose
+            // this, and implying otherwise invites the user to hunt for a
+            // setting that does not exist ("Apple", not "iOS" — this string
+            // also renders on the Mac). No jargon — not "ATS", not "App
+            // Transport Security", not "-1022". Deliberately SHORT (39
+            // characters): this string is a notification title and a Watch
+            // banner, and the wrist holds roughly 38 characters over two lines.
+            return String(localized: "remoteAgent.error.insecureBlocked.v2",
+                          defaultValue: "Apple blocked this unencrypted address.")
         case .sttKeyUnreadable:
             // Says what is TRUE (the key could not be read) and never what is
             // merely likely (that there is no key). Carries its own instruction
@@ -763,6 +793,14 @@ enum AppError: LocalizedError {
             // anything: there is nothing to check.
             return String(localized: "remoteAgent.error.stoppedBeforeSend.recovery",
                           defaultValue: "Nothing left this device, so nothing reached your AI. Send it again whenever you like.")
+        case .insecureConnectionBlocked:
+            // The fixes, in the order a self-hoster will try them, and no
+            // lecture about why encryption is good. ONE string for every lane —
+            // "the server's IP address" is true of a gateway, a file server and
+            // a voice endpoint alike, so a per-lane spelling would be three
+            // chances to drift with nothing gained.
+            return String(localized: "remoteAgent.error.insecureBlocked.recovery.v2",
+                          defaultValue: "Plain http:// only reaches an address on your own network. Use the server's IP address or its .local name, or put it behind https://.")
         case .sttKeyUnreadable:
             // An EXPLICIT arm rather than the generic "Try again.": the fix is a
             // specific act (unlock the device) that a bare retry invitation does
@@ -1159,7 +1197,12 @@ enum AppError: LocalizedError {
              // time; only reissuing the certificate or clearing the pin changes
              // the outcome.
              .remoteAgentCertKeyUnpinnable, .sttCustomCertKeyUnpinnable,
-             .ttsCustomCertKeyUnpinnable, .fileTransferCertKeyUnpinnable:
+             .ttsCustomCertKeyUnpinnable, .fileTransferCertKeyUnpinnable,
+             // 77 is terminal for the sharpest reason in the enum: the verdict
+             // is computed from the URL STRING before any connect, so a second
+             // attempt is GUARANTEED to reach the same answer. Offering Try
+             // Again would be offering a button that cannot work.
+             .insecureConnectionBlocked:
             return false
         case .unknown:
             return true
@@ -1357,6 +1400,7 @@ enum AppError: LocalizedError {
         case 74: return .remoteAgentDefaultNeedsSetup(gatewayName: nil)
         case 75: return .sttKeyUnreadable
         case 76: return .turnStoppedBeforeSend
+        case 77: return .insecureConnectionBlocked
         case 99: return .apiFailure(message: message ?? "")       // unknown(Error) — Error not reconstructible
         default:
             return .apiFailure(message: message ?? "")
@@ -1456,6 +1500,7 @@ extension AppError: CustomNSError {
         case .remoteAgentDefaultNeedsSetup: return 74
         case .sttKeyUnreadable: return 75
         case .turnStoppedBeforeSend: return 76
+        case .insecureConnectionBlocked: return 77
         case .unknown: return 99
         }
     }

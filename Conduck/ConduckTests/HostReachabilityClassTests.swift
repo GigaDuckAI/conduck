@@ -88,6 +88,39 @@ final class HostReachabilityClassTests: XCTestCase {
 
     // MARK: - Degenerate input
 
+    // MARK: - Delegated literal parsing (`LocalNetworkHost` owns the parser)
+
+    /// The bug the delegation removes. `fe8::1` parses to `0fe8:…`, an ordinary
+    /// global address — the old text-prefix match called it link-local.
+    func testDelegatedParserFixesTextPrefixBug() {
+        XCTAssertEqual(HostReachabilityClass.classify("fe8::1"), .publicHost,
+                       "A TEXT prefix would call this link-local; byte-exact matching does not.")
+        XCTAssertEqual(HostReachabilityClass.classify("fe80::1"), .localLAN,
+                       "The genuine link-local address still classifies local.")
+    }
+
+    /// The second improvement: the legacy IPv4 grammar is now understood, so a
+    /// decimal-encoded loopback is recognised instead of read as a hostname.
+    func testDecimalIPv4LiteralIsRecognised() {
+        XCTAssertEqual(HostReachabilityClass.classify("2130706433"), .localLAN,
+                       "inet_aton reads this as 127.0.0.1, and so does the resolver.")
+        XCTAssertEqual(HostReachabilityClass.classify("0xc0a80101"), .localLAN,
+                       "Packed hex for 192.168.1.1.")
+    }
+
+    /// THE DELIBERATE DISAGREEMENT, pinned so it reads as intentional rather
+    /// than accidental. `HostReachabilityClass` answers "would a denied Local
+    /// Network permission explain this timeout?", for which a tailnet address IS
+    /// local; `LocalNetworkHost` answers "will iOS send plain http here?", for
+    /// which it is not (measured -1022). Both answers are correct for their own
+    /// question, and the two types must go on disagreeing about exactly this.
+    func testTailscaleCGNATStaysLocalForTheHint() {
+        XCTAssertEqual(HostReachabilityClass.classify("100.64.0.1"), .tailscale)
+        XCTAssertTrue(HostReachabilityClass.classify("100.64.0.1").suggestsLocalNetworkPermission)
+        XCTAssertEqual(LocalNetworkHost.classify("100.64.0.1"), .remote,
+                       "The transport classifier must NOT follow — iOS refuses plain http to CGNAT.")
+    }
+
     func testNilOrEmptyHostIsUnknownAndDoesNotHint() {
         XCTAssertEqual(HostReachabilityClass.classify(nil), .unknown)
         XCTAssertEqual(HostReachabilityClass.classify(""), .unknown)

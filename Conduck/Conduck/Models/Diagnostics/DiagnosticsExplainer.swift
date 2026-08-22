@@ -126,6 +126,10 @@ enum DiagnosticsExplainer {
         // empty" with "the slot could not be read" would send whoever reads it
         // looking for a key the user already has.
         75: "stt-key-unreadable",
+        // 77 names the REFUSER and the shape of the refusal, so a pasted report
+        // is not mistaken for a dead server: this failure is instant and about
+        // the address, never about reachability.
+        77: "insecure-connection-blocked",
         99: "unknown",
     ]
 }

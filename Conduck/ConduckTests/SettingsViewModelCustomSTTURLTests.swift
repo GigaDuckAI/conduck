@@ -3,19 +3,25 @@
 // Conduck
 // SettingsViewModelCustomSTTURLTests.swift
 //
-// Custom-STT V1.x. The BYO custom STT endpoint URL must be
-// `https://` only; `http://` is rejected client-side at Settings save (REUSED
-// verbatim from the gateway's URL guard) so the bearer key can never leave
-// the device in cleartext.
+// Custom-STT V1.x. The BYO custom voice endpoint URL runs the ONE
+// `EndpointURLPolicy` rule every persisted endpoint runs: `https`, or plain
+// `http` toward a host only the local network can reach, and never a
+// `user:password@` address.
 //
 // Mirrors `SettingsViewModelRemoteAgentURLTests`: these exercise the URL guard
 // in `validateCustomSTT` (validate-only; Save is the separate commit point)
-// WITHOUT reaching the live Test suite — an invalid (http) URL is rejected at
-// the URL guard, and a valid (https) URL with an empty key (under .bearer auth)
-// is rejected at the *key* guard, proving the https URL itself passed validation
-// without requiring a reachable server. Two further tests cover the new
-// Save/Cancel split: Save commits a keyless endpoint with no prior Test, and
-// Cancel drops a never-saved draft.
+// WITHOUT reaching the live Test suite — an inadmissible URL is rejected at the
+// URL guard, and an admissible URL with an empty key (under .bearer auth) is
+// rejected at the *key* guard, proving the URL itself passed validation without
+// requiring a reachable server.
+//
+// THE THREE PATHS MUST TELL ONE STORY. Save, Test-with-a-typed-key
+// (`validateCustomSTT`) and Test-with-a-stored-key (`retestCustomSTT`) all run
+// the same gate and derive their copy from `customSTTURLRejectionMessage`, so a
+// string one of them accepts can never be refused by another with a message
+// telling the user to add `https://` to an address the app itself stored. Two
+// further tests cover the Save/Cancel split: Save commits a keyless endpoint
+// with no prior Test, and Cancel drops a never-saved draft.
 
 import XCTest
 @testable import Conduck
@@ -72,8 +78,8 @@ final class SettingsViewModelCustomSTTURLTests: XCTestCase {
         )
         XCTAssertEqual(
             vm.customSTTValidationStates[uuid],
-            .invalid(message: urlInvalidMessage),
-            "http:// must be rejected at the URL guard — the key would otherwise leave the device in cleartext."
+            .invalid(message: SettingsViewModel.plainHTTPRemoteMessage),
+            "http:// toward a DOTTED NAME must still be rejected at the URL guard — and it now names the real constraint instead of the generic https:// prompt, which would be false (iOS accepts plain http toward a LOCAL address)."
         )
     }
 
@@ -97,6 +103,67 @@ final class SettingsViewModelCustomSTTURLTests: XCTestCase {
             message,
             urlInvalidMessage,
             "An https:// URL must pass the URL guard — the failure should come from the empty-key guard, not the URL guard."
+        )
+    }
+
+    /// The carve-out this lane exists to serve: `http://192.168.1.10:11434` is
+    /// Ollama on the LAN, and the URL guard must pass it. Under `.bearer` auth we
+    /// feed an empty key so the run stops at the KEY guard — which proves the URL
+    /// was accepted without needing a reachable server.
+    func testPlainHTTPLocalURLAcceptedAtURLGuard() async {
+        let vm = SettingsViewModel()
+        seed(vm)
+        await vm.validateCustomSTT(for: uuid, url: "http://192.168.1.10:11434", key: "   ", model: "")
+        guard case .invalid(let message) = vm.customSTTValidationStates[uuid] else {
+            return XCTFail("Expected an .invalid state from the empty-key guard, got \(String(describing: vm.customSTTValidationStates[uuid])).")
+        }
+        XCTAssertNotEqual(message, urlInvalidMessage)
+        XCTAssertNotEqual(message, SettingsViewModel.plainHTTPRemoteMessage,
+                          "A private IPv4 literal over plain http is what the carve-out admits — refusing it here would make the lane unusable for Ollama.")
+    }
+
+    /// A saved fingerprint on a plain-http address can never be compared, so the
+    /// TUPLE is refused before anything is tested or written — and it is refused
+    /// with the named message, not the generic URL one.
+    func testPinOnPlainHTTPRefusedAtValidate() async {
+        let vm = SettingsViewModel()
+        seed(vm)
+        vm.customSTTCertFingerprints[uuid] = String(repeating: "ab", count: 32)
+        await vm.validateCustomSTT(for: uuid, url: "http://192.168.1.10:11434", key: "sk-custom-abc123", model: "")
+        XCTAssertEqual(
+            vm.customSTTValidationStates[uuid],
+            .invalid(message: SettingsViewModel.pinOnPlainHTTPMessage),
+            "Honouring the address and quietly dropping the pin is the one forbidden outcome."
+        )
+    }
+
+    /// `retestCustomSTT` is the Test path for an ALREADY-SAVED endpoint, and it
+    /// must run the same gate as Save. A raw `scheme == "https"` test here told
+    /// the user to add `https://` to a plain-http LAN address the app itself had
+    /// stored — the two-stories-about-one-string failure the shared derivation
+    /// exists to prevent. Under `.bearer` with no stored key the run stops at the
+    /// stored-key guard, which is what proves the URL passed.
+    func testRetestAcceptsAPlainHTTPLocalURL() async {
+        let vm = SettingsViewModel()
+        seed(vm)
+        await vm.retestCustomSTT(for: uuid, url: "http://192.168.1.10:11434", model: "")
+        guard case .invalid(let message) = vm.customSTTValidationStates[uuid] else {
+            return XCTFail("Expected an .invalid state from the stored-key guard, got \(String(describing: vm.customSTTValidationStates[uuid])).")
+        }
+        XCTAssertNotEqual(message, urlInvalidMessage)
+        XCTAssertNotEqual(message, SettingsViewModel.plainHTTPRemoteMessage)
+    }
+
+    /// And the refusal it DOES owe names the real constraint, exactly as the
+    /// Save path's does.
+    func testRetestRefusesAPlainHTTPRemoteURLWithTheNamedMessage() async {
+        let vm = SettingsViewModel()
+        seed(vm)
+        await vm.retestCustomSTT(for: uuid, url: "http://whisper.example.test:9000", model: "")
+        XCTAssertEqual(
+            vm.customSTTValidationStates[uuid],
+            .invalid(message: SettingsViewModel.plainHTTPRemoteMessage),
+            "Test and Save must refuse the same string with the same words."
         )
     }
 

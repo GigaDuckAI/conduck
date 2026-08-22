@@ -821,8 +821,18 @@ final class PairingImportFlow {
             return String(localized: "settings.pairing.error.malformed",
                           defaultValue: "This setup code is damaged or incomplete. Re-run conduck-connect to get a fresh one.")
         case .insecureURL:
-            return String(localized: "settings.pairing.error.insecureURL",
-                          defaultValue: "Setup codes must use https:// URLs.")
+            // FIRST SENTENCE VERBATIM from the typed-address refusal
+            // (`SettingsViewModel.plainHTTPRemoteMessage`) — one cause, one
+            // wording. The remedy differs because the address is not the user's
+            // to edit here: it points at the one place that can mint a code this
+            // parser accepts, matching how `.malformed` already ends.
+            //
+            // A NEW key, not a reworded one: the catalog value wins over
+            // `defaultValue:`, so rewording an existing key would ship its old
+            // string (`.v3` because the `.v2` wording said "iOS" — wrong on
+            // the Mac).
+            return String(localized: "settings.pairing.error.insecureURL.v3",
+                          defaultValue: "Apple allows plain http:// only to an address on your own network. Re-run conduck-connect with the server's IP address, or put it behind https://.")
         }
     }
 

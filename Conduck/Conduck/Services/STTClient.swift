@@ -438,6 +438,12 @@ actor STTClient {
                     // the key type is the problem rather than warned about an
                     // interception that nothing here is evidence of.
                     throw AppError.sttCustomCertKeyUnpinnable
+                case .blockedByATS:
+                    // -1022: iOS refused the address before any connect, so this
+                    // is neither a certificate verdict nor a reachability one.
+                    // Lane-neutral code — the remedy is the same address advice
+                    // on every lane.
+                    throw AppError.insecureConnectionBlocked
                 case .timeout, .unreachable, .notEstablished, .offline, .cancelled:
                     // No certificate verdict — the classifier's transport
                     // classes carry no per-lane copy, so fall through to the

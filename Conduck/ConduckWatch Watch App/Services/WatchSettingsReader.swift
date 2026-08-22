@@ -1008,6 +1008,26 @@ final class WatchSettingsReader {
         }
     }
 
+    // THE WATCH COMPILES THE CANONICAL POLICY. `EndpointURLPolicy.swift` and
+    // `LocalNetworkHost.swift` are members of this target through the project's
+    // membership-exception list, the same way `RemoteAgentClient`,
+    // `RemoteAgentTrustEvaluator` and `RemoteAgentFailureContext` are. Both are
+    // pure Foundation and isolation-free, which is what makes sharing them safe.
+    //
+    // A hand-copied twin is not an option, because admissibility turns on a
+    // byte-exact address classifier (`inet_aton`/`inet_pton`, IPv4-mapped IPv6,
+    // zone ids, the legacy octal grammar) and a second copy of THAT cannot stay
+    // in agreement by care. The two MUST agree: a gateway URL reaches this Watch
+    // by THREE routes (a multi-gateway WCSession envelope, a legacy single
+    // envelope, and cold App-Group/KVS hydration) and the phone applies the same
+    // rule to the same value — a disagreement is one user being told two
+    // different things about one server.
+    //
+    // The gate lives at `remoteAgentConfig(for:)`, the dispatch chokepoint,
+    // because gating one ingest would leave the other two open. Nil-ing the
+    // tuple there routes to the existing "not configured" error path, which is
+    // exactly what an iPhone on the same build reports for the same value.
+
     /// Routing resolver. Returns the `(url, token, cert, model)` tuple for
     /// a SPECIFIC ref (a `rawString`), or nil when that ref is not configured on
     /// this Watch (no cached URL OR no Keychain token). The routing caller maps
@@ -1017,7 +1037,17 @@ final class WatchSettingsReader {
     /// per-ref model cache (nil for built-ins → gateway default; omitted from the
     /// converse body).
     func remoteAgentConfig(for ref: String) -> (url: URL, token: String, authScheme: RemoteAgentAuthScheme, cert: String?, model: String?)? {
-        guard let url = remoteAgentURLs[ref], Self.urlIsAdmissible(url) else { return nil }
+        guard let url = remoteAgentURLs[ref], EndpointURLPolicy.isAdmissible(url) else { return nil }
+        let cert = remoteAgentCertFingerprints[ref]
+        // A saved fingerprint over plain `http` is a configuration this build
+        // cannot create (both the editor and the pairing parser refuse it), but a
+        // version-skewed peer can sync one in. FAIL CLOSED rather than connect
+        // with the pin silently dropped: honouring the address would leave the
+        // user believing a protection is in force that never runs, and the phone
+        // applies the identical fence in `SettingsManager.remoteAgentSnapshot`
+        // — the wrist and the phone must not tell one user two stories about one
+        // server.
+        if cert != nil, EndpointURLPolicy.pinCannotApply(to: url) { return nil }
         let scheme = remoteAgentAuthSchemes[ref] ?? .bearer
         let storedToken = WatchIdentityResolver.getRemoteAgentToken(for: ref)
         // `.bearer` requires a non-empty token (fail closed — keyless is NEVER
@@ -1025,31 +1055,7 @@ final class WatchSettingsReader {
         if scheme.requiresToken, (storedToken?.isEmpty ?? true) {
             return nil
         }
-        return (url, storedToken ?? "", scheme, remoteAgentCertFingerprints[ref], remoteAgentModels[ref])
-    }
-
-    /// Watch-local twin of the iPhone's `EndpointURLPolicy.isAdmissible(_:)`:
-    /// https, a non-empty host, and no `user:password@` userinfo. Applied at
-    /// `remoteAgentConfig(for:)` — the dispatch chokepoint — because a gateway
-    /// URL reaches this Watch by THREE routes (a multi-gateway WCSession
-    /// envelope, a legacy single envelope, and cold App-Group/KVS hydration);
-    /// gating the resolver covers all three, whereas gating one ingest leaves
-    /// the others open. Nil-ing the tuple here routes to the existing "not
-    /// configured" error path, matching what an upgraded iPhone reports for the
-    /// same value — the two must not disagree.
-    ///
-    /// A THIRD copy of the predicate rather than a call: the iPhone's canonical
-    /// `EndpointURLPolicy` lives in the phone-side sources, and this reader must
-    /// not take a cross-target dependency to enforce a four-line rule. If the
-    /// rule ever changes, all copies move together — the policy type's doc
-    /// comment is the contract.
-    private static func urlIsAdmissible(_ url: URL) -> Bool {
-        guard let host = url.host, !host.isEmpty else { return false }
-        guard url.scheme?.lowercased() == "https" else { return false }
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return true
-        }
-        return components.user == nil && components.password == nil
+        return (url, storedToken ?? "", scheme, cert, remoteAgentModels[ref])
     }
 
     /// Whether the gateway bound to `ref` (a `rawString`) has a READY file lane,
