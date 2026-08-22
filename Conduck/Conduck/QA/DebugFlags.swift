@@ -49,5 +49,11 @@ enum DebugFlags {
     /// wins over the ambient dev-convenience flag — same rationale as `QAMode`).
     static let skipOnboarding: Bool =
         ProcessInfo.processInfo.arguments.contains("-ConduckSkipOnboarding")
+
+    // `-ConduckUncapCustomGateways` (lift the custom-gateway cap to the
+    // badge-palette ceiling) is deliberately NOT declared here: the Watch
+    // target compiles `Utilities/Constants.swift` — where the flag gates
+    // `Constants.maxCustomGateways` — but not `QA/`. Recorded so this file
+    // stays the index of developer launch flags.
 }
 #endif

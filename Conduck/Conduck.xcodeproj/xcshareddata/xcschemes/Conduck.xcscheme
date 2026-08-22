@@ -115,6 +115,10 @@
             argument = "-ConduckQAScreenshotMode"
             isEnabled = "NO">
          </CommandLineArgument>
+         <CommandLineArgument
+            argument = "-ConduckUncapCustomGateways"
+            isEnabled = "NO">
+         </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>
    <ProfileAction

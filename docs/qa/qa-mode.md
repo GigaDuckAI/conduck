@@ -158,12 +158,14 @@ bundled; the tokens enter only as runtime launch args sourced from `.env`.
 ## Other developer launch flags (independent of QA mode)
 
 DEBUG-only flags that are NOT part of QA mode — they don't need `-ConduckQAMode`
-and live in `QA/DebugFlags.swift` (separate `#if DEBUG` namespace).
+and live in `QA/DebugFlags.swift` (separate `#if DEBUG` namespace), except where
+a row notes otherwise.
 
 | Flag | Purpose |
 |---|---|
 | `-ConduckShowOnboarding` | Force the onboarding wizard to appear on EVERY launch, regardless of the persisted `onboarding_completed` flag. The AMBIENT dev-convenience flag (pre-added to the shared scheme for first-run iteration). The OPPOSITE of QA mode / `-ConduckSkipOnboarding`, which *skip* onboarding — and those explicit skip intents WIN if both are set (so an automated QA launch is never trapped on first-run; `RootView.init()` iOS / `AppDelegate` macOS precedence). Read-only override — never writes `UserDefaults`, so unsetting it restores normal behavior, and completing onboarding still lands you in the app for that session. Wires both iOS/iPad (`RootView`) and macOS (`AppDelegate`). Lets you iterate on first-run with a plain Cmd+R — no uninstall. Pre-added to the `Conduck` scheme's Run ▸ Arguments and shipped unticked, like every argument in that block; tick the checkbox to enable it. |
 | `-ConduckSkipOnboarding` | Skip the onboarding wizard on every launch WITHOUT any of QA mode's other side effects (no seeded conversations, no gateway override, no QA banner, no Keychain skip). For QA scenarios that must exercise the REAL, unseeded app minus first-run — empty conversation state, genuine settings persistence, etc. — where full `-ConduckQAMode` would mask the thing under test. Beats `-ConduckShowOnboarding` if both are set. Read-only override (never writes `UserDefaults`). Wires both iOS/iPad (`RootView`) and macOS (`AppDelegate`). |
+| `-ConduckUncapCustomGateways` | Lift `Constants.maxCustomGateways` to the badge-palette ceiling (`RemoteAgentBadgePalette.customPalette.count`) so a dev/QA rig can wire more custom gateways than the shipping cap allows — e.g. the whole test fleet in one Debug build. Lives beside the constant in `Utilities/Constants.swift`, NOT in `QA/DebugFlags.swift`: the Watch target compiles that file but not `QA/`. Read once at launch; Release builds contain no override path. Pre-added unticked to the shared scheme's Run ▸ Arguments. |
 
 ## Limitations / out of scope
 
