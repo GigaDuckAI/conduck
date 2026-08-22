@@ -539,8 +539,8 @@ enum STTConnectionTestSuite {
     // and a failed transcription cannot tell one user two stories.
     private static var insecureBlockedReason: String {
         AppError.insecureConnectionBlocked.recoverySuggestion
-            ?? String(localized: "remoteAgent.error.insecureBlocked",
-                      defaultValue: "iOS blocked this unencrypted connection.")
+            ?? String(localized: "remoteAgent.error.insecureBlocked.recovery.v2",
+                      defaultValue: "Plain http:// only reaches an address on your own network. Use the server's IP address or its .local name, or put it behind https://.")
     }
     private static var invalidResponseReason: String {
         String(localized: "stt.test.reachability.invalidResponse",

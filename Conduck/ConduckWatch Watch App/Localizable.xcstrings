@@ -1352,28 +1352,6 @@
         }
       }
     },
-    "remoteAgent.error.insecureBlocked" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "iOS blocked this unencrypted connection."
-          }
-        }
-      }
-    },
-    "remoteAgent.error.insecureBlocked.recovery" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Plain http:// only reaches an address on your own network. Use the server's IP address, or put it behind https://."
-          }
-        }
-      }
-    },
     "remoteAgent.error.insecureBlocked.recovery.v2" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2955,17 +2933,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Dismiss"
-          }
-        }
-      }
-    },
-    "watch.error.insecureBlocked" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "iOS blocked this connection — the address isn't encrypted. Fix it on your iPhone."
           }
         }
       }

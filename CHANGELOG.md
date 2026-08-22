@@ -6,6 +6,65 @@ Each section is named for one App Store release — the marketing version and th
 build number Apple shows — and matches the tag that release carries in this
 repository, `v<version>-<build>`.
 
+## [1.4-10] — the local-server release
+
+App Store release, 22 August 2026. Tagged `v1.4-10`.
+
+### Local servers — plain HTTP where Apple permits it, and nowhere else
+
+- A gateway, a custom speech endpoint or a file lane may now be `http://` when the
+  host is one only the local network can reach: a private-range IPv4 literal
+  (`10/8`, `172.16/12`, `192.168/16`), loopback, link-local, an IPv6 unique-local
+  address, or a `.local` name. Every other address still requires `https://`.
+  This is what lets a bare Ollama on `:11434`, or a home Open WebUI box, work
+  without putting a certificate in front of it first
+- The boundary is Apple's and it was measured, not assumed: App Transport Security
+  permits exactly those hosts with no `Info.plist` exception, and refuses every
+  DNS hostname over plain HTTP even when that name resolves to a LAN address.
+  Widening it further would mean disabling ATS for the whole app, which would
+  weaken the OpenRouter, cloud-speech and file connections too — so it is not done
+- Where the platform behaviour was not measured, the classifier refuses unless the
+  kernel confines the traffic anyway. Single-label names, `0.0.0.0/8`, `::` and
+  `fec0::/10` all take the strict lane, because an unencrypted request carries the
+  gateway token with it and the public DNS root can answer a bare label
+- The address field states the trade plainly: the connection is unencrypted on that
+  network, and it works only from that network — not in the car, and not from a
+  Watch on cellular
+- A certificate pin configured against a plain-HTTP endpoint is refused, never
+  silently ignored
+- A refused address names the remedy rather than the rule — use the server's IP
+  address or its `.local` name, or put it behind `https://`
+- conduck-connect classifies host addresses by the same rule, so the wizard cannot
+  mint a setup code the app will then reject on import
+
+### Watch — a draft adopts the conversation its own capture minted
+
+- A draft thread pushed before its conversation exists could observe the live
+  conversation pin only outside the window where it is non-nil, and wait forever;
+  and any mint at all satisfied its guard, so a deferred drain replaying an older
+  capture could hand a draft a conversation the user never asked for. Mints are
+  stamped with the capture request that owns them, and a draft adopts only its own
+- The in-app Ask refuses at the trigger on exactly the state the headless path
+  refuses on, closing the gap where a deferred drain could take the machine between
+  the check and the start
+- Three adjacent ways to strand a draft are closed: restore no longer stomps a
+  capture the user began meanwhile, a superseded claim leaves a discard echo, and a
+  denied microphone surfaces instead of hiding behind a silent retry
+
+### Gateways
+
+- The custom-gateway roster is capped at three. The cap is enforced when adding, so
+  a roster already above it stays intact and fully editable
+
+### Project
+
+- The changelog ships in the repository, so someone holding a release tag can read
+  what that release contained
+- Architecture documents state the decisions rather than restating the code beneath
+  them; the security disclosure link resolves without a redirect
+
+Verified: iOS 3987 tests / 0 failures · watchOS 217 / 0 · connector 242 checks / 0 · Release builds green on iOS and macOS · macOS test bundle compiles
+
 ## [1.3-9] — the file lane, attention and trust release
 
 App Store release, 19 August 2026. Tagged `v1.3-9`.

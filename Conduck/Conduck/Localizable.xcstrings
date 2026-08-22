@@ -11796,17 +11796,6 @@
         }
       }
     },
-    "settings.remoteAgent.customCheck.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "On that machine, download the script with %@, then run the matching check. Already running OpenAI-compatible software? Run bash conduck-connect.sh --check-server. If this is an adapter built for Conduck, run bash conduck-connect.sh --check-adapter instead. Both send live test requests without changing server configuration. After a PASS, the interactive script can continue into setup."
-          }
-        }
-      }
-    },
     "settings.remoteAgent.customCheck.body.v2" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11814,17 +11803,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "On the server, download the script: %@. Then run bash conduck-connect.sh --check-server — or --check-adapter if this is an adapter built for Conduck. It only sends test requests; nothing on the server changes."
-          }
-        }
-      }
-    },
-    "settings.remoteAgent.customCheck.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Choose the matching server check"
           }
         }
       }
