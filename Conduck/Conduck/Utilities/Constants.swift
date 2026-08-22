@@ -1264,21 +1264,30 @@ enum Constants {
     /// `RemoteAgentBadgePalette.customPalette.count` forfeits the distinct
     /// auto-assigned badge colour.
     ///
-    /// DEBUG-only escape (two gates, mirroring `DebugFlags` — which cannot be
-    /// referenced here: the Watch target compiles this file but not `QA/`):
-    /// a Debug build launched with `-ConduckUncapCustomGateways` (Xcode ▸
-    /// Scheme ▸ Run ▸ Arguments) lifts the cap to the badge-palette ceiling
-    /// for dev/QA-rig setups. Release builds contain no override path, and
-    /// test runs never see the argument (the scheme's TestAction keeps
+    /// DEBUG-only escape: a Debug build launched with
+    /// `-ConduckUncapCustomGateways` (pre-added unticked to the shared scheme's
+    /// Run ▸ Arguments, like every dev flag; also tabled in
+    /// `docs/qa/qa-mode.md`) lifts the cap to the badge-palette ceiling for
+    /// dev/QA-rig setups. Release builds contain no override path, and test
+    /// runs never see the argument (the scheme's TestAction keeps
     /// `shouldUseLaunchSchemeArgsEnv = "NO"`).
     static var maxCustomGateways: Int {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-ConduckUncapCustomGateways") {
-            return RemoteAgentBadgePalette.customPalette.count
-        }
+        if uncapCustomGateways { return RemoteAgentBadgePalette.customPalette.count }
         #endif
         return 3
     }
+
+    #if DEBUG
+    /// Read once per process, like every `DebugFlags` sibling — launch
+    /// arguments are frozen at exec, `ProcessInfo.arguments` bridges a fresh
+    /// array per call, and view-body call sites read the cap per render pass.
+    /// Lives beside the cap instead of in `QA/DebugFlags.swift` because the
+    /// Watch target compiles this file but not `QA/`; `DebugFlags` carries the
+    /// pointer so `QA/` stays the launch-flag index.
+    private static let uncapCustomGateways: Bool =
+        ProcessInfo.processInfo.arguments.contains("-ConduckUncapCustomGateways")
+    #endif
 
     /// App Groups UserDefaults **and** iCloud KVS key holding the JSON-encoded
     /// `[CustomGateway]` roster (id / name / model / badge color + monogram).
@@ -1308,7 +1317,7 @@ enum Constants {
     /// How many forgotten-gateway badges to keep. Deliberately NOT
     /// `maxCustomGateways`, which caps SIMULTANEOUSLY ACTIVE gateways: this is
     /// lifetime history, so reusing that value would silently start dropping
-    /// badges on the sixth gateway a user ever forgets. Generous because each
+    /// badges on the first forget past the active-roster cap. Generous because each
     /// record is a uuid, two characters and a date, and the oldest is dropped
     /// first — so a conversation older than the last `maxRetiredGatewayBadges`
     /// forgotten gateways can still lose its badge.

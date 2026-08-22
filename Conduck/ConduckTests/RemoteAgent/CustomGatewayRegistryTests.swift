@@ -141,8 +141,20 @@ final class CustomGatewayRegistryTests: XCTestCase {
         XCTAssertTrue(readd)
     }
 
-    func testCapConstantIsThree() {
+    /// Pins the reserved product boundary. A failure here means the cap moved —
+    /// a product decision, not a refactor: raising is always safe, lowering a
+    /// cap users have lived under takes away shipped functionality.
+    func testCapMatchesReservedProductBoundary() {
         XCTAssertEqual(Constants.maxCustomGateways, 3)
+    }
+
+    /// Every simultaneously-active custom keeps a DISTINCT auto-assigned badge
+    /// colour only while the cap stays within the palette — the invariant
+    /// `RemoteAgentRefMetadata` documents. Must hold in the DEBUG uncap branch
+    /// too, which returns the palette count itself.
+    func testCapNeverExceedsBadgePalette() {
+        XCTAssertLessThanOrEqual(Constants.maxCustomGateways,
+                                 RemoteAgentBadgePalette.customPalette.count)
     }
 
     /// The cap is enforced on ADD only — every reader decodes the persisted array

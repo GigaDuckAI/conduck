@@ -523,9 +523,12 @@ final class RemoteAgentBroadcastEnvelopeTests: XCTestCase {
     }
 
     /// The WIDEST roster `SettingsManager.currentRemoteAgentMultiEnvelope()` can
-    /// broadcast — every built-in plus a full custom-gateway roster (3 + 5 = 8
-    /// refs today). Each sub-envelope must round-trip with its OWN url / token /
-    /// model / name intact, and none may be dropped or collapsed onto a sibling.
+    /// broadcast — every built-in plus a custom roster at the badge-palette
+    /// ceiling. Deliberately wider than `Constants.maxCustomGateways`: readers
+    /// never truncate, so a roster configured under an earlier, higher cap keeps
+    /// broadcasting in full, and the DEBUG uncap reaches the palette ceiling.
+    /// Each sub-envelope must round-trip with its OWN url / token / model /
+    /// name intact, and none may be dropped or collapsed onto a sibling.
     func testMultiEnvelopeRoundTripsFullGatewayRoster() throws {
         let builtins = try RemoteAgentBackend.allCases.enumerated().map { index, backend in
             try makeSub(ref: backend.rawValue,
@@ -534,7 +537,7 @@ final class RemoteAgentBroadcastEnvelopeTests: XCTestCase {
                         model: "model-\(backend.rawValue)",
                         session: "sess-1")
         }
-        let customs = try (0..<Constants.maxCustomGateways).map { index in
+        let customs = try (0..<RemoteAgentBadgePalette.customPalette.count).map { index in
             try makeSub(ref: "custom_\(UUID().uuidString.lowercased())",
                         urlString: "https://custom\(index).local:90\(index)0",
                         token: "tok-custom-\(index)",
