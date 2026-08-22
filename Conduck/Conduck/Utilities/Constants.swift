@@ -1248,16 +1248,37 @@ enum Constants {
 
     // MARK: - Custom Gateways (user-defined, multi-gateway)
 
-    /// Cap on user-defined custom OpenAI-compatible gateways (bump here). UI/UX
-    /// limit, not a storage limit — the "+ Add custom gateway" affordance
-    /// disables at this count. Enforced ONLY on ADD (`upsertCustomGateway`);
-    /// readers never truncate, so a roster synced from a higher-cap build stays
-    /// intact and editable. Each gateway replicates to the Watch (roster entry +
-    /// a token-bearing sub-envelope over `WCSession.transferUserInfo` + a Watch
-    /// Keychain slot), so a gateway costs more than a voice endpoint.
-    /// Raising past `RemoteAgentBadgePalette.customPalette.count` (8) forfeits
-    /// the distinct auto-assigned badge colour.
-    static let maxCustomGateways = 5
+    /// Cap on user-defined custom OpenAI-compatible gateways. UI/UX limit, not
+    /// a storage limit — the "+ Add custom gateway" affordance disables at this
+    /// count. Enforced ONLY on ADD (`upsertCustomGateway`); readers never
+    /// truncate, so a roster synced from a higher-cap build — or configured
+    /// under an earlier, higher cap — stays intact and editable. Each gateway
+    /// replicates to the Watch (roster entry + a token-bearing sub-envelope
+    /// over `WCSession.transferUserInfo` + a Watch Keychain slot), so a gateway
+    /// costs more than a voice endpoint.
+    ///
+    /// The value is a reserved product boundary, not a technical limit:
+    /// RAISING it is always safe (readers are cap-agnostic), but lowering a
+    /// cap users have lived under retroactively takes away shipped
+    /// functionality — don't. Raising past
+    /// `RemoteAgentBadgePalette.customPalette.count` forfeits the distinct
+    /// auto-assigned badge colour.
+    ///
+    /// DEBUG-only escape (two gates, mirroring `DebugFlags` — which cannot be
+    /// referenced here: the Watch target compiles this file but not `QA/`):
+    /// a Debug build launched with `-ConduckUncapCustomGateways` (Xcode ▸
+    /// Scheme ▸ Run ▸ Arguments) lifts the cap to the badge-palette ceiling
+    /// for dev/QA-rig setups. Release builds contain no override path, and
+    /// test runs never see the argument (the scheme's TestAction keeps
+    /// `shouldUseLaunchSchemeArgsEnv = "NO"`).
+    static var maxCustomGateways: Int {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-ConduckUncapCustomGateways") {
+            return RemoteAgentBadgePalette.customPalette.count
+        }
+        #endif
+        return 3
+    }
 
     /// App Groups UserDefaults **and** iCloud KVS key holding the JSON-encoded
     /// `[CustomGateway]` roster (id / name / model / badge color + monogram).

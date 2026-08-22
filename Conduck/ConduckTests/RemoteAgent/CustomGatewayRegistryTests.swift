@@ -141,8 +141,8 @@ final class CustomGatewayRegistryTests: XCTestCase {
         XCTAssertTrue(readd)
     }
 
-    func testCapConstantIsFive() {
-        XCTAssertEqual(Constants.maxCustomGateways, 5)
+    func testCapConstantIsThree() {
+        XCTAssertEqual(Constants.maxCustomGateways, 3)
     }
 
     /// The cap is enforced on ADD only — every reader decodes the persisted array
