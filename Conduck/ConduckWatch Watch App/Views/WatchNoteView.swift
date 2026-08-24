@@ -404,9 +404,14 @@ struct WatchNoteView: View {
                     // dead-looking button with a reason under it beats a buzz
                     // with none. (A disabled Button never receives the tap, so
                     // the two cannot be combined.)
-                    .disabled(recordingService.isBusy)
+                    // `path.isEmpty` on both: busy UI belongs to the pushed
+                    // thread. `pushNewCapture` appends the route before arming
+                    // the recorder in the same transaction, so without the nav
+                    // guard the launchpad re-renders as "Recording…" during the
+                    // dialog-dismiss + push animations — a visible flash.
+                    .disabled(recordingService.isBusy && path.isEmpty)
 
-                    if recordingService.isBusy {
+                    if recordingService.isBusy && path.isEmpty {
                         Group {
                             if recordingService.isCapturing {
                                 Text("Recording…")  // xcstrings
