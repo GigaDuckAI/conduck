@@ -699,6 +699,17 @@
         }
       }
     },
+    "carplay.error.captureBroken.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't hear the car's microphone. Try again."
+          }
+        }
+      }
+    },
     "carplay.error.fileTransferNotConfigured.speak" : {
       "extractionState" : "manual",
       "localizations" : {

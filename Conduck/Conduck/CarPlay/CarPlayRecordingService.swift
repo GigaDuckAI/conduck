@@ -35,8 +35,10 @@
 //        a short `beginBackgroundTask`.
 //   g12. `AVSpeechSynthesizer` voice filter `.contains()` on `voiceTraits` —
 //        inside `CarPlaySpeechService.selectVoice()`.
-//   g13. 10s cold-connect initial-silence guard + 5s follow-up zero-input
-//        guard + 300s per-recording hard cap — below; `Constants.maxAudioDuration`.
+//   g13. 15s cold-connect initial-silence guard + 30s follow-up zero-input
+//        guard + 300s per-recording hard cap — below;
+//        `Constants.carPlayInitialSilenceTimeout`,
+//        `Constants.carPlayFollowUpSilenceTimeout`, `Constants.maxAudioDuration`.
 //
 // Session behavior:
 // - PER-SESSION lifecycle: `beginSession()` / `endSession(reason:)`; audio
@@ -44,15 +46,19 @@
 // - Multi-turn loop: after a spoken reply, wait `carPlayHFPSettleDelay` (~300 ms
 //   — skipping it crashes engine.start() with '!obj'), then auto re-arm the mic
 //   for the follow-up.
-// - Zero-input follow-up timeout (~5s): mic re-armed but no `onSpeechStart` →
-//   speak "Talk to you later." and end the session (cabin-noise guard).
+// - Zero-input follow-up timeout (30s): mic re-armed but no corroborated speech
+//   → classify the capture pipeline, then speak "Talk to you later." (healthy)
+//   or a microphone-failure line (broken) and end the session.
+// - Empty transcript / no-speech-detected: retry ONCE (speak the prompt, re-arm)
+//   before ending — see `consecutiveEmptyTurns`.
 // - Agent converse hop: STT success → append `user` turn (`sourceDevice
 //   "carplay"`) + stamp pointer + assemble priors → BACKGROUND converse hop
 //   (`CarPlayConverseUploader`). The agent turn is appended ONCE by the
 //   converse delegate; the delegate routes the reply back here to speak (when
 //   foreground + matching) or persist+sync only (unsolicited-audio guard).
-// - CarPlay VAD preset: higher threshold + shorter min-silence to
-//   reject road/cabin noise.
+// - CarPlay VAD preset: a higher threshold to reject road/cabin noise, and a
+//   min-silence LONGER than the library default (1.5 s → 1.792 s felt) so a
+//   driver can pause mid-thought without being endpointed.
 // - Deleted the fixed `"Done."` terminal — replaced by the agent reply (run
 //   through `ReplySanitizer.spoken`).
 
@@ -274,9 +280,53 @@ final class CarPlayRecordingService {
     private var endOfSpeechDetector: EndOfSpeechDetector?
     private var engineConfigChangeObserver: NSObjectProtocol?
 
-    /// Cold-connect / first-turn initial-silence guard (g13). The first
-    /// VAD `.speechStart` cancels it.
-    private static let initialSilenceTimeout: TimeInterval = 10
+    /// Capture-pipeline counters for the CURRENT listen. Rebuilt per listen and
+    /// re-epoched whenever the tap is reinstalled, so a no-speech verdict
+    /// describes the pipeline as it is now and not as it was before an engine
+    /// reconfiguration. Written from the tap thread and the VAD task; read here.
+    @ObservationIgnored private var healthCollector = CapturePipelineHealthCollector()
+
+    /// Generation token for the no-speech timer, bumped on every arm and on
+    /// every invalidate.
+    ///
+    /// LOAD-BEARING against a race that `Timer.invalidate()` cannot win. The
+    /// timer's closure does not act directly — it enqueues a main-actor task —
+    /// and once that closure has fired, invalidating the `Timer` no longer
+    /// revokes the task already sitting in the queue. So corroborated speech
+    /// could cancel the timer and STILL lose to a queued timeout that ends the
+    /// session under it. The handler checks its generation against this before
+    /// deciding anything; a stale task finds a bumped value and returns.
+    @ObservationIgnored private var silenceTimerGeneration: UInt64 = 0
+
+    /// Whether the current listen has seen CORROBORATED speech (two consecutive
+    /// qualifying chunks — see `SpeechCorroborationGate`). The second half of
+    /// the no-speech timeout's guard, and the thing an already-queued timeout
+    /// task has no other way to learn. Reset at the start of every listen.
+    @ObservationIgnored private var didCorroborateSpeechThisListen = false
+
+    /// Monotonic listen counter, bumped on every `startListening`.
+    ///
+    /// Distinct from `currentTurnToken` and NOT interchangeable with it: the
+    /// turn token is minted only after a non-empty transcript has been stored
+    /// and history assembled, so during the STT hop it is either zero or still
+    /// names the PRECEDING turn. Anything that has to survive an `await` on the
+    /// capture→STT→retry path checks this instead — otherwise a slow STT
+    /// response landing after End and a fresh session could re-arm or kill the
+    /// wrong session.
+    @ObservationIgnored private var listenAttemptID: UInt64 = 0
+
+    /// Empty transcripts in a row in this session. Reset on session start and on
+    /// any non-empty transcript; drives `CarPlayEmptyTurnPolicy`.
+    @ObservationIgnored private var consecutiveEmptyTurns = 0
+
+    /// `true` while a `startListening` call is between its first statement and
+    /// its commit. Together with the `state != .recording` half of the same
+    /// guard this is what holds the session to ONE engine and ONE tap (g6): the
+    /// flag covers a listen that is still spinning up, the state check covers
+    /// one that is already live. Neither alone is enough, because `state` only
+    /// becomes `.recording` at the very end of a setup that suspends several
+    /// times.
+    @ObservationIgnored private var isArmingListen = false
 
     /// g4. Fixed capture format — 16 kHz mono Float32.
     private static let captureFixedFormat: AVAudioFormat = {
@@ -292,6 +342,18 @@ final class CarPlayRecordingService {
     }()
 
     nonisolated private static let log = Logger(subsystem: Constants.identityNamespace, category: "CarPlayCapture")
+
+    /// Second logger on the detector's own category, used ONLY for the
+    /// VAD-shaped half of a no-speech verdict. Keeping those lines under
+    /// `CarPlayVAD` means a device log capture filtered to that category shows
+    /// the probability stream and the verdict about it together.
+    ///
+    /// Named `logVAD`, not `vadLog`: `LoggingPrivacyDriftGuardTests` finds a log
+    /// emit by a handle whose name STARTS with `log`/`logger` at an identifier
+    /// boundary, so a handle named the other way round is invisible to the
+    /// privacy guard and every statement written on it would escape the
+    /// no-sensitive-values rule.
+    nonisolated private static let logVAD = Logger(subsystem: Constants.identityNamespace, category: "CarPlayVAD")
 
     /// One-line audio diagnostic for a failed `configureAndActivate()` /
     /// `engine.start()` — surfaces the real OSStatus (the start-failure path now
@@ -428,6 +490,9 @@ final class CarPlayRecordingService {
         sessionConversationID = conversationID
         sessionDefaultRef = defaultRef
         sessionActive = true
+        // Fresh session, fresh empty-turn budget: the retry-once rule counts
+        // within a session, never across drives.
+        consecutiveEmptyTurns = 0
         // Keep the process-wide mirror in lockstep (see `anySessionActive`).
         Self.anySessionActive = true
         CarPlayConverseUploader.shared.setActiveService(self)
@@ -487,9 +552,18 @@ final class CarPlayRecordingService {
     /// Unmute: resume listening. The audio session was held active across the
     /// mute, so `reArmAfterSettle` re-arms the engine (with the modal-presence
     /// self-heal + HFP settle) without re-activating the session.
+    ///
+    /// The re-arm happens ONLY from the parked `.muted` state. Muting does not
+    /// interrupt a reply or a retry prompt — those keep playing and park on
+    /// `.muted` in their own completion — so if this is reached while
+    /// `.speaking` or `.processing` is still live, that flow already owns the
+    /// single re-arm. Launching one here as well would start capture before the
+    /// speech finished and then leave a SECOND listener running behind it when
+    /// the completion did its own re-arm.
     private func unmute() {
         guard sessionActive, isMicMuted else { return }
         isMicMuted = false
+        guard state == .muted else { return }
         Task { await reArmAfterSettle() }
     }
 
@@ -497,11 +571,35 @@ final class CarPlayRecordingService {
 
     /// g6/g4/g8. Build the single capture engine + tap + VAD, start the
     /// engine, transition to `.recording`. `isFollowUp` selects the silence
-    /// guard: the cold-connect first listen uses the 10s initial-silence
-    /// timeout; a re-armed follow-up uses the shorter 5s zero-input timeout,
-    /// after which the session signs off ("Talk to you later.").
+    /// guard: the cold-connect first listen uses
+    /// `Constants.carPlayInitialSilenceTimeout` (15 s); a re-armed follow-up
+    /// uses `Constants.carPlayFollowUpSilenceTimeout` (30 s). Either expiry runs
+    /// the same classify-then-sign-off path.
     private func startListening(isFollowUp: Bool) async {
         guard sessionActive else { return }
+
+        // EXACTLY ONE listen may be arming or live at a time. Everything below
+        // suspends — the cold-start settle, the VAD model load, the engine retry
+        // — and `state` does not become `.recording` until the commit at the
+        // bottom, so two re-arms started moments apart (mute→unmute→mute→unmute
+        // is enough, and the button has no debounce) would otherwise BOTH run to
+        // completion. The second commit would overwrite `captureEngine`,
+        // `captureFile`, `endOfSpeechDetector` and the reconfig observer without
+        // tearing the first set down, leaving a second engine and a second input
+        // tap live on the HFP route — the g6 violation behind the 'obj'/'nope'
+        // wedges. A rejected duplicate deliberately returns BEFORE the
+        // `listenAttemptID` bump: the listen already in flight stays the current
+        // one.
+        guard !isArmingListen, state != .recording else { return }
+        isArmingListen = true
+        defer { isArmingListen = false }
+
+        // Bump FIRST, before any suspension point: everything downstream that
+        // has to survive an `await` compares against this, and an attempt that
+        // bails out below has still correctly invalidated its predecessor.
+        listenAttemptID &+= 1
+        didCorroborateSpeechThisListen = false
+        healthCollector = CapturePipelineHealthCollector()
 
         // Activate the audio session ONCE for the whole session (idempotent if
         // a route renegotiation already re-activated it).
@@ -557,17 +655,31 @@ final class CarPlayRecordingService {
             return
         }
 
-        // CarPlay VAD preset: higher threshold + shorter min-silence to
-        // reject road/cabin noise.
+        // CarPlay VAD preset: a higher threshold to reject road/cabin noise and
+        // a min-silence long enough that a driver can pause mid-thought.
+        let health = healthCollector
+        let attemptID = listenAttemptID
         let detector = EndOfSpeechDetector(
             threshold: Constants.carPlayVADThreshold,
             minSilence: Constants.carPlayVADMinSilence,
+            health: health,
             onSpeechStart: { [weak self] in
-                self?.initialSilenceTimer?.invalidate()
-                self?.initialSilenceTimer = nil
+                // Fires on CORROBORATED speech only. Bumping the generation
+                // here is what disarms a timeout task that has already been
+                // enqueued — invalidating the `Timer` alone cannot.
+                //
+                // The attempt check keeps a detector whose teardown raced its
+                // last main-actor hop from vouching for the listen that
+                // replaced it.
+                guard let self, self.listenAttemptID == attemptID else { return }
+                self.didCorroborateSpeechThisListen = true
+                self.invalidateSilenceTimer()
             },
             onEndOfSpeech: { [weak self] in
-                guard let self, self.state == .recording else { return }
+                // Same attempt check as above: a superseded detector must not
+                // endpoint the listen that replaced it.
+                guard let self, self.listenAttemptID == attemptID,
+                      self.state == .recording else { return }
                 Task { await self.endRecordingForUpload() }
             }
         )
@@ -585,13 +697,31 @@ final class CarPlayRecordingService {
         guard let engine = await startCaptureEngineWithRetry(
             captureFile: captureFile,
             fixedFormat: fixedFormat,
-            detector: detector
+            detector: detector,
+            health: health
         ) else {
             detector.stop()
             try? FileManager.default.removeItem(at: url)
             // Recovery may have ended the session (End / disconnect mid-retry) —
             // only end here if it is still live.
             if sessionActive { endSession(speak: nil) }
+            return
+        }
+
+        // A Mute that landed WHILE this listen was spinning up. `mute()` could
+        // not stop a capture that did not exist yet (its teardown arm runs only
+        // from `.recording`), so without this the commit below would start the
+        // microphone and arm a silence timer behind a button reading "Unmute" —
+        // a live mic on a session the driver believes is muted, and then a
+        // muted session signed off for silence, which D6 forbids. Park on
+        // `.muted` instead: `unmute()` re-arms from there, and only from there.
+        guard !isMicMuted else {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            detector.stop()
+            try? FileManager.default.removeItem(at: url)
+            state = .muted
+            voiceControlTemplate.activateVoiceControlState(withIdentifier: VoiceState.muted)
             return
         }
 
@@ -638,7 +768,8 @@ final class CarPlayRecordingService {
     private func startCaptureEngineWithRetry(
         captureFile: AVAudioFile,
         fixedFormat: AVAudioFormat,
-        detector: EndOfSpeechDetector
+        detector: EndOfSpeechDetector,
+        health: CapturePipelineHealthCollector
     ) async -> AVAudioEngine? {
         let maxAttempts = 3
         for attempt in 0..<maxAttempts {
@@ -680,7 +811,8 @@ final class CarPlayRecordingService {
                 inputFormat: nativeFormat,
                 fixedFormat: fixedFormat,
                 captureFile: captureFile,
-                detector: detector
+                detector: detector,
+                health: health
             ) else {
                 continue
             }
@@ -700,41 +832,162 @@ final class CarPlayRecordingService {
         return nil
     }
 
-    /// Arm the no-speech guard. First listen → 10s cold-connect cancel (silent).
-    /// Follow-up → 5s zero-input timeout that signs off and ends the session.
+    /// Arm the no-speech guard. First listen → `carPlayInitialSilenceTimeout`
+    /// (15 s); follow-up → `carPlayFollowUpSilenceTimeout` (30 s). Both expiries
+    /// run `handleSilenceTimeout`, which decides what to say on the way out.
+    ///
+    /// Single-slot ownership is preserved: one `initialSilenceTimer` at a time,
+    /// invalidated before the new one is armed. `.common` run-loop mode (the
+    /// mode the Watch and the in-app recorder already use) so the timer keeps
+    /// firing while the run loop is in a tracking mode.
     private func scheduleSilenceTimer(isFollowUp: Bool) {
-        initialSilenceTimer?.invalidate()
+        invalidateSilenceTimer()
         let timeout = isFollowUp
             ? Constants.carPlayFollowUpSilenceTimeout
-            : Self.initialSilenceTimeout
-        initialSilenceTimer = Timer.scheduledTimer(
-            withTimeInterval: timeout,
-            repeats: false
-        ) { [weak self] _ in
+            : Constants.carPlayInitialSilenceTimeout
+        let generation = silenceTimerGeneration
+        let timer = Timer(timeInterval: timeout, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.state == .recording else { return }
-                if isFollowUp {
-                    Self.log.info("Follow-up zero-input timeout; signing off")
-                    // xcstrings
-                    self.endSession(
-                        speak: String(localized: "Talk to you later.")
+                self?.handleSilenceTimeout(
+                    generation: generation,
+                    isFollowUp: isFollowUp,
+                    graceUsed: false
+                )
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        initialSilenceTimer = timer
+    }
+
+    /// Drop the no-speech timer AND disarm any timeout task it already
+    /// enqueued. Both halves are needed — see `silenceTimerGeneration`.
+    private func invalidateSilenceTimer() {
+        initialSilenceTimer?.invalidate()
+        initialSilenceTimer = nil
+        silenceTimerGeneration &+= 1
+    }
+
+    /// The no-speech window closed. Decide whether the driver was quiet or the
+    /// capture pipeline is broken, then end the session saying so.
+    ///
+    /// `graceUsed` marks the one-chunk deferral described below, so the grace
+    /// can never chain.
+    private func handleSilenceTimeout(generation: UInt64, isFollowUp: Bool, graceUsed: Bool) {
+        guard state == .recording else { return }
+        // A task enqueued by a timer that has since been superseded or
+        // cancelled. This is the check `Timer.invalidate()` cannot perform.
+        guard generation == silenceTimerGeneration else { return }
+        guard !didCorroborateSpeechThisListen else { return }
+
+        let counters = healthCollector.snapshot()
+        // The same question asked of the VAD task's own record. The task
+        // publishes corroboration into the collector BEFORE it hops to the main
+        // actor to set the flag above, and that hop can be overtaken by a
+        // timeout task already sitting in this queue — so a listen can be
+        // corroborated while the main actor still believes nothing was said.
+        // Without this check the driver is signed off mid-word at exactly the
+        // boundary the grace below exists to protect.
+        guard !counters.didCorroborateSpeech else { return }
+
+        // Expiry-boundary grace. A qualifying chunk is on the board but has not
+        // yet been corroborated by a second one, which means speech may have
+        // started a fraction of a second inside the deadline. Losing that to
+        // the clock would end a session on someone mid-word, so defer the whole
+        // decision by one chunk quantum and ask again. Costs the window at most
+        // one extra 256 ms in this boundary case, and only there.
+        if !graceUsed, counters.consecutiveQualifyingChunks > 0 {
+            Self.logVAD.info("No-speech deadline reached with a qualifying chunk pending corroboration; deferring one chunk")
+            let timer = Timer(
+                timeInterval: CarPlayVADQuantization.chunkDuration,
+                repeats: false
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleSilenceTimeout(
+                        generation: generation,
+                        isFollowUp: isFollowUp,
+                        graceUsed: true
                     )
-                } else {
-                    Self.log.info("Cold-connect initial silence; ending session")
-                    self.endSession(speak: nil)
                 }
             }
+            RunLoop.main.add(timer, forMode: .common)
+            // Same slot, same generation: corroboration during the grace still
+            // invalidates this timer and bumps past its generation, so the
+            // deferred decision is disarmed exactly like the original.
+            initialSilenceTimer = timer
+            return
+        }
+
+        let verdict = CapturePipelineHealth.classify(counters)
+        logSilenceVerdict(verdict, counters: counters, isFollowUp: isFollowUp)
+
+        guard verdict.isBroken else {
+            // Healthy pipeline, nobody spoke. Say goodbye — on the cold-connect
+            // window too. A modal that simply vanishes reads as a crash, and
+            // "the app died" is the wrong thing for a driver to believe about
+            // the thing they just started.
+            // xcstrings
+            endSession(speak: String(localized: "Talk to you later."))
+            return
+        }
+        // One spoken line for all three broken verdicts: a driver can act on
+        // "the microphone isn't working" and cannot act on which layer of the
+        // capture stack failed. The LOG above distinguishes them.
+        // xcstrings: carplay-capture-health
+        endSession(
+            speak: String(
+                localized: "carplay.error.captureBroken.speak",
+                defaultValue: "Couldn't hear the car's microphone. Try again."
+            )
+        )
+    }
+
+    /// Structured, fault-level record of a no-speech verdict, split across the
+    /// two categories so a device log capture answers WHICH failure occurred:
+    /// the capture-side counters under `CarPlayCapture`, the probability-side
+    /// ones under `CarPlayVAD`. Device-audio facts only — no audio, no
+    /// transcript, nothing user-authored.
+    private func logSilenceVerdict(
+        _ verdict: CapturePipelineVerdict,
+        counters: CapturePipelineCounters,
+        isFollowUp: Bool
+    ) {
+        let line = "verdict=\(verdict.rawValue) followUp=\(isFollowUp) "
+            + "tapBuffers=\(counters.tapBuffersReceived) "
+            + "convOK=\(counters.converterSuccesses) convFail=\(counters.converterFailures) "
+            + "samples=\(counters.convertedSampleCount) peak=\(counters.peakAmplitude) "
+            + "vadFrames=\(counters.vadFullFramesEnqueued) vadChunks=\(counters.vadChunksProcessed) "
+            + "maxP=\(counters.maxProbability) nonFiniteP=\(counters.sawNonFiniteProbability) "
+            + "vadTaskFailed=\(counters.vadTaskFailed)"
+
+        if verdict.isBroken {
+            Self.log.fault("CarPlay capture pipeline unhealthy at no-speech timeout: \(line, privacy: .public)")
+        } else {
+            Self.log.info("CarPlay no-speech timeout, pipeline healthy: \(line, privacy: .public)")
+        }
+
+        // Finite all-zero probabilities are NOT a broken verdict — a quiet cabin
+        // looks exactly like this, and a quiet driver must never be told the
+        // microphone failed. But it is also what a silently mis-compiled model
+        // looks like, so it is worth a fault-level line of its own.
+        if CapturePipelineHealth.hasSuspiciousAllZeroProbabilities(counters) {
+            Self.logVAD.fault("Every VAD probability was zero across \(counters.vadChunksProcessed, privacy: .public) chunks; signing off as genuinely quiet")
         }
     }
 
     // MARK: - Capture tap (g4 / g5 / g8)
 
+    /// `health` counters start a NEW EPOCH here. Every install — the first one
+    /// and each reinstall after an engine reconfiguration — resets them, so a
+    /// no-speech verdict describes the tap that is running now. Cumulative
+    /// lifetime totals would let one healthy conversion from before a
+    /// reconfiguration mask a pipeline that died right after it.
     private static func installCaptureTap(
         engine: AVAudioEngine,
         inputFormat: AVAudioFormat,
         fixedFormat: AVAudioFormat,
         captureFile: AVAudioFile,
-        detector: EndOfSpeechDetector
+        detector: EndOfSpeechDetector,
+        health: CapturePipelineHealthCollector
     ) -> Bool {
         guard let converter = AVAudioConverter(from: inputFormat, to: fixedFormat) else {
             log.error("AVAudioConverter \(inputFormat.sampleRate, privacy: .public)Hz → 16 kHz failed")
@@ -742,6 +995,7 @@ final class CarPlayRecordingService {
         }
 
         var rawTapCount = 0
+        health.beginTapEpoch()
 
         engine.inputNode.installTap(
             onBus: 0,
@@ -752,15 +1006,43 @@ final class CarPlayRecordingService {
                 rawTapCount += 1
                 log.info("RAW tap #\(rawTapCount, privacy: .public) frames=\(buffer.frameLength, privacy: .public) rate=\(buffer.format.sampleRate, privacy: .public)Hz \(buffer.format.channelCount, privacy: .public)ch")
             }
+            health.recordTapBuffer()
             guard let converted = convertToFixedFormat(
                 buffer,
                 using: converter,
                 outputFormat: fixedFormat
-            ) else { return }
+            ) else {
+                health.recordConversionFailure()
+                return
+            }
+            // Peak is measured on the CONVERTED samples, at the conversion, so
+            // "real samples arrived and every one of them is digital zero" — a
+            // hands-free microphone handed to us dead — is distinguishable from
+            // "nothing converted at all". Scanning one buffer of floats is
+            // cheap enough for the render thread, which already writes the same
+            // buffer to disk on this callback.
+            health.recordConversion(
+                sampleCount: Int(converted.frameLength),
+                peak: peakAmplitude(of: converted)
+            )
             try? captureFile.write(from: converted)
             detector?.processFixedBuffer(converted)
         }
         return true
+    }
+
+    /// Largest absolute sample amplitude in a mono Float32 buffer. Returns 0 for
+    /// a buffer with no channel data — the caller only reaches this after a
+    /// successful conversion into the fixed format, so that is a no-samples
+    /// reading rather than a silent one.
+    private nonisolated static func peakAmplitude(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let channel = buffer.floatChannelData?[0] else { return 0 }
+        var peak: Float = 0
+        for index in 0..<Int(buffer.frameLength) {
+            let magnitude = abs(channel[index])
+            if magnitude.isFinite, magnitude > peak { peak = magnitude }
+        }
+        return peak
     }
 
     /// g5. Resample to the fixed format. `.noDataNow` (NOT `.endOfStream`).
@@ -825,7 +1107,9 @@ final class CarPlayRecordingService {
             inputFormat: newFormat,
             fixedFormat: Self.captureFixedFormat,
             captureFile: captureFile,
-            detector: detector
+            detector: detector,
+            // New tap, new epoch — see `installCaptureTap`.
+            health: healthCollector
         ) else {
             Self.log.error("Tap reinstall failed after reconfig; ending turn")
             Task { await self.endRecordingForUpload() }
@@ -870,10 +1154,12 @@ final class CarPlayRecordingService {
     }
 
     /// g13. Per-recording hard cap (`Constants.maxAudioDuration`, 300s).
+    /// Single-slot, `.common` run-loop mode — same arrangement as the no-speech
+    /// timer above.
     private func scheduleMaxDurationTimer() {
         recordingMaxDurationTimer?.invalidate()
-        recordingMaxDurationTimer = Timer.scheduledTimer(
-            withTimeInterval: Constants.maxAudioDuration,
+        let timer = Timer(
+            timeInterval: Constants.maxAudioDuration,
             repeats: false
         ) { [weak self] _ in
             Task { @MainActor in
@@ -881,6 +1167,8 @@ final class CarPlayRecordingService {
                 await self.endRecordingForUpload()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        recordingMaxDurationTimer = timer
     }
 
     private func endRecordingForUpload() async {
@@ -896,6 +1184,11 @@ final class CarPlayRecordingService {
     /// converse hop runs; the converse delegate routes the reply back to
     /// `speakReply(...)` (foreground + matching) or persist-only.
     private func processRecording() async {
+        // The listen this upload belongs to. Every hop below that resumes after
+        // an `await` compares against it before touching session state — see
+        // `listenAttemptID` for why the turn token cannot do this job.
+        let attemptID = listenAttemptID
+
         guard let url = recordingURL else {
             // xcstrings
             endSession(speak: String(localized: "Couldn't save — try again."))
@@ -1033,18 +1326,25 @@ final class CarPlayRecordingService {
             // needs no `beginBackgroundTask`; release the short wrap now.
             endBackgroundTask()
 
-            let transcript = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !transcript.isEmpty else {
-                // The user DID speak (VAD endpointed real audio) but STT
-                // returned nothing — say so instead of silently dismissing
-                // the modal (the VAD no-speech path already speaks; this
-                // empty-transcript path didn't). Same copy as
-                // `speakErrorAndEnd(.noSpeechDetected)`.
-                // xcstrings
-                endSession(speak: String(localized: "Didn't catch that — try again."))
+            // (a) Before acting on the STT result at all. A slow response can
+            // land after End and a fresh session, and every branch below either
+            // ends a session or re-arms one — on the wrong session, that is a
+            // conversation killed by a request the driver already abandoned.
+            guard isCurrentListen(attemptID) else {
+                Self.log.info("Stale STT success; dropping")
                 return
             }
 
+            let transcript = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !transcript.isEmpty else {
+                // The user DID speak (VAD endpointed corroborated audio) but STT
+                // returned nothing. Retry once before giving up — see
+                // `handleEmptyTurn`.
+                handleEmptyTurn(attemptID: attemptID)
+                return
+            }
+
+            consecutiveEmptyTurns = 0
             await startConverseHop(transcript: transcript)
 
         } catch let error as AppError {
@@ -1053,10 +1353,88 @@ final class CarPlayRecordingService {
             // so the machine that failed is the speech provider and no gateway
             // capability is in play. `nil` → `.neutral`, today's wording.
             endBackgroundTask()
+            guard isCurrentListen(attemptID) else { return }
+            // The provider's own "there was no speech in that" verdict means
+            // exactly what an empty transcript means, so it takes the same
+            // retry-once path rather than killing the session on the first one.
+            if case .noSpeechDetected = error {
+                handleEmptyTurn(attemptID: attemptID)
+                return
+            }
             speakErrorAndEnd(error)
         } catch {
             endBackgroundTask()
+            guard isCurrentListen(attemptID) else { return }
             speakErrorAndEnd(.unknown(error))
+        }
+    }
+
+    /// Whether `attemptID` still names the live listen of a live session.
+    private func isCurrentListen(_ attemptID: UInt64) -> Bool {
+        sessionActive && listenAttemptID == attemptID
+    }
+
+    // MARK: - Empty-turn retry
+
+    /// A turn produced nothing usable — an empty transcript, or the provider's
+    /// `noSpeechDetected`. Retry once, then sign off.
+    ///
+    /// Never mints or mutates the converse turn token: no turn happened, and a
+    /// token spent on silence would name a turn no reply can ever match.
+    private func handleEmptyTurn(attemptID: UInt64) {
+        let outcome = CarPlayEmptyTurnPolicy.outcome(after: consecutiveEmptyTurns)
+        consecutiveEmptyTurns = CarPlayEmptyTurnPolicy.nextCount(after: consecutiveEmptyTurns)
+        // xcstrings
+        let prompt = String(localized: "Didn't catch that — try again.")
+
+        switch outcome {
+        case .retryListening:
+            Self.log.info("Empty turn \(self.consecutiveEmptyTurns, privacy: .public); prompting and re-arming")
+            speakThenRearm(prompt, expectedListenID: attemptID)
+        case .endSession:
+            Self.log.info("Empty turn \(self.consecutiveEmptyTurns, privacy: .public); signing off")
+            endSession(speak: prompt)
+        }
+    }
+
+    /// Speak a fixed prompt and, on completion, re-arm the microphone for
+    /// another listen. The ONE path a retry takes.
+    ///
+    /// Everything is re-validated in the completion rather than assumed, for a
+    /// specific reason: `CarPlaySpeechService.speak` fires its completion after
+    /// a CANCELLATION as well as after a finish, and every session teardown
+    /// cancels in-flight speech. So a completion running here does not mean the
+    /// prompt was heard, or even that the session still exists.
+    private func speakThenRearm(_ phrase: String, expectedListenID: UInt64) {
+        // (b) Before starting the retry prompt.
+        guard isCurrentListen(expectedListenID) else { return }
+        guard isSceneActive else {
+            // Backgrounded: the unsolicited-audio guard forbids speaking, and a
+            // backgrounded session ends silently.
+            endSession(speak: nil)
+            return
+        }
+
+        state = .speaking
+        voiceControlTemplate.activateVoiceControlState(withIdentifier: VoiceState.speaking)
+        CarPlaySpeechService.shared.speak(phrase) { [weak self] in
+            guard let self else { return }
+            // (c) In the prompt's TTS completion.
+            guard self.isCurrentListen(expectedListenID) else { return }
+            guard self.isSceneActive else {
+                self.endSession(speak: nil)
+                return
+            }
+            if self.isMicMuted {
+                // Muted during the prompt: park passive on `.muted` exactly as
+                // the reply path does. `unmute()` re-arms from there, and only
+                // from there — which is what keeps this from becoming a second
+                // listener.
+                self.state = .muted
+                self.voiceControlTemplate.activateVoiceControlState(withIdentifier: VoiceState.muted)
+                return
+            }
+            Task { await self.reArmAfterSettle(expectedListenID: expectedListenID) }
         }
     }
 
@@ -1388,10 +1766,18 @@ final class CarPlayRecordingService {
     /// to settle (skipping crashes engine.start()
     /// with FourCC '!obj'/560947818; '!int' is the different 560557684), then
     /// re-arm the mic for the follow-up turn.
-    private func reArmAfterSettle() async {
+    ///
+    /// `expectedListenID`, when supplied, is the listen the caller was acting
+    /// for. The settle delay is a suspension point like any other, so a caller
+    /// whose flow has been superseded must not re-arm on the way out — this is
+    /// the last of the four hops that check it. Callers with no listen in hand
+    /// (the reply loop, unmute) pass nil.
+    private func reArmAfterSettle(expectedListenID: UInt64? = nil) async {
         guard sessionActive else { return }
         try? await Task.sleep(for: .seconds(Constants.carPlayHFPSettleDelay))
         guard sessionActive else { return }
+        // (d) After the settle delay, immediately before re-arming.
+        if let expectedListenID, listenAttemptID != expectedListenID { return }
         // Muted during the settle window — hold passive on `.muted`, don't re-arm.
         guard !isMicMuted else {
             state = .muted
@@ -1717,6 +2103,12 @@ final class CarPlayRecordingService {
         sessionDefaultRef = nil
         sessionBoundRef = nil
 
+        // Retire the session's listen lineage. Without this, a stale STT
+        // result captured under the dying session's last `listenAttemptID`
+        // could still match during the window between the next session's
+        // `beginSession` and its first `startListening` bump — and act on it.
+        listenAttemptID &+= 1
+
         // Cancel the in-flight converse so a late reply never lands on a dead
         // session (the delegate sees `.cancelled` and drops it silently).
         let token = currentTurnToken
@@ -1760,8 +2152,11 @@ final class CarPlayRecordingService {
     private func invalidateTimers() {
         recordingMaxDurationTimer?.invalidate()
         recordingMaxDurationTimer = nil
-        initialSilenceTimer?.invalidate()
-        initialSilenceTimer = nil
+        // Bumps the generation as well, so a timeout task already sitting in
+        // the main-actor queue is disarmed too. Mute in particular relies on
+        // this: a muted session must never be signed off for not talking, and
+        // invalidating the `Timer` alone would not have been enough.
+        invalidateSilenceTimer()
     }
 
     // MARK: - Background task (STT hop only — g11)

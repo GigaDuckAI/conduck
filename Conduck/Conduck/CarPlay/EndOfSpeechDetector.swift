@@ -14,9 +14,10 @@ import os.log
 /// `processFixedBuffer(_:)` — buffers MUST already be at 16 kHz mono Float32,
 /// non-interleaved (Silero's required input). This class accumulates exact
 /// 4096-sample frames (256 ms @ 16 kHz, Silero's required chunk size) and
-/// fires `onEndOfSpeech` once Silero declares the user has stopped speaking.
-/// Language-agnostic — same model works for all 13 Voxtral languages without
-/// locale binding.
+/// fires `onEndOfSpeech` once Silero declares the user has stopped speaking —
+/// but only for an episode a `SpeechCorroborationGate` has confirmed was more
+/// than one loud chunk. Language-agnostic — same model works for all 13 Voxtral
+/// languages without locale binding.
 ///
 /// The capture-side conversion (native input format → 16 kHz Float32) is owned
 /// by `CarPlayRecordingService`, not this class. That moves the converter
@@ -33,25 +34,26 @@ import os.log
 /// transcription server-side. FluidAudio is pure VAD: no permission prompt, no
 /// privacy taxonomy concerns.
 ///
-/// Sensitivity defaults to `.medium`. Memory-taking is pause-tolerant by
-/// nature; if cabin testing shows it cuts off mid-thought (false-positive
-/// silence), drop to `.low`. If it lingers too long after speech ends, raise
-/// to `.high`.
+/// TUNING. There are exactly two dials, both in `Constants`, and both are read
+/// by the single caller (`CarPlayRecordingService.startListening`):
+///
+/// - `Constants.carPlayVADThreshold` (0.65) — the probability a 256 ms chunk
+///   must reach to count as speech. Higher rejects more road and cabin noise
+///   and starts dropping quiet talkers; lower does the reverse. The library
+///   releases at threshold − 0.15, so 0.65 in means 0.50 out.
+/// - `Constants.carPlayVADMinSilence` (1.5 s) — how much silence ends a turn.
+///   Raise it if the car cuts people off mid-thought; lower it if the session
+///   lingers after they finish. Its effect is QUANTIZED into 256 ms steps and
+///   costs one extra chunk on top, so two nearby values can behave
+///   identically — compute what a candidate actually buys with
+///   `CarPlayVADQuantization.feltEndOfSpeechDelay(minSilence:)`, whose doc
+///   comment carries the step table. At 1.5 s the felt endpoint is 1.792 s.
+///
+/// The minimum-speech side of the tuning is NOT a library setting — see
+/// `SpeechCorroborationGate` and the `init` note below.
 @MainActor
 final class EndOfSpeechDetector {
     typealias Callback = @MainActor () -> Void
-
-    enum SensitivityLevel {
-        case low, medium, high
-
-        fileprivate var threshold: Float {
-            switch self {
-            case .low: return 0.6
-            case .medium: return 0.5
-            case .high: return 0.4
-            }
-        }
-    }
 
     /// Model-load failures surfaced out of `start()`.
     enum LoadError: Error {
@@ -71,15 +73,17 @@ final class EndOfSpeechDetector {
 
     private let onEndOfSpeech: Callback
     private let onSpeechStart: Callback?
-    /// Resolved VAD speech threshold. Either a `SensitivityLevel`'s threshold
-    /// (the in-app default path) or an explicit override (the CarPlay preset —
-    /// higher threshold to reject road/cabin noise).
+    /// VAD speech threshold — `Constants.carPlayVADThreshold`. Drives BOTH the
+    /// library's own entry decision and the corroboration gate below, so the
+    /// two can never disagree about what "loud enough" means.
     private let resolvedThreshold: Float
     /// Resolved end-of-speech segmentation config (carries `minSilenceDuration`).
-    /// Defaults to FluidAudio's `.default`; the CarPlay preset overrides
-    /// `minSilenceDuration` so a conversational pause doesn't prematurely end
-    /// a turn in a noisy cabin.
     private let segmentationConfig: VadSegmentationConfig
+    /// Pipeline-health counters for the owning capture session, if it supplied
+    /// one. Written from the tap thread and the streaming task; read by the
+    /// owner's main-actor no-speech timer. Optional so the detector stays
+    /// constructible without one.
+    private let health: CapturePipelineHealthCollector?
     /// Marked `nonisolated` so the audio-render-thread tap callback in
     /// `processFixedBuffer` can log without an actor hop. `Logger` is
     /// `Sendable` and free-thread-safe.
@@ -96,23 +100,44 @@ final class EndOfSpeechDetector {
     private var didFire = false
     private var didStart = false
 
-    /// CarPlay preset init. Takes an explicit speech `threshold` (higher than
-    /// the in-app default to reject road/cabin noise) and a `minSilence` (the
-    /// end-of-speech segmentation pause). Both come from `Constants` so the
-    /// CarPlay tuning lives in one place (`docs/ai-context/spec.md`).
+    /// CarPlay preset init. `threshold` and `minSilence` both come from
+    /// `Constants` (`carPlayVADThreshold`, `carPlayVADMinSilence`) so the CarPlay
+    /// tuning lives in one place.
+    ///
+    /// Only `minSilenceDuration` is overridden on the segmentation config, and
+    /// only `minSilenceDuration` has any effect here. Do not read the remaining
+    /// `VadSegmentationConfig.default` fields as though they were in force:
+    /// FluidAudio's STREAMING entry point reads only `negativeThreshold`,
+    /// `negativeThresholdOffset`, `speechPadding` and `minSilenceDuration` off
+    /// that config, and ignores `minSpeechDuration`, `maxSpeechDuration` and
+    /// `silenceThresholdForSplit` — those belong to the batch segmenter, which
+    /// this class never calls.
+    ///
+    /// The ENTRY threshold is not on that config at all: the streaming state
+    /// machine takes it from `VadConfig.defaultThreshold`, which `loadManager()`
+    /// sets from `threshold` below. `negativeThreshold` is left nil on purpose,
+    /// because setting it does not only move the release point — the library
+    /// derives the entry threshold back out of it
+    /// (`min(1, negativeThreshold + negativeThresholdOffset)`), which would
+    /// silently desynchronise the library's entry decision from
+    /// `SpeechCorroborationGate`'s. With it nil, entry is `threshold` and
+    /// release is `threshold - negativeThresholdOffset` (0.15).
+    ///
+    /// In particular there is NO library-side minimum-speech rule protecting us
+    /// from a single noisy chunk; that job belongs to
+    /// `SpeechCorroborationGate`, applied in `start()`.
     init(
         threshold: Float,
         minSilence: TimeInterval,
+        health: CapturePipelineHealthCollector? = nil,
         onSpeechStart: Callback? = nil,
         onEndOfSpeech: @escaping Callback
     ) {
         self.resolvedThreshold = threshold
-        // Override only `minSilenceDuration`; keep every other segmentation
-        // default (min-speech, padding, max-speech) so the preset is a
-        // surgical tweak, not a wholesale config replacement.
         var config = VadSegmentationConfig.default
         config.minSilenceDuration = minSilence
         self.segmentationConfig = config
+        self.health = health
         self.onSpeechStart = onSpeechStart
         self.onEndOfSpeech = onEndOfSpeech
     }
@@ -145,18 +170,25 @@ final class EndOfSpeechDetector {
         self.bufferContinuation = continuation
 
         // Capture the resolved segmentation config locally so the detached
-        // streaming task uses the right `minSilenceDuration` (in-app default
-        // vs. CarPlay preset) without hopping back to `self`.
+        // streaming task uses the right `minSilenceDuration` without hopping
+        // back to `self`.
         let segmentationConfig = self.segmentationConfig
+        let health = self.health
+        let threshold = self.resolvedThreshold
 
         processingTask = Task { [weak self] in
             do {
                 var state = await manager.makeStreamState()
-                var hasFiredSpeechStart = false
+                // The minimum-speech gate, built per listen and owned entirely
+                // by this task. Raw probabilities only — see
+                // `SpeechCorroborationGate` for why the library's triggered
+                // state cannot be used for this.
+                var corroboration = SpeechCorroborationGate(threshold: threshold)
                 var accumulator: [Float] = []
                 accumulator.reserveCapacity(VadManager.chunkSize * 2)
                 let frameSize = VadManager.chunkSize
                 var chunkIndex = 0
+                var discardedBlips = 0
 
                 Self.log.info("VAD task started; frame size = \(frameSize, privacy: .public)")
 
@@ -175,6 +207,7 @@ final class EndOfSpeechDetector {
                             timeResolution: 2
                         )
                         state = result.state
+                        health?.recordVADChunk(probability: result.probability)
 
                         // First few raw probabilities help us tell `.cpuOnly`
                         // working (sane non-zero numbers) from a still-broken
@@ -184,20 +217,46 @@ final class EndOfSpeechDetector {
                             chunkIndex += 1
                         }
 
+                        // The corroboration gate runs on EVERY chunk, not only
+                        // on library events: FluidAudio may never emit a second
+                        // `.speechStart` inside one episode, so a blip that has
+                        // already been discarded must still be able to be
+                        // followed by real speech in the same episode.
+                        let observation = corroboration.observe(probability: result.probability)
+                        health?.recordCorroborationRun(corroboration.consecutiveQualifyingChunks)
+                        if case .corroborated = observation {
+                            // Publish BEFORE the main-actor hop below. The hop
+                            // can be overtaken by a no-speech timeout already
+                            // queued on that actor, and corroborating ends the
+                            // qualifying run — so between these two lines the
+                            // run mirror reads zero and the main actor still
+                            // believes nobody has spoken. The timeout reads this
+                            // flag as well, which is what stops it signing off
+                            // over a driver mid-word.
+                            health?.recordCorroboratedSpeech()
+                            Self.log.info("VAD speech corroborated (p=\(result.probability, privacy: .public))")
+                            await MainActor.run { [weak self] in
+                                self?.onSpeechStart?()
+                            }
+                        }
+
                         guard let event = result.event else { continue }
                         switch event.kind {
                         case .speechStart:
-                            let isFirst = !hasFiredSpeechStart
-                            hasFiredSpeechStart = true
                             Self.log.info("VAD .speechStart at \(event.time ?? 0, privacy: .public)s (p=\(result.probability, privacy: .public))")
-                            if isFirst {
-                                await MainActor.run { [weak self] in
-                                    self?.onSpeechStart?()
-                                }
-                            }
                         case .speechEnd:
                             Self.log.info("VAD .speechEnd at \(event.time ?? 0, privacy: .public)s (p=\(result.probability, privacy: .public))")
-                            guard hasFiredSpeechStart else { continue }
+                            // Uncorroborated episode: a blip, not a turn. Log
+                            // and DISCARD — do not latch `didFire`, do not end
+                            // the turn, and above all do not `return`: the
+                            // stream keeps flowing and the gate keeps looking
+                            // for a qualifying pair. The owner's no-speech kill
+                            // timer counts on undisturbed through this.
+                            guard corroboration.isCorroborated else {
+                                discardedBlips += 1
+                                Self.log.notice("VAD episode discarded as an uncorroborated blip (#\(discardedBlips, privacy: .public)); still listening")
+                                continue
+                            }
                             await MainActor.run {
                                 guard let self, !self.didFire else { return }
                                 self.didFire = true
@@ -212,6 +271,9 @@ final class EndOfSpeechDetector {
                 // cancellation error's localized string can carry file paths and
                 // is a `.public` interpolation, so it would land in the unified
                 // log verbatim. Same shape both share extensions use.
+                if !(error is CancellationError) {
+                    health?.recordVADTaskFailure()
+                }
                 Self.log.error("VAD task failed: \((error as NSError).domain, privacy: .public) code \((error as NSError).code, privacy: .public)")
             }
         }
@@ -249,6 +311,11 @@ final class EndOfSpeechDetector {
             start: channelData,
             count: Int(buffer.frameLength)
         ))
+        // Counted at the ENQUEUE, not at the frame boundary: "samples went in
+        // and no inference came out" is exactly the signature of a streaming
+        // task that never started or wedged, which is what the `vadBroken`
+        // verdict is looking for.
+        health?.recordVADSamplesEnqueued(samples.count, frameSampleCount: VadManager.chunkSize)
         bufferContinuation.yield(samples)
     }
 
