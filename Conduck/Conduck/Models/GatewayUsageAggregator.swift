@@ -148,6 +148,53 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
     /// wider question (nothing recorded EVER) and reads its own flag.
     var isEmpty: Bool { recordedAttempts == 0 }
 
+    /// `deviceGroups` without the bucket that could not be attributed to a
+    /// device — the LIST a by-device breakdown draws.
+    ///
+    /// There are five devices, and an "unrecorded" row is read as a sixth one.
+    /// It is not: it is the attempts whose device the ledger never captured,
+    /// which is a fact about measurement rather than about hardware. So this
+    /// drops them from a LIST and from nothing else — they stay in
+    /// `recordedAttempts` and in every rate on the screen. The computation
+    /// above stays whole on purpose: the data layer keeps the honest bucket,
+    /// and only the reading of it is narrowed.
+    var attributedDeviceGroups: [GatewayUsageGroup] {
+        deviceGroups.filter { $0.key != UsageDeviceBucket.unknown.rawValue }
+    }
+
+    /// Attempts in that unattributed bucket, or zero where there is none.
+    ///
+    /// The COMPLEMENT of `attributedDeviceGroups`, and the reason that filter
+    /// is auditable: it is what lets a test assert the dropped attempts are
+    /// still inside `recordedAttempts` rather than quietly gone. No screen
+    /// renders it — a count of things the ledger failed to measure says
+    /// nothing a user can act on — but a filter whose complement cannot be
+    /// named is a filter nothing can check.
+    var unattributedDeviceAttempts: Int {
+        deviceGroups.first { $0.key == UsageDeviceBucket.unknown.rawValue }?.attempts ?? 0
+    }
+
+    /// `byGateway` without the group that recorded no slot at all — the LIST a
+    /// by-gateway breakdown draws.
+    ///
+    /// The device rule, applied to the same shape of problem: a row reading
+    /// "Not recorded" sits among the user's OWN gateways and is read as one of
+    /// them. It is not — it is the attempts whose slot the ledger never
+    /// captured, and no drill-down into it could say anything the user can act
+    /// on. They leave the list and nothing else: `recordedAttempts` and every
+    /// rate still hold them.
+    var attributedGatewayGroups: [GatewayUsageGroup] {
+        byGateway.filter { $0.key != nil }
+    }
+
+    /// `inputModes` without the slice nothing observed. Beside Typed and Voice
+    /// an "unrecorded" row reads as a third way of talking to the app; it is a
+    /// gap in measurement instead, and the same rule sends it out of the list
+    /// and out of nothing else.
+    var attributedInputModes: [InputModeSlice] {
+        inputModes.filter { $0.mode != .unknown }
+    }
+
     static let empty = GatewayUsageSummary(
         recordedAttempts: 0,
         attemptedTurns: 0,

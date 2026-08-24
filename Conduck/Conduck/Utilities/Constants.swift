@@ -2259,10 +2259,11 @@ enum AppColors {
     /// Primary accent — matches brandAmber
     static let accent = Color(red: 1.0, green: 0.757, blue: 0.027)
 
-    /// Guided-Setup blue (#0A84FF) — the ONE cool-toned affordance in an
-    /// otherwise warm amber/dark palette, which is precisely what makes the
-    /// Personal AI "Guided Setup" row read as the front door. Scoped to that row
-    /// (`PersonalAIConnectRows`) on purpose; nothing else adopts it.
+    /// Guided-Setup blue (#0A84FF) — a cool-toned affordance in an otherwise
+    /// warm amber/dark palette, which is precisely what makes the Personal AI
+    /// "Guided Setup" row read as the front door. Scoped to that row
+    /// (`PersonalAIConnectRows`) and nothing else, so the row keeps being the
+    /// one place a *control* is drawn in it.
     ///
     /// Deliberately an EXPLICIT value rather than `.tint`/`Color.accentColor`:
     /// the app ships an EMPTY `AccentColor` asset, so `.tint` resolves to the
@@ -2270,6 +2271,21 @@ enum AppColors {
     /// accent. A Mac user who picked pink would otherwise get a pink "Guided
     /// Setup" row, losing the exact distinctness this color exists to provide.
     static let guidedSetupBlue = Color(red: 0.039, green: 0.518, blue: 1.0)
+
+    /// Usage-screen icon blue (#0A84FF) — the decorative LEADING glyphs on
+    /// Settings ▸ Usage and its drill-downs: the device rows, the input-mode
+    /// rows, and the rows naming what a request carried.
+    ///
+    /// NEVER a semantic state colour. An outcome, a failure reason and a
+    /// warning each keep their own hue on those same screens, so a blue glyph
+    /// can never be read as a verdict about the row it sits on.
+    ///
+    /// A SEPARATE token from `guidedSetupBlue` despite the identical value: one
+    /// marks a single control, the other decorates a whole screen's rows, and a
+    /// shared constant would let a change made for either scope silently
+    /// repaint the other. Explicit rather than `.tint` for the reason spelled
+    /// out on `guidedSetupBlue`.
+    static let usageIconBlue = Color(red: 0.039, green: 0.518, blue: 1.0)
 
     // MARK: - Semantic Colors (dark mode)
 

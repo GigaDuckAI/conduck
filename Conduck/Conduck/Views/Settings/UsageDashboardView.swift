@@ -113,8 +113,10 @@ enum UsageDashboardIdentity {
 /// iPad detail stack and the macOS category alike.
 ///
 /// `gateway` carries a `RemoteAgentRef.rawString` — the configured SLOT, resolved
-/// to a display name at render time — and nil for the attempts that recorded no
-/// gateway at all, which is a real group rather than an absence to drop.
+/// to a display name at render time. Its nil arm names the attempts that
+/// recorded no gateway at all — a FLOOR, not a push any list offers: those
+/// attempts take no row in any by-gateway list, so nothing constructs the nil
+/// route any more, and the destination merely remains able to render it.
 enum UsageRoute: Hashable {
     case gateway(String?)
     case device(UsageDeviceBucket)
@@ -214,10 +216,10 @@ struct UsageDashboardContent: View {
                 reliabilitySection
                 responseTimeSection
                 tokensSection
-                if !model.summary.deviceGroups.isEmpty {
+                if !model.summary.attributedDeviceGroups.isEmpty {
                     deviceSection
                 }
-                if !model.summary.byGateway.isEmpty {
+                if !model.summary.attributedGatewayGroups.isEmpty {
                     gatewaySection
                 }
                 if !model.summary.threadRanking.threads.isEmpty {
@@ -256,17 +258,13 @@ struct UsageDashboardContent: View {
 
     private func rangeSection(selection: Binding<UsageDashboardModel.Range>) -> some View {
         Section {
-            Picker(selection: selection) {
-                ForEach(UsageDashboardModel.Range.allCases) { range in
-                    Text(range.title).tag(range)
-                }
-            } label: {
-                Text(LocalizedStringResource(
-                    "settings.usage.range.label", defaultValue: "Range"))
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .tint(AppColors.brandAmber)
+            SettingsSegmentedPicker(
+                selection: selection,
+                options: UsageDashboardModel.Range.allCases,
+                label: Text(LocalizedStringResource(
+                    "settings.usage.range.label", defaultValue: "Range")),
+                title: { Text($0.title) }
+            )
             .settingsCardPassiveRow()
             // THE CONTROL IS THE ROW. A grouped `Form` insets its row content
             // and paints a card behind it, so a segmented control left at the
@@ -381,12 +379,13 @@ struct UsageDashboardContent: View {
             Text(LocalizedStringResource(
                 "settings.usage.activity.header", defaultValue: "Activity"))
         } footer: {
+            // The ONE word on this card a person cannot infer from the tiles.
+            // Everything else the old footer carried — where retries are
+            // counted, that they do not inflate this — answered a question
+            // nobody asks until they already distrust the number.
             Text(LocalizedStringResource(
-                "settings.usage.activity.footer",
-                defaultValue: """
-                    A turn is one thing you sent. Retries are counted separately, \
-                    under Reliability, so trying again never inflates your activity.
-                    """))
+                "settings.usage.activity.footer.turn",
+                defaultValue: "A turn is one thing you sent."))
         }
     }
 
@@ -517,7 +516,7 @@ struct UsageDashboardContent: View {
     /// "Shared 0" row would read as a feature that is failing rather than one
     /// this user does not use.
     private var visibleInputModes: [InputModeSlice] {
-        model.summary.inputModes
+        model.summary.attributedInputModes
             .filter { $0.turns > 0 }
             .sorted { $0.turns > $1.turns }
     }
@@ -536,14 +535,9 @@ struct UsageDashboardContent: View {
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.input.header", defaultValue: "Input"))
-        } footer: {
-            Text(LocalizedStringResource(
-                "settings.usage.input.footer",
-                defaultValue: """
-                    How each turn was given. Retrying a turn reuses the input you \
-                    already gave, so it never moves these numbers.
-                    """))
         }
+        // NO FOOTER. "Typed 41 · Voice 12" under a header reading Input is
+        // already the whole sentence a footer would have written out.
     }
 
     private func inputModeRow(
@@ -552,7 +546,7 @@ struct UsageDashboardContent: View {
     ) -> some View {
         HStack(spacing: 10) {
             Image(systemName: inputModeIcon(slice.mode))
-                .foregroundStyle(AppColors.textTertiary)
+                .foregroundStyle(AppColors.usageIconBlue)
                 .accessibilityHidden(true)
             Text(inputModeLabel(slice.mode))
                 .foregroundStyle(AppColors.textPrimary)
@@ -765,34 +759,18 @@ struct UsageDashboardContent: View {
     /// collapsed — which is its default state. A catalog value wins over
     /// `defaultValue:`, so rewording a shipped key in place would keep
     /// rendering the old sentence in every build that has the catalog.
+    /// ONE sentence, and only because the headline is a bare percentage whose
+    /// denominator is not the number above it. A reader who divides the two
+    /// figures on this card gets a different answer unless this is said; the
+    /// two footnotes that used to sit beneath it — what "cut short" means, that
+    /// reasons are counted rather than listed — were answering their own rows'
+    /// labels a second time.
     private var reliabilityFooter: some View {
-        let summary = model.summary
-
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringResource(
-                "settings.usage.reliability.footer.details",
-                defaultValue: """
-                    The success rate counts only attempts that finished as a \
-                    success or a failure. Cancelled and unconfirmed attempts \
-                    are counted under Details but stay out of it.
-                    """))
-            if summary.truncatedReplies > 0 {
-                Text(LocalizedStringResource(
-                    "settings.usage.reliability.truncated.footer",
-                    defaultValue: """
-                        Cut short means the gateway reported it stopped at the \
-                        reply-length limit, not that anything went wrong.
-                        """))
-            }
-            if !summary.failureReasons.isEmpty {
-                Text(LocalizedStringResource(
-                    "settings.usage.reliability.reasons.footer",
-                    defaultValue: """
-                        Failure reasons are counted, not listed. Diagnostics is \
-                        where a single failure can be looked at.
-                        """))
-            }
-        }
+        Text(LocalizedStringResource(
+            "settings.usage.reliability.footer.rate",
+            defaultValue: """
+                Cancelled and unconfirmed attempts stay out of this rate.
+                """))
     }
 
     /// The outcome mix, reported WHOLE — a high unconfirmed count is exactly
@@ -989,12 +967,14 @@ struct UsageDashboardContent: View {
             Text(LocalizedStringResource(
                 "settings.usage.response.header", defaultValue: "Full-response time"))
         } footer: {
+            // KEPT: without it a median is read as model speed, and a slow
+            // agent looks like a slow app. The clause that earns the line is
+            // the last one.
             Text(LocalizedStringResource(
-                "settings.usage.response.footer",
+                "settings.usage.response.footer.scope",
                 defaultValue: """
-                    Measured from sending to the reply landing, so it includes the \
-                    network, any tools your agent ran, and the agent's own work — \
-                    it is not model latency.
+                    Includes the network and any tools your agent ran — not \
+                    model latency.
                     """))
         }
     }
@@ -1049,13 +1029,20 @@ struct UsageDashboardContent: View {
             Text(LocalizedStringResource(
                 "settings.usage.tokens.header", defaultValue: "Reported tokens"))
         } footer: {
-            Text(LocalizedStringResource(
-                "settings.usage.tokens.footer",
-                defaultValue: """
-                    These are your gateway's own numbers, for the attempts it \
-                    reported them on. Gateways are not required to report usage, \
-                    and what one counts in a turn may differ from another.
-                    """))
+            // The header already says "Reported" and each row carries its own
+            // coverage caption. The ONE caveat neither can carry is that this
+            // card — unlike the gateway drill-down — adds figures from gateways
+            // that do not count alike, so the sums mix rulers. Rendered only
+            // when more than one gateway is in range: with a single ruler
+            // there is nothing mixed.
+            if !tokens.isEmpty && model.summary.attributedGatewayGroups.count > 1 {
+                Text(LocalizedStringResource(
+                    "settings.usage.tokens.footer.rulers",
+                    defaultValue: """
+                        Each gateway counts tokens its own way, so these figures \
+                        add up numbers that were not counted alike.
+                        """))
+            }
         }
     }
 
@@ -1088,23 +1075,37 @@ struct UsageDashboardContent: View {
     /// a device does not have a token cost, the gateway does, and putting a sum
     /// beside a device invites reading one iPhone as more expensive than
     /// another. The drill-down carries the fuller picture.
+    ///
+    /// ONLY REAL DEVICES GET A ROW — `attributedDeviceGroups`. There are five
+    /// devices, and a sixth row for the attempts whose device was never
+    /// recorded reads as one of them. Those attempts leave this LIST and
+    /// nothing else: they are inside every figure above, and the screen does
+    /// not single them out, because a count of unmeasured things is a fact
+    /// about the ledger rather than about the user's setup.
     private var deviceSection: some View {
         Section {
-            ForEach(model.summary.deviceGroups) { group in
+            ForEach(model.summary.attributedDeviceGroups) { group in
                 deviceGroupRow(group)
             }
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.byDevice.header", defaultValue: "By device"))
         } footer: {
-            Text(LocalizedStringResource(
-                "settings.usage.byDevice.footer",
-                defaultValue: """
-                    The device a request actually went out from. A turn started on \
-                    your Watch and retried on your phone counts once for each. \
-                    CarPlay is listed separately from the phone driving it.
-                    """))
+            // ONLY where it explains something on screen. A list of device
+            // names needs no gloss; CarPlay sitting BESIDE the very iPhone
+            // driving it is the one row a person reads as a double-count, so
+            // the note appears exactly when that row does.
+            if showsCarPlayNote {
+                Text(LocalizedStringResource(
+                    "settings.usage.byDevice.footer.carPlay",
+                    defaultValue: "CarPlay is listed separately from the phone driving it."))
+            }
         }
+    }
+
+    private var showsCarPlayNote: Bool {
+        model.summary.attributedDeviceGroups
+            .contains { $0.key == UsageDeviceBucket.carPlay.rawValue }
     }
 
     /// TITLE AND CHEVRON ONLY on the top line. The row is read against its
@@ -1118,7 +1119,7 @@ struct UsageDashboardContent: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Image(systemName: deviceIcon(bucket))
-                        .foregroundStyle(AppColors.textTertiary)
+                        .foregroundStyle(AppColors.usageIconBlue)
                         .accessibilityHidden(true)
                     Text(deviceLabel(bucket))
                         .font(.body.weight(.semibold))
@@ -1156,6 +1157,11 @@ struct UsageDashboardContent: View {
 
     /// Icons and words reused from the turn's own device chip, so one device is
     /// named the same way wherever the user meets it.
+    ///
+    /// The unattributed arm is a FLOOR, not a case the section reaches: the
+    /// rows come from `attributedDeviceGroups`, so every key here names one of
+    /// the five devices. It stays because the enum still carries the bucket,
+    /// which the route and the drill-down both remain able to name.
     private func deviceIcon(_ bucket: UsageDeviceBucket) -> String {
         guard let device = Self.deviceFormatterKey(bucket) else { return "questionmark.circle" }
         return MessageRowFormatters.icon(forDevice: device)
@@ -1185,19 +1191,21 @@ struct UsageDashboardContent: View {
 
     private var gatewaySection: some View {
         Section {
-            ForEach(model.summary.byGateway) { group in
+            ForEach(model.summary.attributedGatewayGroups) { group in
                 gatewayGroupRow(group)
             }
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.byGateway.header", defaultValue: "By gateway"))
         } footer: {
+            // KEPT: a gateway the user deleted still having a row is the one
+            // thing on this card that looks like a bug. Which gateway a
+            // conversation was bound to needs no explaining.
             Text(LocalizedStringResource(
-                "settings.usage.byGateway.footer",
+                "settings.usage.byGateway.footer.history",
                 defaultValue: """
-                    Grouped by the gateway a conversation was bound to when it \
-                    sent. A gateway you have since edited or removed still \
-                    appears for the history it made.
+                    A gateway you have since edited or removed still appears for \
+                    the history it made.
                     """))
         }
     }

@@ -94,7 +94,7 @@ struct UsageGatewayDetailView: View {
                 if !summary.byRequestedModel.isEmpty {
                     modelsSection
                 }
-                if !summary.deviceGroups.isEmpty {
+                if !summary.attributedDeviceGroups.isEmpty {
                     deviceSection
                 }
                 if summary.attachmentContext.measuredAttempts > 0 {
@@ -209,12 +209,12 @@ struct UsageGatewayDetailView: View {
             Text(LocalizedStringResource(
                 "settings.usage.reliability.header", defaultValue: "Reliability"))
         } footer: {
+            // Same sentence, same key as the overview: the denominator behind
+            // the headline is the one thing neither screen's figures reveal.
             Text(LocalizedStringResource(
-                "settings.usage.reliability.footer",
+                "settings.usage.reliability.footer.rate",
                 defaultValue: """
-                    The success rate counts only attempts that finished as a \
-                    success or a failure. Cancelled and unconfirmed attempts \
-                    are listed above but stay out of it.
+                    Cancelled and unconfirmed attempts stay out of this rate.
                     """))
         }
     }
@@ -271,11 +271,10 @@ struct UsageGatewayDetailView: View {
                 "settings.usage.response.header", defaultValue: "Full-response time"))
         } footer: {
             Text(LocalizedStringResource(
-                "settings.usage.response.footer",
+                "settings.usage.response.footer.scope",
                 defaultValue: """
-                    Measured from sending to the reply landing, so it includes the \
-                    network, any tools your agent ran, and the agent's own work — \
-                    it is not model latency.
+                    Includes the network and any tools your agent ran — not \
+                    model latency.
                     """))
         }
     }
@@ -326,17 +325,13 @@ struct UsageGatewayDetailView: View {
             Text(LocalizedStringResource(
                 "settings.usage.tokens.header", defaultValue: "Reported tokens"))
         } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringResource(
-                    "settings.usage.tokens.footer",
-                    defaultValue: """
-                        These are your gateway's own numbers, for the attempts it \
-                        reported them on. Gateways are not required to report usage, \
-                        and what one counts in a turn may differ from another.
-                        """))
-                if let first = largestTurns.first {
-                    Text(UsageDetailFormat.turnBasisFooter(first.basis))
-                }
+            // The ranking basis ONLY. It says which number the "Largest turns"
+            // rows were sorted on and which turns it silently leaves out —
+            // neither is visible in the rows. The gateway-reported caveat that
+            // used to sit above it is already carried by the header's own word
+            // and by each row's coverage caption.
+            if let first = largestTurns.first {
+                Text(UsageDetailFormat.turnBasisFooter(first.basis))
             }
         }
     }
@@ -344,7 +339,12 @@ struct UsageGatewayDetailView: View {
     // MARK: - Models
 
     private var modelsSection: some View {
-        Section {
+        // Hoisted: `reportedModelReading` walks the gateway's whole scoped
+        // ledger, and the row and the footer gate below would otherwise each
+        // run that walk on every body evaluation.
+        let reading = reportedModelReading
+
+        return Section {
             ForEach(summary.byRequestedModel) { group in
                 UsageValueRow(
                     verbatimLabel: UsageDetailFormat.modelLabel(for: group.key),
@@ -355,7 +355,7 @@ struct UsageGatewayDetailView: View {
                 )
             }
 
-            if let reading = reportedModelReading {
+            if let reading {
                 UsageValueRow(
                     label: LocalizedStringResource(
                         "settings.usage.detail.model.reported",
@@ -370,13 +370,19 @@ struct UsageGatewayDetailView: View {
             Text(LocalizedStringResource(
                 "settings.usage.detail.models.header", defaultValue: "Models"))
         } footer: {
-            Text(LocalizedStringResource(
-                "settings.usage.detail.models.footer",
-                defaultValue: """
-                    Rows list the model each request ASKED for. A gateway that also \
-                    names the model it served is shown separately — the two \
-                    differing is ordinary, not a fault.
-                    """))
+            // ONLY beside the reported-model row, because that row is the only
+            // thing here that can alarm: an alias resolving or a router
+            // choosing makes the served name differ from the asked-for one, and
+            // two disagreeing model names read as a fault. With no such row the
+            // list is just the models this gateway was asked for.
+            if reading != nil {
+                Text(LocalizedStringResource(
+                    "settings.usage.detail.models.footer.reported",
+                    defaultValue: """
+                        A gateway naming a different model than the one asked for \
+                        is ordinary, not a fault.
+                        """))
+            }
         }
     }
 
@@ -415,9 +421,13 @@ struct UsageGatewayDetailView: View {
 
     // MARK: - By device
 
+    /// ONLY REAL DEVICES GET A ROW, exactly as on the overview —
+    /// `attributedDeviceGroups`. The attempts whose device was never recorded
+    /// stay inside every figure on this screen and take no row of their own:
+    /// there are five devices, and a sixth row reads as one of them.
     private var deviceSection: some View {
         Section {
-            ForEach(summary.deviceGroups) { group in
+            ForEach(summary.attributedDeviceGroups) { group in
                 UsageGroupCompactRow(
                     label: UsageDeviceBucketDisplay.label(forKey: group.key),
                     icon: UsageDeviceBucketDisplay.icon(forKey: group.key),
@@ -427,14 +437,10 @@ struct UsageGatewayDetailView: View {
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.detail.byDevice.header", defaultValue: "By device"))
-        } footer: {
-            Text(LocalizedStringResource(
-                "settings.usage.detail.byDevice.footer",
-                defaultValue: """
-                    Which of your devices sent these requests. A retry counts on \
-                    the device that retried, not on the one that first asked.
-                    """))
         }
+        // NO FOOTER. This screen is only ever reached by pushing from the
+        // overview, whose own by-device card already says whatever needed
+        // saying — repeating it here is the second telling, not the first.
     }
 
     // MARK: - Attachment context
@@ -455,7 +461,8 @@ struct UsageGatewayDetailView: View {
                     defaultValue: "Turns with images"),
                 value: context.turnsWithImages.formatted(.number),
                 caption: UsageDetailFormat.measuredCaption(coverage),
-                icon: "photo"
+                icon: "photo",
+                iconTint: AppColors.usageIconBlue
             )
             UsageValueRow(
                 label: LocalizedStringResource(
@@ -463,7 +470,8 @@ struct UsageGatewayDetailView: View {
                     defaultValue: "Turns with text files"),
                 value: context.turnsWithTextFiles.formatted(.number),
                 caption: UsageDetailFormat.measuredCaption(coverage),
-                icon: "doc.text"
+                icon: "doc.text",
+                iconTint: AppColors.usageIconBlue
             )
             UsageValueRow(
                 label: LocalizedStringResource(
@@ -471,7 +479,8 @@ struct UsageGatewayDetailView: View {
                     defaultValue: "Images re-sent with later turns"),
                 value: context.replayedImageTotal.formatted(.number),
                 caption: UsageDetailFormat.measuredCaption(coverage),
-                icon: "arrow.triangle.2.circlepath"
+                icon: "arrow.triangle.2.circlepath",
+                iconTint: AppColors.usageIconBlue
             )
         } header: {
             Text(LocalizedStringResource(
@@ -752,34 +761,46 @@ struct UsageHeadlineRow: View {
 /// requested model string, an error taxonomy's own copy — which must not be run
 /// through the string catalog: a key whose whole value is a substitution is
 /// rejected by the catalog tooling, and there is nothing to translate anyway.
+///
+/// `iconTint` is the row's ONE colour decision, and it is the call site's:
+/// a DECORATIVE glyph naming a thing (an input mode, an attachment kind) takes
+/// `AppColors.usageIconBlue`, while a glyph carrying a verdict — the scissors on
+/// a cut-short reply, the triangle on a failure reason — keeps the recessive
+/// default. Tinting the whole row type either way would make the two say the
+/// same thing.
 struct UsageValueRow: View {
     private let labelText: Text
     private let value: String
     private let caption: LocalizedStringResource?
     private let icon: String?
+    private let iconTint: Color
 
     init(
         label: LocalizedStringResource,
         value: String,
         caption: LocalizedStringResource? = nil,
-        icon: String? = nil
+        icon: String? = nil,
+        iconTint: Color = AppColors.textTertiary
     ) {
         self.labelText = Text(label)
         self.value = value
         self.caption = caption
         self.icon = icon
+        self.iconTint = iconTint
     }
 
     init(
         verbatimLabel: String,
         value: String,
         caption: LocalizedStringResource? = nil,
-        icon: String? = nil
+        icon: String? = nil,
+        iconTint: Color = AppColors.textTertiary
     ) {
         self.labelText = Text(verbatim: verbatimLabel)
         self.value = value
         self.caption = caption
         self.icon = icon
+        self.iconTint = iconTint
     }
 
     var body: some View {
@@ -787,7 +808,7 @@ struct UsageValueRow: View {
             HStack(spacing: 10) {
                 if let icon {
                     Image(systemName: icon)
-                        .foregroundStyle(AppColors.textTertiary)
+                        .foregroundStyle(iconTint)
                         .accessibilityHidden(true)
                 }
                 labelText
@@ -827,8 +848,10 @@ struct UsageGroupCompactRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 if let icon {
+                    // Decorative and never a verdict — the only glyph this row
+                    // ever carries is the device it names.
                     Image(systemName: icon)
-                        .foregroundStyle(AppColors.textTertiary)
+                        .foregroundStyle(AppColors.usageIconBlue)
                         .accessibilityHidden(true)
                 }
                 Text(verbatim: label)
@@ -863,7 +886,9 @@ enum UsageGatewayLabel {
 }
 
 /// The device buckets as a person reads them. `unknown` is "Not recorded" and
-/// never "Other": that row is an absence of measurement, not a device.
+/// never "Other": it is an absence of measurement, not a device — which is why
+/// it can title a drill-down reached by route but never takes a row in a
+/// by-device list.
 enum UsageDeviceBucketDisplay {
     static func label(_ bucket: UsageDeviceBucket) -> String {
         switch bucket {

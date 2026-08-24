@@ -852,7 +852,6 @@ struct CustomSTTConfigBody: View {
                 defaultValue: "Tests and previews use a small amount of your provider's credits."
             ))
             .font(.caption)
-            .foregroundStyle(AppColors.textSecondary)
         }
     }
 

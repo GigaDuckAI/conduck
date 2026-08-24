@@ -14362,13 +14362,13 @@
         }
       }
     },
-    "settings.usage.activity.footer" : {
+    "settings.usage.activity.footer.turn" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "A turn is one thing you sent. Retries are counted separately, under Reliability, so trying again never inflates your activity."
+            "value" : "A turn is one thing you sent."
           }
         }
       }
@@ -14406,13 +14406,13 @@
         }
       }
     },
-    "settings.usage.byDevice.footer" : {
+    "settings.usage.byDevice.footer.carPlay" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The device a request actually went out from. A turn started on your Watch and retried on your phone counts once for each. CarPlay is listed separately from the phone driving it."
+            "value" : "CarPlay is listed separately from the phone driving it."
           }
         }
       }
@@ -14428,13 +14428,13 @@
         }
       }
     },
-    "settings.usage.byGateway.footer" : {
+    "settings.usage.byGateway.footer.history" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Grouped by the gateway a conversation was bound to when it sent. A gateway you have since edited or removed still appears for the history it made."
+            "value" : "A gateway you have since edited or removed still appears for the history it made."
           }
         }
       }
@@ -14868,17 +14868,6 @@
         }
       }
     },
-    "settings.usage.detail.byDevice.footer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Which of your devices sent these requests. A retry counts on the device that retried, not on the one that first asked."
-          }
-        }
-      }
-    },
     "settings.usage.detail.byDevice.header" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14952,17 +14941,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%1$@ of attempts · %2$lld turns"
-          }
-        }
-      }
-    },
-    "settings.usage.detail.input.footer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "How each turn was given to Conduck. A retry keeps whatever the original turn was — retrying a spoken turn does not make it typed."
           }
         }
       }
@@ -15088,13 +15066,13 @@
         }
       }
     },
-    "settings.usage.detail.models.footer" : {
+    "settings.usage.detail.models.footer.reported" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Rows list the model each request ASKED for. A gateway that also names the model it served is shown separately — the two differing is ordinary, not a fault."
+            "value" : "A gateway naming a different model than the one asked for is ordinary, not a fault."
           }
         }
       }
@@ -15517,17 +15495,6 @@
         }
       }
     },
-    "settings.usage.input.footer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "How each turn was given. Retrying a turn reuses the input you already gave, so it never moves these numbers."
-          }
-        }
-      }
-    },
     "settings.usage.input.header" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -15836,24 +15803,13 @@
         }
       }
     },
-    "settings.usage.reliability.footer" : {
+    "settings.usage.reliability.footer.rate" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The success rate counts only attempts that finished as a success or a failure. Cancelled and unconfirmed attempts are listed above but stay out of it."
-          }
-        }
-      }
-    },
-    "settings.usage.reliability.footer.details" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The success rate counts only attempts that finished as a success or a failure. Cancelled and unconfirmed attempts are counted under Details but stay out of it."
+            "value" : "Cancelled and unconfirmed attempts stay out of this rate."
           }
         }
       }
@@ -15887,17 +15843,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%@ of resolved attempts succeeded"
-          }
-        }
-      }
-    },
-    "settings.usage.reliability.reasons.footer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Failure reasons are counted, not listed. Diagnostics is where a single failure can be looked at."
           }
         }
       }
@@ -15979,17 +15924,6 @@
         }
       }
     },
-    "settings.usage.reliability.truncated.footer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Cut short means the gateway reported it stopped at the reply-length limit, not that anything went wrong."
-          }
-        }
-      }
-    },
     "settings.usage.replies.one" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -16012,13 +15946,13 @@
         }
       }
     },
-    "settings.usage.response.footer" : {
+    "settings.usage.response.footer.scope" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Measured from sending to the reply landing, so it includes the network, any tools your agent ran, and the agent's own work — it is not model latency."
+            "value" : "Includes the network and any tools your agent ran — not model latency."
           }
         }
       }
@@ -16386,13 +16320,13 @@
         }
       }
     },
-    "settings.usage.tokens.footer" : {
+    "settings.usage.tokens.footer.rulers" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "These are your gateway's own numbers, for the attempts it reported them on. Gateways are not required to report usage, and what one counts in a turn may differ from another."
+            "value" : "Each gateway counts tokens its own way, so these figures add up numbers that were not counted alike."
           }
         }
       }

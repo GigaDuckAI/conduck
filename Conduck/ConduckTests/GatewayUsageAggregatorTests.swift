@@ -1277,6 +1277,94 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertEqual(watch.medianResponseTime!, 60.0, accuracy: 1e-9)
     }
 
+    /// THE LIST NARROWS; THE TOTALS DO NOT. `attributedDeviceGroups` is the
+    /// reading a by-device breakdown draws — five real devices and no sixth
+    /// "unrecorded" row — while `deviceGroups`, `recordedAttempts` and every
+    /// rate keep the unattributed attempts. A filter that reached the totals
+    /// would leave the screen's cards disagreeing with each other.
+    func testAttributedDeviceGroupsDropTheUnrecordedBucketAndCountItInstead() {
+        let summary = summarize([
+            attempt(outcome: .succeeded, origin: .app, deviceClass: "iphone"),
+            attempt(outcome: .succeeded, origin: .app, deviceClass: "vision"),
+            attempt(outcome: .succeeded, origin: .unknown),
+        ])
+
+        XCTAssertEqual(summary.deviceGroups.map(\.key), ["unknown", "iphone"])
+        XCTAssertEqual(summary.attributedDeviceGroups.map(\.key), ["iphone"])
+        XCTAssertEqual(summary.unattributedDeviceAttempts, 2)
+        XCTAssertEqual(summary.recordedAttempts, 3, "the totals keep every attempt")
+    }
+
+    /// Nothing attributable at all: the list is empty and the count carries the
+    /// whole range. The SUMMARY always exposes both halves of the split — what
+    /// a screen does with them is the screen's own rule, and a by-device
+    /// section with no row left to draw is not drawn at all. The attempts are
+    /// still in `recordedAttempts` and in every rate.
+    func testAllUnrecordedDevicesLeaveAnEmptyAttributedListAndTheFullCount() {
+        let summary = summarize([
+            attempt(outcome: .succeeded, origin: .unknown),
+            attempt(outcome: .failed, origin: .unknown),
+        ])
+
+        XCTAssertTrue(summary.attributedDeviceGroups.isEmpty)
+        XCTAssertEqual(summary.unattributedDeviceAttempts, 2)
+    }
+
+    /// With nothing unattributed the reading IS the computation, and the count
+    /// is zero rather than nil — there is no absence to report.
+    func testNoUnrecordedBucketLeavesTheDeviceGroupsUntouched() {
+        let summary = summarize([
+            attempt(outcome: .succeeded, origin: .app, deviceClass: "iphone"),
+            attempt(outcome: .succeeded, origin: .watch),
+        ])
+
+        XCTAssertEqual(summary.attributedDeviceGroups, summary.deviceGroups)
+        XCTAssertEqual(summary.unattributedDeviceAttempts, 0)
+    }
+
+    /// THE SAME RULE FOR SLOTS. An attempt that recorded no gateway leaves the
+    /// by-gateway LIST — a row labelled "Not recorded" sits among the user's own
+    /// gateways and reads as one of them — while `byGateway` and every total
+    /// keep it.
+    func testAttributedGatewayGroupsDropTheSlotlessGroup() {
+        let summary = summarize([
+            attempt(gateway: "openclaw", outcome: .succeeded),
+            attempt(gateway: nil, outcome: .succeeded),
+            attempt(gateway: nil, outcome: .failed),
+        ])
+
+        XCTAssertTrue(summary.byGateway.contains { $0.key == nil },
+                      "the computation keeps the honest group")
+        XCTAssertEqual(summary.attributedGatewayGroups.map(\.key), ["openclaw"] as [String?])
+        XCTAssertEqual(summary.recordedAttempts, 3, "the totals keep every attempt")
+    }
+
+    /// With every attempt carrying a slot the reading IS the computation.
+    func testAttributedGatewayGroupsLeaveAFullyAttributedListUntouched() {
+        let summary = summarize([
+            attempt(gateway: "openclaw", outcome: .succeeded),
+            attempt(gateway: "hermes", outcome: .succeeded),
+        ])
+
+        XCTAssertEqual(summary.attributedGatewayGroups, summary.byGateway)
+    }
+
+    /// AND FOR INPUT. `unknown` beside Typed and Voice reads as a third way of
+    /// talking to the app; it is a gap in measurement, so it leaves the list and
+    /// stays in the totals.
+    func testAttributedInputModesDropTheUnobservedSlice() {
+        let summary = summarize([
+            attempt(outcome: .succeeded, inputMode: .text),
+            attempt(outcome: .succeeded, inputMode: .voice),
+            attempt(outcome: .succeeded, inputMode: .unknown),
+        ])
+
+        XCTAssertTrue(summary.inputModes.contains { $0.mode == .unknown },
+                      "the computation keeps the honest slice")
+        XCTAssertEqual(Set(summary.attributedInputModes.map(\.mode)), [.text, .voice])
+        XCTAssertEqual(summary.recordedAttempts, 3, "the totals keep every attempt")
+    }
+
     // MARK: - 13. Ranking basis
 
     /// Gateway-reported totals win wherever ANY thread has one.

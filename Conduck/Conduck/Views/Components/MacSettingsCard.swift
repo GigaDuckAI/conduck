@@ -84,7 +84,15 @@ enum SettingsCardMetrics {
     static let passiveRowVerticalInset: CGFloat = 10
 
     /// Gap between stacked cards in a `PlatformSettingsForm`.
-    static let sectionSpacing: CGFloat = 16
+    ///
+    /// Sized AGAINST the 6pt that binds a header to its card and a card to its
+    /// footer, not picked on its own: a section's own parts have to sit far
+    /// closer to it than the next section does, or a footer caption and the
+    /// header beneath it read as one run of small text and the boundary between
+    /// two cards stops being findable. A grouped `Form` buys that separation on
+    /// the other platforms; here it is the only thing standing between two
+    /// cards, so it carries the whole signal.
+    static let sectionSpacing: CGFloat = 28
 }
 
 #if os(macOS)
@@ -158,7 +166,14 @@ struct SettingsCard<Content: View, Header: View, Footer: View>: View {
             if let cardFooter {
                 cardFooter
                     .font(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
+                    // A STEP BELOW the header's tone, never level with it. The
+                    // next section's header is small secondary text as well, so
+                    // with both in one colour a footnote and the header under it
+                    // read as a single block and the card boundary vanishes
+                    // between them. This also puts the footer in the same
+                    // recessive tone every other caption on these screens
+                    // already uses.
+                    .foregroundStyle(AppColors.textTertiary)
                     .padding(.top, Self.footerGap)
             }
         }

@@ -160,7 +160,6 @@ struct VoiceProviderDetailView: View {
                 defaultValue: "Apple is configured here only. Choose your active speech-to-text and text-to-speech providers on the Voice screen."
             ))
             .font(.caption)
-            .foregroundStyle(AppColors.textSecondary)
         }
     }
 

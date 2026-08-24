@@ -38,7 +38,7 @@ struct UsageDeviceDetailView: View {
     /// The input split is worth a card only when there is a split to show. One
     /// mode at 100% restates the attempt count above it.
     private var inputModes: [InputModeSlice] {
-        summary.inputModes.filter { $0.attempts > 0 }
+        summary.attributedInputModes.filter { $0.attempts > 0 }
     }
 
     var body: some View {
@@ -52,7 +52,7 @@ struct UsageDeviceDetailView: View {
                 if inputModes.count > 1 {
                     inputSection
                 }
-                if !summary.byGateway.isEmpty {
+                if !summary.attributedGatewayGroups.isEmpty {
                     gatewaySection
                 }
             }
@@ -165,11 +165,9 @@ struct UsageDeviceDetailView: View {
                 "settings.usage.reliability.header", defaultValue: "Reliability"))
         } footer: {
             Text(LocalizedStringResource(
-                "settings.usage.reliability.footer",
+                "settings.usage.reliability.footer.rate",
                 defaultValue: """
-                    The success rate counts only attempts that finished as a \
-                    success or a failure. Cancelled and unconfirmed attempts \
-                    are listed above but stay out of it.
+                    Cancelled and unconfirmed attempts stay out of this rate.
                     """))
         }
     }
@@ -225,11 +223,10 @@ struct UsageDeviceDetailView: View {
                 "settings.usage.response.header", defaultValue: "Full-response time"))
         } footer: {
             Text(LocalizedStringResource(
-                "settings.usage.response.footer",
+                "settings.usage.response.footer.scope",
                 defaultValue: """
-                    Measured from sending to the reply landing, so it includes the \
-                    network, any tools your agent ran, and the agent's own work — \
-                    it is not model latency.
+                    Includes the network and any tools your agent ran — not \
+                    model latency.
                     """))
         }
     }
@@ -253,27 +250,23 @@ struct UsageDeviceDetailView: View {
                             \(UsageDetailFormat.percentText(GatewayUsageAggregator.ratio(slice.attempts, total))) \
                             of attempts · \(slice.turns) turns
                             """),
-                    icon: UsageInputModeDisplay.icon(slice.mode)
+                    icon: UsageInputModeDisplay.icon(slice.mode),
+                    iconTint: AppColors.usageIconBlue
                 )
             }
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.detail.input.header", defaultValue: "Input"))
-        } footer: {
-            Text(LocalizedStringResource(
-                "settings.usage.detail.input.footer",
-                defaultValue: """
-                    How each turn was given to Conduck. A retry keeps whatever the \
-                    original turn was — retrying a spoken turn does not make it typed.
-                    """))
         }
+        // NO FOOTER — each row already carries its own share and turn count,
+        // and the overview's Input card is where a reader arrived from.
     }
 
     // MARK: - By gateway
 
     private var gatewaySection: some View {
         Section {
-            ForEach(summary.byGateway) { group in
+            ForEach(summary.attributedGatewayGroups) { group in
                 UsageGroupCompactRow(
                     label: UsageGatewayLabel.name(for: group.key, roster: gatewayRoster),
                     group: group
@@ -282,15 +275,10 @@ struct UsageDeviceDetailView: View {
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.byGateway.header", defaultValue: "By gateway"))
-        } footer: {
-            Text(LocalizedStringResource(
-                "settings.usage.byGateway.footer",
-                defaultValue: """
-                    Grouped by the gateway a conversation was bound to when it \
-                    sent. A gateway you have since edited or removed still \
-                    appears for the history it made.
-                    """))
         }
+        // NO FOOTER. The overview's own by-gateway card carries the one thing
+        // worth saying — that an edited or removed gateway keeps its history —
+        // and this screen is only reached from there.
     }
 }
 

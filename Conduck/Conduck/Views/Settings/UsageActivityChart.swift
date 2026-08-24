@@ -24,6 +24,17 @@
 // a sentence saying so, and a partial measurement carries its coverage count
 // underneath rather than letting the bars imply completeness.
 //
+// AND AN ABSENT BAR MUST NOT COLLAPSE THE CALENDAR. Swift Charts derives a
+// scale from the marks it was given, so a metric that skips days would shrink
+// the x axis to the days that drew — one resolved day in a 30-day range becomes
+// one plot-filling bar over an axis repeating that one date. The domain is
+// therefore pinned to the BUCKET range (`xDomain`) for all three measures, so a
+// day with nothing to say stays a visible gap in a calendar that still spans the
+// window the user picked. The BUCKETS can be narrow too — All time over a
+// day-old ledger is a single day — so that domain also carries a floor, and no
+// chart is ever drawn on a calendar narrower than the shortest range the picker
+// offers.
+//
 // CHART DISCIPLINE (inherited from the overview it grew out of). One series,
 // one measure, one y-scale, no legend — the picker above names the series. The
 // grid is recessive, values appear on SELECTION rather than on every bar, and
@@ -83,7 +94,7 @@ struct UsageActivityChart: View {
             if showsTokenEmptyState {
                 tokenEmptyState
             } else {
-                scaled(chart(selected: selected))
+                scaled(spanned(chart(selected: selected)))
                     .frame(height: 150)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(Text(chartAccessibilityLabel))
@@ -101,23 +112,18 @@ struct UsageActivityChart: View {
 
     // MARK: - Picker
 
-    /// A standard segmented control, so it inherits the platform's own
-    /// VoiceOver treatment ("Turns, selected, 1 of 3") rather than a hand-rolled
-    /// row that would have to reproduce it.
+    /// `SettingsSegmentedPicker`, which IS the standard segmented control on
+    /// iOS — VoiceOver's own "Turns, selected, 1 of 3" included — and reproduces
+    /// those semantics by hand on macOS, where the system control's grey chrome
+    /// does not belong beside the hand-drawn cards. See that file's header.
     private var metricPicker: some View {
-        Picker(selection: $metric) {
-            ForEach(UsageChartMetric.allCases) { option in
-                Text(title(for: option)).tag(option)
-            }
-        } label: {
-            Text(LocalizedStringResource(
-                "settings.usage.chart.metric.label", defaultValue: "Measure"))
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .tint(AppColors.brandAmber)
-        .accessibilityLabel(Text(LocalizedStringResource(
-            "settings.usage.chart.metric.label", defaultValue: "Measure")))
+        SettingsSegmentedPicker(
+            selection: $metric,
+            options: UsageChartMetric.allCases,
+            label: Text(LocalizedStringResource(
+                "settings.usage.chart.metric.label", defaultValue: "Measure")),
+            title: { Text(title(for: $0)) }
+        )
     }
 
     private func title(for metric: UsageChartMetric) -> LocalizedStringResource {
@@ -180,6 +186,55 @@ struct UsageActivityChart: View {
                 AxisValueLabel(format: .dateTime.month(.abbreviated).day())
                     .foregroundStyle(AppColors.textTertiary)
             }
+        }
+    }
+
+    /// The x range the bars stand on, taken from the BUCKETS rather than from
+    /// the marks — see the header. Nil for no buckets, where there is no
+    /// calendar to pin and the chart is not drawn anyway.
+    ///
+    /// The upper bound is the day AFTER the last bucket because a `.day`-unit
+    /// `BarMark` occupies the whole day it starts on: a domain ending on the
+    /// last day itself would clip that day's bar in half.
+    ///
+    /// A FLOOR OF `minimumSpanDays`, taken off the UPPER bound so the last day
+    /// keeps its full width and only the start of the calendar moves. The
+    /// 7/30/90 windows arrive gap-filled and already span their own width, but
+    /// All time over a ledger a day old holds ONE bucket — and a one-day domain
+    /// gives that day the entire plot as a single bar under four axis ticks all
+    /// reading the same date, which is the collapse the pinning above exists to
+    /// prevent, reached from the other side. Seven is the shortest window the
+    /// picker offers, so the narrowest chart drawn is the narrowest one a user
+    /// could have asked for.
+    ///
+    /// `min`/`max` rather than `first`/`last`: the aggregator emits buckets in
+    /// ascending day order, but this is a total function over whatever it is
+    /// handed, and an inverted range is a crash rather than a wrong picture.
+    static func xDomain(for buckets: [GatewayUsageDailyBucket]) -> ClosedRange<Date>? {
+        let calendar = Calendar.current
+        let days = buckets.map(\.day)
+        guard let first = days.min(), let last = days.max(),
+              let end = calendar.date(byAdding: .day, value: 1, to: last),
+              let floor = calendar.date(byAdding: .day, value: -minimumSpanDays, to: end)
+        else { return nil }
+        return min(first, floor)...end
+    }
+
+    /// The narrowest calendar the chart will draw, in days. Named off the range
+    /// picker's shortest window rather than written out, so the two cannot
+    /// drift into a chart narrower than any range on offer.
+    static var minimumSpanDays: Int { UsageDashboardModel.Range.weekDays }
+
+    /// Pins the x scale to `xDomain`. Applied to ALL THREE measures so the axis
+    /// behaves the same whichever one is on screen — the reliability metric is
+    /// the one that skips days, and a rule that fired only for it would leave
+    /// three charts with two different notions of what the axis means.
+    @ViewBuilder
+    private func spanned<Content: View>(_ chart: Content) -> some View {
+        if let domain = Self.xDomain(for: buckets) {
+            chart.chartXScale(domain: domain)
+        } else {
+            chart
         }
     }
 
