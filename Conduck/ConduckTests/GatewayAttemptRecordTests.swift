@@ -13,9 +13,10 @@
 //    clock-skew half is the subtle one: a row stamped by a device whose clock
 //    runs fast is FUTURE-dated on this one, and an elapsed-only window would
 //    leave it hedged forever because the interval only grows more negative.
-// 3. ONE DERIVATION POINT MAPS A `sourceDevice` TAG TO AN INPUT MODE. Retry is
-//    the only caller that has to reconstruct modality, and reconstructing it
-//    twice in two places is how the two answers start disagreeing.
+// 3. ONE DERIVATION POINT PER HALF OF A `sourceDevice` TAG — modality for a
+//    retry, device class for a row that predates the column. Both split on the
+//    same dash, and reconstructing either twice in two places is how the two
+//    answers start disagreeing.
 //
 // The KVC round-trip at the end is the compile-time-invisible one: the record's
 // key strings are the ONLY link between the Swift snapshot and the v11 model,
@@ -119,6 +120,46 @@ final class GatewayAttemptRecordTests: XCTestCase {
         XCTAssertEqual(GatewayInputMode.from(sourceDevice: "iphone-shared"), .shared,
                        "the share lane passes .shared explicitly; recognising the suffix means a "
                        + "tag that ever carries one lands correctly rather than as unknown")
+    }
+
+    // MARK: - Device class from a sourceDevice tag
+
+    func testTheDeviceClassIsDerivedFromTheBaseWord() {
+        XCTAssertEqual(GatewayAttemptDeviceClass.from(sourceDevice: "iphone-voice"), "iphone")
+        XCTAssertEqual(GatewayAttemptDeviceClass.from(sourceDevice: "iphone"), "iphone")
+        XCTAssertEqual(GatewayAttemptDeviceClass.from(sourceDevice: "ipad-text"), "ipad")
+        XCTAssertEqual(GatewayAttemptDeviceClass.from(sourceDevice: "mac-voice"), "mac")
+        XCTAssertEqual(GatewayAttemptDeviceClass.from(sourceDevice: "watch-voice"), "watch")
+        XCTAssertEqual(GatewayAttemptDeviceClass.from(sourceDevice: "carplay"), "carplay",
+                       "nothing stamps the column with it, but a legacy turn tag carrying it must "
+                       + "land in the CarPlay bucket rather than nowhere")
+    }
+
+    func testTheBaseWordIsTakenBeforeTheFIRSTDash() {
+        // The same split `GatewayInputMode.from(sourceDevice:)` performs on the
+        // other half of the tag, so the two halves can never disagree about
+        // where it divides.
+        XCTAssertEqual(GatewayAttemptDeviceClass.from(sourceDevice: "mac-voice-extra"), "mac")
+        XCTAssertNil(GatewayAttemptDeviceClass.from(sourceDevice: "-mac"))
+    }
+
+    func testAnUnrecognisedOrAbsentTagDerivesNilNotAGuess() {
+        XCTAssertNil(GatewayAttemptDeviceClass.from(sourceDevice: nil))
+        XCTAssertNil(GatewayAttemptDeviceClass.from(sourceDevice: ""))
+        XCTAssertNil(GatewayAttemptDeviceClass.from(sourceDevice: "vision-voice"),
+                     "a device this build has never heard of is unattributable, and bucketing it "
+                     + "anywhere would put real attempts on hardware they never ran on")
+        XCTAssertNil(GatewayAttemptDeviceClass.from(sourceDevice: "iPhone"),
+                     "the stored tag is lower-case; matching loosely here would make the column "
+                     + "and the fallback disagree")
+        XCTAssertNil(GatewayAttemptDeviceClass.from(sourceDevice: "macbook"))
+    }
+
+    func testTheDeviceVocabularyIsFrozenSpellings() {
+        // These raw values reach storage and cross device boundaries; a rename
+        // orphans every row already written with the old spelling.
+        XCTAssertEqual(GatewayAttemptDeviceClass.allCases.map(\.rawValue),
+                       ["iphone", "ipad", "mac", "watch", "carplay"])
     }
 
     // MARK: - Effective outcome
@@ -273,6 +314,11 @@ final class GatewayAttemptRecordTests: XCTestCase {
             row.setValue(NSNumber(value: Int64(33)), forKey: "reportedTotalTokens")
             row.setValue(NSNumber(value: Int16(GatewayAttemptRecord.currentRecordVersion)),
                          forKey: "recordVersion")
+            row.setValue(GatewayAttemptDeviceClass.iphone.rawValue, forKey: "originDeviceClass")
+            row.setValue(NSNumber(value: Int32(2)), forKey: "currentTurnInlineImageCount")
+            row.setValue(NSNumber(value: Int32(5)), forKey: "priorTurnInlineImageCount")
+            row.setValue(NSNumber(value: Int32(1)), forKey: "currentTurnInlineTextFileCount")
+            row.setValue(NSNumber(value: Int32(3)), forKey: "priorTurnInlineTextFileCount")
             try context.save()
 
             let record = GatewayAttemptRecord(managedObject: row)
@@ -293,7 +339,66 @@ final class GatewayAttemptRecordTests: XCTestCase {
             XCTAssertEqual(record.reportedOutputTokens, 22)
             XCTAssertEqual(record.reportedTotalTokens, 33)
             XCTAssertEqual(record.recordVersion, GatewayAttemptRecord.currentRecordVersion)
+            XCTAssertEqual(record.originDeviceClass, "iphone")
+            XCTAssertEqual(record.currentTurnInlineImageCount, 2)
+            XCTAssertEqual(record.priorTurnInlineImageCount, 5)
+            XCTAssertEqual(record.currentTurnInlineTextFileCount, 1)
+            XCTAssertEqual(record.priorTurnInlineTextFileCount, 3)
+            XCTAssertNil(record.fallbackSourceDevice,
+                         "it is not a column — only the store's fetch, reading the parent turn, "
+                         + "may ever fill it in")
         }
+    }
+
+    /// The whole reason the four attachment columns are modelled non-scalar: a
+    /// turn measured as carrying nothing and a turn nothing ever measured are
+    /// different facts, and every coverage caption in the dashboard is built on
+    /// telling them apart.
+    func testAnExplicitZeroAttachmentCountIsNotTheSameAsAnUnmeasuredOne() async throws {
+        let container = try await loadCurrentModelInMemory()
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let measured = NSEntityDescription.insertNewObject(
+                forEntityName: "GatewayAttempt", into: context)
+            measured.setValue(NSNumber(value: Int32(0)), forKey: "currentTurnInlineImageCount")
+            measured.setValue(NSNumber(value: Int32(0)), forKey: "priorTurnInlineImageCount")
+            measured.setValue(NSNumber(value: Int32(0)), forKey: "currentTurnInlineTextFileCount")
+            measured.setValue(NSNumber(value: Int32(0)), forKey: "priorTurnInlineTextFileCount")
+
+            let legacy = NSEntityDescription.insertNewObject(
+                forEntityName: "GatewayAttempt", into: context)
+            try context.save()
+
+            let measuredRecord = GatewayAttemptRecord(managedObject: measured)
+            XCTAssertEqual(measuredRecord.currentTurnInlineImageCount, 0)
+            XCTAssertEqual(measuredRecord.priorTurnInlineImageCount, 0)
+            XCTAssertEqual(measuredRecord.currentTurnInlineTextFileCount, 0)
+            XCTAssertEqual(measuredRecord.priorTurnInlineTextFileCount, 0)
+
+            let legacyRecord = GatewayAttemptRecord(managedObject: legacy)
+            XCTAssertNil(legacyRecord.currentTurnInlineImageCount,
+                         "a row written before anything measured attachments says nothing, and "
+                         + "must never be counted as a turn that sent none")
+            XCTAssertNil(legacyRecord.priorTurnInlineImageCount)
+            XCTAssertNil(legacyRecord.currentTurnInlineTextFileCount)
+            XCTAssertNil(legacyRecord.priorTurnInlineTextFileCount)
+            XCTAssertNil(legacyRecord.originDeviceClass)
+        }
+    }
+
+    /// `fallbackSourceDevice` is the one mutable field on the snapshot, and it
+    /// exists only so the store can enrich a legacy row at fetch time. Nothing
+    /// persists it, so the only property worth locking is that setting it
+    /// changes the value and touches nothing else.
+    func testTheFallbackSourceDeviceIsSetAfterTheFactAndPersistsNowhere() {
+        var record = Self.record(outcome: .succeeded, startedAt: Date())
+        XCTAssertNil(record.fallbackSourceDevice)
+        record.fallbackSourceDevice = "ipad-voice"
+        XCTAssertEqual(GatewayAttemptDeviceClass.from(sourceDevice: record.fallbackSourceDevice),
+                       "ipad")
+        XCTAssertNil(record.originDeviceClass,
+                     "the enrichment never stands in for the stored column; the derivation picks "
+                     + "which one to trust")
     }
 
     /// A half-materialised row — the shape CloudKit can genuinely deliver, with
@@ -322,6 +427,14 @@ final class GatewayAttemptRecordTests: XCTestCase {
                          + "built on exactly that distinction")
             XCTAssertNil(record.reportedTotalTokens)
             XCTAssertNil(record.recordVersion)
+            XCTAssertNil(record.originDeviceClass)
+            XCTAssertNil(record.currentTurnInlineImageCount,
+                         "a non-scalar Integer 32 must read nil, not 0 — the same distinction the "
+                         + "token columns depend on")
+            XCTAssertNil(record.priorTurnInlineImageCount)
+            XCTAssertNil(record.currentTurnInlineTextFileCount)
+            XCTAssertNil(record.priorTurnInlineTextFileCount)
+            XCTAssertNil(record.fallbackSourceDevice)
             XCTAssertEqual(record.effectiveOutcome(isLocallyLive: false, now: Date()), .unconfirmed)
         }
     }

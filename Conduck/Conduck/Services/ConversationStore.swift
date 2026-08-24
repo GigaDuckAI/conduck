@@ -2193,29 +2193,19 @@ actor ConversationStore {
     }
 
     /// Delete a single conversation by UUID. The `Cascade` delete rule on
-    /// `Conversation.messages` removes its messages too, and the one on
-    /// `Message.gatewayAttempts` removes the measurement rows linked to them.
+    /// `Conversation.messages` removes its messages too.
     ///
-    /// THE SCALAR ATTEMPT SWEEP IS NOT REDUNDANT WITH THAT CASCADE. An attempt
-    /// row carries both a relationship to its user turn and a scalar
-    /// `conversationID` snapshot, and only the scalar survives a row whose
-    /// relationship was never set — a begin that ran before its message
-    /// resolved, or a row imported ahead of the turn it belongs to. Those rows
-    /// are invisible to the cascade and would outlive the history they measure,
-    /// so they are deleted explicitly, in the SAME context and the same save:
-    /// two saves would be two exports and a window where the conversation is
-    /// gone and its measurements are not.
-    ///
-    /// This is the ONLY way an attempt is ever deleted — positive local deletion
-    /// evidence. Mere absence of a parent never deletes one (see
-    /// `fetchGatewayAttempts`).
+    /// IT DOES NOT TOUCH THE LEDGER. `Message.gatewayAttempts` nullifies rather
+    /// than cascades, so the attempt rows survive with their scalar snapshots
+    /// intact and only their link to a turn that no longer exists removed.
+    /// Deleting a conversation deletes its content; usage history is a separate
+    /// retention decision the user makes explicitly, through "Clear usage
+    /// history" or an erase-everything, and those two are the only things that
+    /// remove an attempt row (`purgeGatewayAttempts`).
     func deleteConversation(id: UUID) async throws {
         try await ensureLoaded()
         let context = newWriteContext()
         try await context.perform { [context] in
-            for row in Self.gatewayAttemptRows(conversationID: id, in: context) {
-                context.delete(row)
-            }
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
             let matches = try context.fetch(request)
@@ -2235,20 +2225,34 @@ actor ConversationStore {
         #endif
     }
 
-    /// Delete every conversation (and, via cascade, every message), plus every
-    /// gateway-attempt row.
+    /// Delete every conversation (and, via cascade, every message), and every
+    /// gateway-attempt row with them. The one place the ledger is erased without
+    /// the user naming it separately — erase-everything means everything.
     ///
-    /// The attempt sweep is unconditional here rather than scalar-keyed: no
-    /// conversation survives this call, so no attempt can survive it as anything
-    /// but an orphan — including the relationship-less rows the cascade cannot
-    /// see. Same context, same save, for the reason `deleteConversation` gives.
+    /// THE SYNCED CLEAR CUTOFF IS ADVANCED FIRST, before anything is deleted.
+    /// Deletion alone is not enough: a device that was offline through the wipe
+    /// still holds its own attempt rows, and they would import afterwards and
+    /// hand the user a usage history for conversations that no longer exist on
+    /// any device. The cutoff is what travels — every device that receives it
+    /// excludes those rows on sight and purges them on its next dashboard load.
+    ///
+    /// The attempt rows go through the batched, resumable purge rather than one
+    /// unbounded delete: a hundred thousand rows must not materialise in a
+    /// single context. It runs AFTER the conversations are gone and its failure
+    /// is not this call's to report — the cutoff already made those rows
+    /// invisible, and the purge finishes on the next run.
     func deleteAll() async throws {
         try await ensureLoaded()
+        let cutoff: Date
+        #if os(watchOS)
+        // No settings channel on the wrist, so no cutoff to publish — the local
+        // purge still runs with the same bound.
+        cutoff = Date()
+        #else
+        cutoff = await SettingsManager.shared.advanceGatewayUsageClearedThrough(Date())
+        #endif
         let context = newWriteContext()
         try await context.perform { [context] in
-            for row in Self.allGatewayAttemptRows(in: context) {
-                context.delete(row)
-            }
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             let matches = try context.fetch(request)
             for object in matches {
@@ -2257,6 +2261,7 @@ actor ConversationStore {
             try context.save()
         }
         await postDidChange()
+        _ = try? await purgeGatewayAttempts(through: cutoff)
         #if !os(watchOS)
         // Every conversation is gone — whatever the quick-capture pointer
         // named is gone with it; clear unconditionally. (Gate required: this
@@ -2772,7 +2777,18 @@ actor ConversationStore {
     /// suppress a valid reply — the inverse ordering, which lets it, is the one
     /// failure mode this design exists to rule out. The store's own verdicts
     /// (`conversationNotFound`, `userMessageNotFound`, `attemptAlreadyTerminal`)
-    /// are decisions, not save failures, and are rethrown untouched.
+    /// are decisions, not save failures, and are never retried.
+    ///
+    /// A REFUSED LANDING IS STILL AN OBSERVED ENDING. When the refusal is
+    /// `conversationNotFound` or `userMessageNotFound` — the turn was deleted
+    /// while its request was in the air — the attempt row is the only thing left
+    /// that outlives the deletion, and the transport DID watch this dispatch
+    /// end. Its outcome is written before the verdict is rethrown, and the reply
+    /// itself is discarded: nothing is inserted, spoken, notified or shown.
+    /// Skipping that write would leave a row reading open forever, and the
+    /// dashboard would hedge it as unconfirmed for a dispatch whose ending was
+    /// witnessed. `attemptAlreadyTerminal` writes nothing, because that verdict
+    /// means the one terminal transition already happened.
     func completeAgentTurn(
         userMessageID: UUID,
         userStatus: String,
@@ -2848,6 +2864,18 @@ actor ConversationStore {
         } catch let verdict as StoreError {
             // Not a save failure — a decision this store made about rows that do
             // or do not exist. Retrying it would only make it again.
+            //
+            // The observed ending is persisted first on the two not-found
+            // verdicts (see the doc comment). This holds the attempt's claim
+            // already, so it writes through the UNCLAIMED path; the write is
+            // update-only out of `inFlight`, so it can never overwrite a row
+            // some other owner already closed.
+            switch verdict {
+            case .conversationNotFound, .userMessageNotFound:
+                await writeTerminalObservation(attempt)
+            case .attemptAlreadyTerminal:
+                break
+            }
             throw verdict
         } catch {
             // The combined save failed. Land the core turn alone, in a fresh

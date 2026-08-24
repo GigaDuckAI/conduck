@@ -528,6 +528,14 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         authScheme: RemoteAgentAuthScheme = .bearer,
         model: String?,
         priorTurns: [ConverseRequest.Message],
+        // The assembler's count of what those prior turns carry inline on THIS
+        // request (images, extracted text-file blocks), for the ledger's
+        // attachment measurement. A dispatch-time fact the uploader cannot
+        // recompute — a spliced text block is indistinguishable from ordinary
+        // text once assembled. Nil (a caller that predates the shape) records
+        // the pair as zero rather than failing the send: measurement never
+        // blocks a turn.
+        priorTurnShape: ConverseRequest.PriorTurnShape? = nil,
         newUserText: String,
         conversationID: UUID,
         userMessageID: UUID,
@@ -665,7 +673,18 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                     inputMode: inputMode,
                     // The exact value sent; nil where the request omitted `model`
                     // and the gateway's own default answered.
-                    requestedModel: model
+                    requestedModel: model,
+                    // Literal, because `SourceDevice` is a main-target type the
+                    // Watch cannot see — and the wrist is the only device this
+                    // uploader ever runs on, so there is nothing to derive.
+                    deviceClass: "watch",
+                    // Structurally zero: the wrist composes text and dictation
+                    // only, with no attachment affordance. Explicit 0 (not nil) —
+                    // this row IS measured, and it measured none.
+                    currentTurnInlineImageCount: 0,
+                    priorTurnInlineImageCount: priorTurnShape?.inlineImageCount ?? 0,
+                    currentTurnInlineTextFileCount: 0,
+                    priorTurnInlineTextFileCount: priorTurnShape?.inlineTextFileCount ?? 0
                 )
             )
         }

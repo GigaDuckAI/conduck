@@ -1201,13 +1201,14 @@ final class CarPlayRecordingService {
             // (CarPlay was image-blind before) + the bound ref's
             // image-history policy. A throw rides the surrounding do/catch
             // (mapped + spoken), exactly like the previous `fetchMessages`.
-            let priorTurns = try await ConversationHistoryAssembler.assemble(
+            let assembledHistory = try await ConversationHistoryAssembler.assemble(
                 conversationID: conversationID,
                 excludingUserMessageID: userRecord.id,
                 excludingNewUserText: transcript,
                 boundRef: boundRef,
                 dispatchFileLaneID: fileTransferLane?.durableLaneID
             )
+            let priorTurns = assembledHistory.turns
 
             // Mint the turn token: the converse delegate carries it so a stale
             // reply (session moved on / ended) never speaks.
@@ -1264,6 +1265,7 @@ final class CarPlayRecordingService {
                 authScheme: snapshot.authScheme,
                 model: snapshot.model,
                 priorTurns: priorTurns,
+                priorTurnShape: assembledHistory.shape,
                 newUserText: transcript,
                 conversationID: conversationID,
                 // Exact per-message status flips (sent/failed/cancelled) — the

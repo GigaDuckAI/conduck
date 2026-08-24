@@ -127,7 +127,7 @@ final class ConverseWireOutboxTests: XCTestCase {
         let wire = try Self.encodeWire(ConverseRequest.priorTurns(
             from: records,
             dataURIsByMessageID: [:],
-            dispatchFileLaneID: Self.ownedLaneID))
+            dispatchFileLaneID: Self.ownedLaneID).turns)
         let text = Self.allText(wire)
 
         XCTAssertFalse(text.contains("[Conduck file transfer]"),

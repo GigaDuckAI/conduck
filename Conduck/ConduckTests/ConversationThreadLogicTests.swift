@@ -119,7 +119,7 @@ final class ConversationThreadLogicTests: XCTestCase {
             record(role: "user", text: "hi", at: 0),
             record(role: "agent", text: "hello", at: 1),
         ]
-        let turns = ConverseRequest.priorTurns(from: records)
+        let turns = ConverseRequest.priorTurns(from: records).turns
         XCTAssertEqual(turns.count, 2)
         XCTAssertEqual(turns[0].role, "user")
         XCTAssertEqual(turns[1].role, "assistant")
@@ -132,7 +132,7 @@ final class ConversationThreadLogicTests: XCTestCase {
             record(role: "agent", text: "reply", at: 1),
             record(role: "user", text: "new turn", at: 2),
         ]
-        let turns = ConverseRequest.priorTurns(from: records, excludingNewUserText: "new turn")
+        let turns = ConverseRequest.priorTurns(from: records, excludingNewUserText: "new turn").turns
         // The just-appended trailing user turn is removed (the assembler
         // re-appends it) — leaving the prior user + agent turns.
         XCTAssertEqual(turns.count, 2)
@@ -143,7 +143,7 @@ final class ConversationThreadLogicTests: XCTestCase {
         let records = [
             record(role: "user", text: "something else", at: 0),
         ]
-        let turns = ConverseRequest.priorTurns(from: records, excludingNewUserText: "new turn")
+        let turns = ConverseRequest.priorTurns(from: records, excludingNewUserText: "new turn").turns
         XCTAssertEqual(turns.count, 1)
         XCTAssertEqual(turns[0].content, "something else")
     }
@@ -153,7 +153,7 @@ final class ConversationThreadLogicTests: XCTestCase {
             record(role: "user", text: "a", at: 0),
             record(role: "agent", text: "b", at: 1),
         ]
-        let turns = ConverseRequest.priorTurns(from: records)
+        let turns = ConverseRequest.priorTurns(from: records).turns
         XCTAssertEqual(turns.count, 2)
     }
 

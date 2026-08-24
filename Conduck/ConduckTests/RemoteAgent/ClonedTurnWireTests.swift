@@ -127,7 +127,7 @@ final class ClonedTurnWireTests: XCTestCase {
                 attachments: [Self.detachedServerFile()]
             )
         ]
-        let turns = ConverseRequest.priorTurns(from: records, dispatchFileLaneID: Self.laneB)
+        let turns = ConverseRequest.priorTurns(from: records, dispatchFileLaneID: Self.laneB).turns
         let content = try Self.wireContent(turns)
         XCTAssertTrue(content[0].contains("not available in the current file-transfer lane"),
                       "A cloned USER turn's detached file must still be disclosed in history.")
@@ -152,7 +152,7 @@ final class ClonedTurnWireTests: XCTestCase {
                 attachments: [Self.detachedServerFile()]
             )
         ]
-        let turns = ConverseRequest.priorTurns(from: records, dispatchFileLaneID: Self.laneB)
+        let turns = ConverseRequest.priorTurns(from: records, dispatchFileLaneID: Self.laneB).turns
         let content = try Self.wireContent(turns)
         XCTAssertTrue(content[0].contains("not available in the current file-transfer lane"),
                       "A cloned agent output the new lane cannot serve must be disclosed, not left implicitly claimable.")
@@ -185,7 +185,7 @@ final class ClonedTurnWireTests: XCTestCase {
                 attachments: [attachment]
             )
         ]
-        let turns = ConverseRequest.priorTurns(from: records, dispatchFileLaneID: Self.laneA)
+        let turns = ConverseRequest.priorTurns(from: records, dispatchFileLaneID: Self.laneA).turns
         let content = try Self.wireContent(turns)
         XCTAssertTrue(content[0].contains("z__out.md"),
                       "A same-lane agent output is still addressable and must keep its reference.")

@@ -461,6 +461,14 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         // turn's `sourceDevice` via `GatewayInputMode.from(sourceDevice:)`.
         origin: GatewayAttemptOrigin,
         inputMode: GatewayInputMode,
+        // The prior-turn attachment shape of `priorTurns`, counted by the
+        // caller's assembler. It cannot be recovered here: the inline text-file
+        // blocks a prior turn contributed are ordinary text by the time they
+        // reach this method, indistinguishable from anything else the turn
+        // said. Defaulted so a caller that measures nothing records zeroes
+        // rather than failing to dispatch — the ledger never gates a send.
+        priorTurnInlineImageCount: Int = 0,
+        priorTurnInlineTextFileCount: Int = 0,
         shareEnvelopeID: UUID? = nil,
         // The user `Message.id` of THIS turn, when the caller knows it (in-app
         // VM, headless intent, share drain). Threaded into the recovery
@@ -679,7 +687,16 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
                     gatewayRef: ref.rawString,
                     origin: origin,
                     inputMode: inputMode,
-                    requestedModel: model
+                    requestedModel: model,
+                    // The KIND of hardware this dispatch ran on, never the name
+                    // the user gave the device. A CarPlay turn runs on the
+                    // phone and says so; the head unit is derived from the
+                    // origin at read time.
+                    deviceClass: SourceDevice.current,
+                    currentTurnInlineImageCount: newUserImageDataURIs.count,
+                    priorTurnInlineImageCount: priorTurnInlineImageCount,
+                    currentTurnInlineTextFileCount: newUserTextFileBlocks.count,
+                    priorTurnInlineTextFileCount: priorTurnInlineTextFileCount
                 )
             )
         } else {

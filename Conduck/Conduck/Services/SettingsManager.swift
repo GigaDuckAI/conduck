@@ -6166,6 +6166,71 @@ actor SettingsManager {
         return true
     }
 
+    // MARK: - Usage-history clear cutoff (App Groups + iCloud KVS)
+    //
+    // What makes "Clear usage history" account-wide without a sixth CloudKit
+    // field. The ledger lives in the conversation store's own private mirror,
+    // and a deletion there only reaches devices that are online to receive it —
+    // a device that was offline through the clear still holds its rows and
+    // would import them straight back afterwards. The CUTOFF is what travels:
+    // every device that receives it stops counting rows at or before it
+    // immediately, and purges them on its next dashboard load.
+    //
+    // MERGE RULE IS MAX, AND IT NEVER REGRESSES. Two devices clearing minutes
+    // apart, or a stale KVS value arriving after a newer local one, must settle
+    // on the LATER instant — taking the earlier would un-clear history the user
+    // already cleared. That makes the value convergent with no ordering
+    // guarantee from the transport, which is the only property KVS actually
+    // offers.
+    //
+    // Stored as a reference-date interval (a `Double`) rather than a `Date`,
+    // because that is what both stores carry natively.
+
+    /// The instant usage history was last cleared through, or nil if it never
+    /// was. Rows at or before it are excluded from every dashboard read; the
+    /// store applies the exclusion, this only holds the value.
+    func gatewayUsageClearedThrough() -> Date? {
+        let local = Self.clearedThroughValue(defaults.object(forKey: Self.gatewayUsageClearedThroughKey))
+        guard iCloudAvailable else { return local }
+        let remote = Self.clearedThroughValue(
+            iCloudStore.object(forKey: Self.gatewayUsageClearedThroughKey))
+        guard let remote else { return local }
+        guard let local else { return remote }
+        return max(local, remote)
+    }
+
+    /// Move the cutoff forward to `date`, and report where it actually stands.
+    /// A `date` at or before the stored value writes nothing and returns the
+    /// stored one — the cutoff only ever advances.
+    ///
+    /// Dual-writes local + KVS so the exclusion is durable on this device
+    /// before any sync happens, and posts `.settingsDidChangeRemotely` so an
+    /// open dashboard reloads against the new cutoff.
+    @discardableResult
+    func advanceGatewayUsageClearedThrough(_ date: Date) -> Date {
+        let current = gatewayUsageClearedThrough()
+        guard current == nil || date > current! else { return current! }
+        let interval = date.timeIntervalSinceReferenceDate
+        defaults.set(interval, forKey: Self.gatewayUsageClearedThroughKey)
+        if iCloudAvailable {
+            iCloudStore.set(interval, forKey: Self.gatewayUsageClearedThroughKey)
+        }
+        postSettingsDidChangeRemotely()
+        return date
+    }
+
+    /// Same key in both stores — the value is identical on either side, so
+    /// there is nothing for a second key literal to disambiguate.
+    private static let gatewayUsageClearedThroughKey = "gatewayUsageClearedThrough"
+
+    /// A stored cutoff read back. Nil for an absent key AND for a
+    /// non-positive interval: a zero is what a store returns for a key it does
+    /// not have, and treating it as a cutoff would date every clear to 2001.
+    private static func clearedThroughValue(_ raw: Any?) -> Date? {
+        guard let interval = (raw as? NSNumber)?.doubleValue, interval > 0 else { return nil }
+        return Date(timeIntervalSinceReferenceDate: interval)
+    }
+
     // MARK: - Lifecycle (called by ConduckApp)
 
     /// Pull current iCloud KVS values into local App Groups UserDefaults.
@@ -6235,6 +6300,21 @@ actor SettingsManager {
         } else if let localTTS = defaults.string(forKey: Constants.ttsActiveProviderIDKVSKey),
                   !localTTS.isEmpty {
             iCloudStore.set(localTTS, forKey: Constants.ttsActiveProviderIDKVSKey)
+        }
+
+        // Usage-history clear cutoff. NOT iCloud-wins like the pointers above —
+        // MAX wins, in both directions, because an earlier cutoff can only
+        // un-clear history the user already cleared. Settling both stores on
+        // the merged value is also how a device that cleared while offline
+        // publishes its cutoff on the next launch.
+        let localClear = Self.clearedThroughValue(
+            defaults.object(forKey: Self.gatewayUsageClearedThroughKey))
+        let cloudClear = Self.clearedThroughValue(
+            iCloudStore.object(forKey: Self.gatewayUsageClearedThroughKey))
+        if let merged = [localClear, cloudClear].compactMap({ $0 }).max() {
+            let interval = merged.timeIntervalSinceReferenceDate
+            defaults.set(interval, forKey: Self.gatewayUsageClearedThroughKey)
+            iCloudStore.set(interval, forKey: Self.gatewayUsageClearedThroughKey)
         }
 
         // Cold-launch backfill: an iOS install configured BEFORE the
@@ -6732,6 +6812,23 @@ actor SettingsManager {
                 defaults.removeObject(forKey: Constants.ttsActiveProviderIDKVSKey)
             }
             didChange = true
+        }
+
+        // Mirror a remote usage-clear cutoff — MAX only. A peer's clear must
+        // take effect here immediately, and a stale or REMOVED remote value
+        // must never move the cutoff backwards: this device would start
+        // counting rows the user already cleared, and would then re-publish
+        // that regression to everyone else.
+        if changedKeys.contains(Self.gatewayUsageClearedThroughKey),
+           let remoteClear = Self.clearedThroughValue(
+            iCloudStore.object(forKey: Self.gatewayUsageClearedThroughKey)) {
+            let localClear = Self.clearedThroughValue(
+                defaults.object(forKey: Self.gatewayUsageClearedThroughKey))
+            if localClear == nil || remoteClear > localClear! {
+                defaults.set(remoteClear.timeIntervalSinceReferenceDate,
+                             forKey: Self.gatewayUsageClearedThroughKey)
+                didChange = true
+            }
         }
 
         // Mirror a remote Watch read-aloud toggle change into App Groups

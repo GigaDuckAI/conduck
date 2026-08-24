@@ -34,6 +34,20 @@
 //   - Turn counts divide by DISTINCT `userMessageID`, so retries move the
 //     attempt numbers and leave the activity numbers alone.
 //
+// A FOURTH DENOMINATOR JOINS THEM FOR RELIABILITY, AND IT IS NARROWER THAN ALL
+// OF THEM: `resolvedTurns` counts only turns whose FINAL attempt reached a
+// stored terminal outcome. First-try delivery and retry recovery divide by it,
+// because a turn still being retried has not yet delivered or failed to, and
+// leaving it in either denominator would report an outcome it has not had.
+//
+// ONE RANKING BASIS PER LIST, NEVER MIXED. Heaviest threads and largest turns
+// rank on gateway-REPORTED totals when any thread in range has one, and on
+// calculated input+output components otherwise — never a per-thread choice
+// between them, which would rank one thread's reported total against another's
+// client-computed sum and call the comparison a ranking. Threads that cannot
+// answer under the chosen basis are absent from the list rather than ranked at
+// zero, and the basis travels with the list so the screen can name it.
+//
 // EVERY RATE IS OPTIONAL AND NIL MEANS UNAVAILABLE. A zero denominator yields
 // nil, never 0.0 and never a NaN — "no attempts resolved yet" and "nothing
 // succeeded" are different claims and the dashboard has to be able to tell them
@@ -69,6 +83,22 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
     let retryRate: Double?
     /// `completedTurns / attemptedTurns`, nil when no turn was attempted.
     let completedTurnRate: Double?
+    /// Turns whose FINAL attempt — latest `startedAt` — reached a stored
+    /// terminal outcome. The reliability denominator, and deliberately not
+    /// `attemptedTurns`: a turn still being retried has not yet delivered or
+    /// failed to, and counting it either way reports an outcome it has not had.
+    let resolvedTurns: Int
+    /// Resolved turns whose EARLIEST attempt succeeded — the turn landed
+    /// without ever being retried. Over `resolvedTurns`.
+    let firstAttemptDeliveredTurns: Int
+    /// Resolved turns carrying more than one attempt. Kept apart from
+    /// `retriedTurns` because the two answer different questions over different
+    /// populations, and dividing recovery by the wider one would count turns
+    /// that have not finished retrying as retries that failed to recover.
+    let resolvedRetriedTurns: Int
+    /// Retried, resolved turns whose FINAL attempt succeeded. Over
+    /// `resolvedRetriedTurns`.
+    let retriedTurnsRecovered: Int
     /// `succeeded / (succeeded + failed)`. Cancellations, unclassifiable
     /// landings and every derived state stay OUT of this denominator; nil when
     /// nothing resolved into either half.
@@ -76,10 +106,12 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
     /// Attempts linked to completed turns / completed turns — how many tries a
     /// turn that eventually worked actually took. Nil when nothing completed.
     let attemptsPerCompletedTurn: Double?
-    /// Distinct conversations with a recorded attempt in range. A
-    /// MEASUREMENT-ERA count: a conversation whose turns all predate the ledger
-    /// is retained history, not measured activity.
-    let activeConversations: Int
+    /// Distinct conversations with a recorded attempt in range, INCLUDING
+    /// conversations the user has since deleted — usage outlives the thread it
+    /// describes, so a count named for live threads would be a lie the moment
+    /// one is deleted. Rows that recorded no conversation are counted in every
+    /// total above and in no thread.
+    let threadsWithUsage: Int
     let outcomeMix: GatewayUsageOutcomeMix
     let tokens: GatewayUsageTokens
     let responseTime: GatewayUsageResponseTime
@@ -94,6 +126,23 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
     let byGateway: [GatewayUsageGroup]
     /// Per requested model, across every gateway, busiest first.
     let byRequestedModel: [GatewayUsageGroup]
+    /// Per device bucket, busiest first, keyed by `UsageDeviceBucket.rawValue`.
+    /// Same shape as `byGateway` so one row view draws both.
+    let deviceGroups: [GatewayUsageGroup]
+    /// Failed attempts by Conduck's OWN error code, commonest first. Never a
+    /// server code, status or message — the code is resolved to the app's user
+    /// facing description at render time.
+    let failureReasons: [FailureReasonCount]
+    /// How the original turns were acquired, busiest first.
+    let inputModes: [InputModeSlice]
+    /// Heaviest threads, and the single basis they were ranked on.
+    let threadRanking: ThreadRanking
+    /// Heaviest individual turns, ranked on `threadRanking.basis` — the same
+    /// basis, so a turn's figure and its thread's figure are comparable.
+    let largestTurns: [TurnOutlier]
+    /// What rode along with the turns: how many carried images or text files,
+    /// and how much of the range could answer at all.
+    let attachmentContext: AttachmentContext
 
     /// Nothing recorded in this range. The dashboard's empty state asks a
     /// wider question (nothing recorded EVER) and reads its own flag.
@@ -106,17 +155,197 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
         retriedTurns: 0,
         retryRate: nil,
         completedTurnRate: nil,
+        resolvedTurns: 0,
+        firstAttemptDeliveredTurns: 0,
+        resolvedRetriedTurns: 0,
+        retriedTurnsRecovered: 0,
         resolvedAttemptSuccessRate: nil,
         attemptsPerCompletedTurn: nil,
-        activeConversations: 0,
+        threadsWithUsage: 0,
         outcomeMix: .empty,
         tokens: .empty,
         responseTime: .empty,
         truncatedReplies: 0,
         dailyActivity: [],
         byGateway: [],
-        byRequestedModel: []
+        byRequestedModel: [],
+        deviceGroups: [],
+        failureReasons: [],
+        inputModes: [],
+        threadRanking: .empty,
+        largestTurns: [],
+        attachmentContext: .empty
     )
+}
+
+// MARK: - Reliability, device and attachment slices
+
+/// One failure code and how often it landed. The code is Conduck's own
+/// `AppError.errorCode`: a stable local integer with a user-facing description
+/// the app already owns, and NEVER the provider's message or HTTP status, which
+/// the ledger refuses to store at all.
+nonisolated struct FailureReasonCount: Sendable, Equatable, Identifiable {
+    let appErrorCode: Int
+    let count: Int
+
+    var id: Int { appErrorCode }
+}
+
+/// How the original turns were acquired. Attempts and turns are reported
+/// separately for the same reason they are everywhere else — a retried voice
+/// turn is one turn's worth of speaking and two attempts' worth of load.
+nonisolated struct InputModeSlice: Sendable, Equatable, Identifiable {
+    let mode: GatewayInputMode
+    let attempts: Int
+    let turns: Int
+
+    var id: String { mode.rawValue }
+}
+
+/// The device an attempt ran from, as the dashboard groups them. A BUCKET, not
+/// a device identity: it is derived from the coarse hardware class and the
+/// surface, never from a user-assigned device name, and it cannot distinguish
+/// two iPhones.
+///
+/// CarPlay and the wrist are surfaces, not hardware — a CarPlay dispatch runs on
+/// the iPhone and stamps `iphone` as its class — so the surface wins where it is
+/// dedicated, which is what makes "By device" answer the question the user is
+/// actually asking.
+nonisolated enum UsageDeviceBucket: String, Sendable, Hashable, CaseIterable, Identifiable {
+    case iphone
+    case ipad
+    case mac
+    case watch
+    case carPlay
+    case unknown
+
+    var id: String { rawValue }
+
+    /// THE SOLE DERIVATION POINT. Dedicated surfaces first, then the class the
+    /// dispatching device stamped, then the parent turn's `sourceDevice` tag as
+    /// a fallback for rows written before the class existed. Anything else is
+    /// `unknown` — an honest bucket, never folded into the commonest one.
+    static func from(record: GatewayAttemptRecord) -> UsageDeviceBucket {
+        switch record.origin {
+        case .carPlay: return .carPlay
+        case .watch: return .watch
+        default: break
+        }
+        let stamped = record.originDeviceClass
+            ?? GatewayAttemptDeviceClass.from(sourceDevice: record.fallbackSourceDevice)
+        switch stamped?.lowercased() {
+        case "iphone": return .iphone
+        case "ipad": return .ipad
+        case "mac": return .mac
+        case "watch": return .watch
+        // A CarPlay dispatch stamps `iphone`, so this arm only fires for a row
+        // whose class came from a `carplay-` tagged turn. Recognised so it lands
+        // in the bucket the user sees rather than silently as unknown.
+        case "carplay": return .carPlay
+        default: return .unknown
+        }
+    }
+}
+
+/// Heaviest threads plus the ONE basis they were ranked on. The basis is part of
+/// the value because the screen has to name it: "ranked by gateway-reported
+/// totals" and "ranked by calculated components" are different claims, and a
+/// list that let each thread pick would be neither.
+nonisolated struct ThreadRanking: Sendable, Equatable {
+    enum Basis: Sendable, Equatable {
+        /// `usage.total_tokens` exactly as the gateway reported it.
+        case reportedTotals
+        /// Input + output, summed by this client, for ranges where no gateway
+        /// reported a total at all. Never mixed with the above.
+        case calculatedComponents
+    }
+
+    let basis: Basis
+    /// Heaviest first, capped at `GatewayUsageAggregator.maxRankedThreads`.
+    /// Threads that reported nothing under `basis` are ABSENT rather than
+    /// ranked at zero — a thread with no figure has not been measured, and
+    /// drawing it last would read as the lightest one.
+    let threads: [ThreadUsage]
+
+    /// An empty ranking still names a basis so the type stays total; nothing
+    /// renders a basis caption for an empty list.
+    static let empty = ThreadRanking(basis: .reportedTotals, threads: [])
+}
+
+/// One conversation's measured usage. CONTENT-FREE like everything else here:
+/// an id, timings, gateway slots and counts. The title the user reads is
+/// resolved from the conversation at render time, and is simply absent when the
+/// conversation is not there any more.
+nonisolated struct ThreadUsage: Sendable, Equatable, Identifiable {
+    let conversationID: UUID
+    /// First and last attempt START in range — the span a row draws. Threads
+    /// whose rows all lack a start instant are not ranked: a span cannot be
+    /// invented from rows that cannot say when they ran.
+    let earliestStart: Date
+    let latestStart: Date
+    /// Distinct `RemoteAgentRef` raw strings, in first-seen chronological
+    /// order. A thread bound to one gateway has one entry; a cloned-and-switched
+    /// thread has more, and the order is the order the user used them.
+    let gatewayRefs: [String?]
+    let attempts: Int
+    let turns: Int
+    /// The figure this thread was ranked on, under the list's single basis.
+    let rankedTokens: Int
+    /// Turns that reported anything under that basis — the numerator of the
+    /// "N of M turns reported" caption, whose M is `turns`.
+    let tokenReportedTurns: Int
+    /// Inline images (current turn + replayed prior turns) summed over rows
+    /// that MEASURED attachments at all. Nil when no row in the thread did:
+    /// zero would claim the thread carried no images, which is a different
+    /// statement from not having counted.
+    let inlineImageCount: Int?
+    let inlineTextFileCount: Int?
+    /// Rows behind the two sums above — the coverage they are honest about.
+    let attachmentMeasuredAttempts: Int
+
+    var id: UUID { conversationID }
+}
+
+/// One heavy turn. Carries its conversation so the screen can navigate to it,
+/// and nothing that would describe what was asked.
+nonisolated struct TurnOutlier: Sendable, Equatable, Identifiable {
+    let conversationID: UUID
+    let userMessageID: UUID
+    /// The turn's EARLIEST attempt start — when the user asked, not when the
+    /// last retry gave up.
+    let startedAt: Date
+    /// The slot the earliest attempt used.
+    let gatewayRef: String?
+    /// Summed across every attempt on the turn: a retry that reached the
+    /// gateway was paid for whether or not its reply was kept.
+    let tokens: Int
+    let basis: ThreadRanking.Basis
+    let inlineImageCount: Int?
+    let inlineTextFileCount: Int?
+
+    var id: UUID { userMessageID }
+}
+
+/// What rode along with the turns, and how much of the range can answer.
+/// Attachment counts are stamped at INSERT, so every row written by a client
+/// that records them can answer regardless of how the attempt ended — the
+/// coverage denominator is `recordedAttempts`, not the terminal subset the
+/// token fields use.
+nonisolated struct AttachmentContext: Sendable, Equatable {
+    /// Rows carrying attachment counts at all. Zero means the range predates
+    /// the measurement, which is why every figure below travels with it.
+    let measuredAttempts: Int
+    /// Distinct turns whose measured rows carried at least one inline image.
+    let turnsWithImages: Int
+    let turnsWithTextFiles: Int
+    /// Prior-turn images re-sent on later requests — the cost of image history,
+    /// which is the one number that explains a slow, expensive thread.
+    let replayedImageTotal: Int
+
+    var isEmpty: Bool { measuredAttempts == 0 }
+
+    static let empty = AttachmentContext(
+        measuredAttempts: 0, turnsWithImages: 0, turnsWithTextFiles: 0, replayedImageTotal: 0)
 }
 
 /// The full effective-outcome distribution. Reported WHOLE — a high
@@ -233,6 +462,11 @@ nonisolated struct GatewayUsageResponseTime: Sendable, Equatable {
 /// One calendar day of activity. Attempts and turns are kept apart here for the
 /// same reason they are everywhere else: three retries of one turn are one
 /// turn's worth of activity and three attempts' worth of load.
+///
+/// The chart draws one metric at a time from this bucket, so every field below
+/// carries the same denominators the range totals use — a day's bar and the
+/// headline above it have to be the same kind of number, or the chart quietly
+/// contradicts the figure it sits under.
 nonisolated struct GatewayUsageDailyBucket: Sendable, Equatable, Identifiable {
     /// Start of day in the calendar the aggregation ran under.
     let day: Date
@@ -240,8 +474,54 @@ nonisolated struct GatewayUsageDailyBucket: Sendable, Equatable, Identifiable {
     /// Distinct user turns attempted that day. A turn whose retries straddle
     /// midnight counts in both days; the range total counts it once.
     let turns: Int
+    /// The day's reliability denominator: attempts that landed SUCCEEDED or
+    /// FAILED, and nothing else. Deliberately NARROWER than
+    /// `GatewayUsageOutcomeMix.resolved`, which also holds cancellations and
+    /// unclassifiable landings — this is the denominator
+    /// `resolvedAttemptSuccessRate` divides by, so the per-day bar and the
+    /// range's success rate answer the same question. A day of nothing but
+    /// cancellations is zero here and draws NO bar, because a cancelled turn is
+    /// not a turn that failed.
+    let resolvedAttempts: Int
+    /// Of `resolvedAttempts`, the ones that succeeded. Numerator of the day's
+    /// success rate; meaningless without the denominator beside it.
+    let succeededAttempts: Int
+    /// The day's best-available token volume: for each terminal attempt, its
+    /// gateway-reported total, else its input + output when BOTH are present,
+    /// else nothing. Bases are mixed WITHIN a day on purpose — this is a volume,
+    /// not a ranking, and nothing is being ordered against anything — which is
+    /// exactly why `tokenMeasuredAttempts` travels beside it.
+    ///
+    /// Zero is ambiguous on its own (nobody reported, or everybody reported
+    /// zero); the coverage count tells the two apart, and naming the figure
+    /// honestly on screen is the UI's job.
+    let reportedTokens: Int
+    /// Attempts behind `reportedTokens`, whose denominator is `attempts`. Zero
+    /// means the day can say nothing about tokens.
+    let tokenMeasuredAttempts: Int
 
     var id: Date { day }
+
+    /// The four metric fields default to zero so a bucket built by hand — a
+    /// preview, a fixture for the turns-only path — states only what it means
+    /// to. A zeroed bucket reads as a quiet day, which is what a gap day is.
+    init(
+        day: Date,
+        attempts: Int,
+        turns: Int,
+        resolvedAttempts: Int = 0,
+        succeededAttempts: Int = 0,
+        reportedTokens: Int = 0,
+        tokenMeasuredAttempts: Int = 0
+    ) {
+        self.day = day
+        self.attempts = attempts
+        self.turns = turns
+        self.resolvedAttempts = resolvedAttempts
+        self.succeededAttempts = succeededAttempts
+        self.reportedTokens = reportedTokens
+        self.tokenMeasuredAttempts = tokenMeasuredAttempts
+    }
 }
 
 /// A slice of the range — one gateway slot, or one requested model. Carries the
@@ -294,6 +574,15 @@ nonisolated enum GatewayUsageAggregator {
     /// instead of a hang.
     static let maxDailyBuckets = 3_660
 
+    /// Ceiling on the ranked-thread list. The screen shows five and offers the
+    /// rest; a ledger with tens of thousands of threads still costs one bounded
+    /// array, and nobody scrolls past fifty.
+    static let maxRankedThreads = 50
+
+    /// Ceiling on the largest-turn list, which is only ever a drill-down's
+    /// "heaviest few" rather than a browsable list.
+    static let maxLargestTurns = 10
+
     /// Everything for one range, in a single pass.
     ///
     /// - Parameters:
@@ -322,6 +611,8 @@ nonisolated enum GatewayUsageAggregator {
 
         let turns = turnCounts(for: items)
         let mix = outcomeMix(for: items)
+        let reliability = turnReliability(for: items)
+        let ranking = threadRanking(for: items)
 
         return GatewayUsageSummary(
             recordedAttempts: items.count,
@@ -330,16 +621,26 @@ nonisolated enum GatewayUsageAggregator {
             retriedTurns: turns.retried,
             retryRate: ratio(turns.retried, turns.attempted),
             completedTurnRate: ratio(turns.completed, turns.attempted),
+            resolvedTurns: reliability.resolved,
+            firstAttemptDeliveredTurns: reliability.firstAttemptDelivered,
+            resolvedRetriedTurns: reliability.retried,
+            retriedTurnsRecovered: reliability.recovered,
             resolvedAttemptSuccessRate: ratio(mix.succeeded, mix.succeeded + mix.failed),
             attemptsPerCompletedTurn: ratio(turns.attemptsOnCompletedTurns, turns.completed),
-            activeConversations: Set(items.compactMap { $0.record.conversationID }).count,
+            threadsWithUsage: Set(items.compactMap { $0.record.conversationID }).count,
             outcomeMix: mix,
             tokens: tokens(for: items),
             responseTime: responseTime(for: items),
             truncatedReplies: items.count(where: { $0.isTruncated }),
             dailyActivity: dailyActivity(for: items, range: activityRange, calendar: calendar),
             byGateway: gatewayGroups(for: items),
-            byRequestedModel: modelGroups(for: items)
+            byRequestedModel: modelGroups(for: items),
+            deviceGroups: deviceGroups(for: items),
+            failureReasons: failureReasons(for: items),
+            inputModes: inputModes(for: items),
+            threadRanking: ranking,
+            largestTurns: largestTurns(for: items, basis: ranking.basis),
+            attachmentContext: attachmentContext(for: items)
         )
     }
 
@@ -440,6 +741,43 @@ nonisolated enum GatewayUsageAggregator {
                 options: [.caseInsensitive]
             ) == .orderedSame
         }
+
+        /// What rode along with this request, or nil when the row predates the
+        /// counting. NOT filtered by outcome: the counts are stamped at insert,
+        /// so an attempt that never landed still measured what it carried.
+        ///
+        /// A row that carries SOME of the four columns answers with the ones it
+        /// has and zero for the rest — a half-materialised mirrored row is
+        /// partial evidence, not absent evidence. Negative values from a corrupt
+        /// column floor at zero; a negative attachment count is meaningless and
+        /// would silently subtract from a neighbouring row's real one.
+        var attachmentCounts: (images: Int, textFiles: Int, replayedImages: Int)? {
+            let current = record.currentTurnInlineImageCount
+            let prior = record.priorTurnInlineImageCount
+            let currentFiles = record.currentTurnInlineTextFileCount
+            let priorFiles = record.priorTurnInlineTextFileCount
+            guard current != nil || prior != nil || currentFiles != nil || priorFiles != nil
+            else { return nil }
+            let priorImages = max(0, prior ?? 0)
+            return (
+                images: max(0, current ?? 0) + priorImages,
+                textFiles: max(0, currentFiles ?? 0) + max(0, priorFiles ?? 0),
+                replayedImages: priorImages
+            )
+        }
+    }
+
+    /// Attempt order WITHIN one turn or thread: by start instant, then by id so
+    /// two rows stamped in the same millisecond still order the same way on
+    /// every device. A row with no start instant sorts LAST — it cannot be
+    /// claimed to have been the first try, and treating it as the final one
+    /// keeps a turn it belongs to from being called resolved on the strength of
+    /// an earlier row.
+    private static func chronological(_ lhs: Classified, _ rhs: Classified) -> Bool {
+        let left = lhs.record.startedAt ?? .distantFuture
+        let right = rhs.record.startedAt ?? .distantFuture
+        if left != right { return left < right }
+        return lhs.record.id.uuidString < rhs.record.id.uuidString
     }
 
     // MARK: - Turn arithmetic
@@ -465,6 +803,38 @@ nonisolated enum GatewayUsageAggregator {
             retried: attemptsPerTurn.count(where: { $0.value > 1 }),
             attemptsOnCompletedTurns: attemptsOnCompletedTurns
         )
+    }
+
+    /// Reliability over turns whose story is FINISHED. A turn is resolved when
+    /// its final attempt — the latest one that started — reached a stored
+    /// terminal outcome; everything below divides by that population.
+    ///
+    /// Deliberately NOT `turnCounts.retried`, which counts every attempted turn
+    /// with a retry. Recovery divided by that number would count a turn still
+    /// being retried as a retry that failed to recover, and the figure would
+    /// improve on its own as unrelated rows landed.
+    private static func turnReliability(
+        for items: [Classified]
+    ) -> (firstAttemptDelivered: Int, resolved: Int, retried: Int, recovered: Int) {
+        var byTurn: [UUID: [Classified]] = [:]
+        for item in items {
+            guard let turn = item.record.userMessageID else { continue }
+            byTurn[turn, default: []].append(item)
+        }
+
+        var firstAttemptDelivered = 0, resolved = 0, retried = 0, recovered = 0
+        for (_, rows) in byTurn {
+            let ordered = rows.sorted(by: chronological)
+            guard let first = ordered.first, let last = ordered.last, last.isResolved
+            else { continue }
+            resolved += 1
+            if first.isSucceeded { firstAttemptDelivered += 1 }
+            if ordered.count > 1 {
+                retried += 1
+                if last.isSucceeded { recovered += 1 }
+            }
+        }
+        return (firstAttemptDelivered, resolved, retried, recovered)
     }
 
     // MARK: - Outcome mix
@@ -556,6 +926,11 @@ nonisolated enum GatewayUsageAggregator {
     /// totals but land in no bucket: a row that cannot say when it began cannot
     /// be drawn on a date axis, and assigning it to "today" would move a bar
     /// that describes a day it has nothing to do with.
+    ///
+    /// A day is bucketed on the attempt's START, so every metric on a bucket is
+    /// "work begun that day" — a turn dispatched before midnight and answered
+    /// after it belongs to the day the user asked, which is the day they
+    /// remember.
     private static func dailyActivity(
         for items: [Classified],
         range: ClosedRange<Date>?,
@@ -563,12 +938,28 @@ nonisolated enum GatewayUsageAggregator {
     ) -> [GatewayUsageDailyBucket] {
         var attemptsPerDay: [Date: Int] = [:]
         var turnsPerDay: [Date: Set<UUID>] = [:]
+        var resolvedPerDay: [Date: Int] = [:]
+        var succeededPerDay: [Date: Int] = [:]
+        var tokensPerDay: [Date: Int64] = [:]
+        var tokenAttemptsPerDay: [Date: Int] = [:]
         for item in items {
             guard let startedAt = item.record.startedAt else { continue }
             let day = calendar.startOfDay(for: startedAt)
             attemptsPerDay[day, default: 0] += 1
             if let turn = item.record.userMessageID {
                 turnsPerDay[day, default: []].insert(turn)
+            }
+            // Succeeded and failed ONLY — see `resolvedAttempts`. A cancelled
+            // or unclassifiable landing is neither a win nor a loss, and
+            // letting it into the denominator would draw a bar that reads as a
+            // bad day when nothing bad happened.
+            if let outcome = item.storedOutcome, outcome == .succeeded || outcome == .failed {
+                resolvedPerDay[day, default: 0] += 1
+                if outcome == .succeeded { succeededPerDay[day, default: 0] += 1 }
+            }
+            if let tokens = bestAvailableTokens(item) {
+                tokenAttemptsPerDay[day, default: 0] += 1
+                tokensPerDay[day] = saturatingSum(tokensPerDay[day] ?? 0, tokens)
             }
         }
 
@@ -593,7 +984,11 @@ nonisolated enum GatewayUsageAggregator {
                 GatewayUsageDailyBucket(
                     day: day,
                     attempts: attemptsPerDay[day] ?? 0,
-                    turns: turnsPerDay[day]?.count ?? 0
+                    turns: turnsPerDay[day]?.count ?? 0,
+                    resolvedAttempts: resolvedPerDay[day] ?? 0,
+                    succeededAttempts: succeededPerDay[day] ?? 0,
+                    reportedTokens: Int(clamping: tokensPerDay[day] ?? 0),
+                    tokenMeasuredAttempts: tokenAttemptsPerDay[day] ?? 0
                 )
             )
             // RE-ANCHOR ON `startOfDay` AT EVERY STEP. Adding a day preserves
@@ -676,5 +1071,297 @@ nonisolated enum GatewayUsageAggregator {
         case (_, nil): return true
         case (let left?, let right?): return left < right
         }
+    }
+
+    /// Same group shape as the gateway rows, keyed by bucket raw value, so the
+    /// device rows and the gateway rows draw through one view.
+    private static func deviceGroups(for items: [Classified]) -> [GatewayUsageGroup] {
+        grouped(items, by: { UsageDeviceBucket.from(record: $0.record).rawValue })
+            .map { group(key: $0.key, members: $0.value, models: []) }
+            .sorted(by: rank)
+    }
+
+    // MARK: - Failure reasons and input modes
+
+    /// FAILED attempts only, by Conduck's own error code. A failure whose code
+    /// was never recorded is left out rather than bucketed as an unnamed
+    /// reason: the list exists to be read as reasons, and a nameless row would
+    /// be the largest bucket on any older range while explaining nothing.
+    private static func failureReasons(for items: [Classified]) -> [FailureReasonCount] {
+        var counts: [Int: Int] = [:]
+        for item in items {
+            guard item.storedOutcome == .failed, let code = item.record.appErrorCode
+            else { continue }
+            counts[code, default: 0] += 1
+        }
+        return counts
+            .map { FailureReasonCount(appErrorCode: $0.key, count: $0.value) }
+            .sorted {
+                $0.count != $1.count ? $0.count > $1.count : $0.appErrorCode < $1.appErrorCode
+            }
+    }
+
+    /// Every mode that appears, `unknown` included — a range whose turns mostly
+    /// predate mode capture must SAY so rather than have its known modes add up
+    /// to a whole they are not.
+    private static func inputModes(for items: [Classified]) -> [InputModeSlice] {
+        var attempts: [GatewayInputMode: Int] = [:]
+        var turns: [GatewayInputMode: Set<UUID>] = [:]
+        for item in items {
+            let mode = item.record.inputMode
+            attempts[mode, default: 0] += 1
+            if let turn = item.record.userMessageID { turns[mode, default: []].insert(turn) }
+        }
+        return attempts
+            .map {
+                InputModeSlice(mode: $0.key, attempts: $0.value, turns: turns[$0.key]?.count ?? 0)
+            }
+            .sorted {
+                $0.attempts != $1.attempts
+                    ? $0.attempts > $1.attempts
+                    : $0.mode.rawValue < $1.mode.rawValue
+            }
+    }
+
+    // MARK: - Ranking basis
+
+    /// What one attempt contributes under a basis, or nil when it cannot answer
+    /// under that basis at all.
+    ///
+    /// TERMINAL ROWS ONLY, exactly as the token fields above: a row that has not
+    /// ended has not had its chance to report, and letting an open row
+    /// contribute would make a thread's rank change without any new work
+    /// happening.
+    private static func tokenContribution(
+        _ item: Classified,
+        basis: ThreadRanking.Basis
+    ) -> Int64? {
+        guard item.isResolved else { return nil }
+        switch basis {
+        case .reportedTotals:
+            return item.record.reportedTotalTokens
+        case .calculatedComponents:
+            // BOTH components, never one: ranking a thread's input-only sum
+            // against another's input+output would order them by which gateway
+            // is chattier about its own accounting.
+            guard let input = item.record.reportedInputTokens,
+                  let output = item.record.reportedOutputTokens
+            else { return nil }
+            return saturatingSum(input, output)
+        }
+    }
+
+    /// What ONE attempt can say about its own token cost, best evidence first:
+    /// the gateway's reported total, else its input + output when both are
+    /// present, else nothing. Nil means the attempt reported nothing usable —
+    /// never zero, which would claim a free turn.
+    ///
+    /// Same preference order, and the same terminal-only gate, that
+    /// `GatewayUsageTokens.calculatedKnownComponents` applies to a whole range:
+    /// a client-computed sum is what you fall back to when no total was
+    /// reported, never a thing you prefer. The difference is scope — this
+    /// answers per attempt, so a range where some gateways total and others do
+    /// not can still draw a day's volume instead of drawing nothing.
+    ///
+    /// FOR VOLUMES ONLY, never for ranking: `tokenContribution` with a single
+    /// pinned basis is what orders threads and turns, precisely so one thread's
+    /// reported total is never ranked against another's client sum.
+    private static func bestAvailableTokens(_ item: Classified) -> Int64? {
+        tokenContribution(item, basis: .reportedTotals)
+            ?? tokenContribution(item, basis: .calculatedComponents)
+    }
+
+    /// ONE basis for the whole range, or nil when nothing can be ranked.
+    /// Gateway-reported totals win wherever any thread has one — a client sum
+    /// is a fallback for ranges no gateway totalled, never a per-thread
+    /// alternative.
+    ///
+    /// Only rows that name a conversation are consulted: a basis chosen from
+    /// unattributable rows would caption a list those rows can never appear in.
+    private static func rankingBasis<S: Sequence>(
+        for attributed: S
+    ) -> ThreadRanking.Basis? where S.Element == Classified {
+        if attributed.contains(where: { tokenContribution($0, basis: .reportedTotals) != nil }) {
+            return .reportedTotals
+        }
+        if attributed.contains(where: {
+            tokenContribution($0, basis: .calculatedComponents) != nil
+        }) {
+            return .calculatedComponents
+        }
+        return nil
+    }
+
+    // MARK: - Heaviest threads
+
+    private static func threadRanking(for items: [Classified]) -> ThreadRanking {
+        // Rows with no conversation are real attempts and count in every total
+        // above; they simply cannot be attributed to a thread, and inventing a
+        // thread for them would put a row on screen nothing can navigate to.
+        var byThread: [UUID: [Classified]] = [:]
+        for item in items {
+            guard let conversation = item.record.conversationID else { continue }
+            byThread[conversation, default: []].append(item)
+        }
+        // Lazily flattened: the basis question short-circuits on the first row
+        // that can answer it, so a 100k-row range never materialises a copy.
+        guard let basis = rankingBasis(for: byThread.values.lazy.flatMap({ $0 }))
+        else { return .empty }
+
+        let threads = byThread.compactMap { conversation, rows in
+            threadUsage(conversation: conversation, rows: rows, basis: basis)
+        }
+        .sorted(by: heaviestFirst)
+        .prefix(maxRankedThreads)
+
+        return ThreadRanking(basis: basis, threads: Array(threads))
+    }
+
+    /// One thread's row, or nil when it cannot be ranked under this basis —
+    /// nothing reported, or no attempt that can say when it ran.
+    private static func threadUsage(
+        conversation: UUID,
+        rows: [Classified],
+        basis: ThreadRanking.Basis
+    ) -> ThreadUsage? {
+        let ordered = rows.sorted(by: chronological)
+        let starts = ordered.compactMap { $0.record.startedAt }
+        guard let earliest = starts.first, let latest = starts.last else { return nil }
+
+        var refs: [String?] = []
+        var tokens: Int64 = 0
+        var reported = false
+        var reportedTurns: Set<UUID> = []
+        var turns: Set<UUID> = []
+        var images = 0, textFiles = 0, measured = 0
+
+        for item in ordered {
+            if !refs.contains(where: { $0 == item.record.gatewayRef }) {
+                refs.append(item.record.gatewayRef)
+            }
+            if let turn = item.record.userMessageID { turns.insert(turn) }
+            if let contribution = tokenContribution(item, basis: basis) {
+                reported = true
+                tokens = saturatingSum(tokens, contribution)
+                if let turn = item.record.userMessageID { reportedTurns.insert(turn) }
+            }
+            if let counts = item.attachmentCounts {
+                measured += 1
+                images += counts.images
+                textFiles += counts.textFiles
+            }
+        }
+        guard reported else { return nil }
+
+        return ThreadUsage(
+            conversationID: conversation,
+            earliestStart: earliest,
+            latestStart: latest,
+            gatewayRefs: refs,
+            attempts: ordered.count,
+            turns: turns.count,
+            rankedTokens: Int(clamping: tokens),
+            tokenReportedTurns: reportedTurns.count,
+            inlineImageCount: measured > 0 ? images : nil,
+            inlineTextFileCount: measured > 0 ? textFiles : nil,
+            attachmentMeasuredAttempts: measured
+        )
+    }
+
+    /// Heaviest first, then most recent, then on the id — so a redraw of two
+    /// equally heavy threads never reshuffles them under the user's finger.
+    private static func heaviestFirst(_ lhs: ThreadUsage, _ rhs: ThreadUsage) -> Bool {
+        if lhs.rankedTokens != rhs.rankedTokens { return lhs.rankedTokens > rhs.rankedTokens }
+        if lhs.latestStart != rhs.latestStart { return lhs.latestStart > rhs.latestStart }
+        return lhs.conversationID.uuidString < rhs.conversationID.uuidString
+    }
+
+    // MARK: - Largest turns
+
+    /// The heaviest individual turns under the SAME basis the thread list used,
+    /// so a turn's figure and its thread's figure are the same kind of number.
+    /// A turn needs both a conversation and a start instant: the row navigates,
+    /// and it draws a date.
+    private static func largestTurns(
+        for items: [Classified],
+        basis: ThreadRanking.Basis
+    ) -> [TurnOutlier] {
+        var byTurn: [UUID: [Classified]] = [:]
+        for item in items {
+            guard item.record.conversationID != nil, let turn = item.record.userMessageID
+            else { continue }
+            byTurn[turn, default: []].append(item)
+        }
+
+        let outliers = byTurn.compactMap { turn, rows -> TurnOutlier? in
+            let ordered = rows.sorted(by: chronological)
+            guard let first = ordered.first(where: { $0.record.startedAt != nil }),
+                  let startedAt = first.record.startedAt,
+                  let conversation = first.record.conversationID
+            else { return nil }
+
+            var tokens: Int64 = 0
+            var reported = false
+            var images = 0, textFiles = 0, measured = 0
+            for item in ordered {
+                if let contribution = tokenContribution(item, basis: basis) {
+                    reported = true
+                    tokens = saturatingSum(tokens, contribution)
+                }
+                if let counts = item.attachmentCounts {
+                    measured += 1
+                    images += counts.images
+                    textFiles += counts.textFiles
+                }
+            }
+            guard reported else { return nil }
+
+            return TurnOutlier(
+                conversationID: conversation,
+                userMessageID: turn,
+                startedAt: startedAt,
+                gatewayRef: first.record.gatewayRef,
+                tokens: Int(clamping: tokens),
+                basis: basis,
+                inlineImageCount: measured > 0 ? images : nil,
+                inlineTextFileCount: measured > 0 ? textFiles : nil
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.tokens != rhs.tokens { return lhs.tokens > rhs.tokens }
+            if lhs.startedAt != rhs.startedAt { return lhs.startedAt > rhs.startedAt }
+            return lhs.userMessageID.uuidString < rhs.userMessageID.uuidString
+        }
+        .prefix(maxLargestTurns)
+
+        return Array(outliers)
+    }
+
+    // MARK: - Attachment context
+
+    /// Coverage here is over ALL recorded attempts, not the terminal subset the
+    /// token fields use, because the counts are stamped when the row opens: an
+    /// attempt that never landed still measured what it carried.
+    private static func attachmentContext(for items: [Classified]) -> AttachmentContext {
+        var measured = 0
+        var replayed = 0
+        var turnsWithImages: Set<UUID> = []
+        var turnsWithTextFiles: Set<UUID> = []
+        for item in items {
+            guard let counts = item.attachmentCounts else { continue }
+            measured += 1
+            replayed += counts.replayedImages
+            // An unattributed row's attachments are counted in `measured` and in
+            // no turn — there is no turn to count it as.
+            guard let turn = item.record.userMessageID else { continue }
+            if counts.images > 0 { turnsWithImages.insert(turn) }
+            if counts.textFiles > 0 { turnsWithTextFiles.insert(turn) }
+        }
+        return AttachmentContext(
+            measuredAttempts: measured,
+            turnsWithImages: turnsWithImages.count,
+            turnsWithTextFiles: turnsWithTextFiles.count,
+            replayedImageTotal: replayed
+        )
     }
 }

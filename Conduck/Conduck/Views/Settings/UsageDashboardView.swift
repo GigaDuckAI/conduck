@@ -3,11 +3,19 @@
 // Conduck
 // UsageDashboardView.swift
 //
-// Settings ▸ Usage — the read surface over the gateway-attempt ledger. One
-// screen: how much you used your gateway, how often it answered, how long it
-// took, and what it reported about tokens. Nothing here is a score, a streak or
-// a goal; the product intent is measurement, and a number that would push
-// someone to use Conduck more does not belong on it.
+// Settings ▸ Usage — the read surface over the gateway-attempt ledger. The
+// overview: how much you used your gateway, how you gave it input, how often it
+// answered, how long it took, what it reported about tokens, and which devices
+// and threads the load came from. Nothing here is a score, a streak or a goal;
+// the product intent is measurement, and a number that would push someone to
+// use Conduck more does not belong on it.
+//
+// THE OVERVIEW ANSWERS "WHAT", THE DRILL-DOWNS ANSWER "WHICH". A gateway row, a
+// device row and the thread list each push a detail screen through `UsageRoute`,
+// and the overview deliberately keeps no nested breakdown of its own — a card
+// that expands in place turns the one screen a user scans into a tree they have
+// to navigate. The destinations are registered HERE, on the shared content root,
+// so all three hosts inherit one registration rather than three copies.
 //
 // `UsageDashboardContent` owns BOTH the cards and their container — a
 // `PlatformSettingsForm`, a grouped `Form` on iOS and a hand-drawn
@@ -39,20 +47,26 @@
 // coverage sits beside every token sum, and the outcome mix is reported whole so
 // a healthy-looking success rate can never be read as the whole story.
 //
-// CHART DISCIPLINE. One series, one measure, one y-scale, no legend — the card's
-// header names the series. The grid is recessive, values appear on SELECTION
-// rather than on every bar, and the bars carry the brand amber because they are
-// one quantity, not a category. Status colour is reserved for the outcome rows,
-// where it always travels with an icon AND a label so colour is never the only
-// carrier of meaning.
+// THE CHART IS `UsageActivityChart`, shared with both drill-downs — its own
+// file owns the chart discipline and the metric picker. Status colour on THIS
+// screen is reserved for the outcome rows, where it always travels with an icon
+// AND a label so colour is never the only carrier of meaning.
 //
 // CONTENT-FREE, AND THAT IS RELEASE-BLOCKING. Nothing rendered here is prompt or
 // reply text, a URL, a host, a token, a provider error string or an HTTP status.
 // The gateway rows show a SLOT's display name resolved from the roster at render
 // time — never a stored name, which would be a stale copy of a setting the user
-// can edit, and never the endpoint behind it.
+// can edit, and never the endpoint behind it. The thread rows carry no title and
+// no snippet: a date span, a gateway name and counts. A title is content, and the
+// only place one may appear is the conversation itself, which the row navigates
+// to rather than quoting.
+//
+// FAILURE REASONS REUSE THE APP'S OWN ERROR COPY. `DiagnosticsExplainer` is the
+// single map from a stored `AppError` code to the sentence a user reads, and it
+// is the map Diagnostics already renders. A second map written here would drift
+// from it silently — the two would disagree about the same failure on two screens
+// of the same app, and nothing would fail.
 
-import Charts
 import SwiftUI
 
 // MARK: - Nav-chrome wrapper (iPhone push · iPad detail)
@@ -91,6 +105,35 @@ enum UsageDashboardIdentity {
     static let systemImage = "chart.bar.xaxis"
 }
 
+// MARK: - Navigation
+
+/// The pushes the overview offers. A value route rather than a destination
+/// closure per row: every host renders the SAME content view, so one
+/// `navigationDestination(for:)` on that content covers the iPhone push, the
+/// iPad detail stack and the macOS category alike.
+///
+/// `gateway` carries a `RemoteAgentRef.rawString` — the configured SLOT, resolved
+/// to a display name at render time — and nil for the attempts that recorded no
+/// gateway at all, which is a real group rather than an absence to drop.
+enum UsageRoute: Hashable {
+    case gateway(String?)
+    case device(UsageDeviceBucket)
+    case allThreads
+}
+
+// MARK: - Stat tiles
+
+/// One figure in the Activity row, described rather than drawn so the row can
+/// be laid out three different ways without the tiles being written three
+/// times. `id` is a stable slug rather than the position: a conditional tile
+/// changes the count, and index identity would then re-key every tile after it.
+private struct UsageActivityStat: Identifiable {
+    let id: String
+    let value: String
+    let label: LocalizedStringResource
+    let accessibility: LocalizedStringResource
+}
+
 // MARK: - Shared content
 
 struct UsageDashboardContent: View {
@@ -102,14 +145,29 @@ struct UsageDashboardContent: View {
     /// slot still deserves its name rather than its raw token.
     @State private var gatewayRoster: [CustomGateway] = []
 
-    /// The day under the pointer / finger in the activity chart. Raw, because a
-    /// date scale reports where the gesture landed rather than which bar it hit;
-    /// the bucket is resolved by calendar day below.
-    @State private var rawSelectedDay: Date?
+    /// Whether the Reliability card's detail is open. Collapsed by default and
+    /// remembered per device: the headline answers the question most users
+    /// came with, and the rows underneath are the follow-up only some of them
+    /// have. Shared with the gateway drill-down's reliability block on purpose
+    /// — a user who opened the detail once asked to see detail.
+    @AppStorage("settings.usage.reliability.expanded")
+    private var reliabilityDetailExpanded: Bool = false
+
+    /// Gate for the destructive clear. Held here rather than in the model: it is
+    /// presentation state, and a model that owned it would have to be reset by
+    /// whichever host dismissed the dialog.
+    @State private var showingClearConfirmation = false
 
     /// Drives the stat-row layout: side by side at normal text sizes, stacked at
     /// accessibility sizes where three columns would crush every value.
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    #if os(iOS)
+    /// The fourth stat tile is what makes this matter: four columns fit an iPad
+    /// or a Mac card and crush an iPhone, where "Conversations" alone is wider
+    /// than the column it would get.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     /// Two ownership modes, mirroring `DiagnosticsContent`:
     ///   • `model: nil` (default) — SELF-OWNS a fresh model (the iPhone push).
@@ -147,11 +205,23 @@ struct UsageDashboardContent: View {
                 emptyRangeSection
             } else {
                 activitySection
+                // Only worth a card when there is a MIX to describe: one mode
+                // holding every turn is a row saying 100%, which tells the user
+                // what they already knew from having used the app.
+                if visibleInputModes.count > 1 {
+                    inputSection
+                }
                 reliabilitySection
                 responseTimeSection
                 tokensSection
+                if !model.summary.deviceGroups.isEmpty {
+                    deviceSection
+                }
                 if !model.summary.byGateway.isEmpty {
                     gatewaySection
+                }
+                if !model.summary.threadRanking.threads.isEmpty {
+                    threadsSection
                 }
             }
 
@@ -160,6 +230,19 @@ struct UsageDashboardContent: View {
             }
         }
         .scrollContentBackground(.hidden)
+        // ONE registration for three hosts. The iPhone push and the iPad detail
+        // already sit inside a `NavigationStack`; the macOS category supplies its
+        // own around this content.
+        .navigationDestination(for: UsageRoute.self) { route in
+            switch route {
+            case .gateway(let ref):
+                UsageGatewayDetailView(model: model, ref: ref)
+            case .device(let bucket):
+                UsageDeviceDetailView(model: model, bucket: bucket)
+            case .allThreads:
+                UsageAllThreadsView(model: model)
+            }
+        }
         // Deferred first load — the hosts build the model whether or not anyone
         // opens Usage, so the whole-ledger sweep waits until the screen is on
         // screen. Latched inside the model, so a re-fired `.task` costs nothing.
@@ -185,6 +268,18 @@ struct UsageDashboardContent: View {
             .labelsHidden()
             .tint(AppColors.brandAmber)
             .settingsCardPassiveRow()
+            // THE CONTROL IS THE ROW. A grouped `Form` insets its row content
+            // and paints a card behind it, so a segmented control left at the
+            // defaults draws a pill inside a pill — two rounded rectangles of
+            // almost the same size, with a band of section fill trapped between
+            // them. Zeroing the insets lets the control span the section, and
+            // clearing the row background leaves exactly one pill on screen.
+            // Both are `List` traits: they reach nothing on macOS, where the
+            // hand-drawn card gives this row its inset through
+            // `.settingsCardPassiveRow()` above, the same as every other row in
+            // the stack.
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
         }
     }
 
@@ -276,7 +371,11 @@ struct UsageDashboardContent: View {
         Section {
             statRow
             if !model.summary.dailyActivity.isEmpty {
-                activityChart
+                // The chart is a SHARED component, identical here and on both
+                // drill-downs — including which measure it is showing, which
+                // follows the user across the push rather than resetting.
+                UsageActivityChart(buckets: model.summary.dailyActivity)
+                    .settingsCardPassiveRow()
             }
         } header: {
             Text(LocalizedStringResource(
@@ -292,131 +391,210 @@ struct UsageDashboardContent: View {
     }
 
     private var statRow: some View {
+        statTileLayout(activityStats)
+            .settingsCardPassiveRow()
+    }
+
+    /// Turns · Completed · Conversations · Tokens. The fourth tile is
+    /// CONDITIONAL, matching how every other absent figure on this screen is
+    /// handled: a gateway that reports no usage leaves the tile out rather than
+    /// standing an em dash where a number belongs, which would read as a broken
+    /// measurement rather than a gateway that never promised one.
+    private var activityStats: [UsageActivityStat] {
         let summary = model.summary
-        return statLayout {
-            statTile(
+        var tiles: [UsageActivityStat] = [
+            UsageActivityStat(
+                id: "turns",
                 value: summary.attemptedTurns.formatted(.number),
                 label: LocalizedStringResource(
                     "settings.usage.stat.turns", defaultValue: "Turns"),
                 accessibility: LocalizedStringResource(
                     "settings.usage.stat.turns.a11y",
                     defaultValue: "\(summary.attemptedTurns) turns sent")
-            )
-            statTile(
+            ),
+            UsageActivityStat(
+                id: "completed",
                 value: summary.completedTurns.formatted(.number),
                 label: LocalizedStringResource(
                     "settings.usage.stat.completed", defaultValue: "Completed"),
                 accessibility: LocalizedStringResource(
                     "settings.usage.stat.completed.a11y",
                     defaultValue: "\(summary.completedTurns) turns completed")
-            )
-            statTile(
-                value: summary.activeConversations.formatted(.number),
+            ),
+            // Threads WITH USAGE, which is not the same as threads the user
+            // still has: the ledger outlives a deleted conversation, so this
+            // counts history rather than what the list would show. The coverage
+            // footer is where that is said in words.
+            UsageActivityStat(
+                id: "conversations",
+                value: summary.threadsWithUsage.formatted(.number),
                 label: LocalizedStringResource(
                     "settings.usage.stat.conversations", defaultValue: "Conversations"),
                 accessibility: LocalizedStringResource(
-                    "settings.usage.stat.conversations.a11y",
-                    defaultValue: "\(summary.activeConversations) conversations active")
+                    "settings.usage.stat.conversations.a11y.withUsage",
+                    defaultValue: "\(summary.threadsWithUsage) conversations with recorded usage")
             )
+        ]
+        if let tokens = activityTokenTotal {
+            tiles.append(UsageActivityStat(
+                id: "tokens",
+                // COMPACT on the face, exact in the label a screen reader
+                // speaks: four columns cannot hold "1,284,930", and a tile is
+                // an at-a-glance figure — the Tokens card below carries the
+                // full number and its coverage.
+                value: tokens.value.formatted(.number.notation(.compactName)),
+                label: LocalizedStringResource(
+                    "settings.usage.stat.tokens", defaultValue: "Tokens"),
+                accessibility: tokens.isReported
+                    ? LocalizedStringResource(
+                        "settings.usage.stat.tokens.a11y.reported",
+                        defaultValue: "\(tokens.value.formatted(.number)) tokens, reported by your gateway")
+                    : LocalizedStringResource(
+                        "settings.usage.stat.tokens.a11y.components",
+                        defaultValue: "\(tokens.value.formatted(.number)) tokens, input plus output added up")
+            ))
         }
-        .settingsCardPassiveRow()
+        return tiles
     }
 
-    /// Turns per day. ONE series, so no legend — the header names it — and no
-    /// value on any bar; the caption above swaps to the selected day's numbers
-    /// instead, which is the only place a number appears.
-    private var activityChart: some View {
-        let buckets = model.summary.dailyActivity
-        let selected = selectedBucket(in: buckets)
+    /// THE SAME RULE THE TOKENS CARD USES, because the tile and the card sit on
+    /// one screen showing one range: a gateway-reported total wins, and only
+    /// where there is none does the client's own sum of the components stand in
+    /// — flagged as such in the accessibility label, never presented as the
+    /// gateway's own number.
+    private var activityTokenTotal: (value: Int64, isReported: Bool)? {
+        let tokens = model.summary.tokens
+        if let total = tokens.reportedTotal.sum { return (total, true) }
+        if let components = tokens.calculatedKnownComponents { return (components, false) }
+        return nil
+    }
 
-        return VStack(alignment: .leading, spacing: 8) {
-            chartCaption(selected: selected)
-
-            Chart(buckets) { bucket in
-                BarMark(
-                    x: .value(
-                        String(localized: "settings.usage.chart.axis.day", defaultValue: "Day"),
-                        bucket.day,
-                        unit: .day
-                    ),
-                    y: .value(
-                        String(localized: "settings.usage.chart.axis.turns", defaultValue: "Turns"),
-                        bucket.turns
-                    )
-                )
-                .cornerRadius(2)
-                // The whole series is one colour. A selection dims the rest
-                // rather than repainting the chosen bar, so the bar the user
-                // pointed at keeps the colour it already had.
-                .foregroundStyle(
-                    AppColors.brandAmber.opacity(
-                        selected == nil || selected?.day == bucket.day ? 1 : 0.35
-                    )
-                )
+    /// Three layouts for one row of tiles: stacked at accessibility sizes, two
+    /// by two where four columns would crush an iPhone, side by side otherwise.
+    ///
+    /// Explicit branches rather than the `AnyLayout` the two- and three-tile
+    /// rows use: a 2×2 arrangement is a different container, not a different
+    /// layout of the same children, so there is no single layout to swap.
+    @ViewBuilder
+    private func statTileLayout(_ stats: [UsageActivityStat]) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(stats) { statTile($0) }
             }
-            .chartXSelection(value: $rawSelectedDay)
-            .chartYScale(domain: .automatic(includesZero: true))
-            .chartYAxis {
-                AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
-                    AxisGridLine()
-                        .foregroundStyle(AppColors.borderSubtle)
-                    AxisValueLabel {
-                        if let count = value.as(Int.self) {
-                            Text(count.formatted(.number))
-                                .foregroundStyle(AppColors.textTertiary)
+        } else if wrapsStatTiles, stats.count > 3 {
+            Grid(alignment: .topLeading, horizontalSpacing: 16, verticalSpacing: 12) {
+                ForEach(Array(stride(from: 0, to: stats.count, by: 2)), id: \.self) { start in
+                    GridRow {
+                        statTile(stats[start])
+                        if start + 1 < stats.count {
+                            statTile(stats[start + 1])
                         }
                     }
                 }
             }
-            // No x grid lines: the bars already stand on the day boundary, and a
-            // second set of rules behind them is noise. `.aligned` keeps the
-            // edge labels inside the plot area — a centered label on the last
-            // tick would hang past the trailing edge and clip ("24. Aug" → "2").
-            .chartXAxis {
-                AxisMarks(preset: .aligned, values: .automatic(desiredCount: 4)) { _ in
-                    AxisValueLabel(format: .dateTime.month(.abbreviated).day())
-                        .foregroundStyle(AppColors.textTertiary)
-                }
+        } else {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(stats) { statTile($0) }
             }
-            .frame(height: 150)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text(LocalizedStringResource(
-                "settings.usage.chart.a11y",
-                defaultValue: "Turns per day, \(model.summary.attemptedTurns) in total")))
+        }
+    }
+
+    /// Only a compact-width iPhone wraps. An iPad detail column and a macOS
+    /// settings card are both wide enough for four columns, and wrapping them
+    /// would waste the width they have.
+    private var wrapsStatTiles: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .compact
+        #else
+        return false
+        #endif
+    }
+
+    // MARK: - Input
+
+    /// Modes that actually happened, busiest first. A mode with no turn behind
+    /// it is not drawn as a zero: the card is about the mix, and a permanent
+    /// "Shared 0" row would read as a feature that is failing rather than one
+    /// this user does not use.
+    private var visibleInputModes: [InputModeSlice] {
+        model.summary.inputModes
+            .filter { $0.turns > 0 }
+            .sorted { $0.turns > $1.turns }
+    }
+
+    /// How turns were GIVEN, never how they were retried — a retry creates no
+    /// new input, which is why this counts turns and the Reliability card counts
+    /// attempts.
+    private var inputSection: some View {
+        let slices = visibleInputModes
+        let total = slices.reduce(0) { $0 + $1.turns }
+
+        return Section {
+            ForEach(slices, id: \.mode) { slice in
+                inputModeRow(slice, total: total)
+            }
+        } header: {
+            Text(LocalizedStringResource(
+                "settings.usage.input.header", defaultValue: "Input"))
+        } footer: {
+            Text(LocalizedStringResource(
+                "settings.usage.input.footer",
+                defaultValue: """
+                    How each turn was given. Retrying a turn reuses the input you \
+                    already gave, so it never moves these numbers.
+                    """))
+        }
+    }
+
+    private func inputModeRow(
+        _ slice: InputModeSlice,
+        total: Int
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: inputModeIcon(slice.mode))
+                .foregroundStyle(AppColors.textTertiary)
+                .accessibilityHidden(true)
+            Text(inputModeLabel(slice.mode))
+                .foregroundStyle(AppColors.textPrimary)
+            Spacer(minLength: 12)
+            Text(inputModeValueText(slice, total: total))
+                .monospacedDigit()
+                .foregroundStyle(AppColors.textSecondary)
         }
         .settingsCardPassiveRow()
+        .accessibilityElement(children: .combine)
     }
 
-    /// The chart's one number line: the series name at rest, the selected day's
-    /// turns and attempts while a bar is picked.
-    private func chartCaption(selected: GatewayUsageDailyBucket?) -> some View {
-        Group {
-            if let selected {
-                Text(LocalizedStringResource(
-                    "settings.usage.chart.selection",
-                    defaultValue: """
-                        \(selected.day.formatted(date: .abbreviated, time: .omitted)) · \
-                        \(selected.turns) turns · \(selected.attempts) attempts
-                        """))
-                    .foregroundStyle(AppColors.textPrimary)
-            } else {
-                Text(LocalizedStringResource(
-                    "settings.usage.chart.caption", defaultValue: "Turns per day"))
-                    .foregroundStyle(AppColors.textTertiary)
-            }
+    private func inputModeValueText(
+        _ slice: InputModeSlice,
+        total: Int
+    ) -> String {
+        let share = GatewayUsageAggregator.ratio(slice.turns, total)
+        return String(
+            localized: "settings.usage.input.value",
+            defaultValue: "\(slice.turns.formatted(.number)) · \(percentText(share))")
+    }
+
+    /// Modality glyphs, matching the ones a turn already wears in the thread.
+    private func inputModeIcon(_ mode: GatewayInputMode) -> String {
+        switch mode {
+        case .voice: return "waveform"
+        case .text: return "keyboard"
+        case .shared: return "square.and.arrow.up"
+        case .unknown: return "questionmark.circle"
         }
-        .font(.caption)
-        .monospacedDigit()
     }
 
-    /// A date scale reports the instant under the gesture, not the bar beneath
-    /// it, so the bucket is matched by calendar day.
-    private func selectedBucket(
-        in buckets: [GatewayUsageDailyBucket]
-    ) -> GatewayUsageDailyBucket? {
-        guard let rawSelectedDay else { return nil }
-        return buckets.first {
-            Calendar.current.isDate($0.day, inSameDayAs: rawSelectedDay)
+    private func inputModeLabel(_ mode: GatewayInputMode) -> String {
+        switch mode {
+        case .voice:
+            return String(localized: "settings.usage.input.voice", defaultValue: "Voice")
+        case .text:
+            return String(localized: "settings.usage.input.text", defaultValue: "Typed")
+        case .shared:
+            return String(localized: "settings.usage.input.shared", defaultValue: "Shared")
+        case .unknown:
+            return unattributedLabel
         }
     }
 
@@ -438,54 +616,181 @@ struct UsageDashboardContent: View {
                         resolved attempts succeeded
                         """)
             )
-
-            outcomeRows
-
-            valueRow(
-                label: LocalizedStringResource(
-                    "settings.usage.reliability.retryRate", defaultValue: "Retry rate"),
-                value: percentText(summary.retryRate),
-                caption: LocalizedStringResource(
-                    "settings.usage.reliability.retryRate.caption",
-                    defaultValue: "\(summary.retriedTurns) of \(summary.attemptedTurns) turns retried")
-            )
-            valueRow(
-                label: LocalizedStringResource(
-                    "settings.usage.reliability.attemptsPerTurn",
-                    defaultValue: "Attempts per completed turn"),
-                value: decimalText(summary.attemptsPerCompletedTurn),
-                caption: nil
-            )
-            if summary.truncatedReplies > 0 {
-                valueRow(
-                    label: LocalizedStringResource(
-                        "settings.usage.reliability.truncated",
-                        defaultValue: "Replies cut short"),
-                    value: summary.truncatedReplies.formatted(.number),
-                    caption: nil,
-                    icon: "scissors"
-                )
-            }
+            reliabilityDetail
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.reliability.header", defaultValue: "Reliability"))
         } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringResource(
-                    "settings.usage.reliability.footer",
+            reliabilityFooter
+        }
+    }
+
+    /// THE HEADLINE IS THE ANSWER; the rest is the follow-up. Ten rows under a
+    /// single percentage is the shape that made this the longest card on the
+    /// screen, and most of what it holds is a question only a user already
+    /// suspecting a problem asks. So the detail collapses by default and
+    /// remembers being opened.
+    ///
+    /// Two implementations, one set of rows — the `VoiceReliabilityDisclosure`
+    /// pattern. iOS keeps `DisclosureGroup`, where the whole row already
+    /// toggles and hit-tests. macOS hand-rolls the expander and OWNS the
+    /// chevron, because `DisclosureGroup` renders its chevron in a slot OUTSIDE
+    /// the label: the label can therefore never span the row, and the row's
+    /// gutter would not line up with the card rows above and below it. A real
+    /// `Button` also carries keyboard activation, VoiceOver activation and a
+    /// pressed state that a tap gesture on a label does not.
+    @ViewBuilder
+    private var reliabilityDetail: some View {
+        #if os(macOS)
+        Button {
+            withAnimation { reliabilityDetailExpanded.toggle() }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppColors.textTertiary)
+                    // Driven from inside the action's `withAnimation` so the
+                    // turn rides the same transaction as the reveal below.
+                    .rotationEffect(.degrees(reliabilityDetailExpanded ? 90 : 0))
+                    .accessibilityHidden(true)
+                reliabilityDetailLabel
+                Spacer()
+            }
+        }
+        .settingsCardRowButton()
+        .accessibilityHint(Text(reliabilityDetailExpanded
+            ? LocalizedStringResource(
+                "settings.usage.reliability.details.collapse", defaultValue: "Collapse")
+            : LocalizedStringResource(
+                "settings.usage.reliability.details.expand", defaultValue: "Expand")))
+
+        if reliabilityDetailExpanded {
+            reliabilityDetailRows
+        }
+        #else
+        DisclosureGroup(isExpanded: $reliabilityDetailExpanded) {
+            reliabilityDetailRows
+        } label: {
+            reliabilityDetailLabel
+                .tappableDisclosureLabel($reliabilityDetailExpanded)
+        }
+        #endif
+    }
+
+    private var reliabilityDetailLabel: some View {
+        Text(LocalizedStringResource(
+            "settings.usage.reliability.details", defaultValue: "Details"))
+            .foregroundStyle(AppColors.textPrimary)
+    }
+
+    /// Everything the headline does not answer. Lifted out of the section for
+    /// the same reason `outcomeRows` is: it keeps the section's own child count
+    /// well clear of `ViewBuilder`'s ten, and macOS resolves card rows by SHAPE
+    /// — a child that emits several views is several rows — so every row below
+    /// is still its own card row, exactly as if it had been written in place.
+    @ViewBuilder
+    private var reliabilityDetailRows: some View {
+        let summary = model.summary
+
+        outcomeRows
+
+        // RESOLVED turns, not attempted ones. A turn still running has not
+        // yet failed to be delivered first try, and counting it as one would
+        // make an active minute look like a reliability dip.
+        valueRow(
+            label: LocalizedStringResource(
+                "settings.usage.reliability.firstTry",
+                defaultValue: "Delivered first try"),
+            value: percentText(GatewayUsageAggregator.ratio(
+                summary.firstAttemptDeliveredTurns, summary.resolvedTurns)),
+            caption: LocalizedStringResource(
+                "settings.usage.reliability.firstTry.caption",
+                defaultValue: """
+                    \(summary.firstAttemptDeliveredTurns) of \
+                    \(summary.resolvedTurns) finished turns
+                    """)
+        )
+        // Only where there is something to recover FROM. With no retry in
+        // range the row is a permanent em dash under a question nobody asked.
+        //
+        // RESOLVED retried turns, never the wider `retriedTurns`: a turn
+        // still being retried has not failed to recover, and dividing by the
+        // wider population would report it as one that did.
+        if summary.resolvedRetriedTurns > 0 {
+            valueRow(
+                label: LocalizedStringResource(
+                    "settings.usage.reliability.recovered",
+                    defaultValue: "Recovered by retry"),
+                value: percentText(GatewayUsageAggregator.ratio(
+                    summary.retriedTurnsRecovered, summary.resolvedRetriedTurns)),
+                caption: LocalizedStringResource(
+                    "settings.usage.reliability.recovered.caption",
                     defaultValue: """
-                        The success rate counts only attempts that finished as a \
-                        success or a failure. Cancelled and unconfirmed attempts \
-                        are listed above but stay out of it.
+                        \(summary.retriedTurnsRecovered) of \
+                        \(summary.resolvedRetriedTurns) retried turns landed
+                        """)
+            )
+        }
+
+        valueRow(
+            label: LocalizedStringResource(
+                "settings.usage.reliability.retryRate", defaultValue: "Retry rate"),
+            value: percentText(summary.retryRate),
+            caption: LocalizedStringResource(
+                "settings.usage.reliability.retryRate.caption",
+                defaultValue: "\(summary.retriedTurns) of \(summary.attemptedTurns) turns retried")
+        )
+        valueRow(
+            label: LocalizedStringResource(
+                "settings.usage.reliability.attemptsPerTurn",
+                defaultValue: "Attempts per completed turn"),
+            value: decimalText(summary.attemptsPerCompletedTurn),
+            caption: nil
+        )
+        if summary.truncatedReplies > 0 {
+            valueRow(
+                label: LocalizedStringResource(
+                    "settings.usage.reliability.truncated",
+                    defaultValue: "Replies cut short"),
+                value: summary.truncatedReplies.formatted(.number),
+                caption: nil,
+                icon: "scissors"
+            )
+        }
+        failureReasonRows
+    }
+
+    /// ITS OWN KEY for the first sentence: the outcome rows sit behind Details,
+    /// so a footer saying they are "listed above" is false whenever the card is
+    /// collapsed — which is its default state. A catalog value wins over
+    /// `defaultValue:`, so rewording a shipped key in place would keep
+    /// rendering the old sentence in every build that has the catalog.
+    private var reliabilityFooter: some View {
+        let summary = model.summary
+
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(LocalizedStringResource(
+                "settings.usage.reliability.footer.details",
+                defaultValue: """
+                    The success rate counts only attempts that finished as a \
+                    success or a failure. Cancelled and unconfirmed attempts \
+                    are counted under Details but stay out of it.
+                    """))
+            if summary.truncatedReplies > 0 {
+                Text(LocalizedStringResource(
+                    "settings.usage.reliability.truncated.footer",
+                    defaultValue: """
+                        Cut short means the gateway reported it stopped at the \
+                        reply-length limit, not that anything went wrong.
                         """))
-                if summary.truncatedReplies > 0 {
-                    Text(LocalizedStringResource(
-                        "settings.usage.reliability.truncated.footer",
-                        defaultValue: """
-                            Cut short means the gateway reported it stopped at the \
-                            reply-length limit, not that anything went wrong.
-                            """))
-                }
+            }
+            if !summary.failureReasons.isEmpty {
+                Text(LocalizedStringResource(
+                    "settings.usage.reliability.reasons.footer",
+                    defaultValue: """
+                        Failure reasons are counted, not listed. Diagnostics is \
+                        where a single failure can be looked at.
+                        """))
             }
         }
     }
@@ -562,6 +867,75 @@ struct UsageDashboardContent: View {
                 count: inProgress
             )
         }
+    }
+
+    // MARK: - Failure reasons
+
+    /// How many distinct reasons get a row of their own before the tail is
+    /// collapsed. A long tail of one-offs is noise in an aggregate; the
+    /// individual failures live in Diagnostics, which is where an investigation
+    /// belongs.
+    private static let failureReasonRowLimit = 5
+
+    /// WHY attempts failed, in aggregate and nowhere near an item list. Copy
+    /// comes through `UsageFailureReasonCopy`, which is a thin read on
+    /// `DiagnosticsExplainer` — the app's own code-to-sentence map — so a reason
+    /// reads identically here, on the gateway drill-down, and on Diagnostics.
+    ///
+    /// The stored code is the ONLY thing the ledger kept: no provider error
+    /// string, no status code. That is why a reason can be named at all without
+    /// breaking the content-free rule.
+    @ViewBuilder
+    private var failureReasonRows: some View {
+        let reasons = model.summary.failureReasons
+        if !reasons.isEmpty {
+            let top = Array(reasons.prefix(Self.failureReasonRowLimit))
+            let otherCount = reasons.dropFirst(Self.failureReasonRowLimit)
+                .reduce(0) { $0 + $1.count }
+
+            Text(LocalizedStringResource(
+                "settings.usage.reliability.reasons.header",
+                defaultValue: "Failure reasons"))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppColors.textTertiary)
+                .settingsCardPassiveRow()
+
+            ForEach(top, id: \.appErrorCode) { reason in
+                failureReasonRow(
+                    label: UsageFailureReasonCopy.label(forAppErrorCode: reason.appErrorCode),
+                    count: reason.count
+                )
+            }
+            if otherCount > 0 {
+                failureReasonRow(
+                    label: String(localized: "settings.usage.reliability.reasons.other",
+                                  defaultValue: "Other reasons"),
+                    count: otherCount
+                )
+            }
+        }
+    }
+
+    /// A cause sentence, wrapped, with its count. The label is a resolved
+    /// `String` rather than a `LocalizedStringResource` because it arrives from
+    /// the shared explainer already localized — which is the point of reusing it.
+    private func failureReasonRow(label: String, count: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(AppColors.error)
+                .accessibilityHidden(true)
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 12)
+            Text(count.formatted(.number))
+                .font(.subheadline)
+                .monospacedDigit()
+                .foregroundStyle(AppColors.textSecondary)
+        }
+        .settingsCardPassiveRow()
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Response time
@@ -708,6 +1082,105 @@ struct UsageDashboardContent: View {
             defaultValue: "Reported on \(percentText(coverage)) of attempts")
     }
 
+    // MARK: - By device
+
+    /// Which of the user's devices did the sending. NO TOKENS HERE on purpose:
+    /// a device does not have a token cost, the gateway does, and putting a sum
+    /// beside a device invites reading one iPhone as more expensive than
+    /// another. The drill-down carries the fuller picture.
+    private var deviceSection: some View {
+        Section {
+            ForEach(model.summary.deviceGroups) { group in
+                deviceGroupRow(group)
+            }
+        } header: {
+            Text(LocalizedStringResource(
+                "settings.usage.byDevice.header", defaultValue: "By device"))
+        } footer: {
+            Text(LocalizedStringResource(
+                "settings.usage.byDevice.footer",
+                defaultValue: """
+                    The device a request actually went out from. A turn started on \
+                    your Watch and retried on your phone counts once for each. \
+                    CarPlay is listed separately from the phone driving it.
+                    """))
+        }
+    }
+
+    /// TITLE AND CHEVRON ONLY on the top line. The row is read against its
+    /// siblings on the rates underneath it, and a raw attempt count at the
+    /// trailing edge is the one figure that answers nothing on its own — the
+    /// caption already carries the sample those rates are taken over, and the
+    /// drill-down carries the count itself.
+    private func deviceGroupRow(_ group: GatewayUsageGroup) -> some View {
+        let bucket = UsageDeviceBucket(rawValue: group.key ?? "") ?? .unknown
+        return navigationRow(value: UsageRoute.device(bucket)) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: deviceIcon(bucket))
+                        .foregroundStyle(AppColors.textTertiary)
+                        .accessibilityHidden(true)
+                    Text(deviceLabel(bucket))
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                    Spacer(minLength: 8)
+                }
+                Text(deviceDetailText(group))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(AppColors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func deviceDetailText(_ group: GatewayUsageGroup) -> String {
+        var parts: [String] = [
+            String(localized: "settings.usage.byGateway.successRate",
+                   defaultValue: "\(percentText(group.successRate)) succeeded")
+        ]
+        if let median = group.medianResponseTime {
+            // PLAIN LANGUAGE, not "(n 12)". The sample size has to be here —
+            // a median over three replies is not a claim — but `n` is a
+            // statistician's abbreviation, and this row is read by someone
+            // asking which gateway feels faster.
+            parts.append(String(
+                localized: "settings.usage.byGateway.median.plain",
+                defaultValue: """
+                    median \(durationText(median)) over \
+                    \(repliesText(group.responseSampleCount))
+                    """))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Icons and words reused from the turn's own device chip, so one device is
+    /// named the same way wherever the user meets it.
+    private func deviceIcon(_ bucket: UsageDeviceBucket) -> String {
+        guard let device = Self.deviceFormatterKey(bucket) else { return "questionmark.circle" }
+        return MessageRowFormatters.icon(forDevice: device)
+    }
+
+    private func deviceLabel(_ bucket: UsageDeviceBucket) -> String {
+        guard let device = Self.deviceFormatterKey(bucket) else { return unattributedLabel }
+        return MessageRowFormatters.label(forDevice: device)
+    }
+
+    /// The bucket's word in `sourceDevice` spelling. `carPlay` is camel-cased in
+    /// the bucket and lower-cased on the wire tag, and mapping it here is what
+    /// keeps the two vocabularies from being merged into one that then has to
+    /// stay in sync with a stored string.
+    private static func deviceFormatterKey(_ bucket: UsageDeviceBucket) -> String? {
+        switch bucket {
+        case .iphone: return "iphone"
+        case .ipad: return "ipad"
+        case .mac: return "mac"
+        case .watch: return "watch"
+        case .carPlay: return "carplay"
+        case .unknown: return nil
+        }
+    }
+
     // MARK: - By gateway
 
     private var gatewaySection: some View {
@@ -732,43 +1205,32 @@ struct UsageDashboardContent: View {
     /// ONE row per gateway — a `VStack`, deliberately, because macOS resolves a
     /// child's row count from its SHAPE and two loose `Text`s here would become
     /// two separated card rows.
+    ///
+    /// The per-model breakdown lives in the drill-down, not here. Nesting it
+    /// under a row made the overview's longest card grow with the user's model
+    /// list, and the mix is a question about ONE gateway rather than about the
+    /// range.
+    ///
+    /// Name and chevron only on the top line, matching the device rows: the
+    /// figures a gateway is compared on are the rates in the caption, and the
+    /// sample they are taken over is already stated there.
     private func gatewayGroupRow(_ group: GatewayUsageGroup) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(gatewayLabel(for: group.key))
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(AppColors.textPrimary)
-                Spacer(minLength: 8)
-                Text(attemptsText(group.attempts))
-                    .font(.subheadline)
-                    .monospacedDigit()
-                    .foregroundStyle(AppColors.textSecondary)
-            }
-
-            Text(groupDetailText(group))
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(AppColors.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            // Only when the slot actually saw more than one model — a
-            // single-model breakdown would just restate the line above it.
-            ForEach(group.models) { modelGroup in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(modelLabel(for: modelGroup.key))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
+        navigationRow(value: UsageRoute.gateway(group.key)) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(gatewayLabel(for: group.key))
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
                     Spacer(minLength: 8)
-                    Text(modelDetailText(modelGroup))
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(AppColors.textTertiary)
                 }
-                .padding(.leading, 12)
+
+                Text(groupDetailText(group))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(AppColors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .settingsCardPassiveRow()
-        .accessibilityElement(children: .combine)
     }
 
     private func groupDetailText(_ group: GatewayUsageGroup) -> String {
@@ -777,9 +1239,16 @@ struct UsageDashboardContent: View {
                    defaultValue: "\(percentText(group.successRate)) succeeded")
         ]
         if let median = group.medianResponseTime {
+            // PLAIN LANGUAGE, not "(n 12)". The sample size has to be here —
+            // a median over three replies is not a claim — but `n` is a
+            // statistician's abbreviation, and this row is read by someone
+            // asking which gateway feels faster.
             parts.append(String(
-                localized: "settings.usage.byGateway.median",
-                defaultValue: "median \(durationText(median)) (n \(group.responseSampleCount))"))
+                localized: "settings.usage.byGateway.median.plain",
+                defaultValue: """
+                    median \(durationText(median)) over \
+                    \(repliesText(group.responseSampleCount))
+                    """))
         }
         // SAME RULE AS THE TOKENS CARD, which sits on this very screen showing the
         // same underlying numbers: a gateway-reported total renders bare, a client
@@ -798,11 +1267,221 @@ struct UsageDashboardContent: View {
         return parts.joined(separator: " · ")
     }
 
-    private func modelDetailText(_ group: GatewayUsageGroup) -> String {
-        let rate = String(
-            localized: "settings.usage.byGateway.successRate",
-            defaultValue: "\(percentText(group.successRate)) succeeded")
-        return attemptsText(group.attempts) + " · " + rate
+    // MARK: - Heaviest threads
+
+    /// Rows on the overview before the list moves to its own screen. THREE, and
+    /// two lines each: the overview answers "what", and a fourth and fifth row
+    /// of the same shape push the Coverage card — where the destructive clear
+    /// lives — off the bottom of a phone screen. "See all" is one tap.
+    private static let threadRowLimit = 3
+
+    /// The threads that cost the most, ranked on ONE basis for the whole list —
+    /// a list mixing gateway-reported totals with client-added components would
+    /// order threads by which gateway happened to be chattier about usage.
+    ///
+    /// A row names no title and quotes nothing. The date span, the gateway and
+    /// the counts are the whole of it; the conversation itself is one tap away
+    /// for the threads that still exist.
+    private var threadsSection: some View {
+        let ranking = model.summary.threadRanking
+        let top = Array(ranking.threads.prefix(Self.threadRowLimit))
+
+        return Section {
+            ForEach(top, id: \.conversationID) { thread in
+                threadRow(thread, basis: ranking.basis)
+            }
+            if ranking.threads.count > top.count {
+                navigationRow(value: UsageRoute.allThreads) {
+                    Text(LocalizedStringResource(
+                        "settings.usage.threads.seeAll", defaultValue: "See all"))
+                        .foregroundStyle(AppColors.textPrimary)
+                }
+            }
+        } header: {
+            Text(LocalizedStringResource(
+                "settings.usage.threads.header", defaultValue: "Heaviest threads"))
+        } footer: {
+            Text(threadBasisFooter(ranking.basis))
+        }
+    }
+
+    /// The ranking basis, said plainly INCLUDING what it leaves out. A list that
+    /// silently drops every thread whose gateway reported nothing looks like a
+    /// list of the user's heaviest threads and is not one.
+    private func threadBasisFooter(_ basis: ThreadRanking.Basis) -> LocalizedStringResource {
+        switch basis {
+        case .reportedTotals:
+            return LocalizedStringResource(
+                "settings.usage.threads.footer.reported",
+                defaultValue: """
+                    Ranked by the total tokens your gateway reported. Threads it \
+                    reported no total for aren't ranked here.
+                    """)
+        case .calculatedComponents:
+            return LocalizedStringResource(
+                "settings.usage.threads.footer.components",
+                defaultValue: """
+                    Ranked by input plus output tokens, added up from what your \
+                    gateway reported — it reported no totals of its own. Threads \
+                    reporting neither aren't ranked here.
+                    """)
+        }
+    }
+
+    /// A live thread navigates; an absent one says so and does not. ABSENT IS
+    /// NOT DELETED: the conversation may be deleted, not yet imported from
+    /// another device, or temporarily unreadable, and the row cannot tell those
+    /// apart. Naming it a deletion would accuse the user of something sync is
+    /// still working on — and the chevron returns on its own if the thread
+    /// arrives later.
+    @ViewBuilder
+    private func threadRow(_ thread: ThreadUsage, basis: ThreadRanking.Basis) -> some View {
+        if model.liveConversationIDs.contains(thread.conversationID) {
+            Button {
+                model.openConversation(thread.conversationID)
+            } label: {
+                threadRowBody(thread, basis: basis, isLive: true)
+                    .padding(.trailing, chevronGutter)
+            }
+            // `.settingsCardRowButton()` IS `.buttonStyle(.plain)` off macOS, so
+            // this one modifier gives the card row its full-bleed live frame and
+            // leaves the `Form` row untinted on iOS.
+            .settingsCardRowButton()
+            .overlay(alignment: .trailing) { rowChevron }
+        } else {
+            threadRowBody(thread, basis: basis, isLive: false)
+                .settingsCardPassiveRow()
+                .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func threadRowBody(
+        _ thread: ThreadUsage,
+        basis: ThreadRanking.Basis,
+        isLive: Bool
+    ) -> some View {
+        // TWO LINES. The thing being ranked (the tokens) sits at the trailing
+        // edge of the first line so three rows read as a column of figures
+        // rather than three paragraphs; everything that qualifies it — which
+        // gateway, how many attempts, what was attached, how complete the
+        // measurement is — folds into ONE caption underneath.
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(threadDateSpan(thread))
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.textPrimary)
+                Spacer(minLength: 8)
+                Text(threadTokensBasisText(thread.rankedTokens, basis: basis))
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(AppColors.textEmphasis)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text(threadCaptionText(thread))
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(AppColors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !isLive {
+                Text(LocalizedStringResource(
+                    "settings.usage.threads.unavailable",
+                    defaultValue: "Conversation unavailable"))
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// One date when the thread's measured life is a single day, a span when it
+    /// is not. Dates only — a time of day is a fact about when someone was at
+    /// their desk.
+    private func threadDateSpan(_ thread: ThreadUsage) -> String {
+        let start = thread.earliestStart.formatted(date: .abbreviated, time: .omitted)
+        if Calendar.current.isDate(thread.earliestStart, inSameDayAs: thread.latestStart) {
+            return start
+        }
+        let end = thread.latestStart.formatted(date: .abbreviated, time: .omitted)
+        return String(localized: "settings.usage.threads.span",
+                      defaultValue: "\(start) – \(end)")
+    }
+
+    /// Every gateway the thread actually sent through, resolved at render time.
+    /// A thread cannot rebind, but a CarPlay override and a clone-and-switch
+    /// both leave more than one ref behind, so the plural case is real.
+    private func threadGatewayText(_ thread: ThreadUsage) -> String {
+        let names = thread.gatewayRefs.map { gatewayLabel(for: $0) }
+        guard !names.isEmpty else { return unattributedLabel }
+        return names.joined(separator: " · ")
+    }
+
+    /// Everything qualifying the ranked figure, on one line. Attachment counts
+    /// and the coverage fragment each appear only when they say something: a
+    /// zero image count and a complete measurement are both silence, and a row
+    /// that prints them anyway trains the eye to skip the caption entirely.
+    private func threadCaptionText(_ thread: ThreadUsage) -> String {
+        var parts: [String] = [
+            threadGatewayText(thread),
+            attemptsText(thread.attempts)
+        ]
+        if let images = thread.inlineImageCount, images > 0 {
+            parts.append(String(localized: "settings.usage.threads.images",
+                                defaultValue: "\(images) images"))
+        }
+        if let files = thread.inlineTextFileCount, files > 0 {
+            parts.append(String(localized: "settings.usage.threads.files",
+                                defaultValue: "\(files) files"))
+        }
+        if let coverage = threadCoverageCaption(thread) {
+            parts.append(coverage)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The basis rides the NUMBER, not just the footer. A user reading one row
+    /// has to be able to tell a gateway's own total from a figure this client
+    /// added up — the tokens card on this same screen holds the identical rule.
+    private func threadTokensBasisText(
+        _ tokens: Int,
+        basis: ThreadRanking.Basis
+    ) -> String {
+        switch basis {
+        case .reportedTotals:
+            return String(localized: "settings.usage.threads.tokens.reported",
+                          defaultValue: "\(tokens.formatted(.number)) tokens")
+        case .calculatedComponents:
+            return String(localized: "settings.usage.threads.tokens.components",
+                          defaultValue: "\(tokens.formatted(.number)) tokens (input + output)")
+        }
+    }
+
+    /// Shown only where coverage is PARTIAL. Full coverage needs no caption, and
+    /// a caption on every row would train the eye to skip the one row where it
+    /// changes the meaning of the number above it.
+    private func threadCoverageCaption(_ thread: ThreadUsage) -> String? {
+        var lines: [String] = []
+        if thread.tokenReportedTurns < thread.turns {
+            lines.append(String(
+                localized: "settings.usage.threads.coverage.tokens",
+                defaultValue: """
+                    Tokens reported on \(thread.tokenReportedTurns) of \
+                    \(thread.turns) turns
+                    """))
+        }
+        let hasAttachmentCounts =
+            thread.inlineImageCount != nil || thread.inlineTextFileCount != nil
+        if hasAttachmentCounts, thread.attachmentMeasuredAttempts < thread.attempts {
+            lines.append(String(
+                localized: "settings.usage.threads.coverage.attachments",
+                defaultValue: """
+                    Attachments counted on \(thread.attachmentMeasuredAttempts) of \
+                    \(thread.attempts) attempts
+                    """))
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
     // MARK: - Coverage
@@ -825,35 +1504,185 @@ struct UsageDashboardContent: View {
                     .settingsCardPassiveRow()
             }
 
-            // Shown only when retained history reaches back FURTHER than
-            // measurement does — where it is the whole point: those turns are
-            // real usage with no measurement behind them, and one "data since"
-            // date would be false for every user who upgraded into this screen.
-            if model.hasUnmeasuredHistory, let historyStart = model.activityHistoryStart {
-                valueRow(
-                    label: LocalizedStringResource(
-                        "settings.usage.coverage.history",
-                        defaultValue: "Conversations kept since"),
-                    value: historyStart.formatted(date: .abbreviated, time: .omitted),
-                    caption: LocalizedStringResource(
-                        "settings.usage.coverage.history.caption",
-                        defaultValue: "Conversations older than the date above are not measured here")
-                )
+            // A clear that failed says so. Silence here would leave records the
+            // user believes are gone — and the cutoff has already advanced, so
+            // what they see is right while what is on disk is not yet.
+            if let clearError = model.clearUsageHistoryError {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(AppColors.warning)
+                        .accessibilityHidden(true)
+                    Text(clearError)
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 12)
+                }
+                .settingsCardPassiveRow()
+                .accessibilityElement(children: .combine)
+            }
+
+            // A destructive control that would erase nothing is not offered.
+            // `hasAnyRecordedAttempts` asks the ledger-wide question rather than
+            // the range's, so switching to "7 days" never hides the control for
+            // history that is still there.
+            if model.isClearingUsageHistory {
+                clearProgressRow
+            } else if model.hasAnyRecordedAttempts {
+                clearUsageHistoryRow
             }
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.coverage.header", defaultValue: "Coverage"))
         } footer: {
+            // ONE honest sentence about what these totals cover. Usage records
+            // outlive the conversations they describe, so a footer promising the
+            // numbers describe "conversations you've kept" would be false for
+            // every user who has ever deleted a thread.
+            //
+            // ITS OWN KEY, not the one the earlier sentence used: a catalog value
+            // wins over `defaultValue:`, so rewording in place would keep
+            // rendering the old, now-false sentence in every shipped build.
             Text(LocalizedStringResource(
-                "settings.usage.coverage.footer",
+                "settings.usage.coverage.retention.footer",
                 defaultValue: """
-                    Totals describe conversations you've kept — deleting a \
-                    conversation removes its history here.
+                    These totals include conversations you have since deleted — \
+                    the records are content-free and stay until you clear usage \
+                    history.
                     """))
         }
     }
 
+    /// The quiet destructive row. Its own line, at the foot of the screen that
+    /// explains what it erases, with the account-wide reach and the finality
+    /// both stated in the dialog rather than in the row's label.
+    private var clearUsageHistoryRow: some View {
+        Button(role: .destructive) {
+            showingClearConfirmation = true
+        } label: {
+            Label(
+                LocalizedStringResource(
+                    "settings.usage.clear.action", defaultValue: "Clear usage history"),
+                systemImage: "trash"
+            )
+            .font(.subheadline)
+        }
+        .settingsCardRowButton()
+        .foregroundStyle(AppColors.error)
+        .confirmationDialog(
+            LocalizedStringResource(
+                "settings.usage.clear.title", defaultValue: "Clear usage history?"),
+            isPresented: $showingClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                LocalizedStringResource(
+                    "settings.usage.clear.action", defaultValue: "Clear usage history"),
+                role: .destructive
+            ) {
+                Task { await model.clearUsageHistory() }
+            }
+            Button(
+                LocalizedStringResource(
+                    "settings.usage.clear.cancel", defaultValue: "Cancel"),
+                role: .cancel
+            ) { }
+        } message: {
+            Text(LocalizedStringResource(
+                "settings.usage.clear.message",
+                defaultValue: """
+                    This removes every usage record from this device and all your \
+                    other devices. Your conversations are not affected. This \
+                    cannot be undone.
+                    """))
+        }
+    }
+
+    /// Local progress only. The clear reaches the user's other devices when they
+    /// next sync, and a bar here claiming to track that would be inventing a
+    /// completion this device cannot observe.
+    private var clearProgressRow: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(LocalizedStringResource(
+                "settings.usage.clear.progress", defaultValue: "Clearing usage history…"))
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textSecondary)
+        }
+        .settingsCardPassiveRow()
+        .accessibilityElement(children: .combine)
+    }
+
     // MARK: - Row vocabulary
+
+    /// A row that pushes a `UsageRoute`. `NavigationLink` IS a `Button`, so the
+    /// card row STYLE reaches it on macOS and brings the full-bleed live frame,
+    /// the row inset and the squared wash in one modifier — and off macOS the
+    /// same modifier is `.buttonStyle(.plain)`, which is what a `Form` row wants.
+    ///
+    /// THE CHEVRON IS THE PLATFORM'S WHEREVER THE PLATFORM DRAWS ONE — the
+    /// `LicensesView` treatment, which is the app's one idiom for a
+    /// `NavigationLink` inside a `PlatformSettingsForm`. The iOS grouped `Form`
+    /// IS a `List`, so it already gives a link the system disclosure accessory,
+    /// laid out BESIDE the row content and mirrored for RTL for free; a second
+    /// hand-drawn one would sit on top of the label as a stray offset arrow.
+    /// macOS renders the same section as a hand-drawn `SettingsCard`, which is
+    /// not a `List` and supplies no accessory, so that branch draws its own —
+    /// trailing-inset to `rowInset` so it lines up with the label on the other
+    /// side of the row, over a gutter the label keeps clear for it.
+    private func navigationRow<Label: View>(
+        value: UsageRoute,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        NavigationLink(value: value) {
+            label()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                #if os(macOS)
+                .padding(.trailing, chevronGutter)
+                #endif
+        }
+        .settingsCardRowButton()
+        #if os(macOS)
+        .overlay(alignment: .trailing) { rowChevron }
+        #endif
+    }
+
+    /// Decoration, never an element: an overlay is a SIBLING of the link it sits
+    /// on, so without `accessibilityHidden` it lands in the rotor as a stray
+    /// item the row's own label already covers.
+    private var rowChevron: some View {
+        Image(systemName: "chevron.forward")
+            .font(.caption)
+            .foregroundStyle(AppColors.textTertiary)
+            .padding(.trailing, rowChevronInset)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    /// Trailing inset for the overlaid chevron — `rowInset` on macOS so it lines
+    /// up with the label on the other side of the card row, nothing elsewhere
+    /// where the `Form` supplies its own.
+    private var rowChevronInset: CGFloat {
+        #if os(macOS)
+        SettingsCardMetrics.rowInset
+        #else
+        0
+        #endif
+    }
+
+    /// Space a navigating row keeps clear so a long value never runs under the
+    /// chevron drawn on top of it.
+    private var chevronGutter: CGFloat { 16 }
+
+    /// The one word for "the ledger did not record this". Used for an
+    /// unattributed gateway, an unrecorded device and an unrecorded input mode
+    /// alike, because they are the same fact about capture rather than three
+    /// different kinds of absence.
+    private var unattributedLabel: String {
+        String(localized: "settings.usage.gateway.unattributed",
+               defaultValue: "Not recorded")
+    }
 
     /// Side by side at normal text sizes, stacked at accessibility sizes. An
     /// `AnyLayout` rather than two branches so the tiles keep their identity
@@ -865,6 +1694,15 @@ struct UsageDashboardContent: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
             : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
         return layout { content() }
+    }
+
+    /// The described form, for the Activity row's variable tile set.
+    private func statTile(_ tile: UsageActivityStat) -> some View {
+        statTile(
+            value: tile.value,
+            label: tile.label,
+            accessibility: tile.accessibility
+        )
     }
 
     private func statTile(
@@ -1009,11 +1847,28 @@ struct UsageDashboardContent: View {
                      defaultValue: "\(count) attempts")
     }
 
-    /// `n` and the window, always together and always visible: a median over
-    /// three samples is not a claim, and the range is what makes it one.
+    /// Two keys rather than one plural rule, for the same reason
+    /// `attemptsText` uses two — the headless catalog synthesis does not run
+    /// Xcode's extraction phase, so a count-driven variation would have to be
+    /// hand-written into the catalog.
+    ///
+    /// REPLIES, not attempts: the figures these captions qualify are measured
+    /// on attempts that actually produced a reply, and "attempts" would name a
+    /// wider population than the number was taken from.
+    private func repliesText(_ count: Int) -> String {
+        count == 1
+            ? String(localized: "settings.usage.replies.one", defaultValue: "1 reply")
+            : String(localized: "settings.usage.replies.other",
+                     defaultValue: "\(count) replies")
+    }
+
+    /// The sample size and the window, always together and always visible: a
+    /// median over three replies is not a claim, and the range is what makes it
+    /// one. Said in words — "12 replies measured" — because "(n 12)" is
+    /// notation, and nothing else on this screen asks the reader to know any.
     private func sampleCaption(count: Int) -> String {
-        String(localized: "settings.usage.response.sampleCaption",
-               defaultValue: "\(attemptsText(count)) · \(rangeCaption)")
+        String(localized: "settings.usage.response.sampleCaption.plain",
+               defaultValue: "\(repliesText(count)) measured · \(rangeCaption)")
     }
 
     private var rangeCaption: String {
@@ -1039,16 +1894,8 @@ struct UsageDashboardContent: View {
     /// stale copy of a setting the user can edit; the raw token is the fallback
     /// only when the string is not a ref this build understands.
     private func gatewayLabel(for key: String?) -> String {
-        guard let key else {
-            return String(localized: "settings.usage.gateway.unattributed",
-                          defaultValue: "Not recorded")
-        }
+        guard let key else { return unattributedLabel }
         guard let ref = RemoteAgentRef(rawString: key) else { return key }
         return RemoteAgentRefMetadata.displayName(for: ref, customs: gatewayRoster)
-    }
-
-    private func modelLabel(for key: String?) -> String {
-        key ?? String(localized: "settings.usage.model.default",
-                      defaultValue: "Gateway default")
     }
 }

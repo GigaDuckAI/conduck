@@ -12,6 +12,13 @@
 //      input mode.
 //   3. `ConversationDetailViewModel.dispatchOrigin(fromMenuBarSurface:)` — how a
 //      dispatching surface becomes the ledger's origin.
+//   4. What the send and retry drafts STAMP — the device class and the four
+//      attachment counts — pinned as a source guard for the reason the
+//      `Headless*DriftGuard` suites give: a draft is built inside a dispatch
+//      task this suite cannot reach without a converse round-trip, and what
+//      breaks is an argument silently going missing. A count that stops being
+//      passed reads as a measured zero rather than as unmeasured, and no later
+//      release can repair a period recorded that way.
 //
 // Both are `nonisolated static` / value-level on purpose: the branches that call
 // them are `#if os(macOS)`, but this suite runs on an iOS simulator (the app's
@@ -185,5 +192,126 @@ final class ConversationDetailViewModelAttemptObservationTests: XCTestCase {
         XCTAssertEqual(GatewayInputMode.from(sourceDevice: "iphone-text"), .text)
         XCTAssertEqual(GatewayInputMode.from(sourceDevice: "mac"), .unknown,
                        "A legacy tag recorded no modality, and `unknown` is the honest answer rather than a guess that would skew the mix.")
+    }
+
+    // MARK: - What a draft stamps
+
+    private static let viewModelPath = "Conduck/ViewModels/ConversationDetailViewModel.swift"
+
+    /// The five attributes every in-app draft must carry, with the expression
+    /// each one is only ever allowed to read from. Pairing the label with its
+    /// SOURCE is the whole point: a `priorTurnInlineImageCount: 0` would satisfy
+    /// a label-only check while recording a request's replayed images as none.
+    private static let stampedFields: [(label: String, source: String)] = [
+        ("deviceClass", "SourceDevice.current"),
+        ("currentTurnInlineImageCount", "newUserImageDataURIs.count"),
+        ("priorTurnInlineImageCount", "priorShape?.inlineImageCount"),
+        ("currentTurnInlineTextFileCount", "newUserTextFileBlocks.count"),
+        ("priorTurnInlineTextFileCount", "priorShape?.inlineTextFileCount")
+    ]
+
+    func testTheSendDraftStampsTheDeviceAndEveryAttachmentCount() throws {
+        let arguments = try Self.draftArguments(ofFunction: "sendUserTurn")
+        for field in Self.stampedFields {
+            XCTAssertTrue(arguments.contains("\(field.label): \(field.source)"),
+                          "`sendUserTurn`'s draft no longer passes `\(field.label)` from `\(field.source)`. "
+                          + "The row still writes a number, so the gap reads as a measurement rather than as a missing one.")
+        }
+    }
+
+    func testTheRetryDraftStampsTheDeviceAndEveryAttachmentCount() throws {
+        // A retry reassembles history under the policy in force NOW, so it
+        // measures its own shape rather than inheriting the failed dispatch's —
+        // two attempts of one turn are two attempts, and may legitimately carry
+        // different attachment shapes.
+        let arguments = try Self.draftArguments(ofFunction: "retry")
+        for field in Self.stampedFields {
+            XCTAssertTrue(arguments.contains("\(field.label): \(field.source)"),
+                          "`retry`'s draft no longer passes `\(field.label)` from `\(field.source)`.")
+        }
+    }
+
+    func testBothBackgroundDispatchesCarryThePriorTurnShapeToTheTransport() throws {
+        // On iPhone and iPad the row is opened inside `BackgroundRemoteAgent.send`,
+        // which cannot recount the prior-turn shape: an inline text-file block is
+        // ordinary text by the time it reaches the transport. Only the assembler
+        // that applied the policy knows, so both call sites have to hand it over.
+        for function in ["sendUserTurn", "retry"] {
+            let body = try Self.body(ofFunction: function)
+            let arguments = try XCTUnwrap(
+                Self.arguments(after: "BackgroundRemoteAgent.shared.send(", in: body),
+                "No background dispatch in `\(function)` — update this guard."
+            )
+            XCTAssertTrue(arguments.contains("priorTurnInlineImageCount: priorShape?.inlineImageCount"),
+                          "`\(function)`'s background dispatch dropped the prior image count, so every iPhone and iPad row records zero replayed images.")
+            XCTAssertTrue(arguments.contains("priorTurnInlineTextFileCount: priorShape?.inlineTextFileCount"),
+                          "`\(function)`'s background dispatch dropped the prior text-file count.")
+        }
+    }
+
+    func testTheStampedDeviceIsAWordTheLedgersVocabularyRecognises() {
+        // `SourceDevice.current` is a `Message.sourceDevice` tag, and the ledger
+        // spells its device classes with the same words. A device whose tag were
+        // outside that vocabulary would land in the dashboard's "Not recorded"
+        // bucket while the row itself looked perfectly populated.
+        XCTAssertNotNil(GatewayAttemptDeviceClass(rawValue: SourceDevice.current))
+        XCTAssertNotEqual(GatewayAttemptDeviceClass(rawValue: SourceDevice.current), .carplay,
+                          "A CarPlay dispatch runs on the phone and stamps `iphone`; the head unit is derived from the origin at read time.")
+    }
+
+    func testAnUnstampedDraftMeasuresNothingRatherThanZero() {
+        // The defaulted init is what keeps capture fail-open across call sites
+        // that predate these fields: a draft built without them opens a row that
+        // says the device is unrecorded, never one that claims a measured zero.
+        let draft = GatewayAttemptDraft(
+            attemptID: UUID(),
+            conversationID: UUID(),
+            userMessageID: UUID(),
+            gatewayRef: "openclaw",
+            origin: .app,
+            inputMode: .text
+        )
+
+        XCTAssertNil(draft.deviceClass)
+        XCTAssertEqual(draft.currentTurnInlineImageCount, 0)
+        XCTAssertEqual(draft.priorTurnInlineImageCount, 0)
+        XCTAssertEqual(draft.currentTurnInlineTextFileCount, 0)
+        XCTAssertEqual(draft.priorTurnInlineTextFileCount, 0)
+    }
+
+    // MARK: - Source-guard plumbing
+
+    /// The comment-stripped body of one view-model method, so an assertion about
+    /// a dispatch cannot be satisfied by an unrelated statement elsewhere in a
+    /// file this size.
+    private static func body(ofFunction name: String) throws -> String {
+        try RefusalLaneSource.body(
+            ofFunction: name,
+            in: RefusalLaneSource.source(at: viewModelPath),
+            path: viewModelPath
+        )
+    }
+
+    private static func draftArguments(ofFunction name: String) throws -> String {
+        let body = try body(ofFunction: name)
+        guard let arguments = arguments(after: "GatewayAttemptDraft(", in: body) else {
+            throw RefusalLaneSource.Failure.missingFunction(name: name, path: viewModelPath)
+        }
+        return arguments
+    }
+
+    /// Everything between `token`'s open paren and its match. Paren-depth rather
+    /// than a line scan, because every argument here is itself a call.
+    private static func arguments(after token: String, in body: String) -> String? {
+        guard let opening = body.range(of: token) else { return nil }
+        var index = opening.upperBound
+        let start = index
+        var depth = 1
+        while index < body.endIndex, depth > 0 {
+            if body[index] == "(" { depth += 1 }
+            if body[index] == ")" { depth -= 1 }
+            index = body.index(after: index)
+        }
+        return String(body[start..<index])
     }
 }

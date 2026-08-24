@@ -164,6 +164,38 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         }
     }
 
+    /// What an assembled prior-turn history actually CARRIES, counted where
+    /// each part is emitted rather than re-derived by a later scan of the
+    /// turns. A re-scan would have to reproduce the disposition machinery
+    /// below to stay true, and would drift the first time a branch moves.
+    ///
+    /// Both numbers are content-free cardinalities — how many parts ride, never
+    /// what is in them — which is what makes them recordable in a ledger whose
+    /// whole contract is that it holds no content (`docs/ai-context/spec.md`).
+    struct PriorTurnShape: Sendable, Equatable {
+        /// `image_url` parts actually on the wire across every prior turn. Only
+        /// the `.inline` disposition emits any: referenced, expired and floored
+        /// turns carry disk references or an honest note, never pixels, and a
+        /// partially-resolved inline turn counts only the URIs it really sends.
+        let inlineImageCount: Int
+        /// Text-file blocks actually spliced back into prior turns. A file whose
+        /// extraction failed gets the unavailable note instead of a block and
+        /// does not count, so the number equals what the model receives.
+        let inlineTextFileCount: Int
+
+        static let empty = PriorTurnShape(inlineImageCount: 0, inlineTextFileCount: 0)
+    }
+
+    /// `priorTurns`' result: the wire turns plus the shape of what they carry.
+    /// A named struct rather than a tuple — this file is Watch-shared and the
+    /// type is destructured at every dispatch surface, so it stays greppable.
+    struct AssembledPriorTurns: Sendable {
+        let turns: [Message]
+        let shape: PriorTurnShape
+
+        static let empty = AssembledPriorTurns(turns: [], shape: .empty)
+    }
+
     /// Map a conversation's stored `MessageRecord`s into the wire
     /// `[Message]` array (the OAI `role`/`content` shape), oldest → newest.
     /// `RemoteAgentClient.assembleMessages` then appends the new user turn
@@ -226,6 +258,20 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
     /// but the on-disk path the reference splices comes from each attachment's
     /// persisted `storedKey` (which ALREADY carries the folder prefix when it was
     /// minted folder-capable) — authoritative over any reconstruction.
+    ///
+    /// **Context trim (`Constants.contextMaxTurns`):** the working set is cut to
+    /// the newest `contextMaxTurns` records BEFORE anything else runs, so this
+    /// method and `RemoteAgentClient.assembleMessages` operate on the same
+    /// population by construction. Two things depend on that: the inline-window
+    /// slots below are spent only on turns that survive to the wire, and the
+    /// `PriorTurnShape` counts describe parts a gateway actually receives. The
+    /// cut happens AFTER the `excludingNewUserText` drop, matching the order
+    /// `assembleMessages` sees (it trims the mapped turns, one per surviving
+    /// record).
+    ///
+    /// Returns the turns TOGETHER WITH their `PriorTurnShape` — the inline image
+    /// and text-file part counts, tallied inside the disposition branches that
+    /// emit them so the numbers describe the request that actually goes out.
     static func priorTurns(
         from records: [MessageRecord],
         excludingNewUserText newUserText: String? = nil,
@@ -233,13 +279,25 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
         folder: String? = nil,
         imagePolicy: ImageHistoryPolicy = .default,
         dispatchFileLaneID: String? = nil
-    ) -> [Message] {
+    ) -> AssembledPriorTurns {
         var working = records
         if let newUserText,
            let last = working.last,
            last.role == "user",
            last.text == newUserText {
             working.removeLast()
+        }
+
+        // THE CONTEXT TRIM, applied here rather than only downstream. The mapping
+        // below is one turn per record, so `assembleMessages`' `suffix(cap)` over
+        // the mapped turns is the same cut as this `suffix(cap)` over the records
+        // — taken AFTER the exclusion above, exactly as it sees them. Doing it
+        // first is what keeps two things true that a later trim cannot repair: an
+        // inline-window slot is never spent on a turn the wire drops, and the
+        // `PriorTurnShape` returned below counts only parts a gateway receives (a
+        // long thread otherwise records images and file blocks that never rode).
+        if working.count > Constants.contextMaxTurns {
+            working = Array(working.suffix(Constants.contextMaxTurns))
         }
 
         // Decide, per image-bearing turn, its DISPOSITION (inline / reference /
@@ -300,8 +358,14 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
             imageBearingSeen += 1
         }
 
+        // Tallied INSIDE the branches below, never re-derived from the finished
+        // turns: a re-scan would have to reproduce the disposition rules to stay
+        // honest, and would over-report the moment one of them moves.
+        var inlineImageCount = 0
+        var inlineTextFileCount = 0
+
         // Map `agent` → `assistant` on the wire (OAI role); `user` stays.
-        return working.map { record in
+        let turns: [Message] = working.map { record in
             let wireRole = record.role == "agent" ? "assistant" : record.role
             // A storedKey only has meaning inside the exact file-transfer lane
             // that minted it. Legacy rows have no provable ownership and are
@@ -335,6 +399,9 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
                     guard let text = att.extractedText else { return nil }
                     return (filename: Self.filename(for: att), text: text)
                 }
+            // The SPLICED blocks, not the candidate attachments: a failed
+            // extraction gets the unavailable note below instead of a block.
+            inlineTextFileCount += textFileBlocks.count
             var splicedText = Self.spliceText(record.text, textFileBlocks: textFileBlocks)
             splicedText = Self.spliceFileUnavailableNote(
                 splicedText,
@@ -431,6 +498,9 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
                     ? Self.spliceImageUnavailableNote(splicedText, imageCount: missing)
                     : splicedText
                 let parts: [Part] = [.text(inlineText)] + imageURIs.map { Part.imageURL($0) }
+                // The RESOLVED URIs only — `missing` images ride as the note,
+                // so the tally never claims a part the wire does not carry.
+                inlineImageCount += imageURIs.count
                 return Message(role: wireRole, content: .parts(parts))
 
             case .reference:
@@ -479,6 +549,11 @@ nonisolated struct ConverseRequest: Encodable, Sendable {
                 return Message(role: wireRole, content: .text(expiredText))
             }
         }
+
+        return AssembledPriorTurns(
+            turns: turns,
+            shape: PriorTurnShape(inlineImageCount: inlineImageCount,
+                                  inlineTextFileCount: inlineTextFileCount))
     }
 
     /// The adapter-contract v1 (revision 1.3) canonical historical-image

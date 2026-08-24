@@ -56,6 +56,15 @@ enum ConversationHistoryAssembler {
     ///     the default policy (`.recent`).
     ///   - store: injectable for tests; production passes `.shared`.
     ///
+    /// Returns the wire turns together with their `ConverseRequest.PriorTurnShape`
+    /// — the inline image / text-file part counts of the history this dispatch
+    /// actually carries, after the image-history POLICY routing, after the
+    /// `Constants.contextMaxTurns` TRIM (`priorTurns` applies it to its own
+    /// working set, so aged-out turns spend no inline-window slot and contribute
+    /// no count), and after COMPAT-mode substitution. Dispatch surfaces record
+    /// those counts on the attempt row, so a count that outran the wire would be
+    /// a measurement that lies.
+    ///
     /// THROWING (`fetchMessages` rethrows) so callers that surface store errors
     /// keep doing so; callers with a non-throwing posture wrap in `try?`. The
     /// per-message byte loads are individually `try?`-tolerant — one
@@ -76,7 +85,7 @@ enum ConversationHistoryAssembler {
         boundRef: RemoteAgentRef?,
         dispatchFileLaneID: String? = nil,
         store: ConversationStore = .shared
-    ) async throws -> [ConverseRequest.Message] {
+    ) async throws -> ConverseRequest.AssembledPriorTurns {
         let allMessages = try await store.fetchMessages(for: conversationID)
 
         // Resolve each prior turn's USER-side image bytes into data-URIs.
@@ -141,6 +150,13 @@ enum ConversationHistoryAssembler {
         let hideEarlierPhotos = try await store.fetchConversation(id: conversationID)?
             .hideEarlierPhotos ?? false
         guard hideEarlierPhotos else { return assembled }
-        return ConverseRequest.substitutingHistoricalImages(in: assembled)
+        // Substitution replaces EVERY historical `image_url` part with the
+        // disclosure text, so the request leaves with no inline images at all —
+        // the shape has to say so, or the ledger records images that never rode.
+        return ConverseRequest.AssembledPriorTurns(
+            turns: ConverseRequest.substitutingHistoricalImages(in: assembled.turns),
+            shape: ConverseRequest.PriorTurnShape(
+                inlineImageCount: 0,
+                inlineTextFileCount: assembled.shape.inlineTextFileCount))
     }
 }

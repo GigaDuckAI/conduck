@@ -22,7 +22,9 @@
 //      beyond the window; the default (`.recent`, nil ref) demotes the oldest
 //      keyed turn to a disk reference; a LEGACY keep-images-inline bool with
 //      no new key lazily resolves to `.all` (migration lock)
-//   6. Throwing: a store that cannot load rethrows out of `assemble`
+//   6. Prior-turn shape: the inline image / text-file counts ride out with the
+//      turns, and compat-mode substitution zeroes the image half
+//   7. Throwing: a store that cannot load rethrows out of `assemble`
 //
 // The image-history policy lives in App-Group UserDefaults (NOT Keychain),
 // so the policy tests run unsigned. Each uses a fresh `RemoteAgentRef.custom`
@@ -165,7 +167,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             excludingNewUserText: nil,
             boundRef: nil,
             store: store
-        )
+        ).turns
 
         XCTAssertEqual(turns.count, 2)
         XCTAssertEqual(turns[0].role, "user")
@@ -209,7 +211,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             excludingNewUserText: "what is in this picture",
             boundRef: nil,
             store: store
-        )
+        ).turns
 
         XCTAssertEqual(turns.count, 2, "the just-appended user turn must not ride as a duplicated trailing turn")
         XCTAssertEqual(turns.map(\.role), ["user", "assistant"])
@@ -241,7 +243,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             excludingNewUserText: nil,
             boundRef: nil,
             store: store
-        )
+        ).turns
 
         XCTAssertEqual(turns.count, 1)
         XCTAssertTrue(imageURLs(of: turns[0]).isEmpty,
@@ -276,7 +278,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             excludingNewUserText: nil,
             boundRef: nil,
             store: store
-        )
+        ).turns
 
         XCTAssertEqual(turns.count, 1)
         XCTAssertTrue(imageURLs(of: turns[0]).isEmpty,
@@ -322,7 +324,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             excludingNewUserText: nil,
             boundRef: nil,
             store: store
-        )
+        ).turns
 
         XCTAssertEqual(turns.count, 1)
         XCTAssertTrue(imageURLs(of: turns[0]).isEmpty,
@@ -354,7 +356,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             boundRef: ref,
             dispatchFileLaneID: ownedFileLaneID,
             store: store
-        )
+        ).turns
 
         XCTAssertEqual(turns.count, 4)
         for (index, turn) in turns.enumerated() {
@@ -380,7 +382,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             boundRef: nil,
             dispatchFileLaneID: ownedFileLaneID,
             store: store
-        )
+        ).turns
 
         XCTAssertEqual(turns.count, 4)
         let demoted = try XCTUnwrap(bareText(of: turns[0]),
@@ -422,7 +424,7 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
             boundRef: ref,
             dispatchFileLaneID: ownedFileLaneID,
             store: store
-        )
+        ).turns
 
         XCTAssertEqual(turns.count, 4)
         for (index, turn) in turns.enumerated() {
@@ -450,7 +452,73 @@ final class ConversationHistoryAssemblerTests: XCTestCase {
                        "an explicit policy choice must shadow the legacy keep-images-inline bool")
     }
 
-    // MARK: - 6. Throwing posture
+    // MARK: - 6. Prior-turn shape (what the dispatch actually carries)
+
+    /// The shape rides out of the assembler alongside the turns, and compat mode
+    /// ("Keep chatting without photos") ZEROES the image half: substitution
+    /// replaces every historical `image_url` part with the disclosure text, so a
+    /// shape still claiming an image would put a picture in the ledger that
+    /// never went on the wire.
+    func testAssembleShapeCountsInlineImagesAndCompatModeZeroesThem() async throws {
+        let store = makeStore()
+        let convo = try await store.createConversation(backend: "openclaw")
+        let bytes = Data("prior-jpeg-bytes".utf8)
+
+        _ = try await store.appendMessage(
+            role: "user", text: "look at this",
+            conversationID: convo.id, sourceDevice: "phone",
+            attachments: [imageDraft(data: bytes)]
+        )
+
+        let assembled = try await ConversationHistoryAssembler.assemble(
+            conversationID: convo.id,
+            excludingUserMessageID: nil,
+            excludingNewUserText: nil,
+            boundRef: nil,
+            store: store
+        )
+        XCTAssertEqual(assembled.shape.inlineImageCount, 1,
+                       "the resolved prior image rides inline and is measured")
+        XCTAssertEqual(assembled.shape.inlineImageCount,
+                       assembled.turns.reduce(0) { $0 + imageURLs(of: $1).count },
+                       "the count must equal the image parts the turns actually carry")
+        XCTAssertEqual(assembled.shape.inlineTextFileCount, 0)
+
+        await store.setHideEarlierPhotos(conversationID: convo.id, true)
+
+        let substituted = try await ConversationHistoryAssembler.assemble(
+            conversationID: convo.id,
+            excludingUserMessageID: nil,
+            excludingNewUserText: nil,
+            boundRef: nil,
+            store: store
+        )
+        XCTAssertEqual(substituted.turns.count, 1)
+        XCTAssertTrue(substituted.turns.allSatisfy { imageURLs(of: $0).isEmpty },
+                      "compat mode leaves no image part on the wire")
+        XCTAssertEqual(substituted.shape.inlineImageCount, 0,
+                       "a substituted history carries no images, and the shape must say so")
+    }
+
+    /// A conversation with no prior turns assembles to explicit zeros — measured
+    /// as carrying nothing, never left unmeasured.
+    func testAssembleShapeIsZeroForAnEmptyHistory() async throws {
+        let store = makeStore()
+        let convo = try await store.createConversation(backend: "openclaw")
+
+        let assembled = try await ConversationHistoryAssembler.assemble(
+            conversationID: convo.id,
+            excludingUserMessageID: nil,
+            excludingNewUserText: nil,
+            boundRef: nil,
+            store: store
+        )
+        XCTAssertTrue(assembled.turns.isEmpty)
+        XCTAssertEqual(assembled.shape.inlineImageCount, 0)
+        XCTAssertEqual(assembled.shape.inlineTextFileCount, 0)
+    }
+
+    // MARK: - 7. Throwing posture
 
     func testAssembleThrowsWhenTheStoreCannotLoad() async {
         // A store URL whose parent directory does not exist —

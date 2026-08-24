@@ -360,7 +360,7 @@ final class ConverseWireTests: XCTestCase {
         let turns = ConverseRequest.priorTurns(
             from: records,
             dataURIsByMessageID: [imageMsgID: [uri]]
-        )
+        ).turns
 
         XCTAssertEqual(turns.count, 2)
         // Encode + inspect the first (image-bearing) turn.
@@ -390,7 +390,7 @@ final class ConverseWireTests: XCTestCase {
             MessageRecord(id: UUID(), role: "user", text: "hi",
                           createdAt: Date(), sourceDevice: "phone"),
         ]
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:])
+        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:]).turns
         let data = try JSONEncoder().encode(ConverseRequest(messages: turns, stream: false))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let wire = try XCTUnwrap(json["messages"] as? [[String: Any]])
@@ -421,7 +421,7 @@ final class ConverseWireTests: XCTestCase {
         let prior = ConverseRequest.priorTurns(
             from: records,
             dataURIsByMessageID: [oldestImageID: ["data:image/jpeg;base64,GONE"]]
-        )
+        ).turns
         let assembled = RemoteAgentClient.assembleMessages(
             priorTurns: prior,
             newUserText: "newest"
@@ -534,7 +534,7 @@ final class ConverseWireTests: XCTestCase {
         let turns = ConverseRequest.priorTurns(
             from: records,
             dispatchFileLaneID: Self.ownedFileLaneID
-        )
+        ).turns
         let data = try JSONEncoder().encode(ConverseRequest(messages: turns, stream: false))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let wire = try XCTUnwrap(json["messages"] as? [[String: Any]])
@@ -578,7 +578,7 @@ final class ConverseWireTests: XCTestCase {
         let turns = ConverseRequest.priorTurns(
             from: records,
             dispatchFileLaneID: String(repeating: "b", count: 64)
-        )
+        ).turns
         let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
 
         XCTAssertFalse(content.contains(secretKey),
@@ -617,7 +617,7 @@ final class ConverseWireTests: XCTestCase {
         let turns = ConverseRequest.priorTurns(
             from: records,
             dispatchFileLaneID: Self.ownedFileLaneID
-        )
+        ).turns
         let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
 
         XCTAssertFalse(content.contains(secretKey),
@@ -789,7 +789,7 @@ final class ConverseWireTests: XCTestCase {
         let turns = ConverseRequest.priorTurns(
             from: records,
             dataURIsByMessageID: [msgID: ["data:image/jpeg;base64,AAAA"]]
-        )
+        ).turns
         let wire = try Self.encodeWire(turns)
         let parts = try XCTUnwrap(wire[0]["content"] as? [[String: Any]],
                                   "an inline dual image rides as a parts array")
@@ -821,7 +821,7 @@ final class ConverseWireTests: XCTestCase {
         XCTAssertEqual(Constants.imageInlineWindow, 3, "this test assumes the window is 3")
 
         let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris,
-                                               folder: "conv")
+                                               folder: "conv").turns
         let wire = try Self.encodeWire(turns)
 
         // Every image turn must still carry an inline image_url; none referenced.
@@ -858,7 +858,7 @@ final class ConverseWireTests: XCTestCase {
             dataURIsByMessageID: uris,
             folder: "conv",
             dispatchFileLaneID: Self.ownedFileLaneID
-        )
+        ).turns
         let wire = try Self.encodeWire(turns)
 
         // 5 image turns, window 3 → exactly 3 inline image_url parts remain.
@@ -913,7 +913,7 @@ final class ConverseWireTests: XCTestCase {
             uris[id] = ["data:image/jpeg;base64,NEWER\(i)"]
         }
 
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris, folder: "conv")
+        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris, folder: "conv").turns
         let wire = try Self.encodeWire(turns)
         let inlineImageURLs = wire.compactMap { $0["content"] as? [[String: Any]] }
             .flatMap { $0 }
@@ -956,7 +956,7 @@ final class ConverseWireTests: XCTestCase {
             uris[id] = ["data:image/jpeg;base64,NEWER\(i)"]
         }
 
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris, folder: "conv")
+        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris, folder: "conv").turns
         let wire = try Self.encodeWire(turns)
         let inlineImageURLs = wire.compactMap { $0["content"] as? [[String: Any]] }
             .flatMap { $0 }
@@ -991,7 +991,7 @@ final class ConverseWireTests: XCTestCase {
         }
 
         let turns = ConverseRequest.priorTurns(
-            from: records, dataURIsByMessageID: uris, folder: "conv", imagePolicy: .all)
+            from: records, dataURIsByMessageID: uris, folder: "conv", imagePolicy: .all).turns
         let wire = try Self.encodeWire(turns)
         let inlineImageCount = wire.compactMap { $0["content"] as? [[String: Any]] }
             .flatMap { $0 }
@@ -1024,7 +1024,7 @@ final class ConverseWireTests: XCTestCase {
         }
 
         // Default policy (.recent) — same path the assembler takes for a nil ref.
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris)
+        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris).turns
         let wire = try Self.encodeWire(turns)
         let inlineImageCount = wire.compactMap { $0["content"] as? [[String: Any]] }
             .flatMap { $0 }
@@ -1081,7 +1081,7 @@ final class ConverseWireTests: XCTestCase {
             dataURIsByMessageID: uris,
             folder: "conv",
             dispatchFileLaneID: Self.ownedFileLaneID
-        )
+        ).turns
         let wire = try Self.encodeWire(turns)
 
         // The mixed turn (wire[0]) expired to composed `.text`: keyed ref + note.
@@ -1125,7 +1125,7 @@ final class ConverseWireTests: XCTestCase {
             folder: "conv",
             imagePolicy: .extended,
             dispatchFileLaneID: Self.ownedFileLaneID
-        )
+        ).turns
         let wire = try Self.encodeWire(turns)
         let inlineImageCount = wire.compactMap { $0["content"] as? [[String: Any]] }
             .flatMap { $0 }
@@ -1158,7 +1158,7 @@ final class ConverseWireTests: XCTestCase {
         }
 
         let turns = ConverseRequest.priorTurns(
-            from: records, dataURIsByMessageID: uris, imagePolicy: .all)
+            from: records, dataURIsByMessageID: uris, imagePolicy: .all).turns
         let wire = try Self.encodeWire(turns)
         let inlineImageCount = wire.compactMap { $0["content"] as? [[String: Any]] }
             .flatMap { $0 }
@@ -1187,7 +1187,7 @@ final class ConverseWireTests: XCTestCase {
             uris[id] = ["data:image/jpeg;base64,ORPHAN\(i)"]
         }
 
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris)
+        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris).turns
         let assembled = RemoteAgentClient.assembleMessages(priorTurns: turns, newUserText: "next")
         let data = try JSONEncoder().encode(ConverseRequest(messages: assembled, stream: false))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -1244,7 +1244,7 @@ final class ConverseWireTests: XCTestCase {
         var uris: [UUID: [String]] = [msgID: ["data:image/jpeg;base64,OLD"]]
         for r in all where r.id != msgID { uris[r.id] = ["data:image/jpeg;base64,N"] }
 
-        let turns = ConverseRequest.priorTurns(from: all, dataURIsByMessageID: uris, folder: "conv")
+        let turns = ConverseRequest.priorTurns(from: all, dataURIsByMessageID: uris, folder: "conv").turns
         let assembled = RemoteAgentClient.assembleMessages(priorTurns: turns, newUserText: "next")
         let data = try JSONEncoder().encode(ConverseRequest(messages: assembled, stream: false))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -1272,7 +1272,7 @@ final class ConverseWireTests: XCTestCase {
             from: records,
             dataURIsByMessageID: [:],
             dispatchFileLaneID: Self.ownedFileLaneID
-        )
+        ).turns
         let wire = try Self.encodeWire(turns)
 
         XCTAssertNil(wire[0]["content"] as? [[String: Any]],
@@ -1305,7 +1305,7 @@ final class ConverseWireTests: XCTestCase {
             from: records,
             dataURIsByMessageID: [:],
             dispatchFileLaneID: String(repeating: "b", count: 64)
-        )
+        ).turns
         let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
 
         XCTAssertFalse(content.contains(secretKey),
@@ -1323,7 +1323,7 @@ final class ConverseWireTests: XCTestCase {
                           createdAt: Date(), sourceDevice: "phone",
                           attachments: [Self.inlineOnlyImageAttachment()]),
         ]
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:])
+        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:]).turns
         let wire = try Self.encodeWire(turns)
 
         XCTAssertNil(wire[0]["content"] as? [[String: Any]],
@@ -1350,7 +1350,7 @@ final class ConverseWireTests: XCTestCase {
                               Self.inlineOnlyImageAttachment(),
                           ]),
         ]
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:])
+        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:]).turns
         let wire = try Self.encodeWire(turns)
         let content = try XCTUnwrap(wire[0]["content"] as? String)
 
@@ -1381,7 +1381,7 @@ final class ConverseWireTests: XCTestCase {
         let turns = ConverseRequest.priorTurns(
             from: records,
             dataURIsByMessageID: [turnID: ["data:image/jpeg;base64,AAA="]]
-        )
+        ).turns
         let wire = try Self.encodeWire(turns)
 
         let parts = try XCTUnwrap(wire[0]["content"] as? [[String: Any]],
@@ -1423,7 +1423,7 @@ final class ConverseWireTests: XCTestCase {
             }
             if unresolvedIsNewest { records.append(unresolved) }
 
-            let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris, folder: "conv")
+            let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris, folder: "conv").turns
             let wire = try Self.encodeWire(turns)
             let inlineImageURLs = wire.compactMap { $0["content"] as? [[String: Any]] }
                 .flatMap { $0 }
@@ -1452,7 +1452,7 @@ final class ConverseWireTests: XCTestCase {
                           attachments: [Self.inlineOnlyImageAttachment()]),
         ]
         let turns = ConverseRequest.priorTurns(
-            from: records, dataURIsByMessageID: [:], imagePolicy: .all)
+            from: records, dataURIsByMessageID: [:], imagePolicy: .all).turns
         let wire = try Self.encodeWire(turns)
         XCTAssertNil(wire[0]["content"] as? [[String: Any]],
                      "the escape hatch cannot conjure inline bytes that were never resolved")
@@ -1478,7 +1478,7 @@ final class ConverseWireTests: XCTestCase {
             from: records,
             dataURIsByMessageID: [:],
             dispatchFileLaneID: Self.ownedFileLaneID
-        )
+        ).turns
         let wire = try Self.encodeWire(turns)
         let content = try XCTUnwrap(wire[0]["content"] as? String,
                                     "a server-reference image turn stays a bare string")
@@ -1508,7 +1508,7 @@ final class ConverseWireTests: XCTestCase {
         let turns = ConverseRequest.priorTurns(
             from: records,
             dispatchFileLaneID: String(repeating: "b", count: 64)
-        )
+        ).turns
         let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
 
         XCTAssertFalse(content.contains(storedKey),
@@ -1569,7 +1569,7 @@ final class ConverseWireTests: XCTestCase {
             from: records,
             dataURIsByMessageID: [:],
             dispatchFileLaneID: Self.ownedFileLaneID
-        ))
+        ).turns)
         XCTAssertEqual(wire[0]["role"] as? String, "assistant",
                        "an agent record maps to the OAI assistant role")
         let content = try XCTUnwrap(wire[0]["content"] as? String)
@@ -1645,7 +1645,7 @@ final class ConverseWireTests: XCTestCase {
                           createdAt: Date(), sourceDevice: "phone",
                           attachments: [Self.inlineOnlyImageAttachment()]),
         ]
-        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:])
+        let turns = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: [:]).turns
         let assembled = RemoteAgentClient.assembleMessages(priorTurns: turns, newUserText: "next")
         let data = try JSONEncoder().encode(ConverseRequest(messages: assembled, stream: false))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -2036,7 +2036,7 @@ final class ConverseWireTests: XCTestCase {
         let turns = ConverseRequest.priorTurns(
             from: records,
             dispatchFileLaneID: Self.ownedFileLaneID
-        )
+        ).turns
         let wire = try Self.encodeWire(turns)
         let content = try XCTUnwrap(wire[0]["content"] as? String,
                                     "a prior dual-text turn (no images) stays a bare string")
@@ -2080,7 +2080,7 @@ final class ConverseWireTests: XCTestCase {
         let turns = ConverseRequest.priorTurns(
             from: records,
             dispatchFileLaneID: String(repeating: "b", count: 64)
-        )
+        ).turns
         let content = try XCTUnwrap(try Self.encodeWire(turns)[0]["content"] as? String)
 
         XCTAssertTrue(content.contains("SAFE_INLINE_BODY"),
@@ -2101,7 +2101,7 @@ final class ConverseWireTests: XCTestCase {
             MessageRecord(id: msgID, role: "user", text: "my memo",
                           createdAt: Date(), sourceDevice: "phone", attachments: [inlineTextAtt]),
         ]
-        let turns = ConverseRequest.priorTurns(from: records)
+        let turns = ConverseRequest.priorTurns(from: records).turns
         let wire = try Self.encodeWire(turns)
         let content = try XCTUnwrap(wire[0]["content"] as? String)
         XCTAssertTrue(content.contains("INLINE_MEMO_BODY"),
@@ -2561,7 +2561,7 @@ final class ConverseWireTests: XCTestCase {
                           createdAt: Date(), sourceDevice: "phone", attachments: [att]),
         ]
         let content = try XCTUnwrap(
-            try Self.encodeWire(ConverseRequest.priorTurns(from: records))[0]["content"] as? String)
+            try Self.encodeWire(ConverseRequest.priorTurns(from: records).turns)[0]["content"] as? String)
         let lines = content.components(separatedBy: "\n")
 
         // my memo · blank · label · fence · MEMO_BODY · fence.
@@ -2570,6 +2570,206 @@ final class ConverseWireTests: XCTestCase {
         XCTAssertFalse(lines.contains(where: { $0.hasPrefix("- ") }),
                        "the forged bullet must not become a line of its own on replay")
         XCTAssertTrue(content.contains("MEMO_BODY"), "the file's own body still rides fenced")
+    }
+
+    // MARK: - Prior-turn shape (what the request actually carries)
+    //
+    // The shape is recorded on the attempt row, so every case below asserts the
+    // count against the ENCODED SENT ARRAY as well as against the expected
+    // number: a tally that outran what the gateway received would be a
+    // measurement that lies, and no later release can repair a period recorded
+    // that way. The ground truth is `RemoteAgentClient.assembleMessages` output,
+    // not the `priorTurns` return — the trim policy lives between the two, so
+    // checking the intermediate array would let a count survive that names parts
+    // the request drops.
+
+    /// Empty history → explicit zeros. A dispatch with no prior turns is
+    /// MEASURED as carrying nothing, never left unmeasured.
+    func testPriorTurnShapeIsZeroForEmptyHistory() {
+        let assembled = ConverseRequest.priorTurns(from: [])
+        XCTAssertTrue(assembled.turns.isEmpty)
+        XCTAssertEqual(assembled.shape, .empty)
+        XCTAssertEqual(assembled.shape.inlineImageCount, 0)
+        XCTAssertEqual(assembled.shape.inlineTextFileCount, 0)
+    }
+
+    /// 5 keyed image turns under the window of 3: the newest 3 ride inline and
+    /// the older 2 demote to disk references, so the shape counts 3 — the
+    /// referenced turns carry no pixels and must not be counted as if they did.
+    func testPriorTurnShapeCountsInlineImagesAndNotReferencedOnes() throws {
+        var records: [MessageRecord] = []
+        var uris: [UUID: [String]] = [:]
+        for i in 0..<5 {
+            let id = UUID()
+            records.append(MessageRecord(
+                id: id, role: "user", text: "turn-\(i)", createdAt: Date(), sourceDevice: "phone",
+                fileTransferLaneID: Self.ownedFileLaneID,
+                attachments: [Self.dualImageAttachment(storedKey: "conv/key\(i)__image\(i).heic")]))
+            uris[id] = ["data:image/jpeg;base64,IMG\(i)"]
+        }
+
+        let assembled = ConverseRequest.priorTurns(
+            from: records,
+            dataURIsByMessageID: uris,
+            folder: "conv",
+            dispatchFileLaneID: Self.ownedFileLaneID
+        )
+
+        XCTAssertEqual(assembled.shape.inlineImageCount, 3,
+                       "only the newest 3 image turns ride inline; the aged 2 are disk references")
+        XCTAssertEqual(assembled.shape.inlineImageCount,
+                       Self.wireImageParts(try Self.encodeSentWire(assembled.turns)),
+                       "the count must equal the image_url parts actually encoded")
+        XCTAssertEqual(assembled.shape.inlineTextFileCount, 0, "no text files in this thread")
+    }
+
+    /// 11 unkeyed image turns: the newest `imageOrphanInlineWindow` stay inline
+    /// and the oldest EXPIRES to the honest note. The expired turn counts zero —
+    /// there is nothing on the wire to attribute to it.
+    func testPriorTurnShapeExcludesExpiredOrphanTurns() throws {
+        var records: [MessageRecord] = []
+        var uris: [UUID: [String]] = [:]
+        for i in 0..<11 {
+            let id = UUID()
+            records.append(MessageRecord(
+                id: id, role: "user", text: "orphan-\(i)", createdAt: Date(), sourceDevice: "phone",
+                attachments: [Self.inlineOnlyImageAttachment()]))
+            uris[id] = ["data:image/jpeg;base64,ORPHAN\(i)"]
+        }
+
+        let assembled = ConverseRequest.priorTurns(from: records, dataURIsByMessageID: uris)
+        let wire = try Self.encodeSentWire(assembled.turns)
+
+        XCTAssertEqual(assembled.shape.inlineImageCount, Constants.imageOrphanInlineWindow,
+                       "the expired oldest orphan contributes nothing")
+        XCTAssertEqual(assembled.shape.inlineImageCount, Self.wireImageParts(wire),
+                       "the count must equal the image_url parts actually encoded")
+        XCTAssertTrue(Self.allText(wire).contains("are not included in this request"),
+                      "the fixture is only meaningful if a turn really expired")
+    }
+
+    /// A PARTIALLY-resolved turn counts the URIs it truly sends: the unresolved
+    /// remainder rides as the unavailable note, so counting attachments instead
+    /// of parts would over-report an image the model never saw.
+    func testPriorTurnShapeCountsOnlyResolvedURIsOnAPartialTurn() throws {
+        let id = UUID()
+        let records = [
+            MessageRecord(id: id, role: "user", text: "two photos",
+                          createdAt: Date(), sourceDevice: "phone",
+                          attachments: [Self.inlineOnlyImageAttachment(),
+                                        Self.inlineOnlyImageAttachment()]),
+        ]
+        let assembled = ConverseRequest.priorTurns(
+            from: records,
+            dataURIsByMessageID: [id: ["data:image/jpeg;base64,ONLYONE"]])
+        let wire = try Self.encodeSentWire(assembled.turns)
+
+        XCTAssertEqual(assembled.shape.inlineImageCount, 1,
+                       "only the resolved image is on the wire")
+        XCTAssertEqual(assembled.shape.inlineImageCount, Self.wireImageParts(wire))
+        XCTAssertTrue(Self.allText(wire).contains("are not included in this request"),
+                      "the missing image is disclosed rather than counted")
+    }
+
+    /// An UNRESOLVED image turn (honesty floor — no map entry) emits a disk
+    /// reference and no parts at all, so it counts zero.
+    func testPriorTurnShapeIsZeroForAFlooredUnresolvedImageTurn() throws {
+        let records = [
+            MessageRecord(id: UUID(), role: "user", text: "look at this chart",
+                          createdAt: Date(), sourceDevice: "phone",
+                          fileTransferLaneID: Self.ownedFileLaneID,
+                          attachments: [Self.dualImageAttachment(storedKey: "conv/feed1234__image.heic")]),
+        ]
+        let assembled = ConverseRequest.priorTurns(
+            from: records, dispatchFileLaneID: Self.ownedFileLaneID)
+
+        XCTAssertEqual(assembled.shape.inlineImageCount, 0)
+        XCTAssertEqual(Self.wireImageParts(try Self.encodeSentWire(assembled.turns)), 0,
+                       "a floored turn mints no image_url part to count")
+    }
+
+    /// Only SPLICED text blocks count. Three prior text attachments, one block:
+    /// the extracted one splices, the failed extraction rides as the unavailable
+    /// note, and the lane-owned dual-text file replays as a disk ref instead.
+    func testPriorTurnShapeCountsOnlySplicedTextFileBlocks() throws {
+        let splicedAtt = AttachmentRecord(
+            id: UUID(), mimeType: "text/plain", filename: "memo.txt", thumbnailData: nil,
+            extractedText: "INLINE_MEMO_BODY", width: 0, height: 0, byteSize: 16, sequence: 0,
+            createdAt: Date(), isServerReference: false, storedKey: nil)
+        let unextractedAtt = AttachmentRecord(
+            id: UUID(), mimeType: "text/plain", filename: "broken.txt", thumbnailData: nil,
+            extractedText: nil, width: 0, height: 0, byteSize: 16, sequence: 1,
+            createdAt: Date(), isServerReference: false, storedKey: nil)
+        let dualTextAtt = AttachmentRecord(
+            id: UUID(), mimeType: "text/markdown", filename: "notes.md", thumbnailData: nil,
+            extractedText: "AGED_BODY", width: 0, height: 0, byteSize: 9, sequence: 0,
+            createdAt: Date(), isServerReference: false, storedKey: "conv/dead1234__notes.md")
+        let records = [
+            MessageRecord(id: UUID(), role: "user", text: "two files",
+                          createdAt: Date(), sourceDevice: "phone",
+                          attachments: [splicedAtt, unextractedAtt]),
+            MessageRecord(id: UUID(), role: "user", text: "see my notes",
+                          createdAt: Date(), sourceDevice: "phone",
+                          fileTransferLaneID: Self.ownedFileLaneID,
+                          attachments: [dualTextAtt]),
+        ]
+
+        let assembled = ConverseRequest.priorTurns(
+            from: records, dispatchFileLaneID: Self.ownedFileLaneID)
+        let text = Self.allText(try Self.encodeSentWire(assembled.turns))
+
+        XCTAssertEqual(assembled.shape.inlineTextFileCount, 1,
+                       "one fenced block rides; a failed extraction and an aged disk ref are not blocks")
+        XCTAssertTrue(text.contains("INLINE_MEMO_BODY"), "the counted block is really on the wire")
+        XCTAssertFalse(text.contains("AGED_BODY"), "the dual-text body replays as a disk ref, uncounted")
+        XCTAssertTrue(text.contains("are not available in the current file-transfer lane"),
+                      "the unextractable file is disclosed rather than counted")
+        XCTAssertEqual(assembled.shape.inlineImageCount, 0)
+    }
+
+    /// A thread LONGER than `Constants.contextMaxTurns` whose oldest turn carries
+    /// both an image and a text file: the trim drops that turn, so both counts
+    /// read zero. Counting it would record an image and a file block the gateway
+    /// never received — and it would also spend an inline-window slot on a turn
+    /// the wire discards, demoting a newer image turn to a disk reference for no
+    /// reason.
+    func testPriorTurnShapeIgnoresTurnsBeyondTheContextTrim() throws {
+        let cap = Constants.contextMaxTurns
+        let oldestID = UUID()
+        let oldestTextAtt = AttachmentRecord(
+            id: UUID(), mimeType: "text/plain", filename: "oldest.txt", thumbnailData: nil,
+            extractedText: "OLDEST_FILE_BODY", width: 0, height: 0, byteSize: 16, sequence: 1,
+            createdAt: Date(), isServerReference: false, storedKey: nil)
+
+        var records: [MessageRecord] = [
+            MessageRecord(id: oldestID, role: "user", text: "OLDEST-AGED-OUT",
+                          createdAt: Date(), sourceDevice: "phone",
+                          attachments: [Self.inlineOnlyImageAttachment(), oldestTextAtt]),
+        ]
+        // Pad past the cap so the tagged turn is trimmed off the front.
+        for i in 0..<(cap + 4) {
+            records.append(MessageRecord(
+                id: UUID(), role: i.isMultiple(of: 2) ? "agent" : "user",
+                text: "turn-\(i)", createdAt: Date(), sourceDevice: "phone"))
+        }
+        XCTAssertGreaterThan(records.count, cap, "the fixture is only meaningful past the cap")
+
+        let assembled = ConverseRequest.priorTurns(
+            from: records,
+            dataURIsByMessageID: [oldestID: ["data:image/jpeg;base64,TRIMMED"]])
+        let wire = try Self.encodeSentWire(assembled.turns)
+
+        XCTAssertEqual(assembled.turns.count, cap,
+                       "the assembled history is already cut to the sent-array cap")
+        XCTAssertEqual(assembled.shape.inlineImageCount, 0,
+                       "the trimmed turn's image never rides, so it is never counted")
+        XCTAssertEqual(assembled.shape.inlineTextFileCount, 0,
+                       "the trimmed turn's file block never rides, so it is never counted")
+        XCTAssertEqual(Self.wireImageParts(wire), 0,
+                       "no image_url part crosses the wire for a turn the trim dropped")
+        let text = Self.allText(wire)
+        XCTAssertFalse(text.contains("OLDEST-AGED-OUT"), "the aged-out turn is absent entirely")
+        XCTAssertFalse(text.contains("OLDEST_FILE_BODY"), "its spliced file body is absent too")
     }
 
     // MARK: - Phase C helpers
@@ -2607,6 +2807,26 @@ final class ConverseWireTests: XCTestCase {
         let data = try JSONEncoder().encode(ConverseRequest(messages: turns, stream: false))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         return try XCTUnwrap(json["messages"] as? [[String: Any]])
+    }
+
+    /// Encode the SENT array — `assembleMessages` over `turns` plus a new user
+    /// turn — so a shape assertion is checked against what the request really
+    /// carries, trim policy included, rather than the pre-trim intermediate. The
+    /// appended turn is bare text with no attachments and a marker no fixture
+    /// uses, so it adds no image part and no substring any assertion looks for.
+    private static func encodeSentWire(_ turns: [ConverseRequest.Message]) throws -> [[String: Any]] {
+        try Self.encodeWire(RemoteAgentClient.assembleMessages(priorTurns: turns,
+                                                               newUserText: "newest"))
+    }
+
+    /// Count the `image_url` parts in an encoded `messages[]` — the wire-side
+    /// ground truth every `PriorTurnShape.inlineImageCount` assertion is checked
+    /// against, so a shape that counts something the wire lacks fails loudly.
+    private static func wireImageParts(_ wire: [[String: Any]]) -> Int {
+        wire.compactMap { $0["content"] as? [[String: Any]] }
+            .flatMap { $0 }
+            .filter { ($0["type"] as? String) == "image_url" }
+            .count
     }
 
     /// Concatenate every turn's text (bare-string content + `.text` parts) for

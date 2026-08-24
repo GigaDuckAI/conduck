@@ -285,7 +285,11 @@ struct ConversationListView: View {
                 Text("Cancel")
             }
         } message: {
-            Text("This removes every conversation from this device and all your other devices. This cannot be undone.")
+            // NAMES THE USAGE RECORDS, because erase-everything is the one
+            // deletion that also takes them. A single conversation's deletion
+            // leaves its content-free records behind for trends, so a message
+            // reused between the two would be false on one of them.
+            Text("This removes every conversation and its usage records from this device and all your other devices. This cannot be undone.")
         }
         .task { await viewModel.reload() }
         .task(id: searchKey) { await runContentSearch() }

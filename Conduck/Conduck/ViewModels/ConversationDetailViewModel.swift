@@ -4022,13 +4022,20 @@ final class ConversationDetailViewModel {
         // shared assembler (the single history choke point across the six
         // converse surfaces). `try?` preserves this path's non-throwing posture
         // (a store hiccup sends with empty history rather than failing the turn).
-        let priorTurns = (try? await ConversationHistoryAssembler.assemble(
+        let assembledHistory = try? await ConversationHistoryAssembler.assemble(
             conversationID: conversationID,
             excludingUserMessageID: userMessageID,
             excludingNewUserText: text,
             boundRef: RemoteAgentRef(rawString: rawBackend ?? ""),
             dispatchFileLaneID: dispatchFileLane?.durableLaneID
-        )) ?? []
+        )
+        let priorTurns = assembledHistory?.turns ?? []
+        // The prior-turn attachment shape the ledger records — counted inside
+        // the assembler, after policy, compat and trimming, so it describes
+        // what this request actually carries rather than what the thread holds.
+        // A failed assembly sends no history at all, so zero is the measured
+        // truth here and not a stand-in for unmeasured.
+        let priorShape = assembledHistory?.shape
         // Dispatch-time fact for the failure classification: does THIS
         // request carry historical image parts? (Post-policy, post-compat —
         // exactly what actually goes on the wire.)
@@ -4157,7 +4164,14 @@ final class ConversationDetailViewModel {
                     // the window), so it names the surface running this dispatch.
                     origin: Self.dispatchOrigin(fromMenuBarSurface: surfacesInPopover),
                     inputMode: modality.inputMode,
-                    requestedModel: snapshot.model
+                    requestedModel: snapshot.model,
+                    // The hardware this dispatch ran on — never the name the
+                    // user gave it.
+                    deviceClass: SourceDevice.current,
+                    currentTurnInlineImageCount: newUserImageDataURIs.count,
+                    priorTurnInlineImageCount: priorShape?.inlineImageCount ?? 0,
+                    currentTurnInlineTextFileCount: newUserTextFileBlocks.count,
+                    priorTurnInlineTextFileCount: priorShape?.inlineTextFileCount ?? 0
                 )
                 // Checked immediately before the awaited insert, and again
                 // immediately after it: a Stop landing in that window must not
@@ -4291,6 +4305,11 @@ final class ConversationDetailViewModel {
                 // stamp their own origins there.
                 origin: .app,
                 inputMode: modality.inputMode,
+                // The prior-turn shape this request carries, counted by the
+                // assembler above — the transport opens the ledger row and
+                // cannot recount it from the assembled turns.
+                priorTurnInlineImageCount: priorShape?.inlineImageCount ?? 0,
+                priorTurnInlineTextFileCount: priorShape?.inlineTextFileCount ?? 0,
                 // EXACT per-message status flips in the background delegate (a
                 // conversation-wide flip would alias a concurrent sibling
                 // turn's status — e.g. a long headless think in this thread).
@@ -4943,13 +4962,18 @@ final class ConversationDetailViewModel {
         // (exclude this turn) — the SAME shared assembler as the live send path,
         // so retry produces the same wire shape. `try?` preserves the
         // non-throwing posture.
-        let priorTurns = (try? await ConversationHistoryAssembler.assemble(
+        let assembledHistory = try? await ConversationHistoryAssembler.assemble(
             conversationID: conversationID,
             excludingUserMessageID: userMessageID,
             excludingNewUserText: text,
             boundRef: RemoteAgentRef(rawString: rawBackend ?? ""),
             dispatchFileLaneID: historyFileLane?.durableLaneID
-        )) ?? []
+        )
+        let priorTurns = assembledHistory?.turns ?? []
+        // Re-counted for THIS dispatch rather than inherited from the failed
+        // one: a retry reassembles history under the policy in force now, so
+        // the two attempts of one turn can legitimately carry different shapes.
+        let priorShape = assembledHistory?.shape
         // Dispatch-time fact for the failure classification: does THIS
         // request carry historical image parts? (Post-policy, post-compat —
         // exactly what actually goes on the wire.)
@@ -5041,7 +5065,14 @@ final class ConversationDetailViewModel {
                     // original send: the caller states it (see `fromPopover`).
                     origin: Self.dispatchOrigin(fromMenuBarSurface: fromPopover),
                     inputMode: retryInputMode,
-                    requestedModel: snapshot.model
+                    requestedModel: snapshot.model,
+                    // The device running the RETRY, by the same rule the origin
+                    // above follows — not the one that ran the original send.
+                    deviceClass: SourceDevice.current,
+                    currentTurnInlineImageCount: newUserImageDataURIs.count,
+                    priorTurnInlineImageCount: priorShape?.inlineImageCount ?? 0,
+                    currentTurnInlineTextFileCount: newUserTextFileBlocks.count,
+                    priorTurnInlineTextFileCount: priorShape?.inlineTextFileCount ?? 0
                 )
                 try Task.checkCancellation()
                 attemptContext = await ConversationStore.shared.beginGatewayAttempt(draft: attemptDraft)
@@ -5156,6 +5187,9 @@ final class ConversationDetailViewModel {
                 // because a retry acquires nothing new.
                 origin: .app,
                 inputMode: retryInputMode,
+                // This dispatch's own prior-turn shape — see the send twin.
+                priorTurnInlineImageCount: priorShape?.inlineImageCount ?? 0,
+                priorTurnInlineTextFileCount: priorShape?.inlineTextFileCount ?? 0,
                 // Exact per-message flips — same rationale as sendUserTurn.
                 userMessageID: userMessageID,
                 // Inherited quick-lane provenance — see sendUserTurn's twin.

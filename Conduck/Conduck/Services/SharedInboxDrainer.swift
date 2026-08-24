@@ -111,6 +111,12 @@ protocol ShareConverseDispatching: Sendable {
         newUserServerFileRefs: [(originalName: String, storedKey: String)],
         newUserImageFileRefs: [(storedKey: String, filename: String)],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)],
+        // The prior-turn attachment shape of `priorTurns`, counted by the
+        // assembler that produced them. Threaded rather than recounted: an
+        // inline text-file block is ordinary text once assembled, so nothing
+        // downstream can tell it from the rest of what a turn said.
+        priorTurnInlineImageCount: Int,
+        priorTurnInlineTextFileCount: Int,
         fileTransferSnapshot: SettingsManager.FileTransferSnapshot?,
         conversationID: UUID,
         shareEnvelopeID: UUID
@@ -160,6 +166,8 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
         newUserServerFileRefs: [(originalName: String, storedKey: String)],
         newUserImageFileRefs: [(storedKey: String, filename: String)],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)],
+        priorTurnInlineImageCount: Int,
+        priorTurnInlineTextFileCount: Int,
         fileTransferSnapshot: SettingsManager.FileTransferSnapshot?,
         conversationID: UUID,
         shareEnvelopeID: UUID
@@ -274,7 +282,14 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
                 gatewayRef: ref.rawString,
                 origin: .share,
                 inputMode: .shared,
-                requestedModel: model
+                requestedModel: model,
+                // The Mac running the drain — the share arrived from another
+                // app on this device, so there is no other candidate.
+                deviceClass: SourceDevice.current,
+                currentTurnInlineImageCount: newUserImageDataURIs.count,
+                priorTurnInlineImageCount: priorTurnInlineImageCount,
+                currentTurnInlineTextFileCount: newUserTextFileBlocks.count,
+                priorTurnInlineTextFileCount: priorTurnInlineTextFileCount
             )
         )
         /// Close the row this branch opened, if it opened one.
@@ -418,6 +433,8 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             // of them was typed or spoken into Conduck.
             origin: .share,
             inputMode: .shared,
+            priorTurnInlineImageCount: priorTurnInlineImageCount,
+            priorTurnInlineTextFileCount: priorTurnInlineTextFileCount,
             shareEnvelopeID: shareEnvelopeID,
             userMessageID: shareEnvelopeID
         )
@@ -1330,14 +1347,19 @@ actor SharedInboxDrainer {
         // `ImageHistoryPolicy` (inline window / disk-ref demotion / orphan
         // expiry). `try?` preserves the non-throwing posture (a store hiccup
         // dispatches with empty history rather than quarantining the share).
-        let priorTurns = (try? await ConversationHistoryAssembler.assemble(
+        let assembledHistory = try? await ConversationHistoryAssembler.assemble(
             conversationID: routed.conversationID,
             excludingUserMessageID: manifest.uuid,
             excludingNewUserText: userText,
             boundRef: routed.ref,
             dispatchFileLaneID: dispatchFileLane?.durableLaneID,
             store: store
-        )) ?? []
+        )
+        let priorTurns = assembledHistory?.turns ?? []
+        // What this request carries from earlier turns, counted where the
+        // policy was applied. A store hiccup dispatches with empty history, so
+        // its shape is zero rather than unknown.
+        let priorShape = assembledHistory?.shape
 
         // --- Durably mark `submitted` BEFORE dispatch (mark-before-resume) ---
         // This is the crash-window seal: if the process dies after this write but
@@ -1371,6 +1393,8 @@ actor SharedInboxDrainer {
                 newUserServerFileRefs: serverFileRefs,
                 newUserImageFileRefs: imageFileServerRefs,
                 newUserTextFileServerRefs: textFileServerRefs,
+                priorTurnInlineImageCount: priorShape?.inlineImageCount ?? 0,
+                priorTurnInlineTextFileCount: priorShape?.inlineTextFileCount ?? 0,
                 fileTransferSnapshot: dispatchFileLane,
                 conversationID: routed.conversationID,
                 shareEnvelopeID: manifest.uuid

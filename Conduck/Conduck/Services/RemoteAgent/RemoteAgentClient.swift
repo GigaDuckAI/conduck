@@ -423,6 +423,13 @@ actor RemoteAgentClient {
         // composer, ConverseIntent, background iOS) stay byte-identical.
         surface: ConverseRequest.Surface = .standard
     ) -> [ConverseRequest.Message] {
+        // BELT AND BRACES, and deliberately kept. `ConverseRequest.priorTurns`
+        // already cuts to this same cap (it has to — its inline-image window and
+        // its part counts must describe the sent array), so for that caller this
+        // is a no-op. It stays because `priorTurns` is not the only source of
+        // this parameter: a caller handing over turns built any other way still
+        // gets the trim policy enforced at the one place that shapes every
+        // request.
         let cap = Constants.contextMaxTurns
         let trimmed = priorTurns.count > cap
             ? Array(priorTurns.suffix(cap))

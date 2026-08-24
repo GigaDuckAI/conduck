@@ -327,6 +327,14 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
         authScheme: RemoteAgentAuthScheme = .bearer,
         model: String?,
         priorTurns: [ConverseRequest.Message],
+        // The assembler's count of what those prior turns actually carry inline
+        // on this request (images, extracted text-file blocks), for the ledger's
+        // attachment measurement. A dispatch-time fact the uploader cannot
+        // recompute — a spliced text block is indistinguishable from ordinary
+        // text once assembled. Nil (a caller that predates the shape) records
+        // the pair as zero rather than failing the send: measurement never
+        // blocks a turn.
+        priorTurnShape: ConverseRequest.PriorTurnShape? = nil,
         newUserText: String,
         conversationID: UUID,
         // The user `Message.id` of THIS turn, when the caller threads it
@@ -437,7 +445,19 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
                     origin: .carPlay,
                     // The head unit has no keyboard; every CarPlay turn is spoken.
                     inputMode: .voice,
-                    requestedModel: model
+                    requestedModel: model,
+                    // The DEVICE that executed this dispatch, which for CarPlay is
+                    // always the phone driving the head unit — the CarPlay bucket
+                    // is derived from `origin` at read time, never stamped here, so
+                    // a device breakdown still counts the hardware that sent it.
+                    deviceClass: "iphone",
+                    // Structurally zero: the head unit offers no attachment
+                    // affordance, so a CarPlay turn carries text only. Explicit 0
+                    // (not nil) — this row IS measured, and it measured none.
+                    currentTurnInlineImageCount: 0,
+                    priorTurnInlineImageCount: priorTurnShape?.inlineImageCount ?? 0,
+                    currentTurnInlineTextFileCount: 0,
+                    priorTurnInlineTextFileCount: priorTurnShape?.inlineTextFileCount ?? 0
                 )
             )
         }

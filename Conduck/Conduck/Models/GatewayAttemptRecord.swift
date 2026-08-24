@@ -136,6 +136,40 @@ nonisolated enum GatewayInputMode: String, Sendable, Hashable, CaseIterable {
     }
 }
 
+/// The kind of hardware a dispatch ran on, as the ledger spells it. The stored
+/// column carries the raw string rather than this type, so an older client
+/// reading a newer client's row sees an unrecognised word and not a decode
+/// failure; this enum is only the vocabulary and the ONE parse point.
+///
+/// `carplay` is parseable but never stamped: a CarPlay dispatch runs on the
+/// iPhone and stamps `iphone`, and the CarPlay bucket is derived from
+/// `originSurface` at read time. The word is recognised so that a legacy
+/// `Message.sourceDevice` tag carrying it lands as CarPlay rather than as
+/// nothing.
+nonisolated enum GatewayAttemptDeviceClass: String, Sendable, Hashable, CaseIterable {
+    case iphone
+    case ipad
+    case mac
+    case watch
+    case carplay
+
+    /// THE SOLE DERIVATION POINT for a device class read off a
+    /// `Message.sourceDevice` tag, mirroring `GatewayInputMode.from(sourceDevice:)`
+    /// on the other half of the same tag.
+    ///
+    /// The tag is `<device>` or `<device>-<modality>`, split on the FIRST dash
+    /// exactly as `MessageRowFormatters.baseDevice` splits it, so only the base
+    /// word decides. An unrecognised word — a future device, a corrupt tag —
+    /// yields nil, which is the honest answer: nothing here says what ran the
+    /// turn, and guessing would put a real attempt in a bucket it never came
+    /// from.
+    static func from(sourceDevice: String?) -> String? {
+        guard let sourceDevice else { return nil }
+        let base = sourceDevice.prefix(while: { $0 != "-" })
+        return GatewayAttemptDeviceClass(rawValue: String(base))?.rawValue
+    }
+}
+
 // MARK: - Dispatch-time carriers
 
 /// Everything the store needs to open an attempt row, assembled by the
@@ -159,6 +193,26 @@ nonisolated struct GatewayAttemptDraft: Sendable, Hashable {
     /// gateway's own default answered. Snapshotted because the setting it came
     /// from can change afterwards.
     let requestedModel: String?
+    /// The device executing THIS dispatch, as a `GatewayAttemptDeviceClass` raw
+    /// value — the RETRY device on a retry, never the device that produced the
+    /// original turn. A CarPlay dispatch stamps `iphone`, because that is the
+    /// hardware doing the work; `origin` already carries the surface. Nil when
+    /// the transport had nothing to stamp, which reads as unmeasured rather
+    /// than as an unknown device.
+    let deviceClass: String?
+    /// `image_url` parts belonging to the CURRENT user turn on this request,
+    /// counted after final assembly so it measures what actually went out.
+    let currentTurnInlineImageCount: Int
+    /// Prior-turn `image_url` parts riding along on THIS request, after policy,
+    /// compatibility and trimming decided how much history to replay.
+    let priorTurnInlineImageCount: Int
+    /// Text-file blocks actually spliced into the current turn. A failed
+    /// extraction, an unavailable notice, and a file left as a server-side
+    /// reference are all not inline and do not count; a file sent both ways
+    /// counts once, here.
+    let currentTurnInlineTextFileCount: Int
+    /// Prior-turn text-file blocks re-spliced into THIS request.
+    let priorTurnInlineTextFileCount: Int
 
     init(
         attemptID: UUID,
@@ -167,7 +221,12 @@ nonisolated struct GatewayAttemptDraft: Sendable, Hashable {
         gatewayRef: String,
         origin: GatewayAttemptOrigin,
         inputMode: GatewayInputMode,
-        requestedModel: String? = nil
+        requestedModel: String? = nil,
+        deviceClass: String? = nil,
+        currentTurnInlineImageCount: Int = 0,
+        priorTurnInlineImageCount: Int = 0,
+        currentTurnInlineTextFileCount: Int = 0,
+        priorTurnInlineTextFileCount: Int = 0
     ) {
         self.attemptID = attemptID
         self.conversationID = conversationID
@@ -176,6 +235,11 @@ nonisolated struct GatewayAttemptDraft: Sendable, Hashable {
         self.origin = origin
         self.inputMode = inputMode
         self.requestedModel = requestedModel
+        self.deviceClass = deviceClass
+        self.currentTurnInlineImageCount = currentTurnInlineImageCount
+        self.priorTurnInlineImageCount = priorTurnInlineImageCount
+        self.currentTurnInlineTextFileCount = currentTurnInlineTextFileCount
+        self.priorTurnInlineTextFileCount = priorTurnInlineTextFileCount
     }
 }
 
@@ -283,6 +347,27 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
     /// derives `pending`/`unconfirmed` instead of passing itself off as an
     /// authoritative terminal answer no device ever gave.
     let hasStoredOutcome: Bool
+    /// The device that ran this dispatch, as a `GatewayAttemptDeviceClass` raw
+    /// value. Nil on a row written before the column existed, and on one whose
+    /// transport had nothing to stamp — the dashboard falls back to
+    /// `fallbackSourceDevice` and then to a "not recorded" bucket rather than
+    /// guessing.
+    let originDeviceClass: String?
+    /// The four attachment counts are `Int?` for the reason the token columns
+    /// are: nil is a row written before anything measured this, and an explicit
+    /// 0 is a measured turn that carried nothing. Coverage captions are built
+    /// on exactly that distinction, so collapsing them would claim every legacy
+    /// row sent no attachments.
+    let currentTurnInlineImageCount: Int?
+    let priorTurnInlineImageCount: Int?
+    let currentTurnInlineTextFileCount: Int?
+    let priorTurnInlineTextFileCount: Int?
+    /// The parent user turn's `Message.sourceDevice` tag, supplied by the STORE
+    /// at fetch time and NEVER persisted on the attempt row — it is a read-time
+    /// enrichment for rows that predate `originDeviceClass`, and the only field
+    /// here that is not a column. A record built anywhere else leaves it nil,
+    /// and nothing may write it back.
+    var fallbackSourceDevice: String?
 
     init(
         id: UUID,
@@ -303,7 +388,13 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
         reportedOutputTokens: Int64? = nil,
         reportedTotalTokens: Int64? = nil,
         recordVersion: Int? = currentRecordVersion,
-        hasStoredOutcome: Bool = true
+        hasStoredOutcome: Bool = true,
+        originDeviceClass: String? = nil,
+        currentTurnInlineImageCount: Int? = nil,
+        priorTurnInlineImageCount: Int? = nil,
+        currentTurnInlineTextFileCount: Int? = nil,
+        priorTurnInlineTextFileCount: Int? = nil,
+        fallbackSourceDevice: String? = nil
     ) {
         self.id = id
         self.conversationID = conversationID
@@ -324,6 +415,12 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
         self.reportedTotalTokens = reportedTotalTokens
         self.recordVersion = recordVersion
         self.hasStoredOutcome = hasStoredOutcome
+        self.originDeviceClass = originDeviceClass
+        self.currentTurnInlineImageCount = currentTurnInlineImageCount
+        self.priorTurnInlineImageCount = priorTurnInlineImageCount
+        self.currentTurnInlineTextFileCount = currentTurnInlineTextFileCount
+        self.priorTurnInlineTextFileCount = priorTurnInlineTextFileCount
+        self.fallbackSourceDevice = fallbackSourceDevice
     }
 
     /// Defensive KVC read of a stored row. A missing `id` is replaced with a
@@ -336,7 +433,10 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
     /// they are modelled non-scalar — which is the whole point: only an
     /// `NSNumber?` can tell a reported ZERO apart from NOTHING REPORTED, and a
     /// scalar column would read both as 0 and quietly claim every gateway
-    /// reports its usage.
+    /// reports its usage. The four `Integer 32` attachment columns are modelled
+    /// non-scalar for the same reason, and `fallbackSourceDevice` is NOT read
+    /// here — it lives on the parent turn, and only the store's fetch can reach
+    /// it.
     init(managedObject: NSManagedObject) {
         self.id = (managedObject.value(forKey: "id") as? UUID) ?? UUID()
         self.conversationID = managedObject.value(forKey: "conversationID") as? UUID
@@ -363,6 +463,16 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
         self.reportedTotalTokens =
             (managedObject.value(forKey: "reportedTotalTokens") as? NSNumber)?.int64Value
         self.recordVersion = (managedObject.value(forKey: "recordVersion") as? NSNumber)?.intValue
+        self.originDeviceClass = managedObject.value(forKey: "originDeviceClass") as? String
+        self.currentTurnInlineImageCount =
+            (managedObject.value(forKey: "currentTurnInlineImageCount") as? NSNumber)?.intValue
+        self.priorTurnInlineImageCount =
+            (managedObject.value(forKey: "priorTurnInlineImageCount") as? NSNumber)?.intValue
+        self.currentTurnInlineTextFileCount =
+            (managedObject.value(forKey: "currentTurnInlineTextFileCount") as? NSNumber)?.intValue
+        self.priorTurnInlineTextFileCount =
+            (managedObject.value(forKey: "priorTurnInlineTextFileCount") as? NSNumber)?.intValue
+        self.fallbackSourceDevice = nil
     }
 
     /// The six reported columns viewed back as the value they were parsed from,

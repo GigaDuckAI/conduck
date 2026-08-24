@@ -632,13 +632,14 @@ struct ConverseIntent: AppIntent {
         // image-history policy; `RemoteAgentClient.assembleMessages` then appends
         // the new user turn and applies the trim policy.
         do {
-            let priorTurns = try await ConversationHistoryAssembler.assemble(
+            let assembledHistory = try await ConversationHistoryAssembler.assemble(
                 conversationID: conversationID,
                 excludingUserMessageID: userTurn.id,
                 excludingNewUserText: userText,
                 boundRef: routed.ref,
                 dispatchFileLaneID: dispatchFileLane?.durableLaneID
             )
+            let priorTurns = assembledHistory.turns
             try await BackgroundRemoteAgent.shared.send(
                 backend: snapshot.backend,
                 ref: snapshot.ref,
@@ -657,6 +658,12 @@ struct ConverseIntent: AppIntent {
                 // Siri — and everything it hands over was spoken.
                 origin: .quickCapture,
                 inputMode: .voice,
+                // Replayed-attachment shape for the ledger. Recomputing this
+                // inside the transport is impossible — an inline text-file block
+                // is indistinguishable text once assembled — so the measured
+                // pair must ride from the assembler that produced it.
+                priorTurnInlineImageCount: assembledHistory.shape.inlineImageCount,
+                priorTurnInlineTextFileCount: assembledHistory.shape.inlineTextFileCount,
                 // EXACT per-message status flips in the delegate (a
                 // conversation-wide flip would alias a concurrent in-app
                 // sibling turn's status).

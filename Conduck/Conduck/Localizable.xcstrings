@@ -14381,6 +14381,28 @@
         }
       }
     },
+    "settings.usage.byDevice.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The device a request actually went out from. A turn started on your Watch and retried on your phone counts once for each. CarPlay is listed separately from the phone driving it."
+          }
+        }
+      }
+    },
+    "settings.usage.byDevice.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "By device"
+          }
+        }
+      }
+    },
     "settings.usage.byGateway.footer" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14403,13 +14425,13 @@
         }
       }
     },
-    "settings.usage.byGateway.median" : {
+    "settings.usage.byGateway.median.plain" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "median %1$@ (n %2$lld)"
+            "value" : "median %1$@ over %2$@"
           }
         }
       }
@@ -14447,13 +14469,35 @@
         }
       }
     },
-    "settings.usage.chart.a11y" : {
+    "settings.usage.chart.a11y.reliability" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Turns per day, %lld in total"
+            "value" : "Chart of the share of attempts that succeeded, per day"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.a11y.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Chart of tokens per day"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.a11y.turns" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Chart of turns per day"
           }
         }
       }
@@ -14465,6 +14509,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Day"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.axis.success" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Success rate"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.axis.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tokens"
           }
         }
       }
@@ -14491,6 +14557,72 @@
         }
       }
     },
+    "settings.usage.chart.caption.reliability" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Attempts that succeeded, per day"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.caption.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tokens per day"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.metric.label" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Measure"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.metric.reliability" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Success"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.metric.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tokens"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.metric.turns" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Turns"
+          }
+        }
+      }
+    },
     "settings.usage.chart.selection" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14502,13 +14634,112 @@
         }
       }
     },
-    "settings.usage.coverage.footer" : {
+    "settings.usage.chart.selection.reliability" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Totals describe conversations you've kept — deleting a conversation removes its history here."
+            "value" : "%1$@ · %2$lld of %3$lld succeeded"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.reliability.none" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ · nothing finished this day"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@ tokens"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.tokens.coverage" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Token data on %1$lld of %2$lld attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.tokens.none" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No attempt in this range reported a usable token total."
+          }
+        }
+      }
+    },
+    "settings.usage.clear.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Clear usage history"
+          }
+        }
+      }
+    },
+    "settings.usage.clear.cancel" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "settings.usage.clear.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This removes every usage record from this device and all your other devices. Your conversations are not affected. This cannot be undone."
+          }
+        }
+      }
+    },
+    "settings.usage.clear.progress" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Clearing usage history…"
+          }
+        }
+      }
+    },
+    "settings.usage.clear.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Clear usage history?"
           }
         }
       }
@@ -14520,28 +14751,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Coverage"
-          }
-        }
-      }
-    },
-    "settings.usage.coverage.history" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conversations kept since"
-          }
-        }
-      }
-    },
-    "settings.usage.coverage.history.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conversations older than the date above are not measured here"
           }
         }
       }
@@ -14564,6 +14773,644 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Measurement starts with your next conversation."
+          }
+        }
+      }
+    },
+    "settings.usage.coverage.retention.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "These totals include conversations you have since deleted — the records are content-free and stay until you clear usage history."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.attachments.files" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Turns with text files"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.attachments.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "An image already sent goes out again with later turns so the agent can still see it. That is the single biggest thing you can change about how much work a long conversation takes."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.attachments.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "What the requests carried"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.attachments.images" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Turns with images"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.attachments.replayed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Images re-sent with later turns"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.byDevice.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Which of your devices sent these requests. A retry counts on the device that retried, not on the one that first asked."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.byDevice.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "By device"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.empty" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing recorded for this in the selected range."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.failureReason.other" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Other"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.firstTry" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Delivered first try"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.firstTry.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld finished turns"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.groupMedian" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "median %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.input.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of attempts · %2$lld turns"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.input.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "How each turn was given to Conduck. A retry keeps whatever the original turn was — retrying a spoken turn does not make it typed."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.input.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Input"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.input.shared" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Shared in"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.input.text" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Typed"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.input.unknown" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not recorded"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.input.voice" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Voice"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.largestTurns.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Largest turns"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.measuredCoverage" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Measured on %@ of attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.model.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ succeeded"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.model.reported" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reported model"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.model.reported.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Named by your gateway on %@ of attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.model.reported.many" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld models"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.models.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Rows list the model each request ASKED for. A gateway that also names the model it served is shown separately — the two differing is ordinary, not a fault."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.models.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Models"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.overReplies.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "over 1 reply"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.overReplies.other" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "over %lld replies"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.rangeCaption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Showing %@"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.recovered" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recovered by retry"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.recovered.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld retried turns"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.repliesMeasured.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "1 reply measured"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.repliesMeasured.other" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld replies measured"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.sampleCaption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.stat.attempts" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.stat.attempts.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld recorded attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threadBasis.components" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ranked by input plus output, added up from what your gateway reported — it reported no totals of its own."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threadBasis.reported" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ranked by gateway-reported total tokens. Conversations without reported totals aren't ranked."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.coverage" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld turns reported"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.files" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld files"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conversations"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.images" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld images"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.measured" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "measured on %lld"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.none" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No conversation in this range can be ranked — your gateway reported no token usage for any of them."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.span" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ – %2$@"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Heaviest conversations"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ tokens"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.threads.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conversation unavailable"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.turnBasis.components" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Largest turns are ranked by input plus output, added up from what your gateway reported — it reported no totals of its own."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.turnBasis.reported" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Largest turns are ranked by the total your gateway reported. Turns it reported no total for aren't ranked."
+          }
+        }
+      }
+    },
+    "settings.usage.device.carPlay" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "CarPlay"
+          }
+        }
+      }
+    },
+    "settings.usage.device.ipad" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "iPad"
+          }
+        }
+      }
+    },
+    "settings.usage.device.iphone" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "iPhone"
+          }
+        }
+      }
+    },
+    "settings.usage.device.mac" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Mac"
+          }
+        }
+      }
+    },
+    "settings.usage.device.unknown" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not recorded"
+          }
+        }
+      }
+    },
+    "settings.usage.device.watch" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Apple Watch"
           }
         }
       }
@@ -14601,6 +15448,17 @@
         }
       }
     },
+    "settings.usage.error.clear" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't remove every record. Conduck will finish next time you open this screen."
+          }
+        }
+      }
+    },
     "settings.usage.error.load" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14630,6 +15488,72 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Not recorded"
+          }
+        }
+      }
+    },
+    "settings.usage.input.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "How each turn was given. Retrying a turn reuses the input you already gave, so it never moves these numbers."
+          }
+        }
+      }
+    },
+    "settings.usage.input.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Input"
+          }
+        }
+      }
+    },
+    "settings.usage.input.shared" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Shared"
+          }
+        }
+      }
+    },
+    "settings.usage.input.text" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Typed"
+          }
+        }
+      }
+    },
+    "settings.usage.input.value" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "settings.usage.input.voice" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Voice"
           }
         }
       }
@@ -14832,6 +15756,61 @@
         }
       }
     },
+    "settings.usage.reliability.details" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Details"
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.details.collapse" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Collapse"
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.details.expand" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Expand"
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.firstTry" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Delivered first try"
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.firstTry.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld finished turns"
+          }
+        }
+      }
+    },
     "settings.usage.reliability.footer" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14839,6 +15818,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "The success rate counts only attempts that finished as a success or a failure. Cancelled and unconfirmed attempts are listed above but stay out of it."
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.footer.details" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The success rate counts only attempts that finished as a success or a failure. Cancelled and unconfirmed attempts are counted under Details but stay out of it."
           }
         }
       }
@@ -14872,6 +15862,61 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%@ of resolved attempts succeeded"
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.reasons.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failure reasons are counted, not listed. Diagnostics is where a single failure can be looked at."
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.reasons.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failure reasons"
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.reasons.other" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Other reasons"
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.recovered" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recovered by retry"
+          }
+        }
+      }
+    },
+    "settings.usage.reliability.recovered.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld retried turns landed"
           }
         }
       }
@@ -14916,6 +15961,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Cut short means the gateway reported it stopped at the reply-length limit, not that anything went wrong."
+          }
+        }
+      }
+    },
+    "settings.usage.replies.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "1 reply"
+          }
+        }
+      }
+    },
+    "settings.usage.replies.other" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld replies"
           }
         }
       }
@@ -14997,13 +16064,13 @@
         }
       }
     },
-    "settings.usage.response.sampleCaption" : {
+    "settings.usage.response.sampleCaption.plain" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@ · %2$@"
+            "value" : "%1$@ measured · %2$@"
           }
         }
       }
@@ -15041,13 +16108,46 @@
         }
       }
     },
-    "settings.usage.stat.conversations.a11y" : {
+    "settings.usage.stat.conversations.a11y.withUsage" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%lld conversations active"
+            "value" : "%lld conversations with recorded usage"
+          }
+        }
+      }
+    },
+    "settings.usage.stat.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tokens"
+          }
+        }
+      }
+    },
+    "settings.usage.stat.tokens.a11y.components" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ tokens, input plus output added up"
+          }
+        }
+      }
+    },
+    "settings.usage.stat.tokens.a11y.reported" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ tokens, reported by your gateway"
           }
         }
       }
@@ -15070,6 +16170,138 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%lld turns sent"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.coverage.attachments" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Attachments counted on %1$lld of %2$lld attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.coverage.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tokens reported on %1$lld of %2$lld turns"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.files" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld files"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.footer.components" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ranked by input plus output tokens, added up from what your gateway reported — it reported no totals of its own. Threads reporting neither aren't ranked here."
+          }
+        }
+      }
+    },
+    "settings.usage.threads.footer.reported" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ranked by the total tokens your gateway reported. Threads it reported no total for aren't ranked here."
+          }
+        }
+      }
+    },
+    "settings.usage.threads.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Heaviest threads"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.images" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld images"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.seeAll" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "See all"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.span" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ – %2$@"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.tokens.components" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ tokens (input + output)"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.tokens.reported" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ tokens"
+          }
+        }
+      }
+    },
+    "settings.usage.threads.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conversation unavailable"
           }
         }
       }
@@ -17956,6 +19188,9 @@
           }
         }
       }
+    },
+    "This removes every conversation and its usage records from this device and all your other devices. This cannot be undone." : {
+
     },
     "This removes every conversation from this device and all your other devices. This cannot be undone." : {
       "extractionState" : "manual",

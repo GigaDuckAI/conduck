@@ -49,7 +49,13 @@ struct SettingsView: View {
     @State private var didAutoOpenGuided = false
     /// Programmatic navigation path for the preferences destinations. Owned here
     /// so a deep-link (`initialCategory`) can push a sub-screen on appear.
-    @State private var path: [Category] = []
+    ///
+    /// HETEROGENEOUS (`NavigationPath`), never a typed `[Category]`: a pushed
+    /// screen presents its OWN route values (`UsageDashboardContent` pushes
+    /// `UsageRoute`), and a homogeneous path can hold only its one element type —
+    /// SwiftUI then honors only root-level destinations, so every such link goes
+    /// inert and the pushed screen's own `.navigationDestination(for:)` is ignored.
+    @State private var path = NavigationPath()
     @Environment(\.dismiss) private var dismiss
 
     /// Optional starting category. Defaults to nil (land on the root list);
@@ -119,7 +125,7 @@ struct SettingsView: View {
         }
         // Honor a deep-link (e.g. the mic-gate redirect → Voice) on first appear.
         .onAppear {
-            if let initialCategory, path.isEmpty { path = [initialCategory] }
+            if let initialCategory, path.isEmpty { path = NavigationPath([initialCategory]) }
         }
         // "Connect Personal AI" deep-link: after the Personal AI destination has
         // mounted AND state has hydrated, auto-open the guided cover — once, and

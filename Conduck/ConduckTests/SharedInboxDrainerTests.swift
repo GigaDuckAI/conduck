@@ -1393,6 +1393,8 @@ private final class MockConverseDispatcher: ShareConverseDispatching, @unchecked
         newUserServerFileRefs: [(originalName: String, storedKey: String)],
         newUserImageFileRefs: [(storedKey: String, filename: String)],
         newUserTextFileServerRefs: [(originalName: String, storedKey: String)],
+        priorTurnInlineImageCount: Int,
+        priorTurnInlineTextFileCount: Int,
         fileTransferSnapshot: SettingsManager.FileTransferSnapshot?,
         conversationID: UUID,
         shareEnvelopeID: UUID

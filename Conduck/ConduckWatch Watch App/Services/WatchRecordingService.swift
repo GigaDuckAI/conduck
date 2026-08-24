@@ -2002,7 +2002,7 @@ final class WatchRecordingService {
             // even when nothing about the lane changed. The value is resolved
             // here rather than left to the uploader for the same reason the
             // uploader captures it: it is a dispatch-time fact.
-            let priorTurns = try await ConversationHistoryAssembler.assemble(
+            let assembledHistory = try await ConversationHistoryAssembler.assemble(
                 conversationID: conversationID,
                 excludingUserMessageID: userRecord.id,
                 excludingNewUserText: trimmed,
@@ -2010,6 +2010,7 @@ final class WatchRecordingService {
                 dispatchFileLaneID: WatchSettingsReader.shared
                     .remoteAgentFileLane(for: ref).laneID
             )
+            let priorTurns = assembledHistory.turns
 
             // Persist in-flight markers for wrist-drop restoration.
             let startedAt = Date()
@@ -2027,6 +2028,7 @@ final class WatchRecordingService {
                 authScheme: authScheme,
                 model: model,
                 priorTurns: priorTurns,
+                priorTurnShape: assembledHistory.shape,
                 newUserText: trimmed,
                 conversationID: conversationID,
                 // Exact per-message status flips (sent / failed / cancelled).

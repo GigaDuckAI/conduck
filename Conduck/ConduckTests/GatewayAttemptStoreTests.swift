@@ -21,12 +21,11 @@
 //     `agentMessageID`, so it holds with `attempt: nil` — a store whose only
 //     duplicate guard were the attempt row would insert twice exactly when
 //     measurement had already failed.
-//   • ORPHANS ARE INVISIBLE, NOT DELETED. An attempt whose conversation this
-//     device cannot resolve is filtered out of every read and left in the store,
-//     because mirroring cannot tell "the parent was deleted" from "the parent
-//     has not imported yet". These tests prove the distinction by RE-CREATING
-//     the conversation under its original id: a filtered row reappears, a
-//     deleted one does not.
+//   • USAGE HISTORY OUTLIVES THE CONVERSATIONS IT DESCRIBES. Deleting a thread
+//     deletes its content and leaves its attempt rows standing and countable —
+//     including the rows whose conversation this device never saw at all. The
+//     only things that remove a row are the user clearing usage history and an
+//     erase-everything, and both go through the same purge.
 //
 // Each test builds its OWN isolated `inMemory` store (mirrors
 // `ConversationStoreDedupeTests`) — no `.shared` singleton, no App Group sqlite.
@@ -67,7 +66,12 @@ final class GatewayAttemptStoreTests: XCTestCase {
         gatewayRef: String = "openclaw",
         origin: GatewayAttemptOrigin = .app,
         inputMode: GatewayInputMode = .text,
-        requestedModel: String? = "glm-4.7"
+        requestedModel: String? = "glm-4.7",
+        deviceClass: String? = "iphone",
+        currentTurnInlineImageCount: Int = 0,
+        priorTurnInlineImageCount: Int = 0,
+        currentTurnInlineTextFileCount: Int = 0,
+        priorTurnInlineTextFileCount: Int = 0
     ) -> GatewayAttemptDraft {
         GatewayAttemptDraft(
             attemptID: attemptID,
@@ -76,7 +80,12 @@ final class GatewayAttemptStoreTests: XCTestCase {
             gatewayRef: gatewayRef,
             origin: origin,
             inputMode: inputMode,
-            requestedModel: requestedModel
+            requestedModel: requestedModel,
+            deviceClass: deviceClass,
+            currentTurnInlineImageCount: currentTurnInlineImageCount,
+            priorTurnInlineImageCount: priorTurnInlineImageCount,
+            currentTurnInlineTextFileCount: currentTurnInlineTextFileCount,
+            priorTurnInlineTextFileCount: priorTurnInlineTextFileCount
         )
     }
 
@@ -89,6 +98,35 @@ final class GatewayAttemptStoreTests: XCTestCase {
             reportedOutputTokens: 340,
             reportedTotalTokens: 1_540
         )
+    }
+
+    // Three awaited helpers, because XCTest's assertion autoclosures are not
+    // async — every store read has to be hoisted out of the assertion anyway,
+    // and these keep that from crowding out what each test is actually saying.
+
+    @discardableResult
+    private func openAttempt(
+        _ store: ConversationStore,
+        _ draft: GatewayAttemptDraft,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> GatewayAttemptContext {
+        let context = await store.beginGatewayAttempt(draft: draft)
+        return try XCTUnwrap(context, "A begin against a loaded store must insert.",
+                             file: file, line: line)
+    }
+
+    private func onlyAttempt(
+        in store: ConversationStore,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> GatewayAttemptRecord {
+        let rows = try await store.fetchGatewayAttempts()
+        return try XCTUnwrap(rows.first, "Expected a stored attempt.", file: file, line: line)
+    }
+
+    private func attemptCount(in store: ConversationStore) async throws -> Int {
+        try await store.fetchGatewayAttempts().count
     }
 
     // MARK: - Begin
@@ -121,6 +159,78 @@ final class GatewayAttemptStoreTests: XCTestCase {
         XCTAssertEqual(row.recordVersion, GatewayAttemptRecord.currentRecordVersion)
         XCTAssertNil(row.reportedTotalTokens,
                      "Nothing has been reported yet — a fresh row must not fabricate a zero.")
+    }
+
+    func testBeginPersistsTheDeviceClassAndTheAttachmentShapeItWasHanded() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let draft = makeDraft(
+            conversationID: seed.conversationID,
+            userMessageID: seed.userMessageID,
+            deviceClass: "ipad",
+            currentTurnInlineImageCount: 2,
+            priorTurnInlineImageCount: 5,
+            currentTurnInlineTextFileCount: 1,
+            priorTurnInlineTextFileCount: 3
+        )
+
+        _ = await store.beginGatewayAttempt(draft: draft)
+
+        let row = try await onlyAttempt(in: store)
+        XCTAssertEqual(row.originDeviceClass, "ipad",
+                       "The device that executed THIS dispatch, not the turn's origin surface.")
+        XCTAssertEqual(row.currentTurnInlineImageCount, 2)
+        XCTAssertEqual(row.priorTurnInlineImageCount, 5)
+        XCTAssertEqual(row.currentTurnInlineTextFileCount, 1)
+        XCTAssertEqual(row.priorTurnInlineTextFileCount, 3)
+    }
+
+    func testBeginWritesExplicitZeroesForATurnThatCarriedNoAttachments() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let draft = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
+
+        _ = await store.beginGatewayAttempt(draft: draft)
+
+        let row = try await onlyAttempt(in: store)
+        // Nil means "this build did not measure" and is a claim only a row
+        // written before the columns existed may make. A plain text turn has to
+        // say zero, or every coverage denominator silently shrinks.
+        XCTAssertEqual(row.currentTurnInlineImageCount, 0)
+        XCTAssertEqual(row.priorTurnInlineImageCount, 0)
+        XCTAssertEqual(row.currentTurnInlineTextFileCount, 0)
+        XCTAssertEqual(row.priorTurnInlineTextFileCount, 0)
+    }
+
+    func testFetchEnrichesEachRowWithItsUserTurnsSourceDevice() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        // No `deviceClass` of its own — exactly the legacy row whose bucket can
+        // only come from the turn it belongs to.
+        _ = await store.beginGatewayAttempt(
+            draft: makeDraft(
+                conversationID: seed.conversationID,
+                userMessageID: seed.userMessageID,
+                deviceClass: nil
+            )
+        )
+
+        let row = try await onlyAttempt(in: store)
+        XCTAssertNil(row.originDeviceClass)
+        XCTAssertEqual(row.fallbackSourceDevice, "iphone-text",
+                       "The enrichment is read off the linked turn at fetch time, never stored.")
+    }
+
+    func testFetchLeavesFallbackSourceDeviceEmptyWithNoLinkedTurn() async throws {
+        let store = makeStore()
+        let convo = try await store.createConversation(backend: "openclaw")
+        _ = await store.beginGatewayAttempt(
+            draft: makeDraft(conversationID: convo.id, userMessageID: UUID(), deviceClass: nil)
+        )
+
+        let row = try await onlyAttempt(in: store)
+        XCTAssertNil(row.fallbackSourceDevice,
+                     "Nothing is invented for a row whose turn never resolved.")
     }
 
     func testBeginStoresTheScalarsEvenWhenTheUserMessageDoesNotResolve() async throws {
@@ -785,37 +895,40 @@ final class GatewayAttemptStoreTests: XCTestCase {
         XCTAssertEqual(row.completedAt, completedAt)
     }
 
-    // MARK: - Deletion
+    // MARK: - Retention: usage outlives the history it measures
 
-    func testDeletingAConversationDeletesItsAttempts() async throws {
+    func testDeletingAConversationLeavesItsAttemptsStandingAndCountable() async throws {
         let store = makeStore()
         let seed = try await seedTurn(in: store)
         let draft = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
         _ = await store.beginGatewayAttempt(draft: draft)
 
         try await store.deleteConversation(id: seed.conversationID)
-        // Re-create the thread under its ORIGINAL id: a merely FILTERED row
-        // would become visible again here. Nothing does, so the row is gone.
-        _ = try await store.createConversation(id: seed.conversationID, backend: "openclaw")
 
         let stored = try await store.fetchGatewayAttempts()
-        XCTAssertTrue(stored.isEmpty, "Attempts live exactly as long as the history they measure.")
+        XCTAssertEqual(stored.count, 1,
+                       "Deleting a thread deletes its content, never the measurement of it.")
+        let row = try XCTUnwrap(stored.first)
+        XCTAssertEqual(row.id, draft.attemptID)
+        XCTAssertEqual(row.conversationID, seed.conversationID,
+                       "The scalar snapshot survives the parent it names.")
+        XCTAssertEqual(row.gatewayRef, "openclaw")
+        XCTAssertNil(row.fallbackSourceDevice,
+                     "The linked turn went with the conversation — the relationship nullifies.")
     }
 
-    func testDeletingAConversationAlsoDeletesRelationshipLessAttempts() async throws {
+    func testDeletingAConversationLeavesRelationshipLessAttemptsStanding() async throws {
         let store = makeStore()
         let convo = try await store.createConversation(backend: "openclaw")
-        // No user `Message`, so no relationship and therefore no cascade — only
-        // the explicit scalar sweep can reach this row.
+        // No user `Message`, so no relationship at all — the row is carried
+        // entirely by its scalars.
         let draft = makeDraft(conversationID: convo.id, userMessageID: UUID())
         _ = await store.beginGatewayAttempt(draft: draft)
 
         try await store.deleteConversation(id: convo.id)
-        _ = try await store.createConversation(id: convo.id, backend: "openclaw")
 
         let stored = try await store.fetchGatewayAttempts()
-        XCTAssertTrue(stored.isEmpty,
-                      "The scalar sweep is what covers a row the cascade cannot see.")
+        XCTAssertEqual(stored.map(\.id), [draft.attemptID])
     }
 
     func testDeleteAllRemovesEveryAttemptIncludingRelationshipLessOnes() async throws {
@@ -829,54 +942,218 @@ final class GatewayAttemptStoreTests: XCTestCase {
             draft: makeDraft(conversationID: loose.id, userMessageID: UUID(), gatewayRef: "hermes")
         )
 
+        // Erase-everything is the one deletion that takes the ledger with it,
+        // and it goes through the same batched purge as a user-driven clear.
         try await store.deleteAll()
-        _ = try await store.createConversation(id: linked.conversationID, backend: "openclaw")
-        _ = try await store.createConversation(id: loose.id, backend: "hermes")
 
         let stored = try await store.fetchGatewayAttempts()
         XCTAssertTrue(stored.isEmpty)
     }
 
-    func testDeleteGatewayAttemptsRemovesRowsByScalarConversationID() async throws {
+    // MARK: - Rows with no attribution at all
+
+    func testAnAttemptWhoseConversationIsAbsentIsStillCounted() async throws {
         let store = makeStore()
-        let kept = try await seedTurn(in: store)
-        let purged = try await seedTurn(in: store)
-        _ = await store.beginGatewayAttempt(
-            draft: makeDraft(conversationID: kept.conversationID, userMessageID: kept.userMessageID)
-        )
-        _ = await store.beginGatewayAttempt(
-            draft: makeDraft(conversationID: purged.conversationID, userMessageID: purged.userMessageID)
-        )
-
-        await store.deleteGatewayAttempts(conversationID: purged.conversationID)
-
-        let remaining = try await store.fetchGatewayAttempts()
-        XCTAssertEqual(remaining.count, 1)
-        XCTAssertEqual(remaining.first?.conversationID, kept.conversationID)
-    }
-
-    // MARK: - Orphan invisibility
-
-    func testAnAttemptWhoseConversationIsAbsentIsInvisibleButNotDeleted() async throws {
-        let store = makeStore()
-        // A live conversation has to exist, or the filter would short-circuit
-        // for a different reason than the one under test.
         _ = try await seedTurn(in: store)
-        // A row that arrived ahead of the conversation it names — the
-        // out-of-order import this rule exists for.
+        // A row that arrived ahead of the conversation it names — deleted,
+        // not yet imported, or temporarily unavailable are indistinguishable
+        // from here, and none of them stops it counting as a dispatch.
         let futureConversationID = UUID()
         let draft = makeDraft(conversationID: futureConversationID, userMessageID: UUID())
         _ = await store.beginGatewayAttempt(draft: draft)
 
-        let hidden = try await store.fetchGatewayAttempts()
-        XCTAssertTrue(hidden.isEmpty, "An unattributable attempt is left out of every read.")
+        let stored = try await store.fetchGatewayAttempts()
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored.first?.id, draft.attemptID)
 
-        // The parent finally imports. The row must still be there.
+        // The parent finally imports. Nothing about the row changes.
         _ = try await store.createConversation(id: futureConversationID, backend: "openclaw")
-        let visible = try await store.fetchGatewayAttempts()
-        XCTAssertEqual(visible.count, 1)
-        XCTAssertEqual(visible.first?.id, draft.attemptID,
-                       "Absence of a parent is not evidence of deletion — the row was only hidden.")
+        let afterImport = try await attemptCount(in: store)
+        XCTAssertEqual(afterImport, 1)
+    }
+
+    func testLiveConversationIDsReportsOnlyResolvableParents() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        // Two rows: one whose parent resolves right now, one whose parent never
+        // will. Both must survive the delete below — the second assertion is
+        // only worth making if a resolvable row was there to be swept.
+        _ = try await openAttempt(store, makeDraft(
+            conversationID: seed.conversationID, userMessageID: seed.userMessageID
+        ))
+        _ = await store.beginGatewayAttempt(
+            draft: makeDraft(conversationID: UUID(), userMessageID: UUID())
+        )
+
+        let live = await store.liveConversationIDs()
+        XCTAssertEqual(live, [seed.conversationID],
+                       "Navigation is what this gates — never a count, and never a deletion.")
+
+        try await store.deleteConversation(id: seed.conversationID)
+        let afterDelete = await store.liveConversationIDs()
+        XCTAssertTrue(afterDelete.isEmpty)
+        let stillCounted = try await attemptCount(in: store)
+        XCTAssertEqual(stillCounted, 2,
+                       "Both rows still count — only the chevron goes away.")
+    }
+
+    // MARK: - The clear cutoff
+
+    func testAClearCutoffExcludesRowsAtOrBeforeItFromBothReads() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let old = try await openAttempt(store, makeDraft(
+            conversationID: seed.conversationID, userMessageID: seed.userMessageID))
+        let recent = try await openAttempt(store, makeDraft(
+            conversationID: seed.conversationID, userMessageID: seed.userMessageID))
+        // The cutoff lands ON the older row's instant — "cleared through" is
+        // inclusive, or a clear tapped at the same millisecond as a dispatch
+        // would leave that dispatch behind.
+        let cutoff = old.startedAt
+
+        let visible = try await store.fetchGatewayAttempts(clearedThrough: cutoff)
+        XCTAssertEqual(visible.map(\.id), [recent.attemptID])
+        let earliest = try await store.earliestGatewayAttemptStart(clearedThrough: cutoff)
+        XCTAssertEqual(earliest, recent.startedAt,
+                       "'Measuring since' has to move past a cleared period, not describe it.")
+        let unfiltered = try await attemptCount(in: store)
+        XCTAssertEqual(unfiltered, 2,
+                       "Exclusion is the caller's cutoff, not a state of the store.")
+    }
+
+    func testAnUndatedRowIsExcludedByAnyCutoff() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let draft = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
+        _ = await store.beginGatewayAttempt(draft: draft)
+        try await store.debugClearGatewayAttemptStart(attemptID: draft.attemptID)
+
+        let uncleared = try await attemptCount(in: store)
+        XCTAssertEqual(uncleared, 1,
+                       "With no cutoff an undated row is inside the unbounded range.")
+        let visible = try await store.fetchGatewayAttempts(clearedThrough: Date())
+        XCTAssertTrue(visible.isEmpty,
+                      "'Clear everything up to now' cannot spare the rows that cannot say when.")
+    }
+
+    // MARK: - Purge
+
+    func testPurgeWalksManyBatchesAndDeletesEveryRowThroughTheCutoff() async throws {
+        let store = makeStore()
+        let convo = try await store.createConversation(backend: "openclaw")
+        // Three passes of the 500-row batch bound, so a loop that stopped after
+        // one fetch — or that walked with an OFFSET and skipped what it had just
+        // deleted — leaves rows behind and fails here.
+        let rowCount = ConversationStore.gatewayAttemptPurgeBatchSize * 2 + 1
+        for _ in 0..<rowCount {
+            _ = await store.beginGatewayAttempt(
+                draft: makeDraft(conversationID: convo.id, userMessageID: UUID())
+            )
+        }
+        let seeded = try await attemptCount(in: store)
+        XCTAssertEqual(seeded, rowCount)
+
+        let deleted = try await store.purgeGatewayAttempts(through: Date())
+        XCTAssertEqual(deleted, rowCount)
+        let remaining = try await attemptCount(in: store)
+        XCTAssertEqual(remaining, 0)
+    }
+
+    func testPurgeIsIdempotentAndSparesRowsAfterTheCutoff() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let old = try await openAttempt(store, makeDraft(
+            conversationID: seed.conversationID, userMessageID: seed.userMessageID))
+        let kept = try await openAttempt(store, makeDraft(
+            conversationID: seed.conversationID, userMessageID: seed.userMessageID))
+
+        let first = try await store.purgeGatewayAttempts(through: old.startedAt)
+        XCTAssertEqual(first, 1)
+        // Re-running after an interruption must complete the job, not repeat it
+        // or fail on rows that are already gone.
+        let second = try await store.purgeGatewayAttempts(through: old.startedAt)
+        XCTAssertEqual(second, 0)
+
+        let remaining = try await store.fetchGatewayAttempts()
+        XCTAssertEqual(remaining.map(\.id), [kept.attemptID])
+    }
+
+    // MARK: - The late reply to a turn that is gone
+    //
+    // Retention decoupling makes this case visible for the first time: the
+    // attempt row now outlives the conversation, so a landing REFUSED because
+    // its turn was deleted mid-flight used to leave a row reading open forever,
+    // and the dashboard would hedge it as unconfirmed for a dispatch whose
+    // ending the transport actually watched. The verdict still stands — no
+    // reply, no notification, no speech — and the outcome is written anyway.
+
+    func testALandingRefusedForAMissingUserTurnStillClosesItsAttempt() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let draft = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
+        _ = await store.beginGatewayAttempt(draft: draft)
+
+        let completedAt = Date()
+        do {
+            _ = try await store.completeAgentTurn(
+                userMessageID: UUID(),   // deleted mid-flight
+                userStatus: "sent",
+                agentText: "Run certbot renew.",
+                conversationID: seed.conversationID,
+                sourceDevice: "iphone-text",
+                attempt: TerminalAttemptObservation(
+                    attemptID: draft.attemptID,
+                    completedAt: completedAt,
+                    outcome: .succeeded,
+                    metadata: makeMetadata()
+                )
+            )
+            XCTFail("The verdict must still be thrown — nothing may land under a deleted turn.")
+        } catch ConversationStore.StoreError.userMessageNotFound {
+            // expected
+        }
+
+        let messages = try await store.fetchMessages(for: seed.conversationID)
+        XCTAssertEqual(messages.count, 1, "The reply content is discarded, not parked somewhere.")
+        let row = try await onlyAttempt(in: store)
+        XCTAssertEqual(row.outcome, .succeeded,
+                       "The transport watched this dispatch end; the row has to say so.")
+        XCTAssertEqual(row.completedAt, completedAt)
+    }
+
+    func testALandingRefusedForAMissingConversationStillClosesItsAttempt() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let draft = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
+        _ = await store.beginGatewayAttempt(draft: draft)
+        // The whole thread goes while the request is in the air. The attempt
+        // row survives it — that is exactly what makes this case reachable.
+        try await store.deleteConversation(id: seed.conversationID)
+
+        let completedAt = Date()
+        do {
+            _ = try await store.completeAgentTurn(
+                userMessageID: seed.userMessageID,
+                userStatus: "sent",
+                agentText: "Run certbot renew.",
+                conversationID: seed.conversationID,
+                sourceDevice: "iphone-text",
+                attempt: TerminalAttemptObservation(
+                    attemptID: draft.attemptID,
+                    completedAt: completedAt,
+                    outcome: .failed,
+                    appErrorCode: 17
+                )
+            )
+            XCTFail("A landing for a conversation that is gone must not recreate anything.")
+        } catch ConversationStore.StoreError.conversationNotFound {
+            // expected
+        }
+
+        let row = try await onlyAttempt(in: store)
+        XCTAssertEqual(row.outcome, .failed)
+        XCTAssertEqual(row.appErrorCode, 17)
+        XCTAssertEqual(row.completedAt, completedAt)
     }
 
     // MARK: - Range reads
@@ -917,22 +1194,97 @@ final class GatewayAttemptStoreTests: XCTestCase {
         XCTAssertEqual(stored.map(\.id), [first.attemptID, second.attemptID])
     }
 
-    func testEarliestStartReportsTheOldestVisibleAttemptOnly() async throws {
+    func testEarliestStartReportsTheOldestRetainedAttempt() async throws {
         let store = makeStore()
         let empty = try await store.earliestGatewayAttemptStart()
         XCTAssertNil(empty, "An empty store has not started measuring anything.")
 
-        // An orphan older than everything real: it must not become the date the
-        // dashboard claims to be measuring since, because its history is gone.
-        _ = await store.beginGatewayAttempt(
-            draft: makeDraft(conversationID: UUID(), userMessageID: UUID())
-        )
+        // An unattributable row older than everything else. It IS the date
+        // measurement began — the dashboard measures dispatches, and this one
+        // happened whether or not its thread is still here.
+        let unattributed = try await openAttempt(
+            store, makeDraft(conversationID: UUID(), userMessageID: UUID()))
         let seed = try await seedTurn(in: store)
-        let visible = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
-        let context = await store.beginGatewayAttempt(draft: visible)
-        let opened = try XCTUnwrap(context)
+        _ = await store.beginGatewayAttempt(
+            draft: makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
+        )
 
         let earliest = try await store.earliestGatewayAttemptStart()
-        XCTAssertEqual(earliest, opened.startedAt)
+        XCTAssertEqual(earliest, unattributed.startedAt)
+    }
+}
+
+// MARK: - The synced clear cutoff
+//
+// What makes "Clear usage history" account-wide with no sixth CloudKit field:
+// the cutoff travels through the settings channel, and every device excludes
+// rows at or before it on sight. The rule the whole scheme rests on is that it
+// only ever ADVANCES — a stale value arriving late, or a second device clearing
+// a moment earlier, must never un-clear history the user already cleared.
+final class GatewayUsageClearCutoffTests: XCTestCase {
+
+    private func makeManager(
+        defaults: InMemoryDefaultsStore = InMemoryDefaultsStore(),
+        kvs: InMemoryUbiquitousStore = InMemoryUbiquitousStore()
+    ) -> SettingsManager {
+        SettingsManager(dependencies: .inMemory(
+            defaults: defaults, ubiquitous: kvs, cloudAvailable: true
+        ))
+    }
+
+    func testTheCutoffIsAbsentUntilSomethingIsCleared() async {
+        let manager = makeManager()
+        let stored = await manager.gatewayUsageClearedThrough()
+        XCTAssertNil(stored, "An untouched install has cleared nothing — not 'cleared at 2001'.")
+    }
+
+    func testAdvancingWritesBothStoresAndReportsWhereItStands() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+        let cleared = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let settled = await manager.advanceGatewayUsageClearedThrough(cleared)
+
+        let readBack = await manager.gatewayUsageClearedThrough()
+        XCTAssertEqual(settled, cleared)
+        XCTAssertEqual(readBack, cleared)
+        XCTAssertNotNil(kvs.object(forKey: "gatewayUsageClearedThrough"),
+                        "The cutoff is what syncs — a local-only write clears one device.")
+        XCTAssertNotNil(defaults.object(forKey: "gatewayUsageClearedThrough"),
+                        "And the local mirror is what makes the exclusion survive a relaunch.")
+    }
+
+    func testTheCutoffNeverRegresses() async {
+        let manager = makeManager()
+        let later = Date(timeIntervalSince1970: 1_800_000_000)
+        let earlier = later.addingTimeInterval(-3_600)
+
+        _ = await manager.advanceGatewayUsageClearedThrough(later)
+        let settled = await manager.advanceGatewayUsageClearedThrough(earlier)
+
+        let readBack = await manager.gatewayUsageClearedThrough()
+        XCTAssertEqual(settled, later, "An earlier cutoff would un-clear a cleared period.")
+        XCTAssertEqual(readBack, later)
+    }
+
+    func testAPeersLaterCutoffWinsAndAnEarlierOneIsIgnored() async {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        let manager = makeManager(defaults: defaults, kvs: kvs)
+        let local = Date(timeIntervalSince1970: 1_800_000_000)
+        _ = await manager.advanceGatewayUsageClearedThrough(local)
+
+        let stale = local.addingTimeInterval(-600)
+        kvs.set(stale.timeIntervalSinceReferenceDate, forKey: "gatewayUsageClearedThrough")
+        let afterStale = await manager.gatewayUsageClearedThrough()
+        XCTAssertEqual(afterStale, local,
+                       "Max merge, in both directions — the transport orders nothing.")
+
+        let peer = local.addingTimeInterval(600)
+        kvs.set(peer.timeIntervalSinceReferenceDate, forKey: "gatewayUsageClearedThrough")
+        let afterPeer = await manager.gatewayUsageClearedThrough()
+        XCTAssertEqual(afterPeer, peer,
+                       "A peer's clear has to take effect here without waiting for a purge.")
     }
 }

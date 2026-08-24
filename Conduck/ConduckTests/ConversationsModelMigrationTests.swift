@@ -13,10 +13,14 @@
 // path, not a hypothetical.
 //
 // From v11 the file also covers DELETION, which is not a migration question but
-// belongs beside the relationship that answers it: an attempt row must die with
-// the message it measured, and an attempt row that arrived without its
-// relationship must be reachable by its scalar conversation id, because the
-// cascade cannot see it.
+// belongs beside the relationship that answers it. Under v11 an attempt row dies
+// with the message it measured, and an attempt row that arrived without its
+// relationship is reachable only by its scalar conversation id, because the
+// cascade cannot see it. v12 decouples the two lifetimes — the link nullifies
+// instead of cascading, so a content-free measurement outlives the content it
+// measured — and each version's tests assert that version's own rule: a shipped
+// model is frozen history and the v11 assertions describe the artifact users
+// still have on disk, not the behaviour the app has today.
 //
 // Each test loads BOTH model versions explicitly from the compiled `.momd` in
 // the host app bundle (the `Conversations <N>.mom` layout, same as
@@ -328,7 +332,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     func testV8StoreMigratesToV9WithNilOutputDeliveryCensus() async throws {
         let v8 = try requiredModel(named: "Conversations 8.mom")
         let v9 = try requiredModel(named: "Conversations 9.mom")
-        let current = try requiredModel(named: "Conversations 11.mom")
+        let current = try requiredModel(named: "Conversations 12.mom")
         let conversationID = UUID()
         let messageID = UUID()
         let boxKey = "\(conversationID.uuidString)/out-0123456789abcdef"
@@ -1066,12 +1070,374 @@ final class ConversationsModelMigrationTests: XCTestCase {
         }
     }
 
-    /// The model the APP opens is v11. A pointer left on v10 would ship code that
-    /// reads a whole entity from a store that has none — and, worse, would not
+    /// v12 is ADDITIVE in its columns and changes exactly ONE rule: it adds five
+    /// optional attributes to `GatewayAttempt` and flips `Message.gatewayAttempts`
+    /// from cascade to nullify. Nothing else may differ from v11 — a second change
+    /// slipped into the same version deploys to a production CloudKit schema that
+    /// is additive-only and can never take it back.
+    ///
+    /// THE DELETE RULE IS THE POINT OF THE VERSION. Usage history is content-free
+    /// by construction, so it has no reason to share the lifetime of the content:
+    /// deleting a conversation removes what was said, and the measurement of the
+    /// dispatch survives so trends do not collapse every time the user tidies up.
+    /// The user clears usage history explicitly, through its own control. v11
+    /// keeps its cascade in its own test above — a shipped model is history, and
+    /// only the version the app opens is asserted to nullify.
+    func testV12AddsFiveAttemptAttributesAndNothingElse() throws {
+        let v11 = try requiredModel(named: "Conversations 11.mom")
+        let v12 = try requiredModel(named: "Conversations 12.mom")
+
+        XCTAssertEqual(Set(v11.entitiesByName.keys), Set(v12.entitiesByName.keys),
+                       "no entity appears or disappears — an entity change is not lightweight")
+
+        let expectedAdditions: [String: Set<String>] = [
+            "Attachment": [],
+            "Conversation": [],
+            "Message": [],
+            "GatewayAttempt": [
+                "originDeviceClass",
+                "currentTurnInlineImageCount",
+                "priorTurnInlineImageCount",
+                "currentTurnInlineTextFileCount",
+                "priorTurnInlineTextFileCount",
+            ],
+        ]
+        let expectedTypes: [String: NSAttributeType] = [
+            "originDeviceClass": .stringAttributeType,
+            "currentTurnInlineImageCount": .integer32AttributeType,
+            "priorTurnInlineImageCount": .integer32AttributeType,
+            "currentTurnInlineTextFileCount": .integer32AttributeType,
+            "priorTurnInlineTextFileCount": .integer32AttributeType,
+        ]
+
+        for (name, newEntity) in v12.entitiesByName {
+            let oldEntity = try XCTUnwrap(v11.entitiesByName[name])
+            let added = Set(newEntity.attributesByName.keys)
+                .subtracting(oldEntity.attributesByName.keys)
+            let removed = Set(oldEntity.attributesByName.keys)
+                .subtracting(newEntity.attributesByName.keys)
+            XCTAssertTrue(removed.isEmpty,
+                          "\(name) lost \(removed.sorted()) — a removal is data loss, not a migration")
+            let expectedForEntity = try XCTUnwrap(expectedAdditions[name])
+            XCTAssertEqual(added, expectedForEntity,
+                           "\(name) gains exactly the columns this version reviewed — an extra one "
+                           + "is permanent, and a missing one is a fact the account can never carry")
+            XCTAssertEqual(
+                Set(newEntity.relationshipsByName.keys), Set(oldEntity.relationshipsByName.keys),
+                "\(name) keeps its relationships — a relationship change is not lightweight")
+
+            for attribute in added.compactMap({ newEntity.attributesByName[$0] }) {
+                XCTAssertEqual(attribute.attributeType, expectedTypes[attribute.name],
+                               "\(attribute.name) ships at its settled type: a production CloudKit "
+                               + "schema is additive-only, so the type it deploys with is the type "
+                               + "it keeps forever")
+                XCTAssertTrue(attribute.isOptional,
+                              "\(attribute.name) must be optional — CloudKit requires it, and every "
+                              + "row written before this version is genuinely UNMEASURED")
+                XCTAssertNil(
+                    attribute.defaultValue,
+                    "\(attribute.name) must carry NO default: a default is written to every "
+                    + "pre-existing row at migration time, so a zero here would claim the whole "
+                    + "history was inspected and found to carry no images and no files — a "
+                    + "measurement nobody took, indistinguishable afterwards from one that was")
+            }
+        }
+
+        // The one rule change, in both directions. Nullify is what lets a
+        // content-free row outlive the turn it measured; the inverse stays
+        // nullify so a surviving attempt never takes a message with it.
+        let link = try XCTUnwrap(
+            v12.entitiesByName["Message"]?.relationshipsByName["gatewayAttempts"])
+        XCTAssertEqual(link.deleteRule, .nullifyDeleteRule,
+                       "deleting a conversation must leave its measurements standing — usage "
+                       + "history is cleared through its own control, never as a side effect")
+        XCTAssertTrue(link.isToMany)
+        XCTAssertTrue(link.isOptional)
+        XCTAssertFalse(link.isOrdered,
+                       "CloudKit rejects an ordered relationship; attempts are ordered in code by "
+                       + "startedAt")
+        XCTAssertEqual(link.destinationEntity?.name, "GatewayAttempt")
+        XCTAssertEqual(link.inverseRelationship?.name, "userMessage")
+
+        let inverse = try XCTUnwrap(
+            v12.entitiesByName["GatewayAttempt"]?.relationshipsByName["userMessage"])
+        XCTAssertEqual(inverse.deleteRule, .nullifyDeleteRule)
+        XCTAssertEqual(inverse.maxCount, 1)
+        XCTAssertTrue(inverse.isOptional)
+    }
+
+    /// A v11 store — the one the previous release installed — opens under v12 with
+    /// every ledger row intact and the five new columns reading nil. Nil is the
+    /// load-bearing part: a legacy row was written before anything counted
+    /// attachments, so it is UNMEASURED, and the dashboard's coverage figures rest
+    /// on being able to tell that apart from a turn that carried none.
+    func testV11StoreMigratesToV12WithNilAttachmentShapeColumns() async throws {
+        let v11 = try requiredModel(named: "Conversations 11.mom")
+        let v12 = try requiredModel(named: "Conversations 12.mom")
+        let conversationID = UUID()
+        let messageID = UUID()
+        let attemptID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let completedAt = Date(timeIntervalSince1970: 1_800_000_007)
+
+        do {
+            let container = try await loadStore(model: v11)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let conversation = NSEntityDescription.insertNewObject(
+                    forEntityName: "Conversation", into: context)
+                conversation.setValue(conversationID, forKey: "id")
+                conversation.setValue("hermes", forKey: "backend")
+                conversation.setValue(startedAt, forKey: "createdAt")
+
+                let message = NSEntityDescription.insertNewObject(
+                    forEntityName: "Message", into: context)
+                message.setValue(messageID, forKey: "id")
+                message.setValue("user", forKey: "role")
+                message.setValue("a measured turn", forKey: "text")
+                message.setValue(startedAt, forKey: "createdAt")
+                message.setValue("ipad-voice", forKey: "sourceDevice")
+                message.setValue(conversation, forKey: "conversation")
+
+                let attempt = NSEntityDescription.insertNewObject(
+                    forEntityName: "GatewayAttempt", into: context)
+                attempt.setValue(attemptID, forKey: "id")
+                attempt.setValue(conversationID, forKey: "conversationID")
+                attempt.setValue(messageID, forKey: "userMessageID")
+                attempt.setValue("hermes", forKey: "gatewayRef")
+                attempt.setValue(startedAt, forKey: "startedAt")
+                attempt.setValue(completedAt, forKey: "completedAt")
+                attempt.setValue("succeeded", forKey: "outcome")
+                attempt.setValue("app", forKey: "originSurface")
+                attempt.setValue("voice", forKey: "inputMode")
+                attempt.setValue(NSNumber(value: Int64(1_234)), forKey: "reportedTotalTokens")
+                attempt.setValue(NSNumber(value: Int16(1)), forKey: "recordVersion")
+                attempt.setValue(message, forKey: "userMessage")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v12)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+            request.predicate = NSPredicate(format: "id == %@", attemptID as CVarArg)
+            request.fetchLimit = 1
+            let attempt = try XCTUnwrap(context.fetch(request).first,
+                                        "the v11 ledger row must survive migration")
+
+            XCTAssertEqual(attempt.value(forKey: "conversationID") as? UUID, conversationID)
+            XCTAssertEqual(attempt.value(forKey: "userMessageID") as? UUID, messageID)
+            XCTAssertEqual(attempt.value(forKey: "gatewayRef") as? String, "hermes")
+            XCTAssertEqual(attempt.value(forKey: "startedAt") as? Date, startedAt)
+            XCTAssertEqual(attempt.value(forKey: "completedAt") as? Date, completedAt)
+            XCTAssertEqual(attempt.value(forKey: "outcome") as? String, "succeeded")
+            XCTAssertEqual(attempt.value(forKey: "reportedTotalTokens") as? NSNumber,
+                           NSNumber(value: Int64(1_234)))
+            XCTAssertEqual((attempt.value(forKey: "userMessage") as? NSManagedObject)?
+                .value(forKey: "id") as? UUID, messageID,
+                "the relationship survives the rule change — only what DELETION does to it changed")
+
+            for column in ["originDeviceClass", "currentTurnInlineImageCount",
+                           "priorTurnInlineImageCount", "currentTurnInlineTextFileCount",
+                           "priorTurnInlineTextFileCount"] {
+                XCTAssertNil(
+                    attempt.value(forKey: column),
+                    "GatewayAttempt.\(column) must be nil on a pre-v12 row — it was written before "
+                    + "anything counted, and a zero would report an inspection that never happened")
+            }
+
+            // And a NEW row records an explicit zero, which is what makes the nil
+            // above mean UNMEASURED rather than NONE.
+            let fresh = NSEntityDescription.insertNewObject(
+                forEntityName: "GatewayAttempt", into: context)
+            fresh.setValue(UUID(), forKey: "id")
+            fresh.setValue(conversationID, forKey: "conversationID")
+            fresh.setValue(Date(timeIntervalSince1970: 1_800_000_100), forKey: "startedAt")
+            fresh.setValue("iphone", forKey: "originDeviceClass")
+            fresh.setValue(NSNumber(value: Int32(2)), forKey: "currentTurnInlineImageCount")
+            fresh.setValue(NSNumber(value: Int32(0)), forKey: "priorTurnInlineImageCount")
+            fresh.setValue(NSNumber(value: Int32(1)), forKey: "currentTurnInlineTextFileCount")
+            fresh.setValue(NSNumber(value: Int32(0)), forKey: "priorTurnInlineTextFileCount")
+            try context.save()
+
+            XCTAssertEqual(fresh.value(forKey: "originDeviceClass") as? String, "iphone")
+            XCTAssertEqual(fresh.value(forKey: "currentTurnInlineImageCount") as? NSNumber,
+                           NSNumber(value: Int32(2)))
+            XCTAssertEqual(fresh.value(forKey: "priorTurnInlineImageCount") as? NSNumber,
+                           NSNumber(value: Int32(0)))
+            XCTAssertEqual(fresh.value(forKey: "currentTurnInlineTextFileCount") as? NSNumber,
+                           NSNumber(value: Int32(1)))
+            XCTAssertEqual(fresh.value(forKey: "priorTurnInlineTextFileCount") as? NSNumber,
+                           NSNumber(value: Int32(0)))
+        }
+    }
+
+    /// THE SKIPPED-VERSION PATH. A device that never launched the v11 release
+    /// migrates v10 → v12 in one hop, which Core Data infers as a single mapping
+    /// rather than a replay of each step. It has to land in the same place: the
+    /// history intact, the ledger EMPTY, and nothing back-filled — a fabricated
+    /// row per historical message would make every rate a fiction, and a fresh
+    /// attachment count on it would compound the fiction with a measurement.
+    func testV10StoreMigratesToV12SkippingV11() async throws {
+        let v10 = try requiredModel(named: "Conversations 10.mom")
+        let v12 = try requiredModel(named: "Conversations 12.mom")
+        let messageID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 1_799_000_000)
+
+        do {
+            let container = try await loadStore(model: v10)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let conversation = NSEntityDescription.insertNewObject(
+                    forEntityName: "Conversation", into: context)
+                conversation.setValue(UUID(), forKey: "id")
+                conversation.setValue("openclaw", forKey: "backend")
+                conversation.setValue(createdAt, forKey: "createdAt")
+
+                let message = NSEntityDescription.insertNewObject(
+                    forEntityName: "Message", into: context)
+                message.setValue(messageID, forKey: "id")
+                message.setValue("user", forKey: "role")
+                message.setValue("a turn from before the ledger", forKey: "text")
+                message.setValue(createdAt, forKey: "createdAt")
+                message.setValue("mac-text", forKey: "sourceDevice")
+                message.setValue("sent", forKey: "status")
+                message.setValue(conversation, forKey: "conversation")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v12)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let messageRequest = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            messageRequest.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            messageRequest.fetchLimit = 1
+            let message = try XCTUnwrap(context.fetch(messageRequest).first,
+                                        "the v10 message row must survive the two-version hop")
+            XCTAssertEqual(message.value(forKey: "text") as? String,
+                           "a turn from before the ledger")
+            XCTAssertEqual(message.value(forKey: "sourceDevice") as? String, "mac-text")
+            XCTAssertEqual(message.value(forKey: "createdAt") as? Date, createdAt)
+
+            XCTAssertEqual(
+                try context.count(for: NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")),
+                0,
+                "migration back-fills NOTHING across any number of versions at once")
+            XCTAssertEqual((message.value(forKey: "gatewayAttempts") as? NSSet)?.count, 0)
+        }
+    }
+
+    /// THE PROMISE THE VERSION EXISTS FOR, proved on a store that actually
+    /// migrated rather than one born under v12 — the delete rule that governs a
+    /// migrated store is the one baked into the destination model, and this is the
+    /// only test that demonstrates it on the path a real device takes.
+    ///
+    /// Deleting the conversation still removes the content: the conversation and
+    /// its messages go. The attempt row stays, its link nulled, its scalar
+    /// snapshots — conversation id, gateway, timings, tokens — intact, because
+    /// they are what the dashboard reads and none of them says anything about what
+    /// was typed or answered.
+    func testAMigratedV11AttemptSurvivesConversationDeletionUnderV12() async throws {
+        let v11 = try requiredModel(named: "Conversations 11.mom")
+        let v12 = try requiredModel(named: "Conversations 12.mom")
+        let conversationID = UUID()
+        let messageID = UUID()
+        let attemptID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_800_500_000)
+
+        do {
+            let container = try await loadStore(model: v11)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let conversation = NSEntityDescription.insertNewObject(
+                    forEntityName: "Conversation", into: context)
+                conversation.setValue(conversationID, forKey: "id")
+                conversation.setValue("openclaw", forKey: "backend")
+                conversation.setValue(startedAt, forKey: "createdAt")
+
+                let message = NSEntityDescription.insertNewObject(
+                    forEntityName: "Message", into: context)
+                message.setValue(messageID, forKey: "id")
+                message.setValue("user", forKey: "role")
+                message.setValue("something the user later deletes", forKey: "text")
+                message.setValue(startedAt, forKey: "createdAt")
+                message.setValue("iphone-voice", forKey: "sourceDevice")
+                message.setValue(conversation, forKey: "conversation")
+
+                let attempt = NSEntityDescription.insertNewObject(
+                    forEntityName: "GatewayAttempt", into: context)
+                attempt.setValue(attemptID, forKey: "id")
+                attempt.setValue(conversationID, forKey: "conversationID")
+                attempt.setValue(messageID, forKey: "userMessageID")
+                attempt.setValue("openclaw", forKey: "gatewayRef")
+                attempt.setValue(startedAt, forKey: "startedAt")
+                attempt.setValue("succeeded", forKey: "outcome")
+                attempt.setValue(NSNumber(value: Int64(4_096)), forKey: "reportedTotalTokens")
+                attempt.setValue(NSNumber(value: Int16(1)), forKey: "recordVersion")
+                attempt.setValue(message, forKey: "userMessage")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v12)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let conversationRequest = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
+            conversationRequest.predicate = NSPredicate(
+                format: "id == %@", conversationID as CVarArg)
+            let conversation = try XCTUnwrap(context.fetch(conversationRequest).first)
+
+            context.delete(conversation)
+            try context.save()
+
+            XCTAssertEqual(
+                try context.count(for: NSFetchRequest<NSManagedObject>(entityName: "Conversation")),
+                0)
+            XCTAssertEqual(
+                try context.count(for: NSFetchRequest<NSManagedObject>(entityName: "Message")), 0,
+                "the content goes — the conversation still cascades to its messages")
+
+            let attemptRequest = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+            attemptRequest.predicate = NSPredicate(format: "id == %@", attemptID as CVarArg)
+            let attempt = try XCTUnwrap(
+                context.fetch(attemptRequest).first,
+                "the measurement outlives the content it measured — that is the whole of v12, and "
+                + "without it every trend resets each time the user deletes a conversation")
+
+            XCTAssertNil(attempt.value(forKey: "userMessage"),
+                         "the link nullifies rather than cascading; the row keeps no handle on a "
+                         + "message that no longer exists")
+            XCTAssertEqual(attempt.value(forKey: "conversationID") as? UUID, conversationID,
+                           "the scalar snapshots survive — they are what the dashboard groups by, "
+                           + "and none of them carries content")
+            XCTAssertEqual(attempt.value(forKey: "userMessageID") as? UUID, messageID)
+            XCTAssertEqual(attempt.value(forKey: "gatewayRef") as? String, "openclaw")
+            XCTAssertEqual(attempt.value(forKey: "startedAt") as? Date, startedAt)
+            XCTAssertEqual(attempt.value(forKey: "outcome") as? String, "succeeded")
+            XCTAssertEqual(attempt.value(forKey: "reportedTotalTokens") as? NSNumber,
+                           NSNumber(value: Int64(4_096)))
+        }
+    }
+
+    /// The model the APP opens is v12. A pointer left on an older version would
+    /// ship code that reads columns a store does not have — and, worse, would not
     /// fail loudly at the ledger's edges: KVC on a missing attribute is what the
     /// record's tolerant reads are built to survive, so the dashboard would simply
-    /// report an account that has never dispatched anything.
-    func testTheCurrentModelVersionIsV11() throws {
+    /// report an account that measured nothing. A stale pointer would also leave
+    /// the cascade in force, quietly deleting usage history the app now promises
+    /// to keep.
+    func testTheCurrentModelVersionIsV12() throws {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         let momd = try XCTUnwrap(
             bundles.compactMap { $0.url(forResource: "Conversations", withExtension: "momd") }.first,
@@ -1079,6 +1445,6 @@ final class ConversationsModelMigrationTests: XCTestCase {
         let plist = try XCTUnwrap(
             NSDictionary(contentsOf: momd.appendingPathComponent("VersionInfo.plist")),
             "a compiled momd always carries VersionInfo.plist")
-        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 11")
+        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 12")
     }
 }

@@ -5,8 +5,8 @@
 //
 // The persistence half of the gateway-attempt ledger: opening a row at the
 // final pre-transport boundary, closing it exactly once when a turn lands,
-// reading it back for the dashboard, and deleting it with the history it
-// describes. An extension of the SAME actor rather than a store of its own,
+// reading it back for the dashboard, and deleting it only when the user asks.
+// An extension of the SAME actor rather than a store of its own,
 // because a terminal landing has to write the reply, the user turn's send state
 // and the attempt row in ONE Core Data save — a second actor could not join
 // that transaction, and two saves would be two CloudKit exports and a window
@@ -29,8 +29,17 @@
 // dispatch, the reply or the failure flip at landing, the send-state flip on a
 // cancel — and those post already. Posting again per dispatch would reload every
 // list for a row no conversation surface renders, which is exactly the refetch
-// loop `ConversationStore`'s header argues against. The one exception is the
-// explicit `deleteGatewayAttempts` cleanup, which no other write accompanies.
+// loop `ConversationStore`'s header argues against. The exceptions are the
+// explicit deletion — `purgeGatewayAttempts`, the one primitive that removes an
+// attempt row, reached by the user clearing usage history and by `deleteAll`'s
+// erase-everything — which no other attempt write accompanies.
+//
+// USAGE HISTORY OUTLIVES THE CONVERSATIONS IT DESCRIBES. Attempt rows are
+// first-class: a row whose conversation is deleted, never imported, or
+// unattributable stays readable and countable, and the ONLY things that remove
+// one are the user clearing usage history and an erase-everything. Retention is
+// temporal decoupling and nothing more — the rows never leave this private
+// store, and they carry no more than they ever did.
 //
 // IN the Watch target: `ConduckWatch Watch App` shares `ConversationStore.swift`
 // through a pbxproj membership exception, and this file has to travel with it —
@@ -60,10 +69,15 @@ extension ConversationStore {
     ///
     /// The scalar snapshots are ALWAYS written; the `userMessage` relationship
     /// is set only when the message resolves in this context. That asymmetry is
-    /// deliberate: the relationship is what carries the cascade delete, and the
-    /// scalars are what survive a row whose parent has not imported yet. A row
-    /// with only the scalars is still countable and still deletable — see
-    /// `deleteGatewayAttempts`.
+    /// deliberate: the scalars are what a row carries on its own, and the
+    /// relationship is an enrichment the read side uses when it happens to be
+    /// there. A row with only the scalars is fully countable.
+    ///
+    /// The four attachment-shape counts are written as EXPLICIT ZEROES, never
+    /// left absent. Nil on those columns means "this build did not measure",
+    /// which is a claim only a row written before they existed may make; a
+    /// dispatch that genuinely carried no image and no text file has to say so,
+    /// or every coverage denominator on the dashboard silently shrinks.
     func beginGatewayAttempt(draft: GatewayAttemptDraft) async -> GatewayAttemptContext? {
         do { try await ensureLoaded() } catch { return nil }
         let context = newWriteContext()
@@ -86,6 +100,27 @@ extension ConversationStore {
             row.setValue(draft.requestedModel, forKey: "requestedModel")
             row.setValue(startedAt, forKey: "startedAt")
             row.setValue(GatewayAttemptOutcome.inFlight.rawValue, forKey: "outcome")
+            // The device that executed THIS dispatch, base word only — a retry
+            // reflects the retry's device, never the turn's. Nil where the
+            // surface cannot name one; the read side then falls back to the
+            // user turn's own tag.
+            row.setValue(draft.deviceClass, forKey: "originDeviceClass")
+            row.setValue(
+                NSNumber(value: draft.currentTurnInlineImageCount),
+                forKey: "currentTurnInlineImageCount"
+            )
+            row.setValue(
+                NSNumber(value: draft.priorTurnInlineImageCount),
+                forKey: "priorTurnInlineImageCount"
+            )
+            row.setValue(
+                NSNumber(value: draft.currentTurnInlineTextFileCount),
+                forKey: "currentTurnInlineTextFileCount"
+            )
+            row.setValue(
+                NSNumber(value: draft.priorTurnInlineTextFileCount),
+                forKey: "priorTurnInlineTextFileCount"
+            )
             // Stamped so a later client can change what an attempt MEANS
             // without its rows mixing silently into this one's totals.
             row.setValue(
@@ -138,27 +173,6 @@ extension ConversationStore {
         }
     }
 
-    /// Delete every attempt whose SCALAR `conversationID` names `conversationID`.
-    /// The relationship cascade already removes attempts linked to a deleted
-    /// conversation's messages; this covers the rows whose relationship was
-    /// never set or has not imported, which the cascade cannot see.
-    ///
-    /// Posts on a real deletion, unlike every other write here: no `Message`
-    /// write accompanies this one, so nothing else would tell an open dashboard
-    /// its totals moved.
-    func deleteGatewayAttempts(conversationID: UUID) async {
-        do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
-        let deleted: Bool = await context.perform { [context] in
-            let rows = Self.gatewayAttemptRows(conversationID: conversationID, in: context)
-            guard !rows.isEmpty else { return false }
-            for row in rows { context.delete(row) }
-            do { try context.save() } catch { return false }
-            return true
-        }
-        if deleted { await postDidChange() }
-    }
-
     // MARK: - Read
 
     /// Every attempt the dashboard may count, oldest start first.
@@ -167,20 +181,34 @@ extension ConversationStore {
     /// therefore outside every bounded range and inside the unbounded one, which
     /// is the honest reading — it happened, but it cannot be placed in time.
     ///
-    /// ORPHANS ARE FILTERED, NEVER DELETED. An attempt whose `conversationID`
-    /// does not resolve to a live `Conversation` is left out of the result and
-    /// left alone in the store. Mirroring cannot distinguish "the parent was
-    /// deleted" from "the parent has not imported yet", so absence is not
-    /// evidence: deleting on it would sync permanent loss the first time a slow
-    /// import outran the read. Such rows stay stored-but-invisible, which is the
-    /// accepted convergence limit.
-    func fetchGatewayAttempts(from: Date? = nil, to: Date? = nil) async throws -> [GatewayAttemptRecord] {
+    /// NO ROW IS FILTERED OUT FOR ITS PARENT'S SAKE. An attempt whose
+    /// conversation was deleted, has not imported yet, or was never named at all
+    /// still counts: it measures a dispatch that really happened, and the
+    /// dashboard describes the user's gateways rather than their kept threads.
+    /// Thread-level grouping simply has nothing to hang an unattributed row on
+    /// and leaves it out of that one view.
+    ///
+    /// `clearedThrough` is the synced clear cutoff, supplied by the caller from
+    /// settings so this store stays settings-free. Rows at or before it are
+    /// excluded from the moment the cutoff is set, whether or not the purge that
+    /// follows has run — which is what makes a Clear on one device take effect
+    /// on the next before any deletion syncs. An undated row is excluded too:
+    /// "clear everything up to now" cannot mean "except the rows that cannot say
+    /// when they happened", and the purge removes exactly the same set.
+    ///
+    /// The user turn is PREFETCHED because every row wants one field off it —
+    /// `sourceDevice`, for the device bucket a row written before
+    /// `originDeviceClass` existed cannot supply itself. Faulting that
+    /// per-row over a hundred thousand rows is the difference between one fetch
+    /// and a hundred thousand.
+    func fetchGatewayAttempts(
+        from: Date? = nil,
+        to: Date? = nil,
+        clearedThrough: Date? = nil
+    ) async throws -> [GatewayAttemptRecord] {
         try await ensureLoaded()
         let context = newReadContext()
         return try await context.perform { [context] in
-            let live = Self.liveConversationIDs(in: context)
-            guard !live.isEmpty else { return [] }
-
             let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
             var clauses: [NSPredicate] = []
             if let from {
@@ -189,53 +217,152 @@ extension ConversationStore {
             if let to {
                 clauses.append(NSPredicate(format: "startedAt <= %@", to as NSDate))
             }
+            if let clearedThrough {
+                clauses.append(Self.notClearedPredicate(through: clearedThrough))
+            }
             if !clauses.isEmpty {
                 request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: clauses)
             }
             // Oldest first, so the daily buckets and the "measuring since"
             // caption read the same order the aggregator walks.
             request.sortDescriptors = [NSSortDescriptor(key: "startedAt", ascending: true)]
+            request.relationshipKeyPathsForPrefetching = ["userMessage"]
 
-            return try context.fetch(request).compactMap { row -> GatewayAttemptRecord? in
-                guard
-                    let conversationID = row.value(forKey: "conversationID") as? UUID,
-                    live.contains(conversationID)
-                else { return nil }
-                return GatewayAttemptRecord(managedObject: row)
+            return try context.fetch(request).map { row -> GatewayAttemptRecord in
+                var record = GatewayAttemptRecord(managedObject: row)
+                // Enrichment, never storage: the tag belongs to the user turn,
+                // and copying it into the attempt row would duplicate a fact
+                // that is already there and can already change.
+                record.fallbackSourceDevice =
+                    (row.value(forKey: "userMessage") as? NSManagedObject)?
+                    .value(forKey: "sourceDevice") as? String
+                return record
             }
         }
     }
 
-    /// When measurement began: the earliest `startedAt` among attempts the
-    /// dashboard can still see. Deliberately the VISIBLE earliest rather than
-    /// the stored one — a caption reading "measuring since" a date whose
-    /// conversation the user deleted would describe totals that no longer
-    /// include it.
+    /// When measurement began: the earliest `startedAt` still retained. One
+    /// fetch of one row, because nothing about the row's parent can disqualify
+    /// it any more.
     ///
-    /// Walks oldest-first and stops at the first row it can attribute, so the
-    /// common answer costs one row. Only a store whose oldest attempts are all
-    /// orphans walks further, and that is exactly the case where stopping early
-    /// would give the wrong date.
-    func earliestGatewayAttemptStart() async throws -> Date? {
+    /// `clearedThrough` applies for the same reason it applies to the read
+    /// above: a caption reading "measuring since" a date the user just cleared
+    /// past would describe a period the dashboard no longer counts.
+    func earliestGatewayAttemptStart(clearedThrough: Date? = nil) async throws -> Date? {
         try await ensureLoaded()
         let context = newReadContext()
         return try await context.perform { [context] in
-            let live = Self.liveConversationIDs(in: context)
-            guard !live.isEmpty else { return nil }
-
             let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
-            request.predicate = NSPredicate(format: "startedAt != nil")
-            request.sortDescriptors = [NSSortDescriptor(key: "startedAt", ascending: true)]
-            for row in try context.fetch(request) {
-                guard
-                    let conversationID = row.value(forKey: "conversationID") as? UUID,
-                    live.contains(conversationID)
-                else { continue }
-                return row.value(forKey: "startedAt") as? Date
+            var clauses = [NSPredicate(format: "startedAt != nil")]
+            if let clearedThrough {
+                clauses.append(NSPredicate(format: "startedAt > %@", clearedThrough as NSDate))
             }
-            return nil
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: clauses)
+            request.sortDescriptors = [NSSortDescriptor(key: "startedAt", ascending: true)]
+            request.fetchLimit = 1
+            return try context.fetch(request).first?.value(forKey: "startedAt") as? Date
         }
     }
+
+    /// The ids of every `Conversation` this device can currently resolve. The
+    /// dashboard gates thread NAVIGATION on it — a heaviest-thread row whose
+    /// conversation is absent renders without a chevron rather than pushing a
+    /// screen onto nothing — and gates nothing else: absence never removes a
+    /// row from a count, and never deletes anything.
+    func liveConversationIDs() async -> Set<UUID> {
+        do { try await ensureLoaded() } catch { return [] }
+        let context = newReadContext()
+        return await context.perform { [context] in
+            Self.liveConversationIDs(in: context)
+        }
+    }
+
+    // MARK: - Purge
+
+    /// Delete every attempt row at or before `cutoff`, and report how many went.
+    /// THE ONE WAY AN ATTEMPT ROW IS EVER DELETED — "Clear usage history" and
+    /// the erase-everything both come through here, and nothing else removes a
+    /// row at all.
+    ///
+    /// OBJECT-LEVEL DELETES, NOT `NSBatchDeleteRequest`. A batch delete bypasses
+    /// the managed-object layer, and Apple does not guarantee it composes with
+    /// CloudKit mirroring — an unexported tombstone is a clear that silently
+    /// stops at the device it was tapped on, which is the opposite of what this
+    /// primitive promises.
+    ///
+    /// Batched with a fetch LIMIT and never an OFFSET: the rows are being
+    /// deleted as they are read, so every pass must start again at the top of
+    /// what is left. An offset would skip exactly as many rows as the previous
+    /// pass removed. The context is saved AND reset per batch so a hundred
+    /// thousand rows never coexist in one context's registry.
+    ///
+    /// IDEMPOTENT AND RESUMABLE: a run interrupted halfway leaves the rows it
+    /// already deleted deleted, and a later run finishes the job. Re-running
+    /// against a store with nothing left costs one empty fetch and posts
+    /// nothing.
+    @discardableResult
+    func purgeGatewayAttempts(through cutoff: Date) async throws -> Int {
+        try await ensureLoaded()
+        let context = newWriteContext()
+        var deleted = 0
+        while true {
+            let batch: Int = try await context.perform { [context] in
+                let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+                request.predicate = Self.clearedPredicate(through: cutoff)
+                request.fetchLimit = Self.gatewayAttemptPurgeBatchSize
+                let rows = try context.fetch(request)
+                guard !rows.isEmpty else { return 0 }
+                for row in rows { context.delete(row) }
+                try context.save()
+                context.reset()
+                return rows.count
+            }
+            if batch == 0 { break }
+            deleted += batch
+        }
+        // One post for the whole purge: no `Message` write accompanies it, and
+        // an open dashboard has to be told its totals moved exactly once.
+        if deleted > 0 { await postDidChange() }
+        return deleted
+    }
+
+    /// How many rows one purge pass materialises. An engineering bound on the
+    /// context's registry, not a semantic one — the loop repeats until the
+    /// predicate matches nothing, so the value only trades pass count against
+    /// peak memory.
+    static let gatewayAttemptPurgeBatchSize = 500
+
+    /// Rows a clear cutoff covers. An UNDATED row is included: a cutoff means
+    /// "everything up to now", and a row that cannot say when it happened
+    /// cannot claim to have happened after. Reads and the purge share this so
+    /// the set the dashboard stops counting is exactly the set that gets
+    /// deleted.
+    static func clearedPredicate(through cutoff: Date) -> NSPredicate {
+        NSPredicate(format: "startedAt == nil OR startedAt <= %@", cutoff as NSDate)
+    }
+
+    /// The complement of `clearedPredicate` — what a read after a clear may
+    /// still see.
+    static func notClearedPredicate(through cutoff: Date) -> NSPredicate {
+        NSPredicate(format: "startedAt != nil AND startedAt > %@", cutoff as NSDate)
+    }
+
+    #if DEBUG
+    /// Test-only: clear an attempt row's `startedAt` to produce the undated row
+    /// a half-materialised import really can deliver (`GatewayAttempt.startedAt`
+    /// is `optional="YES"`). Nothing else can build one — every begin stamps the
+    /// instant inside its own transaction — and the clear cutoff's treatment of
+    /// such a row is otherwise unverifiable. Not used by app code.
+    func debugClearGatewayAttemptStart(attemptID: UUID) async throws {
+        try await ensureLoaded()
+        let context = newWriteContext()
+        try await context.perform { [context] in
+            guard let row = Self.gatewayAttemptRow(id: attemptID, in: context) else { return }
+            row.setValue(nil, forKey: "startedAt")
+            try context.save()
+        }
+    }
+    #endif
 
     // MARK: - Shared row mechanics
     //
@@ -321,25 +448,7 @@ extension ConversationStore {
         return (try? context.fetch(request))?.first
     }
 
-    /// Every attempt row whose SCALAR `conversationID` names `conversationID`.
-    static func gatewayAttemptRows(
-        conversationID: UUID,
-        in context: NSManagedObjectContext
-    ) -> [NSManagedObject] {
-        let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
-        request.predicate = NSPredicate(format: "conversationID == %@", conversationID as CVarArg)
-        return (try? context.fetch(request)) ?? []
-    }
-
-    /// Every attempt row in the store. Used only where every conversation is
-    /// being deleted, so no row can survive as anything but an orphan.
-    static func allGatewayAttemptRows(in context: NSManagedObjectContext) -> [NSManagedObject] {
-        let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
-        return (try? context.fetch(request)) ?? []
-    }
-
-    /// The ids of every `Conversation` this context can see — the set an
-    /// attempt has to name to be countable. Built with a plain object fetch
+    /// The ids of every `Conversation` this context can see. Built with a plain object fetch
     /// rather than a dictionary/expression one: those are the fetch shapes the
     /// in-memory store the whole suite runs on does not support uniformly, and a
     /// read path that behaves differently under test than in production is worth
