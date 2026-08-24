@@ -242,7 +242,11 @@ final class ConversationListViewModel {
 
     // MARK: - Mutations
 
-    func delete(_ conversation: ConversationRecord) async {
+    /// Returns whether the conversation actually died — hosts that tear down
+    /// UI for the deleted thread (the macOS window's detail pane) must not do
+    /// so after a store throw that left the row alive.
+    @discardableResult
+    func delete(_ conversation: ConversationRecord) async -> Bool {
         do {
             try await ConversationStore.shared.deleteConversation(id: conversation.id)
             // The durable markers are columns on the conversation and die with
@@ -254,12 +258,16 @@ final class ConversationListViewModel {
             ReadStateStore.shared.forget(conversation.id)
             conversations.removeAll { $0.id == conversation.id }
             changeGeneration += 1
+            return true
         } catch {
             // Non-fatal — the notification will re-fetch on the next write.
+            return false
         }
     }
 
-    func deleteAll() async {
+    /// Same success contract as `delete(_:)`.
+    @discardableResult
+    func deleteAll() async -> Bool {
         do {
             let doomed = conversations.map(\.id)
             try await ConversationStore.shared.deleteAll()
@@ -270,8 +278,10 @@ final class ConversationListViewModel {
             for id in doomed { ReadStateStore.shared.forget(id) }
             conversations = []
             changeGeneration += 1
+            return true
         } catch {
             loadError = String(localized: "Couldn't clear your conversations. Try again.")
+            return false
         }
     }
 }

@@ -7,7 +7,9 @@
 // sheet (`ContentView`), the iPad split sidebar (`ConversationLibraryView`) and
 // the macOS window sidebar (`MainWindowView`).
 // Time-grouped (Today / This Week / Earlier) by `lastActivityAt`,
-// `.searchable`, swipe-delete. Each row = title (fallback to the first line of
+// `.searchable`, per-row delete (swipe on iOS, right-click context menu on
+// macOS) plus a Delete-All trash (iOS toolbar item; macOS-fenced sidebar-region
+// toolbar item). Each row = title (fallback to the first line of
 // the last message) + a reserved trailing activity mark + a role-aware preview
 // subtitle + a metadata line that is a date when nothing is happening and the
 // status words while a turn is in flight.
@@ -34,7 +36,9 @@ struct ConversationListView: View {
     /// Additive: suppress the built-in toolbar New / Delete-All actions. The
     /// macOS window has no sidebar-column toolbar of its own (one toolbar spans
     /// the whole split view, and `LeadingToolbarChrome` owns New there), so it
-    /// passes `false`; iOS keeps the default `true`.
+    /// passes `false`; iOS keeps the default `true`. This flag governs only the
+    /// iOS-designed items — macOS's Delete-All is the separate `#if os(macOS)`
+    /// toolbar item below, unaffected by this flag.
     var showsToolbarActions: Bool = true
     /// Optional host-owned search binding. The split-view hosts pass their
     /// pinned search field's text through this so filtering is driven by the
@@ -115,6 +119,15 @@ struct ConversationListView: View {
     /// iPhone sheet leaves it nil (a tap dismisses the sheet, so there's no
     /// persistent selection to indicate).
     var selectedConversationID: UUID? = nil
+    /// Additive: called AFTER one conversation was actually deleted through
+    /// this list (right-click Delete on macOS, swipe on iOS), with its id. The
+    /// macOS window uses it to drop its detail pane when the open thread dies;
+    /// the iOS hosts pass nothing (default nil) and render exactly as before.
+    /// Never fires on a store throw — the row is still alive then.
+    var onDeleted: ((UUID) -> Void)? = nil
+    /// Additive: called AFTER Delete-All actually cleared the store. Same
+    /// consumer and same success contract as `onDeleted`.
+    var onDeletedAll: (() -> Void)? = nil
 
     @State private var viewModel = ConversationListViewModel()
     /// Drives the quiet "iCloud unavailable" banner (the only sync chrome). Reads
@@ -143,7 +156,9 @@ struct ConversationListView: View {
     /// Where Delete-All docks. `.topBarLeading` is iOS-only and this file
     /// compiles for macOS too, so the leading case is spelled inside the fence.
     /// macOS never renders this item at all — its host passes
-    /// `showsToolbarActions: false` — so its branch is the inert one.
+    /// `showsToolbarActions: false` — so its branch is the inert one. (The
+    /// macOS trash is the separate `#if os(macOS)` item in the toolbar block,
+    /// not this one; the two are never live together.)
     ///
     /// WHERE THE LEADING TRASH LANDS, and why nothing here sets it. MEASURED
     /// (iPadOS 26.5, iPad Pro 12.9-inch (6th gen) simulator, 1024x1366pt
@@ -266,6 +281,33 @@ struct ConversationListView: View {
                     }
                 }
             }
+            #if os(macOS)
+            // macOS window: Delete-All is a trash item in the window toolbar's
+            // SIDEBAR region — the region `LeadingToolbarChrome`'s New button
+            // occupies (declared at the column level in MainWindowView) —
+            // mirroring the iOS toolbar trash. Declared HERE, not in the host,
+            // because this view owns the list view model: the same
+            // `!viewModel.conversations.isEmpty` gate the iOS trash uses, and
+            // the same `showDeleteAllConfirmation` alert below, both come for
+            // free. Fenced, not flagged — independent of `showsToolbarActions`,
+            // which governs only the iOS-designed items above. Lives and dies
+            // with the sidebar column's CONTENT: a collapsed sidebar removes
+            // it, exactly as the iPad sidebar bar does.
+            if !viewModel.conversations.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(role: .destructive) {
+                        showDeleteAllConfirmation = true
+                    } label: {
+                        Label(String(localized: "Delete All"), systemImage: "trash")
+                    }
+                    .help(String(localized: LocalizedStringResource(
+                        "conversations.deleteAll.help",
+                        defaultValue: "Delete all conversations"
+                    )))
+                    .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
+                }
+            }
+            #endif
         }
         .safeAreaInset(edge: .top) {
             if syncMonitor.showsBanner, let reason = syncMonitor.unavailableReason {
@@ -277,7 +319,11 @@ struct ConversationListView: View {
         .safeAreaInset(edge: .bottom) { settingsFooterRow }
         .alert(Text("Delete all conversations?"), isPresented: $showDeleteAllConfirmation) {
             Button(role: .destructive) {
-                Task { await viewModel.deleteAll() }
+                Task {
+                    if await viewModel.deleteAll() {
+                        onDeletedAll?()
+                    }
+                }
             } label: {
                 Text("Delete All")
             }
@@ -457,6 +503,36 @@ struct ConversationListView: View {
                         // paints below, so a hovered row and a selected one
                         // share one shape. No-op on iOS.
                         .settingsListRowButton()
+                        #if os(macOS)
+                        // Right-click Delete on the row — the macOS counterpart
+                        // of the iOS swipe (`.onDelete` renders nothing on this
+                        // platform). Fenced, not flagged: the iOS hosts never
+                        // gain this modifier at compile time. Attached after
+                        // `.settingsListRowButton()` so the menu's hit region is
+                        // the same full-bleed band that style reclaims. Direct
+                        // `convo` capture, never index math, so a list mutation
+                        // between click and menu action cannot retarget the
+                        // delete. NO confirmation, by spec ("Deleting a single
+                        // conversation is deliberately not made to argue back").
+                        // DECIDED EXCEPTION to the context-menu-mirrors-a-
+                        // visible-control rule (see the attachment chip in
+                        // ConversationThreadView): on this platform the row menu
+                        // IS the per-row affordance, the platform-standard one
+                        // for sidebar lists — founder-decided, don't "fix" it by
+                        // removing the menu or adding a keyboard path.
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                Task {
+                                    if await viewModel.delete(convo) {
+                                        onDeleted?(convo.id)
+                                    }
+                                }
+                            } label: {
+                                Label(String(localized: "Delete"), systemImage: "trash")
+                            }
+                            .accessibilityIdentifier("context.deleteConversation")  // stable QA target (non-localized)
+                        }
+                        #endif
                         // Active-conversation highlight (persistent-sidebar hosts
                         // only; nil on the iPhone sheet → Color.clear). A subtle
                         // amber row fill — the app's accent reads as "selected" on
@@ -473,7 +549,10 @@ struct ConversationListView: View {
                     .onDelete { indexSet in
                         Task {
                             for index in indexSet {
-                                await viewModel.delete(group.conversations[index])
+                                let convo = group.conversations[index]
+                                if await viewModel.delete(convo) {
+                                    onDeleted?(convo.id)
+                                }
                             }
                         }
                     }

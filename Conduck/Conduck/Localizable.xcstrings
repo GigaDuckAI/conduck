@@ -1508,6 +1508,17 @@
         }
       }
     },
+    "conversations.deleteAll.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Delete all conversations"
+          }
+        }
+      }
+    },
     "conversations.empty.micHint" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1942,6 +1953,9 @@
           }
         }
       }
+    },
+    "Delete" : {
+
     },
     "Delete All" : {
 

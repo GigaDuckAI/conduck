@@ -560,7 +560,9 @@ struct MainWindowView: View {
                 customGateways: customGateways,
                 configuredRefs: configuredRefs,
                 // Persistent window sidebar: highlight the active thread's row.
-                selectedConversationID: selectedConversationID
+                selectedConversationID: selectedConversationID,
+                onDeleted: { id in handleConversationDeleted(id) },
+                onDeletedAll: { handleAllConversationsDeleted() }
             )
             .padding(.top, 8)
 
@@ -774,6 +776,29 @@ struct MainWindowView: View {
         userPickedRefForNewChat = false
         coordinator.pendingNewConversationRef = selectedRef
         Task { await refreshConfiguredBackends() }
+    }
+
+    /// A conversation was deleted from the sidebar. If it is the thread the
+    /// detail pane is showing — via the sidebar selection OR the window lane a
+    /// first-turn mint bound WITHOUT touching `selectedConversationID` (see
+    /// `currentMountIdentity`) — fall back to the new-chat empty state.
+    /// `startNewConversation()` is deliberately the entire reaction: it clears
+    /// the window lane, the selection, the draft and any in-flight capture
+    /// through the same path ⌘N takes, so deletion cannot invent a second
+    /// teardown ordering. A mid-turn VM stays alive in the coordinator's
+    /// registry until its turn settles; the late reply then hits the store's
+    /// not-found verdict, settles its ledger attempt, and is discarded.
+    private func handleConversationDeleted(_ id: UUID) {
+        guard selectedConversationID == id
+            || coordinator.windowViewModel?.conversationID == id else { return }
+        startNewConversation()
+    }
+
+    /// Delete-All destroyed whatever the detail pane was showing; same reset,
+    /// guarded so an already-empty new-chat window is not needlessly reshuffled.
+    private func handleAllConversationsDeleted() {
+        guard selectedConversationID != nil || coordinator.windowViewModel != nil else { return }
+        startNewConversation()
     }
 
     /// Take the coordinator's already-resolved new-chat seed, synchronously.
