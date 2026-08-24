@@ -65,6 +65,24 @@ final class ATSTransportClassTests: XCTestCase {
                        "A cold tunnel's generic -1200 with no verdict recorded stays unreachable.")
     }
 
+    /// Every code that means "the device's own route" classifies `.offline` —
+    /// no network at all, cellular data denied, roaming off abroad, a call
+    /// holding the radio. Leaving any of them to the `default:` unreachable arm
+    /// re-opens the bug the class exists for: a failure that is entirely local
+    /// reported as a problem with the user's server, and (on the file lane) a
+    /// one-strike cooldown that suppresses the folder on the retry sent once
+    /// the connection is back.
+    func testDeviceSideRouteCodesAllClassifyOffline() {
+        for code: URLError.Code in [
+            .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive
+        ] {
+            XCTAssertEqual(
+                RemoteAgentTrustEvaluator.classifyTransportError(code, signals: .empty),
+                .offline,
+                "\(code) never left the device and says nothing about any server")
+        }
+    }
+
     func testBlockedByATSIsNotRetryable() {
         XCTAssertFalse(AppError.insecureConnectionBlocked.isRetryable,
                        "The verdict is computed from the URL string, so a retry is guaranteed to produce the same answer.")

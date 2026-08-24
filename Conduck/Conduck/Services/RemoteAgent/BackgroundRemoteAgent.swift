@@ -1773,18 +1773,22 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // arms of the same names — this duplicate exists because a background
         // session's completion callback cannot read the evaluator's per-challenge
         // signals, not because the transport taxonomy differs. Change both.
-        case .notConnectedToInternet:
+        case .notConnectedToInternet,
+             .dataNotAllowed,
+             .internationalRoamingOff,
+             .callIsActive:
             // UNREACHABLE ON THIS LANE, and kept anyway. A background session
             // waits for connectivity instead of failing, so an offline converse
             // send parks rather than arriving here as code -1009 — measured on
             // device with the radio off. The arm stays because this mapper is
             // shared: `CarPlayConverseUploader` calls it too, the taxonomy must
-            // remain in lockstep with `classifyTransportError`, and deleting an
-            // arm to reflect one lane's reachability would be the kind of local
-            // truth that breaks the next caller. The offline case a USER can
-            // actually reach on this lane is a Stop over zero departed bytes —
-            // see `ConverseCancelVerdict`, which reaches the same `AppError`
-            // and therefore the same copy.
+            // remain in lockstep with `classifyTransportError`'s `.offline` arm
+            // (all four codes are the device's own route, not the server), and
+            // deleting an arm to reflect one lane's reachability would be the
+            // kind of local truth that breaks the next caller. The offline case
+            // a USER can actually reach on this lane is a Stop over zero
+            // departed bytes — see `ConverseCancelVerdict`, which reaches the
+            // same `AppError` and therefore the same copy.
             return .noInternetConnection
         case .cannotConnectToHost,
              .cannotFindHost,

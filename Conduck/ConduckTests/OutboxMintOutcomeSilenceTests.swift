@@ -38,7 +38,7 @@ extension BackgroundFileTransfer.OutboxMintOutcome {
     var isActionableFault: Bool {
         switch self {
         case .witnessFailed, .witnessSuppressed: return true
-        case .named, .noLane, .laneCannotReturn: return false
+        case .named, .noLane, .laneCannotReturn, .noObservation: return false
         }
     }
 }
@@ -55,16 +55,20 @@ final class OutboxMintOutcomeSilenceTests: XCTestCase {
                       + "request, never the consequence")
     }
 
-    /// The silent three, each silent because the user is not missing anything
+    /// The silent four, each silent because the user is not missing anything
     /// they were promised: no lane at all, a lane that cannot return files as a
-    /// standing property, and a turn that got what it asked for.
-    func testTheThreeSilentOutcomesDrawNothing() {
+    /// standing property, a turn that got what it asked for, and a witness that
+    /// never reached the lane — an offline device or the user's own Stop —
+    /// whose cause fells the gateway hop too, so no reply lands for a row to
+    /// sit under.
+    func testTheFourSilentOutcomesDrawNothing() {
         for outcome: BackgroundFileTransfer.OutboxMintOutcome in [
-            .named("conv/out-box"), .noLane, .laneCannotReturn
+            .named("conv/out-box"), .noLane, .laneCannotReturn, .noObservation
         ] {
             XCTAssertFalse(outcome.isActionableFault,
-                           "\(outcome) is either a success or a standing configuration the File "
-                           + "transfer page states plainly; a per-turn row about it is noise")
+                           "\(outcome) is a success, a standing configuration the File transfer "
+                           + "page states plainly, or a request this device never really made; "
+                           + "a per-turn row about it is noise")
         }
     }
 
@@ -75,7 +79,7 @@ final class OutboxMintOutcomeSilenceTests: XCTestCase {
         XCTAssertEqual(BackgroundFileTransfer.OutboxMintOutcome.named("conv/out-box").key,
                        "conv/out-box")
         for outcome: BackgroundFileTransfer.OutboxMintOutcome in [
-            .noLane, .laneCannotReturn, .witnessFailed, .witnessSuppressed
+            .noLane, .laneCannotReturn, .noObservation, .witnessFailed, .witnessSuppressed
         ] {
             XCTAssertNil(outcome.key, "\(outcome) names no folder")
         }

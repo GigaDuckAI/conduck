@@ -643,10 +643,15 @@ final class RemoteAgentTrustEvaluator: NSObject, URLSessionTaskDelegate, @unchec
             return .blockedByATS
         case .timedOut:
             return .timeout
-        case .notConnectedToInternet:
-            // The device itself has no route. Answered before the host-shaped
-            // codes below so a failure that is entirely local never gets
-            // reported as a problem with the user's server.
+        case .notConnectedToInternet,
+             .dataNotAllowed,
+             .internationalRoamingOff,
+             .callIsActive:
+            // The device itself has no usable route — no network at all,
+            // cellular data denied, data roaming switched off abroad, or a call
+            // holding the radio. Answered before the host-shaped codes below so
+            // a failure that is entirely local never gets reported as a problem
+            // with the user's server.
             return .offline
         case .cannotConnectToHost,
              .cannotFindHost,

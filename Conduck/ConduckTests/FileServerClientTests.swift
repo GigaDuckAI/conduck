@@ -720,6 +720,113 @@ final class FileServerClientTests: XCTestCase {
                        "a request that never got an answer proves no absence")
     }
 
+    /// An offline device is evidence about THIS DEVICE, not the lane: the
+    /// request never left the phone, so nothing was observed and nothing may be
+    /// charged. Reading it as `.unreachable` opened a one-strike cooldown that
+    /// suppressed the folder on the very retry the user sent once their
+    /// connection came back — a "No folder for this reply" row under a healthy
+    /// server.
+    func testAnOfflineDeviceIsNoObservationNotUnreachable() async {
+        for code: URLError.Code in [
+            .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive
+        ] {
+            let session = makeMockSession()
+            defer { session.invalidateAndCancel() }
+            MockURLProtocol.requestHandler = { _ in throw URLError(code) }
+
+            let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
+                snapshot: makeSnapshot(),
+                collectionKey: Self.witnessBoxKey,
+                session: session)
+
+            XCTAssertEqual(witnessed, .noObservation,
+                           "\(code): a request the device never sent says nothing about the lane")
+        }
+    }
+
+    /// A `-999` HAS THREE AUTHORS, and only one of them is silent. Our own
+    /// dispatch being stopped is a fact about this device and witnesses
+    /// `.noObservation`; the pin delegate refusing the server's certificate and
+    /// a peer resetting the stream mid-request are both the lane's doing and
+    /// keep the one-strike `.unreachable` patience. The evaluator's record
+    /// extracts the refusal; `Task.isCancelled`, read inside the catch, is the
+    /// only witness to whether the cancel was ours — the same rule
+    /// `RemoteAgentClient.mapTransportError` makes a required parameter.
+    /// Reading a refusal as `.noObservation` would let a rotated or intercepted
+    /// certificate charge nothing, open no cooldown, and never draw the
+    /// folder-less row — a silent, permanent loss of the one report that case
+    /// exists for, while every send pays a doomed handshake.
+    func testACancelIsOnlySilentWhenItWasOurs() {
+        XCTAssertEqual(
+            BackgroundFileTransfer.witnessTransportVerdict(
+                code: .cancelled, signals: .empty, isTaskCancelled: true),
+            .noObservation,
+            "the user's Stop must not charge the lane's health")
+        XCTAssertEqual(
+            BackgroundFileTransfer.witnessTransportVerdict(
+                code: .cancelled, signals: .empty, isTaskCancelled: false),
+            .unreachable,
+            "a peer reset wears the same code and is the lane's doing — the tunnel-hiccup patience applies")
+    }
+
+    /// The `-999` that is a pin refusal stays lane evidence whatever the task
+    /// state — a refusal recorded during a turn the user then stopped is still
+    /// a refusal, and the interception shape may never go quiet.
+    func testAPinRefusalDressedAsACancelStaysUnreachable() {
+        let untrustedChain = RemoteAgentTrustEvaluator.AttemptTrustSignals(
+            systemTrustRejected: true, challengeRefused: true,
+            pinRejected: false, pinComparisonUnsupported: false)
+        XCTAssertEqual(
+            BackgroundFileTransfer.witnessTransportVerdict(
+                code: .cancelled, signals: untrustedChain, isTaskCancelled: false),
+            .unreachable,
+            "a pinned lane over a chain the system rejected fails closed as lane evidence")
+
+        let keyMismatch = RemoteAgentTrustEvaluator.AttemptTrustSignals(
+            systemTrustRejected: false, challengeRefused: true,
+            pinRejected: true, pinComparisonUnsupported: false)
+        XCTAssertEqual(
+            BackgroundFileTransfer.witnessTransportVerdict(
+                code: .cancelled, signals: keyMismatch, isTaskCancelled: true),
+            .unreachable,
+            "a pin that caught a different key is the interception shape, even mid-Stop")
+    }
+
+    /// The full request path agrees: a bare `-999` from the wire with no task
+    /// cancellation and no refusal on record is the peer-reset shape.
+    func testABareUncancelledCancelThroughTheSeamStaysUnreachable() async {
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
+
+        let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
+            snapshot: makeSnapshot(),
+            collectionKey: Self.witnessBoxKey,
+            session: session)
+
+        XCTAssertEqual(witnessed, .unreachable)
+    }
+
+    /// The rotated-tunnel signature keeps its fast backoff: with a network path
+    /// present, a host that cannot be found or that timed out is an observation
+    /// ABOUT THE LANE, and stays `.unreachable`. `.networkConnectionLost` too —
+    /// a connection that existed and died is one the lane participated in.
+    func testHostSideTransportFailuresStayUnreachable() async {
+        for code: URLError.Code in [.cannotFindHost, .timedOut, .networkConnectionLost] {
+            let session = makeMockSession()
+            defer { session.invalidateAndCancel() }
+            MockURLProtocol.requestHandler = { _ in throw URLError(code) }
+
+            let witnessed = await BackgroundFileTransfer.witnessCollectionAbsent(
+                snapshot: makeSnapshot(),
+                collectionKey: Self.witnessBoxKey,
+                session: session)
+
+            XCTAssertEqual(witnessed, .unreachable,
+                           "\(code) is evidence about the lane and keeps the one-strike patience")
+        }
+    }
+
     /// A root-level collection has no parent to create.
     func testParentCollectionKeyIsNilAtTheServedRoot() {
         XCTAssertNil(FileServerClient.parentCollectionKey(of: "out-0123456789abcdef"))
@@ -1715,6 +1822,61 @@ final class FileServerClientTests: XCTestCase {
 
         XCTAssertEqual(recorder.calls.count, 3,
                        "three samples, then the lane is parked — the `.answered` threshold")
+    }
+
+    /// THE OFFLINE-RETRY SCENARIO, end to end. A send from a dead spot used to
+    /// charge the lane an `.unreachable` — one strike, cooldown open — so the
+    /// retry the user sent the moment their connection came back was
+    /// `.witnessSuppressed`, went out folder-less, and drew "No folder for this
+    /// reply" under a healthy server's answer. The offline attempt is a fact
+    /// about the device; the lane's health must come through it untouched, so
+    /// the retry probes normally and gets its folder.
+    func testAnOfflineMintChargesNothingAndTheOnlineRetryGetsItsFolder() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+
+        MockURLProtocol.requestHandler = { _ in throw URLError(.notConnectedToInternet) }
+        let offline = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertEqual(offline, .noObservation)
+        XCTAssertFalse(offline.isActionableFault,
+                       "a request the device never sent is nobody's fault worth a row")
+        let lane = BackgroundFileTransfer.FileLaneWitnessBreaker.laneKey(for: snapshot)
+        XCTAssertNil(BackgroundFileTransfer.FileLaneWitnessBreaker.shared.faultedSince(lane: lane),
+                     "no streak may open — `faultedSince` is the folder-less row's only live input")
+        XCTAssertEqual(BackgroundFileTransfer.FileLaneWitnessBreaker.shared.laneDecision(for: snapshot),
+                       .probe,
+                       "the retry must be allowed to ask, not sat in a cooldown the device caused")
+
+        MockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404,
+                             httpVersion: "HTTP/1.1", headerFields: nil)!, Data())
+        }
+        let retry = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertNotNil(retry.key, "connection back, absence witnessed — the retry gets its folder")
+    }
+
+    /// And a `-999` the task did NOT cancel — a peer reset, or a pin refusal —
+    /// charges the mint like any unreachable lane: one strike, cooldown open.
+    /// The device-side carve-out must not widen into a hole a flapping tunnel
+    /// or a rotated certificate can hide in.
+    func testAnUncancelledCancelMintKeepsTheOneStrikePatience() async {
+        let snapshot = makeSnapshot()
+        let session = makeMockSession()
+        defer { session.invalidateAndCancel() }
+        MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
+
+        let outcome = await BackgroundFileTransfer.mintOutboxKey(
+            conversationID: UUID(), snapshot: snapshot, session: session)
+
+        XCTAssertEqual(outcome, .witnessFailed)
+        XCTAssertEqual(BackgroundFileTransfer.FileLaneWitnessBreaker.shared.laneDecision(for: snapshot),
+                       .cooldown,
+                       "lane-authored -999s keep the fast backoff a dead host earns")
     }
 
     /// THE TWO PATHS MUST AGREE ABOUT ONE SERVER. A route-scoped `405` server —
