@@ -8,8 +8,9 @@
 // the macOS window sidebar (`MainWindowView`).
 // Time-grouped (Today / This Week / Earlier) by `lastActivityAt`,
 // `.searchable`, per-row delete (swipe on iOS, right-click context menu on
-// macOS) plus a Delete-All trash (iOS toolbar item; macOS-fenced sidebar-region
-// toolbar item). Each row = title (fallback to the first line of
+// macOS) plus a Delete-All trash (iOS toolbar item here; the macOS window's
+// trash lives in `MainWindowView` and reaches this view's alert through
+// `externalDeleteAllConfirmation`). Each row = title (fallback to the first line of
 // the last message) + a reserved trailing activity mark + a role-aware preview
 // subtitle + a metadata line that is a date when nothing is happening and the
 // status words while a turn is in flight.
@@ -37,8 +38,8 @@ struct ConversationListView: View {
     /// macOS window has no sidebar-column toolbar of its own (one toolbar spans
     /// the whole split view, and `LeadingToolbarChrome` owns New there), so it
     /// passes `false`; iOS keeps the default `true`. This flag governs only the
-    /// iOS-designed items — macOS's Delete-All is the separate `#if os(macOS)`
-    /// toolbar item below, unaffected by this flag.
+    /// iOS-designed items — the macOS window's Delete-All is a column-level
+    /// item MainWindowView declares itself, unaffected by this flag.
     var showsToolbarActions: Bool = true
     /// Optional host-owned search binding. The split-view hosts pass their
     /// pinned search field's text through this so filtering is driven by the
@@ -128,6 +129,19 @@ struct ConversationListView: View {
     /// Additive: called AFTER Delete-All actually cleared the store. Same
     /// consumer and same success contract as `onDeleted`.
     var onDeletedAll: (() -> Void)? = nil
+    /// Additive: host-owned trigger for the Delete-All confirmation alert. The
+    /// macOS window owns the toolbar trash itself (a column-level item is the
+    /// only way to order it AHEAD of `LeadingToolbarChrome`'s compose in the
+    /// sidebar band — content-declared items land after column-declared ones)
+    /// and flips this binding to present the alert below, which stays HERE
+    /// because this view owns the list view model the alert's action needs.
+    /// iOS hosts leave nil and keep the internal state.
+    var externalDeleteAllConfirmation: Binding<Bool>? = nil
+    /// Additive: reports whether the list is empty — once on appear and again
+    /// on every change — so a host that owns the Delete-All affordance can
+    /// apply the same empty-list gate the iOS toolbar trash uses. iOS hosts
+    /// leave nil.
+    var onConversationsEmptyChanged: ((Bool) -> Void)? = nil
 
     @State private var viewModel = ConversationListViewModel()
     /// Drives the quiet "iCloud unavailable" banner (the only sync chrome). Reads
@@ -157,8 +171,8 @@ struct ConversationListView: View {
     /// compiles for macOS too, so the leading case is spelled inside the fence.
     /// macOS never renders this item at all — its host passes
     /// `showsToolbarActions: false` — so its branch is the inert one. (The
-    /// macOS trash is the separate `#if os(macOS)` item in the toolbar block,
-    /// not this one; the two are never live together.)
+    /// macOS window's trash is MainWindowView's own column-level item, not
+    /// this one; the two are never live together.)
     ///
     /// WHERE THE LEADING TRASH LANDS, and why nothing here sets it. MEASURED
     /// (iPadOS 26.5, iPad Pro 12.9-inch (6th gen) simulator, 1024x1366pt
@@ -281,33 +295,15 @@ struct ConversationListView: View {
                     }
                 }
             }
-            #if os(macOS)
-            // macOS window: Delete-All is a trash item in the window toolbar's
-            // SIDEBAR region — the region `LeadingToolbarChrome`'s New button
-            // occupies (declared at the column level in MainWindowView) —
-            // mirroring the iOS toolbar trash. Declared HERE, not in the host,
-            // because this view owns the list view model: the same
-            // `!viewModel.conversations.isEmpty` gate the iOS trash uses, and
-            // the same `showDeleteAllConfirmation` alert below, both come for
-            // free. Fenced, not flagged — independent of `showsToolbarActions`,
-            // which governs only the iOS-designed items above. Lives and dies
-            // with the sidebar column's CONTENT: a collapsed sidebar removes
-            // it, exactly as the iPad sidebar bar does.
-            if !viewModel.conversations.isEmpty {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(role: .destructive) {
-                        showDeleteAllConfirmation = true
-                    } label: {
-                        Label(String(localized: "Delete All"), systemImage: "trash")
-                    }
-                    .help(String(localized: LocalizedStringResource(
-                        "conversations.deleteAll.help",
-                        defaultValue: "Delete all conversations"
-                    )))
-                    .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
-                }
-            }
-            #endif
+            // macOS carries NO Delete-All item here: MainWindowView owns the
+            // window's trash (see `externalDeleteAllConfirmation` above for
+            // why ordering forces a column-level item) and reaches the alert
+            // below through that binding. Two placements were measured before
+            // settling there — a content-declared `.primaryAction` item lands
+            // BETWEEN compose and the toggle (after the column-declared items,
+            // mid-pair), and `.navigation` leaves the sidebar region entirely,
+            // docking at the DETAIL region's leading edge past the tracking
+            // separator (screenshot-measured, macOS 26.5, 2026-08-24).
         }
         .safeAreaInset(edge: .top) {
             if syncMonitor.showsBanner, let reason = syncMonitor.unavailableReason {
@@ -317,7 +313,7 @@ struct ConversationListView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { settingsFooterRow }
-        .alert(Text("Delete all conversations?"), isPresented: $showDeleteAllConfirmation) {
+        .alert(Text("Delete all conversations?"), isPresented: externalDeleteAllConfirmation ?? $showDeleteAllConfirmation) {
             Button(role: .destructive) {
                 Task {
                     if await viewModel.deleteAll() {
@@ -339,6 +335,11 @@ struct ConversationListView: View {
         }
         .task { await viewModel.reload() }
         .task(id: searchKey) { await runContentSearch() }
+        // `initial: true` so a host mounting against an already-loaded model
+        // hears the current state, not only future transitions.
+        .onChange(of: viewModel.conversations.isEmpty, initial: true) { _, isEmpty in
+            onConversationsEmptyChanged?(isEmpty)
+        }
     }
 
     // MARK: - Content search (Tier 2)

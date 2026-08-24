@@ -104,6 +104,25 @@ struct MainWindowView: View {
     /// `SidebarSearchField` at the top of the sidebar drives the list filter.
     @State private var sidebarSearch = ""
 
+    /// Trigger for the Delete-All confirmation alert, flipped by this window's
+    /// toolbar trash and handed to `ConversationListView` as
+    /// `externalDeleteAllConfirmation` — the alert (and the view model its
+    /// action needs) lives down there; only the trigger is owned here.
+    @State private var showDeleteAllConfirmation = false
+
+    /// Mirror of the sidebar list's non-empty state, fed by
+    /// `onConversationsEmptyChanged` — the same gate the iOS toolbar trash
+    /// applies, needed up here because the trash is a column-level item.
+    @State private var sidebarHasConversations = false
+
+    /// Split-view column visibility, bound so the toolbar can OBSERVE the
+    /// sidebar state: a column-level item survives collapse on macOS (that is
+    /// why compose lives at column level), so hiding the Delete-All trash in
+    /// the collapsed bar needs an explicit gate, not the platform's unmount.
+    /// `.automatic` start = the system's own default (sidebar shown), same as
+    /// the unbound initializer this window used before.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+
     /// The Settings modal. Triggered by the footer menu, ⌘,, the
     /// `.openSettingsWindow` bus, and the menu-bar "Settings…" item (via the
     /// coordinator's `pendingShowSettings` flag for the window-was-closed case).
@@ -256,7 +275,7 @@ struct MainWindowView: View {
     /// The two-column shell, split from `body`'s event-modifier chain so the
     /// column builders type-check independently (keeps SourceKit within budget).
     private var splitView: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             // WHY a width floor on the column CONTENT as well as the column
             // width: each `NavigationSplitView` column is hosted in its OWN
             // `NSHostingView`, which measures the column's minimum size by
@@ -308,6 +327,43 @@ struct MainWindowView: View {
                 // breaks the surface it serves. The measurements are in that
                 // file's header.
                 .toolbar {
+                    // Delete-All ahead of compose: within the sidebar region a
+                    // column-level item renders in declaration order, so this
+                    // is the one attachment that puts the destructive control
+                    // LEFT of the compose→toggle pair (a content-declared item
+                    // lands between them, and `.navigation` leaves the region
+                    // entirely for the detail side — both screenshot-measured,
+                    // macOS 26.5, 2026-08-24). The flexible spacer pushes
+                    // compose+toggle back against the divider and opens the gap
+                    // that keeps trash from reading as one cluster with them —
+                    // the iPad sidebar bar's leading-trash arrangement. The
+                    // trigger and the empty-gate state both live in
+                    // `ConversationListView` (it owns the list view model), fed
+                    // through `externalDeleteAllConfirmation` /
+                    // `onConversationsEmptyChanged` at the `sidebar` call site.
+                    //
+                    // The visibility gate is EXPLICIT because a column-level
+                    // item outlives the collapsed column on macOS (compose
+                    // relies on exactly that): founder-decided, the collapsed
+                    // bar shows no Delete-All at all — a destructive bulk
+                    // action stays with the list it destroys, like the iPad
+                    // sidebar bar, while compose+toggle keep their two
+                    // collapsed capsules.
+                    if sidebarHasConversations && columnVisibility != .detailOnly {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button(role: .destructive) {
+                                showDeleteAllConfirmation = true
+                            } label: {
+                                Label(String(localized: "Delete All"), systemImage: "trash")
+                            }
+                            .help(String(localized: LocalizedStringResource(
+                                "conversations.deleteAll.help",
+                                defaultValue: "Delete all conversations"
+                            )))
+                            .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
+                        }
+                        ToolbarSpacer(.flexible, placement: .primaryAction)
+                    }
                     LeadingToolbarChrome(column: .sidebar) { startNewConversation() }
                 }
         } detail: {
@@ -552,7 +608,8 @@ struct MainWindowView: View {
                 .padding(.top, 12)
 
             // 2. Conversation list (toolbar New/Delete suppressed; the window
-            // toolbar owns New).
+            // toolbar owns New AND the Delete-All trash — see the `splitView`
+            // toolbar block for why ordering forces the trash to column level).
             ConversationListView(
                 onSelect: { id in selectedConversationID = id },
                 showsToolbarActions: false,
@@ -562,7 +619,9 @@ struct MainWindowView: View {
                 // Persistent window sidebar: highlight the active thread's row.
                 selectedConversationID: selectedConversationID,
                 onDeleted: { id in handleConversationDeleted(id) },
-                onDeletedAll: { handleAllConversationsDeleted() }
+                onDeletedAll: { handleAllConversationsDeleted() },
+                externalDeleteAllConfirmation: $showDeleteAllConfirmation,
+                onConversationsEmptyChanged: { sidebarHasConversations = !$0 }
             )
             .padding(.top, 8)
 
@@ -623,13 +682,11 @@ struct MainWindowView: View {
                 }
             }
         } label: {
+            // No explicit chevron here: AppKit already draws the Menu's own
+            // disclosure indicator, so a drawn one would render a second arrow.
             gatewayPillBackground(
-                HStack(spacing: 4) {
-                    Text(RemoteAgentRefMetadata.displayName(for: selectedRef, customs: customGateways))
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                }
-                .foregroundStyle(AppColors.textSecondary)
+                Text(RemoteAgentRefMetadata.displayName(for: selectedRef, customs: customGateways))
+                    .foregroundStyle(AppColors.textSecondary)
             )
         }
         .help(String(localized: LocalizedStringResource(
