@@ -1084,6 +1084,33 @@ actor ConversationStore {
     /// gate; this set guarantees one local claimant reaches it at a time.
     private var retryClaims: Set<UUID> = []
 
+    /// In-process terminal claims over `GatewayAttempt` rows — the same
+    /// reentrancy guard as `retryClaims`, for the same reason, over the other
+    /// one-shot transition this store owns. An attempt makes exactly ONE
+    /// terminal transition out of `inFlight`, and the row's own `inFlight`
+    /// predicate is the durable cross-process gate; this set is what keeps two
+    /// local claimants — a landing delegate and a cancel path arriving in the
+    /// same instant — from both reaching it across an `await`.
+    ///
+    /// Internal rather than private so the same actor's `+GatewayAttempts`
+    /// extension, a sibling FILE that `private` does not reach, shares the one
+    /// claim set with the combined landings in this file. A losing claimant
+    /// never blocks a reply: it drops the MEASUREMENT and lands the turn.
+    var terminalClaims: Set<UUID> = []
+
+    #if DEBUG
+    /// Whether attempt-bearing saves are currently rigged to fail. Set only
+    /// through `debugSetAttemptBearingSaveFailure`, which carries the argument
+    /// for the seam; compiled out of Release entirely.
+    private var debugFailsAttemptBearingSaves = false
+
+    /// What that seam throws. Deliberately NOT a `StoreError`: those are
+    /// decisions this store made and are rethrown untouched, while a save
+    /// failure is precisely what the fail-open retry is for — so the injected
+    /// error has to travel the same path a real one does.
+    struct DebugInjectedSaveFailure: Error {}
+    #endif
+
     /// Conversations `repairTailProjection` has already been asked about in this
     /// process. THE LOOP GUARD, and it has to be here rather than in the caller:
     /// a repair is triggered by a surface noticing a stale envelope, and a
@@ -1103,6 +1130,20 @@ actor ConversationStore {
         /// `appendMessage` was handed a `conversationID` that does not exist
         /// in the store. Caller should mint a fresh conversation first.
         case conversationNotFound
+        /// An attempt-correlated landing could not find the exact user turn it
+        /// was sent to answer — deleted mid-flight, here or on another device.
+        /// The reply is NOT inserted: a correlated landing knows precisely which
+        /// turn it belongs to, and a reply with no question is worse than a
+        /// missing one. The legacy no-attempt landing keeps its older tolerance
+        /// and is never handed this.
+        case userMessageNotFound
+        /// A landing arrived for an attempt whose row is already terminal, and
+        /// no reply carrying this dispatch's `agentMessageID` exists to return.
+        /// The duplicate/late-callback rule: the turn was already concluded —
+        /// cancelled before the callback, or closed by an earlier one — so
+        /// nothing is written and nothing is recreated. Callers treat it as a
+        /// benign no-op, NOT as a store failure to report or retry.
+        case attemptAlreadyTerminal
     }
 
     /// One output-detector result to reconcile transactionally.
@@ -1331,7 +1372,12 @@ actor ConversationStore {
     /// caller (sticky — pinned by
     /// `ConversationHistoryAssemblerTests.testAssembleThrowsWhenTheStoreCannotLoad`:
     /// the first touch rethrows the load failure rather than swallowing it).
-    private func ensureLoaded() async throws {
+    ///
+    /// Internal rather than private so the same actor's `+GatewayAttempts`
+    /// extension — a sibling FILE, which `private` does not reach — can gate its
+    /// own entry points on the load the way every method here does. Not
+    /// general-purpose module API.
+    func ensureLoaded() async throws {
         let task: Task<Void, Error>
         if let loadTask {
             task = loadTask
@@ -1468,7 +1514,10 @@ actor ConversationStore {
     /// never routed through `RemoteChangeDebouncer`: a user-visible local
     /// write must surface on the very next runloop turn; only the remote
     /// CloudKit fan-in coalesces.
-    private func postDidChange() async {
+    ///
+    /// Internal rather than private for the same reason `ensureLoaded` is — the
+    /// `+GatewayAttempts` extension is a sibling file, not a general caller.
+    func postDidChange() async {
         await MainActor.run {
             NotificationCenter.default.post(name: .conversationsDidChange, object: nil)
         }
@@ -1504,10 +1553,23 @@ actor ConversationStore {
     /// `container.viewContext` — it is deliberately unconfigured (see
     /// `performLoad`). Reads don't come through here: a read-only context
     /// never saves, so no merge policy applies.
-    private func newWriteContext() -> NSManagedObjectContext {
+    ///
+    /// Internal rather than private for the same reason `ensureLoaded` is — the
+    /// `+GatewayAttempts` extension is a sibling file, not a general caller.
+    func newWriteContext() -> NSManagedObjectContext {
         let context = container.newBackgroundContext()
         context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         return context
+    }
+
+    /// Fresh per-call context for a store READ, with no merge policy for the
+    /// reason above — a read-only context never saves. Exists only because the
+    /// `+GatewayAttempts` extension cannot reach `container` from another file,
+    /// and must not read through `newWriteContext`, which would blur where the
+    /// merge-policy invariant applies. Every read path in THIS file keeps using
+    /// `container.newBackgroundContext()` directly.
+    func newReadContext() -> NSManagedObjectContext {
+        container.newBackgroundContext()
     }
 
     // MARK: - Conversation CRUD
@@ -2131,11 +2193,29 @@ actor ConversationStore {
     }
 
     /// Delete a single conversation by UUID. The `Cascade` delete rule on
-    /// `Conversation.messages` removes its messages too.
+    /// `Conversation.messages` removes its messages too, and the one on
+    /// `Message.gatewayAttempts` removes the measurement rows linked to them.
+    ///
+    /// THE SCALAR ATTEMPT SWEEP IS NOT REDUNDANT WITH THAT CASCADE. An attempt
+    /// row carries both a relationship to its user turn and a scalar
+    /// `conversationID` snapshot, and only the scalar survives a row whose
+    /// relationship was never set — a begin that ran before its message
+    /// resolved, or a row imported ahead of the turn it belongs to. Those rows
+    /// are invisible to the cascade and would outlive the history they measure,
+    /// so they are deleted explicitly, in the SAME context and the same save:
+    /// two saves would be two exports and a window where the conversation is
+    /// gone and its measurements are not.
+    ///
+    /// This is the ONLY way an attempt is ever deleted — positive local deletion
+    /// evidence. Mere absence of a parent never deletes one (see
+    /// `fetchGatewayAttempts`).
     func deleteConversation(id: UUID) async throws {
         try await ensureLoaded()
         let context = newWriteContext()
         try await context.perform { [context] in
+            for row in Self.gatewayAttemptRows(conversationID: id, in: context) {
+                context.delete(row)
+            }
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
             let matches = try context.fetch(request)
@@ -2155,11 +2235,20 @@ actor ConversationStore {
         #endif
     }
 
-    /// Delete every conversation (and, via cascade, every message).
+    /// Delete every conversation (and, via cascade, every message), plus every
+    /// gateway-attempt row.
+    ///
+    /// The attempt sweep is unconditional here rather than scalar-keyed: no
+    /// conversation survives this call, so no attempt can survive it as anything
+    /// but an orphan — including the relationship-less rows the cascade cannot
+    /// see. Same context, same save, for the reason `deleteConversation` gives.
     func deleteAll() async throws {
         try await ensureLoaded()
         let context = newWriteContext()
         try await context.perform { [context] in
+            for row in Self.allGatewayAttemptRows(in: context) {
+                context.delete(row)
+            }
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             let matches = try context.fetch(request)
             for object in matches {
@@ -2652,14 +2741,38 @@ actor ConversationStore {
     }
 
     /// Complete a foreground agent turn in ONE background-context save: flip the
-    /// just-sent USER message to `userStatus` (`sent`) AND insert the agent
-    /// reply, then post a SINGLE `.conversationsDidChange`. Collapses the old
-    /// two-call `updateStatus` + `appendMessage` sequence (two saves → two
-    /// CloudKit exports → two reload posts) into one — the macOS foreground path
-    /// used to fan those into the reload/merge storm that beachballed the UI.
-    /// The user-status flip is a no-op if that id no longer resolves (deleted
-    /// mid-flight on another device); the agent insert always runs. Returns the
-    /// agent `MessageRecord` snapshot (same read-path contract as `appendMessage`).
+    /// just-sent USER message to `userStatus` (`sent`), insert the agent reply,
+    /// and — when the landing carries one — close its gateway-attempt row, then
+    /// post a SINGLE `.conversationsDidChange`. Collapses the old two-call
+    /// `updateStatus` + `appendMessage` sequence (two saves → two CloudKit
+    /// exports → two reload posts) into one — the macOS foreground path used to
+    /// fan those into the reload/merge storm that beachballed the UI. Returns
+    /// the agent `MessageRecord` snapshot (same read-path contract as
+    /// `appendMessage`).
+    ///
+    /// THE REPLY IS INSERTED AT MOST ONCE PER `agentMessageID`, and that
+    /// guarantee owes nothing to the ledger. Every modern dispatch mints a
+    /// deterministic id and carries it in its durable task metadata, so a
+    /// duplicate callback — a relaunched process replaying a completion, a
+    /// delegate and a foreground catch racing — probes, finds the reply it would
+    /// have written, and returns it instead. This holds with `attempt == nil`,
+    /// which is the whole point: the fail-open measurement layer must never be
+    /// the only duplicate guard.
+    ///
+    /// TWO TOLERANCES, CHOSEN BY WHETHER THE LANDING IS CORRELATED. A legacy
+    /// (`attempt == nil`) landing keeps the older rule — the user-status flip is
+    /// a no-op if that id no longer resolves, and the reply lands anyway as long
+    /// as the conversation does. A correlated landing knows exactly which turn
+    /// it answers, so a missing user turn throws `userMessageNotFound` rather
+    /// than parking a reply under a question the user deleted.
+    ///
+    /// MEASUREMENT IS FAIL-OPEN. When the combined save fails, the core reply is
+    /// retried once, alone, in a fresh context, and only then is the attempt
+    /// terminalization retried best-effort. A defect in the ledger cannot
+    /// suppress a valid reply — the inverse ordering, which lets it, is the one
+    /// failure mode this design exists to rule out. The store's own verdicts
+    /// (`conversationNotFound`, `userMessageNotFound`, `attemptAlreadyTerminal`)
+    /// are decisions, not save failures, and are rethrown untouched.
     func completeAgentTurn(
         userMessageID: UUID,
         userStatus: String,
@@ -2672,10 +2785,112 @@ actor ConversationStore {
         /// into. Same rule as `appendMessage`: written in the SAME save as the
         /// lane identity, and only alongside a non-nil one.
         outputBoxKey: String? = nil,
-        attachments: [AttachmentDraft] = []
+        attachments: [AttachmentDraft] = [],
+        /// What the transport observed at the terminal boundary, when it owns an
+        /// attempt row to close. Nil for a legacy landing, for a dispatch whose
+        /// begin never inserted, and for a pre-upgrade background blob — all
+        /// three land exactly as they always did, and none of them fabricates a
+        /// row after the fact.
+        attempt: TerminalAttemptObservation? = nil
     ) async throws -> MessageRecord {
         try await ensureLoaded()
 
+        guard let attempt, let attemptID = attempt.attemptID else {
+            return try await landAgentTurn(
+                userMessageID: userMessageID,
+                userStatus: userStatus,
+                agentText: agentText,
+                conversationID: conversationID,
+                sourceDevice: sourceDevice,
+                agentMessageID: agentMessageID,
+                outputScanLaneID: outputScanLaneID,
+                outputBoxKey: outputBoxKey,
+                attachments: attachments,
+                attempt: nil,
+                requiresExactUserMessage: false
+            )
+        }
+
+        // A losing claimant drops the MEASUREMENT, never the turn: another local
+        // owner is already writing this attempt's one terminal transition, so
+        // this landing does its core work with no ledger reads or writes at all.
+        guard terminalClaims.insert(attemptID).inserted else {
+            return try await landAgentTurn(
+                userMessageID: userMessageID,
+                userStatus: userStatus,
+                agentText: agentText,
+                conversationID: conversationID,
+                sourceDevice: sourceDevice,
+                agentMessageID: agentMessageID,
+                outputScanLaneID: outputScanLaneID,
+                outputBoxKey: outputBoxKey,
+                attachments: attachments,
+                attempt: nil,
+                requiresExactUserMessage: true
+            )
+        }
+        defer { terminalClaims.remove(attemptID) }
+
+        do {
+            return try await landAgentTurn(
+                userMessageID: userMessageID,
+                userStatus: userStatus,
+                agentText: agentText,
+                conversationID: conversationID,
+                sourceDevice: sourceDevice,
+                agentMessageID: agentMessageID,
+                outputScanLaneID: outputScanLaneID,
+                outputBoxKey: outputBoxKey,
+                attachments: attachments,
+                attempt: attempt,
+                requiresExactUserMessage: true
+            )
+        } catch let verdict as StoreError {
+            // Not a save failure — a decision this store made about rows that do
+            // or do not exist. Retrying it would only make it again.
+            throw verdict
+        } catch {
+            // The combined save failed. Land the core turn alone, in a fresh
+            // context, reading and writing no `GatewayAttempt` at all — the
+            // reply is what the user is owed. The claim is still held, so the
+            // best-effort measurement below is still this landing's to make.
+            let record = try await landAgentTurn(
+                userMessageID: userMessageID,
+                userStatus: userStatus,
+                agentText: agentText,
+                conversationID: conversationID,
+                sourceDevice: sourceDevice,
+                agentMessageID: agentMessageID,
+                outputScanLaneID: outputScanLaneID,
+                outputBoxKey: outputBoxKey,
+                attachments: attachments,
+                attempt: nil,
+                requiresExactUserMessage: true
+            )
+            await writeTerminalObservation(attempt)
+            return record
+        }
+    }
+
+    /// One pass of the agent-turn landing. Separated from `completeAgentTurn` so
+    /// the fail-open retry can run the SAME transaction with the ledger switched
+    /// off, rather than a second, subtly different one.
+    ///
+    /// `requiresExactUserMessage` carries the correlated/legacy tolerance split
+    /// argued at `completeAgentTurn`.
+    private func landAgentTurn(
+        userMessageID: UUID,
+        userStatus: String,
+        agentText: String,
+        conversationID: UUID,
+        sourceDevice: String,
+        agentMessageID: UUID,
+        outputScanLaneID: String?,
+        outputBoxKey: String?,
+        attachments: [AttachmentDraft],
+        attempt: TerminalAttemptObservation?,
+        requiresExactUserMessage: Bool
+    ) async throws -> MessageRecord {
         // Proposed by the clock, settled inside the transaction — one stamp for
         // the reply row, the parent's `lastActivityAt`, the tail envelope and
         // every attachment. Same rule as `appendMessage`, including why the
@@ -2683,7 +2898,11 @@ actor ConversationStore {
         let proposedNow = Date()
 
         let bgContext = newWriteContext()
-        let now: Date = try await bgContext.perform { [bgContext] in
+        #if DEBUG
+        let injectedSaveFailure = debugFailsAttemptBearingSaves && attempt != nil
+        #endif
+        let landed: (existing: MessageRecord?, stamp: Date, wrote: Bool)
+        landed = try await bgContext.perform { [bgContext] in
             let convoRequest = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             convoRequest.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
             convoRequest.fetchLimit = 1
@@ -2691,15 +2910,66 @@ actor ConversationStore {
                 throw StoreError.conversationNotFound
             }
 
-            let now = Self.appendStamp(proposed: proposedNow, appendingTo: conversation)
+            // Does this dispatch's reply already exist? Probed BEFORE anything
+            // is written, in the same context as the insert it guards.
+            let replyProbe = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            replyProbe.predicate = NSPredicate(format: "id == %@", agentMessageID as CVarArg)
+            replyProbe.fetchLimit = 1
+            let existingReply = try bgContext.fetch(replyProbe).first
 
-            // Flip the user turn out of `sending` (no-op if it no longer resolves).
             let userRequest = NSFetchRequest<NSManagedObject>(entityName: "Message")
             userRequest.predicate = NSPredicate(format: "id == %@", userMessageID as CVarArg)
             userRequest.fetchLimit = 1
-            if let userMessage = try bgContext.fetch(userRequest).first {
-                Self.applySendState(userStatus, to: userMessage)
+            let userMessage = try bgContext.fetch(userRequest).first
+            guard !requiresExactUserMessage || userMessage != nil else {
+                throw StoreError.userMessageNotFound
             }
+
+            // The duplicate/late-callback rule. An attempt makes exactly one
+            // terminal transition, so a row that is already terminal says this
+            // callback is not the first: suppress the terminal mutation AND the
+            // reply insert. It is NOT the fail-open missing-row case — a missing
+            // row means measurement never started, an already-terminal row means
+            // this turn was already concluded, possibly by a cancel.
+            //
+            // Only a row that genuinely reads terminal suppresses anything:
+            // `storedOutcomeIsTerminal` treats an ABSENT outcome column as open,
+            // so a half-materialised row cannot cost the user a reply the
+            // gateway really returned. Suppressing on unreadable measurement is
+            // exactly the inversion the fail-open rule exists to forbid.
+            var attemptRow: NSManagedObject?
+            if let attemptID = attempt?.attemptID {
+                attemptRow = Self.gatewayAttemptRow(id: attemptID, in: bgContext)
+                if let attemptRow, Self.storedOutcomeIsTerminal(attemptRow) {
+                    guard let existingReply else { throw StoreError.attemptAlreadyTerminal }
+                    let flipped = userMessage.map { Self.applySendState(userStatus, to: $0) } ?? false
+                    if flipped { try bgContext.save() }
+                    return (MessageRecord(managedObject: existingReply), proposedNow, flipped)
+                }
+            }
+
+            // Flip the user turn out of `sending` (a no-op if it no longer
+            // resolves, on the legacy path that tolerates that).
+            var wrote = false
+            if let userMessage, Self.applySendState(userStatus, to: userMessage) {
+                wrote = true
+            }
+            // Close the attempt in the SAME save as the reply. Update-only, and
+            // only out of `inFlight`.
+            if let attempt, let attemptRow,
+               Self.applyTerminalObservation(attempt, to: attemptRow) {
+                wrote = true
+            }
+
+            // The reply is already stored: return it untouched, and above all do
+            // not re-bump `lastActivityAt` — a benign duplicate must not float a
+            // settled thread back to the top of the list.
+            if let existingReply {
+                if wrote { try bgContext.save() }
+                return (MessageRecord(managedObject: existingReply), proposedNow, wrote)
+            }
+
+            let now = Self.appendStamp(proposed: proposedNow, appendingTo: conversation)
 
             // Insert the agent reply (+ any output attachments) in the SAME save.
             let message = NSEntityDescription.insertNewObject(
@@ -2746,11 +3016,16 @@ actor ConversationStore {
                 forKey: "tailProjection"
             )
 
+            #if DEBUG
+            if injectedSaveFailure { throw DebugInjectedSaveFailure() }
+            #endif
             try bgContext.save()
-            return now
+            return (nil, now, true)
         }
 
-        await postDidChange()
+        if landed.wrote { await postDidChange() }
+        if let existing = landed.existing { return existing }
+        let now = landed.stamp
 
         return MessageRecord(
             id: agentMessageID,
@@ -3159,21 +3434,79 @@ actor ConversationStore {
     ///
     /// `role == "user"` guard mirrors the other send-state writers.
     /// Non-throwing best-effort: failure writers run on cleanup paths.
-    func failTurn(messageID: UUID, classification: TurnFailureClassification?) async {
+    ///
+    /// `attempt` joins the gateway-attempt terminalization to the SAME save, on
+    /// the same fail-open terms as `completeAgentTurn`: if the combined save
+    /// fails, the classification is written again alone in a fresh context and
+    /// only then is the measurement retried best-effort. A failed turn is still
+    /// a turn the user has to be able to retry, so the ledger never gets to keep
+    /// the Retry chip from appearing.
+    func failTurn(
+        messageID: UUID,
+        classification: TurnFailureClassification?,
+        attempt: TerminalAttemptObservation? = nil
+    ) async {
         do { try await ensureLoaded() } catch { return }
+
+        guard let attempt, let attemptID = attempt.attemptID else {
+            await applyTurnFailure(messageID: messageID, classification: classification, attempt: nil)
+            return
+        }
+        // Losing the claim drops the measurement, never the classification —
+        // see `completeAgentTurn`.
+        guard terminalClaims.insert(attemptID).inserted else {
+            await applyTurnFailure(messageID: messageID, classification: classification, attempt: nil)
+            return
+        }
+        defer { terminalClaims.remove(attemptID) }
+
+        let saved = await applyTurnFailure(
+            messageID: messageID, classification: classification, attempt: attempt
+        )
+        guard !saved else { return }
+        await applyTurnFailure(messageID: messageID, classification: classification, attempt: nil)
+        await writeTerminalObservation(attempt)
+    }
+
+    /// One pass of the failed-turn transition. Returns whether the pass got as
+    /// far as a committed store — TRUE when it saved AND when it found nothing
+    /// to write, since neither is a defect the caller can repair by retrying;
+    /// FALSE only when a save actually threw, which is the fail-open trigger.
+    @discardableResult
+    private func applyTurnFailure(
+        messageID: UUID,
+        classification: TurnFailureClassification?,
+        attempt: TerminalAttemptObservation?
+    ) async -> Bool {
         let context = newWriteContext()
-        let changed: Bool = await context.perform { [context] in
+        #if DEBUG
+        let injectedSaveFailure = debugFailsAttemptBearingSaves && attempt != nil
+        #endif
+        let pass: (changed: Bool, saved: Bool) = await context.perform { [context] in
+            var changed = false
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(
                 format: "id == %@ AND role == %@", messageID as CVarArg, "user"
             )
             request.fetchLimit = 1
-            guard let message = (try? context.fetch(request))?.first else { return false }
-            guard Self.applyFailure(classification, to: message) else { return false }
-            try? context.save()
-            return true
+            if let message = (try? context.fetch(request))?.first,
+               Self.applyFailure(classification, to: message) {
+                changed = true
+            }
+            if let attempt, let attemptID = attempt.attemptID,
+               let row = Self.gatewayAttemptRow(id: attemptID, in: context),
+               Self.applyTerminalObservation(attempt, to: row) {
+                changed = true
+            }
+            guard changed else { return (false, true) }
+            #if DEBUG
+            if injectedSaveFailure { return (false, false) }
+            #endif
+            do { try context.save() } catch { return (false, false) }
+            return (true, true)
         }
-        if changed { await postDidChange() }
+        if pass.changed { await postDidChange() }
+        return pass.saved
     }
 
     /// Conversation-wide variant of `failTurn` for callers without the exact
@@ -4470,6 +4803,34 @@ actor ConversationStore {
             message.setValue(nil, forKey: "text")
             try context.save()
         }
+    }
+
+    /// Test-only: clear an attempt row's `outcome` to simulate the
+    /// half-materialised row the ledger's absent-column rule is written for
+    /// (`GatewayAttempt.outcome` is `optional="YES"`, so a mirrored row really
+    /// can arrive this way). `#if DEBUG` so it never ships. Not used by app code.
+    func debugClearGatewayAttemptOutcome(attemptID: UUID) async throws {
+        try await ensureLoaded()
+        let context = newWriteContext()
+        try await context.perform { [context] in
+            guard let row = Self.gatewayAttemptRow(id: attemptID, in: context) else { return }
+            row.setValue(nil, forKey: "outcome")
+            try context.save()
+        }
+    }
+
+    /// Test-only fault injection for the ONE branch the ledger exists to make
+    /// survivable: the combined save failing while a reply is riding on it.
+    /// Nothing else in the suite can produce that failure — every attempt column
+    /// is optional and unconstrained, so no data shape makes Core Data refuse
+    /// the save — which would leave the fail-open arm verified by reading only.
+    ///
+    /// Armed, a save carrying a `TerminalAttemptObservation` throws instead of
+    /// committing. The core-only retry carries no observation and is therefore
+    /// untouched, which is exactly the asymmetry the rule needs: the measurement
+    /// pass fails, the reply still lands.
+    func debugSetAttemptBearingSaveFailure(_ fails: Bool) {
+        debugFailsAttemptBearingSaves = fails
     }
 #endif
 

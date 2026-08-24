@@ -412,7 +412,7 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
                 transport: .pinned(session: session, evaluator: evaluator))
             XCTFail("A converse send against a mismatched pin must FAIL. Succeeding here means the send path is not pinning.")
         } catch {
-            XCTAssertEqual((error as? AppError)?.errorCode,
+            XCTAssertEqual(error.unwrappedAppError?.errorCode,
                            AppError.remoteAgentCertMismatch.errorCode,
                            "The live send must surface a certificate error, not a cancel or a generic 'unreachable'. Got: \(error)")
         }
@@ -436,7 +436,7 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
             fileServerReady: false,
             transport: .pinned(session: session, evaluator: evaluator))
 
-        XCTAssertEqual(reply, "LIVE-REPLY-tlsA",
+        XCTAssertEqual(reply.text, "LIVE-REPLY-tlsA",
                        "A correctly pinned gateway on a trusted chain must still answer — a pin that blocks the happy path is not a security control, it is an outage.")
         let after = try await fixture.hits()
         XCTAssertEqual(after.delta(from: before, key: "tlsA /v1/chat/completions"), 1)

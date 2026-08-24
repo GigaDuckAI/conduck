@@ -74,7 +74,7 @@ final class RemoteAgentClientTests: XCTestCase {
             transport: .unevaluated(session: session)
         )
 
-        XCTAssertEqual(reply, "hi")
+        XCTAssertEqual(reply.text, "hi")
 
         let req = try XCTUnwrap(capturedRequest)
         XCTAssertEqual(req.url?.path, "/v1/chat/completions",
@@ -131,7 +131,7 @@ final class RemoteAgentClientTests: XCTestCase {
             transport: .unevaluated(session: session)
         )
 
-        XCTAssertEqual(reply, "hermes reply")
+        XCTAssertEqual(reply.text, "hermes reply")
 
         let req = try XCTUnwrap(capturedRequest)
         XCTAssertNil(req.value(forHTTPHeaderField: "x-openclaw-session-key"),
@@ -262,11 +262,13 @@ final class RemoteAgentClientTests: XCTestCase {
             XCTFail("Expected a thrown error for a cancelled request")
         } catch is CancellationError {
             XCTFail("A -999 with no task cancellation behind it is a PEER reset, not a user cancel — classifying it as a cancel is what made the failure unclassified and invisible to Diagnostics.")
-        } catch let error as AppError {
-            XCTAssertEqual(error.errorCode, AppError.remoteAgentUnreachable.errorCode,
-                           "An interrupted connection must classify as unreachable (delivery UNCERTAIN), not vanish as a benign cancel.")
         } catch {
-            XCTFail("Expected an AppError, got \(type(of: error)): \(error)")
+            // Read through the carrier, not off the concrete type: a foreground
+            // failure arrives as `RemoteAgentSendFailure` (it also carries the
+            // turn's timing and any reported usage), and what this case owns is
+            // the TAXONOMY inside it.
+            XCTAssertEqual(error.unwrappedAppError?.errorCode, AppError.remoteAgentUnreachable.errorCode,
+                           "An interrupted connection must classify as unreachable (delivery UNCERTAIN), not vanish as a benign cancel. Got \(type(of: error)): \(error)")
         }
     }
 
@@ -329,14 +331,21 @@ final class RemoteAgentClientTests: XCTestCase {
         do {
             try await block()
             XCTFail("Expected throw of \(expected.errorCode) — got success", file: file, line: line)
-        } catch let error as AppError {
+        } catch {
+            // `unwrappedAppError` rather than an `as AppError` arm: a converse
+            // send throws its taxonomy inside `RemoteAgentSendFailure` (which
+            // also carries timing + reported usage), while `testConnection` and
+            // the probes still throw the bare case. One read covers both, and it
+            // is the same read every production failure writer performs.
+            guard let appError = error.unwrappedAppError else {
+                XCTFail("Expected an AppError carrier, got \(type(of: error)): \(error)", file: file, line: line)
+                return
+            }
             XCTAssertEqual(
-                error.errorCode, expected.errorCode,
-                "Expected error code \(expected.errorCode), got \(error.errorCode) (\(error))",
+                appError.errorCode, expected.errorCode,
+                "Expected error code \(expected.errorCode), got \(appError.errorCode) (\(appError))",
                 file: file, line: line
             )
-        } catch {
-            XCTFail("Expected AppError, got \(type(of: error)): \(error)", file: file, line: line)
         }
     }
 

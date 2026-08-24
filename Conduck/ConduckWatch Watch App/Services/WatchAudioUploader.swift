@@ -508,6 +508,17 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// conversation-wide fallback below exists only for tasks enqueued before
     /// the wrist threaded an id at all.
     ///
+    /// `inputMode` is how the user PRODUCED this turn — dictated or typed. Only
+    /// the recording service knows (both modes funnel through this one
+    /// uploader), so it is a required parameter rather than a wrist-side guess.
+    /// It is measurement provenance for the gateway-attempt ledger and reaches
+    /// nothing on the wire.
+    ///
+    /// ASYNC because the attempt row is opened INSIDE, at the last boundary
+    /// before `resume()`. Opening it earlier would record dispatches that never
+    /// happened (a body write that throws, a metadata encode that fails); the
+    /// caller is already in an async context, so the await costs it nothing.
+    ///
     /// - Throws: `AppError.remoteAgentNotConfigured` if URL/token absent;
     ///   `.remoteAgentInvalidResponse` if metadata/body encoding fails.
     func uploadConverse(
@@ -520,8 +531,9 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         newUserText: String,
         conversationID: UUID,
         userMessageID: UUID,
+        inputMode: GatewayInputMode,
         stampsActiveConversation: Bool
-    ) throws {
+    ) async throws {
         let endpoint = url.appending(path: "v1/chat/completions")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -576,33 +588,95 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             .appendingPathComponent("conduck-watch-converse-body-\(UUID().uuidString).json")
         try bodyData.write(to: bodyURL, options: [.atomic])
 
-        let metadata = RemoteAgentBackgroundMetadata(
-            bodyPath: bodyURL.path,
-            conversationID: conversationID.uuidString,
-            backendRawValue: ref,
-            // Rides the task so the completion handler can address THIS turn
-            // rather than every `sending` turn in the conversation.
-            userMessageID: userMessageID,
-            stampsActiveConversation: stampsActiveConversation,
-            // Rides the task so the identity survives suspension, a cross-launch
-            // process recycle, and any settings edit between now and the reply.
-            // Nil (no ready lane, or a pre-courier iPhone) → the reply lands
-            // unstamped, exactly as before: no scan, but also no wrong scan.
-            fileTransferLaneID: fileLane.laneID,
-            // The folder named on the wire above. The wrist never reads it —
-            // it records where the request invited files so a capable device
-            // can, and carrying it on the task is what survives a wrist-drop,
-            // a suspension, or a cross-launch process recycle. Non-nil only
-            // where `fileTransferLaneID` is (see `outboxKey(forLane:…)`), so the
-            // pair the store insists on lands whole or not at all.
-            outputBoxKey: outboxKey
-        )
-        let metadataString: String
+        // ONE dispatch mints ONE candidate attempt id and ONE deterministic
+        // reply id, both HERE, so they can be pre-encoded into the durable task
+        // metadata before anything is stored. The reply id is what makes the
+        // landing idempotent across the process recycle this lane is built
+        // around — a relaunched delegate replaying a completion probes for the
+        // reply it would have written instead of writing a second one — and it
+        // owes nothing to the ledger, which is fail-open and may store nothing
+        // at all.
+        let attemptID = UUID()
+        let agentMessageID = UUID()
+
+        func metadataEnvelope(attemptID: UUID?) -> RemoteAgentBackgroundMetadata {
+            RemoteAgentBackgroundMetadata(
+                bodyPath: bodyURL.path,
+                conversationID: conversationID.uuidString,
+                backendRawValue: ref,
+                // Rides the task so the completion handler can address THIS turn
+                // rather than every `sending` turn in the conversation.
+                userMessageID: userMessageID,
+                stampsActiveConversation: stampsActiveConversation,
+                // Rides the task so the identity survives suspension, a cross-launch
+                // process recycle, and any settings edit between now and the reply.
+                // Nil (no ready lane, or a pre-courier iPhone) → the reply lands
+                // unstamped, exactly as before: no scan, but also no wrong scan.
+                fileTransferLaneID: fileLane.laneID,
+                // The folder named on the wire above. The wrist never reads it —
+                // it records where the request invited files so a capable device
+                // can, and carrying it on the task is what survives a wrist-drop,
+                // a suspension, or a cross-launch process recycle. Non-nil only
+                // where `fileTransferLaneID` is (see `outboxKey(forLane:…)`), so the
+                // pair the store insists on lands whole or not at all.
+                outputBoxKey: outboxKey,
+                // Nil in the fallback variant, which is what a dispatch whose
+                // measurement never opened must carry: an absent id lands the
+                // turn exactly as a pre-upgrade blob does and fabricates no row
+                // after the fact.
+                attemptID: attemptID,
+                agentMessageID: agentMessageID
+            )
+        }
+
+        // BOTH variants are encoded BEFORE the row is opened, because the id may
+        // only be recorded if it can actually ride the task. The attempt-free
+        // variant is the one that must encode — its failure is the pre-existing
+        // hard abort — while a failure of the attempt-bearing variant only costs
+        // this dispatch its measurement, which is the fail-open direction.
+        let attemptFreeString: String
         do {
-            metadataString = try metadata.encodedString()
+            attemptFreeString = try metadataEnvelope(attemptID: nil).encodedString()
         } catch {
             try? FileManager.default.removeItem(at: bodyURL)
             throw AppError.remoteAgentInvalidResponse
+        }
+        let attemptBearingString = try? metadataEnvelope(attemptID: attemptID).encodedString()
+
+        // The final pre-transport boundary. Nil back (store unavailable, insert
+        // refused) means this dispatch simply goes unmeasured — a valid
+        // BYO-gateway turn is never failed in order to count it.
+        //
+        // NO PENDING-DISPATCH CANCEL CLAIM HERE, unlike the iPhone and CarPlay
+        // uploaders: the wrist exposes no cancel entry point at all, so nothing
+        // can race this await and there is no claim to recheck before `resume()`.
+        var attemptContext: GatewayAttemptContext? = nil
+        if attemptBearingString != nil {
+            attemptContext = await ConversationStore.shared.beginGatewayAttempt(
+                draft: GatewayAttemptDraft(
+                    attemptID: attemptID,
+                    conversationID: conversationID,
+                    userMessageID: userMessageID,
+                    // The configured SLOT, never the endpoint behind it — the
+                    // `ref` parameter IS `RemoteAgentRef.rawString` (the caller
+                    // parses it with `RemoteAgentRef(rawString:)`).
+                    gatewayRef: ref,
+                    origin: .watch,
+                    inputMode: inputMode,
+                    // The exact value sent; nil where the request omitted `model`
+                    // and the gateway's own default answered.
+                    requestedModel: model
+                )
+            )
+        }
+
+        // Nothing fallible may run between a successful open and `resume()`, or
+        // a row would be left open for a task that was never started.
+        let metadataString: String
+        if attemptContext != nil, let attemptBearingString {
+            metadataString = attemptBearingString
+        } else {
+            metadataString = attemptFreeString
         }
 
         let task = converseSession.uploadTask(with: request, fromFile: bodyURL)
@@ -613,6 +687,29 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         task.resume()
 
         WatchLog.note(.converse, "converse.bg.start", ["task": task.taskIdentifier])
+    }
+
+    /// Every conversation this wrist still has a live background task for,
+    /// across BOTH sessions. Read from `allTasks` rather than an in-memory
+    /// registry for the case this exists to serve: after the relaunch that
+    /// stranded the turn, the registry is empty and the tasks are not.
+    ///
+    /// An STT task contributes nothing — its `taskDescription` carries
+    /// `STTBackgroundTaskMetadata`, which has no conversation id and does not
+    /// decode as a converse envelope — and that is correct rather than a gap:
+    /// the wrist appends its user turn only once the transcript is in hand, so
+    /// an in-flight STT hop has no `sending` row to protect yet.
+    func liveConversationIDs() async -> Set<UUID> {
+        var live: Set<UUID> = []
+        for session in [converseSession, backgroundSession] {
+            for task in await session.allTasks {
+                guard let id = task.taskDescription
+                    .flatMap({ try? RemoteAgentBackgroundMetadata.decode($0) })
+                    .flatMap({ UUID(uuidString: $0.conversationID) }) else { continue }
+                live.insert(id)
+            }
+        }
+        return live
     }
 
     // MARK: - URLSessionDataDelegate
@@ -966,6 +1063,10 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// (success / failure / cancel). No 423 / no lock-retry — client-owned
     /// history pins no server session (that case is retired).
     private func handleConverseCompletion(task: URLSessionTask, error: Error?) {
+        // FIRST statement in the callback, before any decode, fetch or store
+        // hop: this is the instant the hop ended, and the elapsed time it closes
+        // has to measure the gateway, not the persistence that follows it.
+        let completedAt = Date()
         let key = TaskKey(wake: .converse, id: task.taskIdentifier)
 
         // Recover the metadata envelope (body path + conversationID + backend)
@@ -1000,10 +1101,11 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         // (removed) so the sets cannot grow across dropped tasks.
         let responseOverCap = overCapTaskKeys.remove(key) != nil
         let trustSignals = trustSignalsByTaskKey.removeValue(forKey: key) ?? .empty
+        let responseBody = responseData[key]
         let verdict = WatchConverseCompletionVerdict.make(
             metadata: metadata,
             httpStatus: (task.response as? HTTPURLResponse)?.statusCode,
-            body: responseData[key],
+            body: responseBody,
             transportError: error,
             registryEntryPresent: multipartTempFiles[key] != nil,
             responseOverCap: responseOverCap,
@@ -1015,6 +1117,21 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         // all (an in-flight blob across an app upgrade); every write below then
         // falls back to the conversation-wide flip.
         let userMessageID = metadata?.userMessageID
+
+        // What the gateway REPORTED about this turn, read from whatever body
+        // arrived — non-2xx included, because a gateway can bill for work it
+        // then failed to return. Never throws, never logs, and every field it
+        // keeps is already bounded and control-character-scanned.
+        let reported = responseBody.map(GatewayResponseMetadata.parse)
+        // The ledger's view of the same completion. Nil when this task carries
+        // no attempt id (a pre-upgrade blob, or a dispatch whose begin stored
+        // nothing) — those land exactly as they always did.
+        let observation = Self.terminalObservation(
+            for: verdict,
+            attemptID: metadata?.attemptID,
+            completedAt: completedAt,
+            reported: reported
+        )
 
         switch verdict {
         case .cleanupOnly:
@@ -1028,13 +1145,25 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // iPhone's next launch sweep. Mirrors `BackgroundRemoteAgent`'s
             // live-cancel arm, which likewise writes no classification: a
             // user-initiated cancel has no cause to record.
-            if let cid = metadata.flatMap({ UUID(uuidString: $0.conversationID) }) {
+            //
+            // The attempt closes as `cancelled` here rather than `failed`,
+            // which is the one place the two verdicts part company: the Message
+            // says what the user can still do about the turn (Retry), while the
+            // attempt says what happened to the dispatch. No core landing is
+            // closing this row, so it takes the standalone terminal write.
+            let cid = metadata.flatMap { UUID(uuidString: $0.conversationID) }
+            if cid != nil || observation != nil {
                 beginPersistenceWork()
                 Task {
-                    if let userMessageID {
-                        await ConversationStore.shared.markPendingUserTurn(messageID: userMessageID, to: "failed")
-                    } else {
-                        await ConversationStore.shared.markPendingUserTurns(conversationID: cid, to: "failed")
+                    if let cid {
+                        if let userMessageID {
+                            await ConversationStore.shared.markPendingUserTurn(messageID: userMessageID, to: "failed")
+                        } else {
+                            await ConversationStore.shared.markPendingUserTurns(conversationID: cid, to: "failed")
+                        }
+                    }
+                    if let observation {
+                        await ConversationStore.shared.terminalizeGatewayAttempt(observation)
                     }
                     endPersistenceWork()
                 }
@@ -1049,7 +1178,8 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                 ),
                 conversationID: conversationID,
                 userMessageID: userMessageID,
-                classification: Self.failureClassification(for: kind)
+                classification: Self.failureClassification(for: kind),
+                attempt: observation
             )
             return
 
@@ -1094,14 +1224,24 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                         // back from the task. The wrist renders no chip for it —
                         // it persists the folder so a capable device can list
                         // it. Nil is UNKNOWN, never EMPTY.
+                        //
+                        // `agentMessageID` is the reply id this dispatch minted
+                        // and carried on the task, which is what makes the
+                        // landing idempotent: a relaunched delegate replaying
+                        // this completion finds the reply it would have written
+                        // and returns it instead of inserting a second bubble.
+                        // A pre-upgrade blob carries none and falls back to a
+                        // fresh id, i.e. exactly today's behaviour.
                         appendedID = try await ConversationStore.shared.completeAgentTurn(
                             userMessageID: userMessageID,
                             userStatus: "sent",
                             agentText: reply,
                             conversationID: cid,
                             sourceDevice: "watch",
+                            agentMessageID: metadata?.agentMessageID ?? UUID(),
                             outputScanLaneID: metadata?.fileTransferLaneID,
-                            outputBoxKey: metadata?.outputBoxKey
+                            outputBoxKey: metadata?.outputBoxKey,
+                            attempt: observation
                         ).id
                     } else {
                         // Backward-compatible landing for a task enqueued before
@@ -1122,17 +1262,32 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                         ).id
                         await ConversationStore.shared.markPendingUserTurns(conversationID: cid, to: "sent")
                     }
+                } catch ConversationStore.StoreError.attemptAlreadyTerminal {
+                    // NOT a failure and not a lost reply: this attempt was
+                    // already concluded, so this callback is a duplicate or a
+                    // late replay of one that already landed. Nothing is
+                    // written, nothing is recreated, and — load-bearing on the
+                    // wrist — no second banner is posted for a reply the user
+                    // has already been shown.
+                    WatchLog.note(.converse, "converse.bg.duplicateLanding")
+                    return
                 } catch {
                     // Append failed (e.g. the conversation was deleted on another
-                    // device mid-flight). Don't claim success — and don't leave
-                    // the user turn spinning either: the turn is over whichever
-                    // way the persistence went. No classification: the gateway
-                    // answered, so there is no gateway-side cause to record.
+                    // device mid-flight, or the exact user turn this reply answers
+                    // was). Don't claim success — and don't leave the user turn
+                    // spinning either: the turn is over whichever way the
+                    // persistence went. No classification: the gateway answered,
+                    // so there is no gateway-side cause to record.
+                    //
+                    // The observation still rides along, and it still says
+                    // `succeeded`: the outcome describes the gateway hop, not
+                    // what this device could do with the answer afterwards.
                     WatchLog.error(.converse, "converse.bg.appendFail")
                     surfaceTurnFailure(
                         message: String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI."),
                         conversationID: cid,
-                        userMessageID: userMessageID
+                        userMessageID: userMessageID,
+                        attempt: observation
                     )
                     return
                 }
@@ -1347,6 +1502,59 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         }
     }
 
+    /// The LEDGER's reading of a converse completion — a pure translation of the
+    /// verdict, kept beside `failureClassification` and unit-tested the same way
+    /// (`WatchConverseCompletionVerdictTests`), so the wrist's measurement can
+    /// never drift from the verdict the user is shown.
+    ///
+    /// Nil for a task carrying no attempt id: a pre-upgrade blob and a dispatch
+    /// whose begin stored nothing must land exactly as they always did, and
+    /// neither may fabricate a row after the fact.
+    ///
+    /// THE FOUR OUTCOMES ARE NOT INTERCHANGEABLE:
+    /// - `.reply` is the only `succeeded` — the strict decoder accepted an answer.
+    /// - `.cleanupOnly` is `cancelled`: the registry entry was still present, so
+    ///   a live in-process cancel stopped this turn.
+    /// - `.cancelledAcrossLaunch` is `unknown`, NOT `cancelled` and NOT `failed`.
+    ///   Every background task comes back cancelled after a force-quit, and the
+    ///   claim that would have said whether a user meant it died with the old
+    ///   process. `unknown` is the honest record of an authoritative terminal
+    ///   callback that could not be classified; the Message stays `failed` so
+    ///   the Retry chip still appears, exactly as today.
+    /// - everything else is `failed`, carrying Conduck's OWN `AppError.errorCode`
+    ///   where one was proven — never a status, a wire string or a server message.
+    ///   The certificate and over-cap kinds belong here rather than with the
+    ///   cancellations even though they arrive as `URLError.cancelled`: the
+    ///   delegate refused the task for a stated reason, which is a failure.
+    static func terminalObservation(
+        for verdict: WatchConverseCompletionVerdict,
+        attemptID: UUID?,
+        completedAt: Date,
+        reported: GatewayResponseMetadata?
+    ) -> TerminalAttemptObservation? {
+        guard let attemptID else { return nil }
+        let outcome: GatewayAttemptOutcome
+        var appErrorCode: Int?
+        switch verdict {
+        case .reply:
+            outcome = .succeeded
+        case .cleanupOnly:
+            outcome = .cancelled
+        case .failure(.cancelledAcrossLaunch, _):
+            outcome = .unknown
+        case .failure(let kind, _):
+            outcome = .failed
+            appErrorCode = failureClassification(for: kind)?.failureCode
+        }
+        return TerminalAttemptObservation(
+            attemptID: attemptID,
+            completedAt: completedAt,
+            outcome: outcome,
+            appErrorCode: appErrorCode,
+            metadata: reported
+        )
+    }
+
     // MARK: - Failure funnel
 
     /// Surface a failed background turn THREE ways: flip the user turn to
@@ -1367,14 +1575,22 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// wrist turn readable as "Not sent" on the phone hours later instead of
     /// spinning forever. Exact-message flip when the dispatch site threaded the
     /// id; conversation-wide fallback only for pre-upgrade in-flight blobs.
-    /// `userMessageID` / `classification` default to nil for the STT callers,
-    /// which pass `conversationID: nil` and therefore write nothing at all — an
-    /// STT failure happens BEFORE any user turn exists.
+    /// `userMessageID` / `classification` / `attempt` default to nil for the STT
+    /// callers, which pass `conversationID: nil` and therefore write nothing at
+    /// all — an STT failure happens BEFORE any user turn exists, and before any
+    /// gateway attempt does.
+    ///
+    /// `attempt` rides the SAME save as the classification whenever there is an
+    /// exact turn to join it to, so a failed wrist turn and its measurement land
+    /// together or not at all. The two fallbacks below close the row on its own
+    /// instead: a conversation-wide flip has no exact turn to join, and a
+    /// verdict with no conversation at all has nothing to flip.
     private func surfaceTurnFailure(
         message: String,
         conversationID: UUID?,
         userMessageID: UUID? = nil,
-        classification: ConversationStore.TurnFailureClassification? = nil
+        classification: ConversationStore.TurnFailureClassification? = nil,
+        attempt: TerminalAttemptObservation? = nil
     ) {
         // Counted as persistence work so a background wake's `.backgroundTask`
         // closure holds open until the failure lands in the live state machine.
@@ -1390,13 +1606,31 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             beginPersistenceWork()
             Task {
                 if let userMessageID {
-                    await ConversationStore.shared.failTurn(messageID: userMessageID, classification: classification)
+                    await ConversationStore.shared.failTurn(
+                        messageID: userMessageID,
+                        classification: classification,
+                        attempt: attempt
+                    )
                 } else {
                     await ConversationStore.shared.failPendingUserTurns(
                         conversationID: conversationID,
                         classification: classification
                     )
+                    if let attempt {
+                        await ConversationStore.shared.terminalizeGatewayAttempt(attempt)
+                    }
                 }
+                endPersistenceWork()
+            }
+        } else if let attempt {
+            // No conversation to write against — a metadata decode that lost the
+            // id, on a task that nonetheless carried one. The turn is
+            // unreachable, but the attempt is still an attempt, and leaving the
+            // row open would report this device's own confusion as an
+            // indefinitely `unconfirmed` dispatch.
+            beginPersistenceWork()
+            Task {
+                await ConversationStore.shared.terminalizeGatewayAttempt(attempt)
                 endPersistenceWork()
             }
         }

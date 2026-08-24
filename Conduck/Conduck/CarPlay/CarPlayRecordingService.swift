@@ -186,7 +186,27 @@ final class CarPlayRecordingService {
     /// delegate carries it so a STALE reply (the session moved on or ended)
     /// never speaks or re-arms — the stale-reply guard. `0` = no live turn.
     @ObservationIgnored private var currentTurnToken: UInt64 = 0
-    @ObservationIgnored private var turnTokenCounter: UInt64 = 0
+
+    /// The mint behind `currentTurnToken`, PROCESS-LIFETIME rather than
+    /// per-instance. An instance of this service is constructed fresh on every
+    /// `didConnect` and dropped on disconnect, while `CarPlayConverseUploader`
+    /// is a process singleton whose pending-dispatch cancel claims are KEYED ON
+    /// THIS TOKEN. A per-instance counter therefore restarted at 1 on each
+    /// reconnect and re-minted tokens an earlier session had already spent:
+    /// `endSession` marks its last token cancelled whether or not that turn is
+    /// still live, so drive N+1's k-th turn drew a token drive N had already
+    /// marked and was dropped before dispatch — no request, no spoken error,
+    /// and a ledger row stored `cancelled` for a turn nobody cancelled.
+    /// Monotonic across every session in the process, a token is minted at most
+    /// once and a stale mark can never name a future turn.
+    @MainActor private static var turnTokenCounter: UInt64 = 0
+
+    /// The only mint site. Every token in the process comes from here, so the
+    /// "never re-minted" property is one function's to keep.
+    @MainActor static func mintTurnToken() -> UInt64 {
+        turnTokenCounter &+= 1
+        return turnTokenCounter
+    }
 
     /// Tracks the single audio-session activation so deactivate runs EXACTLY
     /// ONCE per session, on whichever terminal path fires first.
@@ -1191,8 +1211,16 @@ final class CarPlayRecordingService {
 
             // Mint the turn token: the converse delegate carries it so a stale
             // reply (session moved on / ended) never speaks.
-            turnTokenCounter &+= 1
-            currentTurnToken = turnTokenCounter
+            //
+            // THE DISPATCH CARRIES THE MINTED TOKEN, not a re-read of
+            // `currentTurnToken`. `endSession` zeroes that property before
+            // cancelling, and awaits still separate this line from the upload —
+            // so re-reading it handed the uploader the `0` sentinel for a turn
+            // the driver had just ended, which is the one value that matches no
+            // cancel claim and no in-flight lookup. The turn then dispatched
+            // into a dead session and could never be cancelled afterwards.
+            let dispatchTurnToken = Self.mintTurnToken()
+            currentTurnToken = dispatchTurnToken
 
             // Revalidate the SAME ready physical lane immediately before
             // enqueue. Never replace A with whatever lane now occupies this
@@ -1223,7 +1251,12 @@ final class CarPlayRecordingService {
                 snapshot: fileTransferLane
             ).key
 
-            try CarPlayConverseUploader.shared.uploadConverse(
+            // AWAITED: the uploader opens this turn's gateway-attempt row at its
+            // final pre-transport boundary, after every preflight above has
+            // already succeeded. Nothing here changes for the driver — the
+            // upload is still a background one, and this returns as soon as the
+            // task is resumed.
+            try await CarPlayConverseUploader.shared.uploadConverse(
                 backend: snapshot.backend,
                 ref: snapshot.ref,
                 url: snapshot.url,
@@ -1239,8 +1272,16 @@ final class CarPlayRecordingService {
                 userMessageID: userRecord.id,
                 fileTransferLaneID: fileTransferLane?.durableLaneID,
                 outboxKey: outboxKey,
-                turnToken: currentTurnToken
+                turnToken: dispatchTurnToken
             )
+        } catch is CancellationError {
+            // The driver pressed End while the uploader was at its final
+            // boundary, so nothing was dispatched. `endSession` has already torn
+            // the session down and spoken its sign-off, and the uploader has
+            // already flipped this turn to `failed` for the Retry chip —
+            // speaking a failure now would answer an empty seat with a problem
+            // nobody has.
+            return
         } catch {
             let mapped = (error as? AppError) ?? .remoteAgentUnreachable
             // The routing forks above set `sessionBoundRef` before anything in

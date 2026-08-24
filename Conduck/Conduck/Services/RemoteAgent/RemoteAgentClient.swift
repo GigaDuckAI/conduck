@@ -45,6 +45,68 @@ import Foundation
 import os.log
 #endif
 
+// MARK: - Terminal carriers
+
+/// A completed foreground turn: the reply the strict decoder accepted, whatever
+/// the same bytes reported about the work behind it, and the instant those bytes
+/// were in hand.
+///
+/// `completedAt` is stamped the moment the response returns, BEFORE any parsing
+/// or persistence, so the elapsed time it closes measures the gateway hop and
+/// not the landing that follows it. The caller carries it into the attempt's
+/// terminal observation rather than re-reading the clock there, where a slow
+/// store save would be charged to the gateway.
+nonisolated struct RemoteAgentReply: Sendable {
+    /// `choices[0].message.content` — exactly what the strict decoder returned.
+    let text: String
+    /// What the gateway said about the turn, or nil when it reported nothing
+    /// this client could keep. Never gates the reply: metadata is observed
+    /// beside the decode, never inside it.
+    let metadata: GatewayResponseMetadata?
+    let completedAt: Date
+}
+
+/// A foreground turn that ended in a failure the gateway is answerable for,
+/// carrying the SAME facts a success carries.
+///
+/// WHY A CARRIER AND NOT A BARE `AppError`. A gateway can bill for work it then
+/// failed to return — a 500 after the model ran, a truncation refused at the
+/// envelope — so a failure's `usage` is exactly as real as a success's, and a
+/// throw shape that admits only a taxonomy case discards it. The two halves that
+/// already existed (`appError`, `wireCode`) are preserved verbatim so no failure
+/// writer classifies differently than it did before this type existed;
+/// `unwrappedAppError` and `TurnFailureClassification.init(from:)` both unwrap it
+/// (`AdapterWireCode.swift`), which is what keeps that promise mechanical rather
+/// than remembered.
+///
+/// A CANCELLATION IS NOT ONE OF THESE. `CancellationError` propagates out of
+/// `send` unwrapped, because the callers' `catch is CancellationError` arms are
+/// what distinguish a benign Stop from a gateway verdict — a cancel writes no
+/// classification and keeps the turn retryable.
+nonisolated struct RemoteAgentSendFailure: Error, Sendable {
+    /// Byte-for-byte the `AppError` this failure threw before the carrier
+    /// existed.
+    let appError: AppError
+    /// The adapter-contract wire code when the body carried one; nil when the
+    /// classification came from the status map, the regex heuristics, or the
+    /// transport.
+    let wireCode: AdapterWireCode?
+    /// What the error body reported, when there was a body at all. Nil for
+    /// every pre-response failure — a timeout or a refused chain has no bytes to
+    /// read, and inventing an empty observation there would count a turn the
+    /// gateway never saw.
+    let metadata: GatewayResponseMetadata?
+    let completedAt: Date
+}
+
+extension RemoteAgentSendFailure: LocalizedError {
+    /// Forward the mapped error's copy so a generic `error.localizedDescription`
+    /// site shows the same string it would have shown for the bare `AppError` —
+    /// never a type name. Same contract `ClassifiedRemoteAgentFailure` keeps.
+    nonisolated var errorDescription: String? { appError.errorDescription }
+    nonisolated var recoverySuggestion: String? { appError.recoverySuggestion }
+}
+
 /// Foreground client for the Personal AI gateway round-trip
 /// (`POST /v1/chat/completions`).
 actor RemoteAgentClient {
@@ -102,9 +164,11 @@ actor RemoteAgentClient {
     // MARK: - Public API
 
     /// Issue a user turn to the configured gateway, sending the full
-    /// client-owned conversation history. Returns the agent's reply text
-    /// (`choices[0].message.content`). Throws an `AppError` from the
-    /// `.remoteAgent*` family on failure.
+    /// client-owned conversation history. Returns the agent's reply
+    /// (`choices[0].message.content`) with the turn's optional reported
+    /// metadata and its completion instant. Throws `RemoteAgentSendFailure`
+    /// carrying an `AppError` from the `.remoteAgent*` family on failure — or a
+    /// bare `CancellationError`, which is deliberately NOT wrapped.
     ///
     /// - Parameters:
     ///   - backend: which gateway speaks. Selects the base URL + setup
@@ -130,10 +194,12 @@ actor RemoteAgentClient {
     ///     The evaluator is read AFTER the awaited request so a pin rejection is
     ///     told apart from a benign cancel (URLSession surfaces BOTH as
     ///     `.cancelled`).
-    /// - Returns: the agent's reply text.
-    /// - Throws: `AppError` — typically `.remoteAgentAuthFailed`,
-    ///   `.remoteAgentServerError`, `.remoteAgentInvalidResponse`, or a
-    ///   transport-mapped case.
+    /// - Returns: the agent's reply, its reported metadata, and the instant the
+    ///   response bytes arrived.
+    /// - Throws: `RemoteAgentSendFailure` wrapping an `AppError` — typically
+    ///   `.remoteAgentAuthFailed`, `.remoteAgentServerError`,
+    ///   `.remoteAgentInvalidResponse`, or a transport-mapped case — or
+    ///   `CancellationError` for a genuine user cancel.
     func send(
         backend: RemoteAgentBackend,
         url: URL,
@@ -176,7 +242,7 @@ actor RemoteAgentClient {
         // bug.
         outboxKey: String? = nil,
         transport: Transport
-    ) async throws -> String {
+    ) async throws -> RemoteAgentReply {
         let request = Self.buildRequest(
             url: url,
             token: token,
@@ -219,15 +285,44 @@ actor RemoteAgentClient {
         do {
             (data, response) = try await Self.performRequest(request, transport: transport)
         } catch {
+            // Stamped FIRST, before the log and before the carrier is built: the
+            // hop ended when the transport gave up, not when this frame finished
+            // describing it.
+            let completedAt = Date()
 #if DEBUG
             // The TRANSPORT half of the outcome log. Without it a foreground send
             // that never got a response left `send(fg)` with no counterpart at
             // all, and the only way to tell a timeout from a reset from a cancel
             // was to infer it from which copy the failed bubble rendered.
+            //
+            // Logged from the ORIGINAL error, before the wrap below, so the token
+            // keeps reading the classification off the shape it was minted on.
             RemoteAgentDiagnostics.log.log("fail(fg): stage=transport elapsed=\(String(format: "%.1f", Date().timeIntervalSince(diagStart)), privacy: .public)s \(RemoteAgentDiagnostics.outcomeToken(for: error), privacy: .public)")
 #endif
-            throw error
+            // A cancel is not a gateway verdict and must not arrive as one: the
+            // callers' `catch is CancellationError` arms flip the turn
+            // status-only, write no classification, and close the attempt as
+            // `cancelled`. Wrapping it here would route a Stop into the failure
+            // writers instead.
+            if error is CancellationError { throw error }
+            // Pre-response: no body existed, so there is nothing the gateway
+            // reported and nothing to preserve.
+            throw RemoteAgentSendFailure(
+                appError: error.unwrappedAppError ?? .remoteAgentUnreachable,
+                wireCode: error.unwrappedWireCode,
+                metadata: nil,
+                completedAt: completedAt
+            )
         }
+        // The terminal instant for a turn that produced bytes — parsing and
+        // persistence happen after it and are not the gateway's time.
+        let completedAt = Date()
+        // Observed BESIDE the strict decode, never inside it: a hostile `usage`
+        // cannot sink a good reply, and a well-formed one cannot rescue a bad
+        // one. Runs on error bodies too — a gateway can bill for work it failed
+        // to return.
+        let observed = GatewayResponseMetadata.parse(data)
+        let metadata = observed.isEmpty ? nil : observed
 
 #if DEBUG
         let diagHTTP = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -238,12 +333,23 @@ actor RemoteAgentClient {
 #endif
 
         do {
-            return try Self.decodeReply(data: data, response: response, backend: backend)
+            let text = try Self.decodeReply(data: data, response: response, backend: backend)
+            return RemoteAgentReply(text: text, metadata: metadata, completedAt: completedAt)
         } catch {
 #if DEBUG
             RemoteAgentDiagnostics.log.log("fail(fg): stage=decode http=\(diagHTTP, privacy: .public) \(RemoteAgentDiagnostics.outcomeToken(for: error), privacy: .public)")
 #endif
-            throw error
+            // The same bytes that failed the strict decode still described the
+            // work: a 500 the model was already paid for, a refusal whose
+            // envelope reported its own usage. The classification is carried
+            // through untouched — `appError` is what this throw site has always
+            // thrown, and `wireCode` is the code that classified it.
+            throw RemoteAgentSendFailure(
+                appError: error.unwrappedAppError ?? .remoteAgentUnreachable,
+                wireCode: error.unwrappedWireCode,
+                metadata: metadata,
+                completedAt: completedAt
+            )
         }
     }
 

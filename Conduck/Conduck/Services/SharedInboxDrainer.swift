@@ -242,23 +242,130 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
         defer {
             Task { @MainActor in InFlightTurnRegistry.shared.noteEnded(shareClaim) }
         }
-        let reply = try await RemoteAgentClient.shared.send(
-            backend: backend,
-            url: url,
-            token: token,
-            authScheme: authScheme,
-            model: model,
-            priorTurns: priorTurns,
-            newUserText: newUserText,
-            newUserImageDataURIs: newUserImageDataURIs,
-            newUserTextFileBlocks: newUserTextFileBlocks,
-            newUserServerFileRefs: newUserServerFileRefs,
-            newUserImageFileRefs: newUserImageFileRefs,
-            newUserTextFileServerRefs: newUserTextFileServerRefs,
-            fileServerReady: fileServerReady,
-            outboxKey: outboxKey,
-            transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
+
+        // --- THE FINAL PRE-TRANSPORT BOUNDARY ---
+        //
+        // macOS owns its own share landing (the foreground client lands
+        // in-process; there is no background delegate to hand the turn to), so
+        // this branch is the terminal owner for the attempt as well as the
+        // reply. The row opens HERE, after every fallible preparation above —
+        // the lane revalidation, the outbox mint, the pinned session — so a
+        // local preparation failure is never recorded as gateway usage.
+        //
+        // `agentMessageID` is minted for the same reason the background lane
+        // mints one: reply insertion has to be idempotent independently of the
+        // ledger, and a macOS foreground landing can still race a duplicate
+        // (the drainer's reconcile re-entering after a mid-landing quit).
+        let attemptID = UUID()
+        let agentMessageID = UUID()
+        // Checked immediately BEFORE the insert as well as immediately after it:
+        // a drain cancelled while the row was opening would otherwise leave one
+        // behind for a request that never happened.
+        try Task.checkCancellation()
+        let attemptContext = await ConversationStore.shared.beginGatewayAttempt(
+            draft: GatewayAttemptDraft(
+                attemptID: attemptID,
+                conversationID: conversationID,
+                // The drain appends the user turn with `id: manifest.uuid`, so
+                // the envelope id IS the exact user `Message.id`.
+                userMessageID: shareEnvelopeID,
+                // The SLOT, never the URL behind it — the ledger is
+                // content-free.
+                gatewayRef: ref.rawString,
+                origin: .share,
+                inputMode: .shared,
+                requestedModel: model
+            )
         )
+        /// Close the row this branch opened, if it opened one.
+        func terminalize(
+            _ outcome: GatewayAttemptOutcome,
+            at completedAt: Date,
+            code: Int? = nil,
+            metadata: GatewayResponseMetadata? = nil
+        ) -> TerminalAttemptObservation? {
+            guard let attemptContext else { return nil }
+            return TerminalAttemptObservation(
+                attemptID: attemptContext.attemptID,
+                completedAt: completedAt,
+                outcome: outcome,
+                appErrorCode: code,
+                metadata: metadata
+            )
+        }
+        // A cancel landing between the awaited insert and the send would
+        // otherwise leave a row open forever with nothing on the wire to close
+        // it. Structured cancellation is this transport's whole cancel channel.
+        if Task.isCancelled {
+            if let observation = terminalize(.cancelled, at: Date()) {
+                await ConversationStore.shared.terminalizeGatewayAttempt(observation)
+            }
+            throw CancellationError()
+        }
+
+        let reply: RemoteAgentReply
+        do {
+            reply = try await RemoteAgentClient.shared.send(
+                backend: backend,
+                url: url,
+                token: token,
+                authScheme: authScheme,
+                model: model,
+                priorTurns: priorTurns,
+                newUserText: newUserText,
+                newUserImageDataURIs: newUserImageDataURIs,
+                newUserTextFileBlocks: newUserTextFileBlocks,
+                newUserServerFileRefs: newUserServerFileRefs,
+                newUserImageFileRefs: newUserImageFileRefs,
+                newUserTextFileServerRefs: newUserTextFileServerRefs,
+                fileServerReady: fileServerReady,
+                outboxKey: outboxKey,
+                transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
+            )
+        } catch let failure as RemoteAgentSendFailure {
+            // THE FAILURE LANDING, owned here. The classification and the
+            // attempt terminal ride ONE save; the classification is built
+            // through the shared `init(from:)` mapping so the wire code cannot
+            // be dropped by hand-building fields, and it carries the same
+            // dispatch-time history-image fact the drainer's catch would.
+            //
+            // The rethrow still reaches `failWithTurn`, which owns the parts
+            // that are NOT this turn's classification: the red dot, the
+            // deep-linking notification and the envelope deletion. Its own
+            // `failTurn` finds a row already failed WITH a code and no-ops.
+            await ConversationStore.shared.failTurn(
+                messageID: shareEnvelopeID,
+                classification: .init(
+                    from: failure,
+                    hadHistoryImages: ConverseRequest.containsImageParts(priorTurns)
+                ),
+                attempt: terminalize(
+                    .failed,
+                    at: failure.completedAt,
+                    code: failure.appError.errorCode,
+                    // Present on a non-2xx landing too: a gateway can bill for
+                    // work it failed to return.
+                    metadata: failure.metadata
+                )
+            )
+            throw failure
+        } catch is CancellationError {
+            if let observation = terminalize(.cancelled, at: Date()) {
+                await ConversationStore.shared.terminalizeGatewayAttempt(observation)
+            }
+            throw CancellationError()
+        } catch {
+            // Defensive: every post-boundary throw is supposed to arrive as a
+            // `RemoteAgentSendFailure`. An unclassified one still closes the
+            // row rather than stranding it `inFlight` — the drainer's catch
+            // owns the Message.
+            if let observation = terminalize(
+                .failed, at: Date(), code: error.unwrappedAppError?.errorCode
+            ) {
+                await ConversationStore.shared.terminalizeGatewayAttempt(observation)
+            }
+            throw error
+        }
         // Land in-process via the SHARED landing path (append → flip → output
         // detect → user reply notification → post `.remoteAgentTurnDidComplete`,
         // crash-safe order). `backendRawValue` is the carrier raw value — only a
@@ -268,7 +375,7 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
         // (agent-append failed, e.g. conversation deleted mid-flight) does NOT
         // throw — at-most-once: the gateway was already hit, never re-dispatch.
         _ = await BackgroundRemoteAgent.recordReply(
-            reply,
+            reply.text,
             conversationID: conversationID,
             backendRawValue: backend.rawValue,
             userMessageID: shareEnvelopeID,
@@ -277,9 +384,14 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             // The SAME folder the wire named — never a second mint. A macOS
             // foreground hop cannot land after process death, so this in-process
             // hand-off is the whole recovery channel for it.
-            outputBoxKey: outboxKey
+            outputBoxKey: outboxKey,
+            agentMessageID: agentMessageID,
+            // Reply + exact user flip + attempt terminal, in ONE save.
+            // `completedAt` is the instant the client stamped on return, not a
+            // fresh clock read after the persistence hop.
+            attempt: terminalize(.succeeded, at: reply.completedAt, metadata: reply.metadata)
         )
-        return reply
+        return reply.text
         #else
         // iOS: BACKGROUND session (survives the share-extension exit + app
         // suspension); its delegate lands the reply via the same `recordReply`.
@@ -300,6 +412,12 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
             inputFileTransferSnapshot: fileTransferSnapshot,
             fileTransferSnapshot: fileTransferSnapshot,
             conversationID: conversationID,
+            // Provenance for the gateway-attempt ledger. A share is its own
+            // surface, and `shared` is its own input mode — text, images and
+            // files arrive together from a sheet, in any combination, and none
+            // of them was typed or spoken into Conduck.
+            origin: .share,
+            inputMode: .shared,
             shareEnvelopeID: shareEnvelopeID,
             userMessageID: shareEnvelopeID
         )

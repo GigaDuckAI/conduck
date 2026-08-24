@@ -162,4 +162,136 @@ final class RemoteAgentBackgroundMetadataTests: XCTestCase {
         XCTAssertNil(decoded.refRawValue,
                      "A pre-field taskDescription must decode with refRawValue == nil (tolerant).")
     }
+
+    // MARK: - attemptID + agentMessageID (usage ledger + reply idempotency)
+
+    func testAttemptAndAgentMessageIDsRoundTrip() throws {
+        let attemptID = UUID()
+        let agentMessageID = UUID()
+        let original = RemoteAgentBackgroundMetadata(
+            bodyPath: "/tmp/body.json",
+            conversationID: "11111111-2222-3333-4444-555555555555",
+            backendRawValue: "openclaw",
+            attemptID: attemptID,
+            agentMessageID: agentMessageID
+        )
+        let decoded = try RemoteAgentBackgroundMetadata.decode(original.encodedString())
+        XCTAssertEqual(decoded.attemptID, attemptID,
+                       "The ledger row's id must survive the taskDescription round-trip — it is "
+                           + "the only channel that can close the row after a relaunch.")
+        XCTAssertEqual(decoded.agentMessageID, agentMessageID,
+                       "The reply's Message.id must survive the round-trip — a replayed "
+                           + "completion deduplicates on it.")
+    }
+
+    func testDefaultAttemptAndAgentMessageIDsAreNil() throws {
+        // The pre-ledger construction sites (CarPlay uploader, tests) must stay
+        // byte-identical: both new fields default to nil and round-trip as nil.
+        let original = RemoteAgentBackgroundMetadata(
+            bodyPath: "/tmp/body.json",
+            conversationID: "abc",
+            backendRawValue: "hermes"
+        )
+        XCTAssertNil(original.attemptID)
+        XCTAssertNil(original.agentMessageID)
+        let decoded = try RemoteAgentBackgroundMetadata.decode(original.encodedString())
+        XCTAssertNil(decoded.attemptID)
+        XCTAssertNil(decoded.agentMessageID)
+    }
+
+    func testTolerantDecodeOfPreLedgerTaskDescription() throws {
+        // THE UPGRADE CASE, and the one that has to be right: a converse task
+        // enqueued by the previous build is still live when the ledger ships.
+        // Its taskDescription has neither key, and it must land exactly as it
+        // always did — attemptID nil (measure nothing, fabricate no row) and
+        // agentMessageID nil (fall back to a freshly minted reply id).
+        let legacyJSON = """
+        {"bodyPath":"/tmp/old.json","conversationID":"cid","backendRawValue":"openclaw",\
+        "refRawValue":"hermes","stampsActiveConversation":true,"outputBoxKey":"cid/out-ab12"}
+        """
+        let decoded = try RemoteAgentBackgroundMetadata.decode(legacyJSON)
+        XCTAssertNil(decoded.attemptID,
+                     "A pre-ledger taskDescription must decode with attemptID == nil (tolerant).")
+        XCTAssertNil(decoded.agentMessageID,
+                     "A pre-ledger taskDescription must decode with agentMessageID == nil (tolerant).")
+        // Everything the old blob DID carry still arrives — the additive fields
+        // must not have disturbed the existing keys.
+        XCTAssertEqual(decoded.bodyPath, "/tmp/old.json")
+        XCTAssertEqual(decoded.refRawValue, "hermes")
+        XCTAssertEqual(decoded.stampsActiveConversation, true)
+        XCTAssertEqual(decoded.outputBoxKey, "cid/out-ab12")
+    }
+
+    func testTolerantDecodeOfUnknownFutureKey() throws {
+        // The mirror of the case above: a taskDescription written by a LATER
+        // build (an extra key this one has never heard of) must still decode,
+        // or an upgrade that lands mid-turn strands the reply.
+        let futureJSON = """
+        {"bodyPath":"/tmp/new.json","conversationID":"cid","backendRawValue":"openclaw",\
+        "attemptID":"11111111-2222-3333-4444-555555555555","somethingNewer":42}
+        """
+        let decoded = try RemoteAgentBackgroundMetadata.decode(futureJSON)
+        XCTAssertEqual(decoded.attemptID,
+                       UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
+    }
+
+    func testMeasuredAndUnmeasuredVariantsDifferOnlyByAttemptID() throws {
+        // THE FAIL-OPEN CONTRACT, pinned. `send` pre-encodes both variants
+        // before the ledger insert and picks one afterwards; if the insert
+        // fails it attaches the nil-variant. That fallback is only safe while
+        // the two envelopes are identical in every field the delegate needs to
+        // land the reply — INCLUDING agentMessageID, because reply idempotency
+        // must not depend on the ledger.
+        let agentMessageID = UUID()
+        let common: (UUID?) -> RemoteAgentBackgroundMetadata = { attemptID in
+            RemoteAgentBackgroundMetadata(
+                bodyPath: "/tmp/body.json",
+                conversationID: "11111111-2222-3333-4444-555555555555",
+                backendRawValue: "openclaw",
+                refRawValue: "custom_22222222-3333-4444-5555-666666666666",
+                shareEnvelopeID: nil,
+                userMessageID: UUID(uuidString: "33333333-4444-5555-6666-777777777777"),
+                stampsActiveConversation: false,
+                requestHadHistoryImages: true,
+                fileTransferLaneID: "lane-1",
+                outputBoxKey: "cid/out-ab12",
+                dispatchChatSignature: "sig",
+                attemptID: attemptID,
+                agentMessageID: agentMessageID
+            )
+        }
+        let measured = try RemoteAgentBackgroundMetadata.decode(common(UUID()).encodedString())
+        let unmeasured = try RemoteAgentBackgroundMetadata.decode(common(nil).encodedString())
+
+        XCTAssertNotNil(measured.attemptID)
+        XCTAssertNil(unmeasured.attemptID)
+        XCTAssertEqual(measured.agentMessageID, unmeasured.agentMessageID,
+                       "Reply idempotency must hold on the unmeasured variant too — the "
+                           + "fail-open measurement layer can never be the only duplicate guard.")
+        XCTAssertEqual(measured.bodyPath, unmeasured.bodyPath)
+        XCTAssertEqual(measured.conversationID, unmeasured.conversationID)
+        XCTAssertEqual(measured.backendRawValue, unmeasured.backendRawValue)
+        XCTAssertEqual(measured.refRawValue, unmeasured.refRawValue)
+        XCTAssertEqual(measured.userMessageID, unmeasured.userMessageID)
+        XCTAssertEqual(measured.stampsActiveConversation, unmeasured.stampsActiveConversation)
+        XCTAssertEqual(measured.requestHadHistoryImages, unmeasured.requestHadHistoryImages)
+        XCTAssertEqual(measured.fileTransferLaneID, unmeasured.fileTransferLaneID)
+        XCTAssertEqual(measured.outputBoxKey, unmeasured.outputBoxKey)
+        XCTAssertEqual(measured.dispatchChatSignature, unmeasured.dispatchChatSignature)
+    }
+
+    func testAttemptIDIsNotDerivedFromAgentMessageID() throws {
+        // Pins the separation the duplicate-guard argument rests on. If a future
+        // change derived one from the other, a dispatch whose ledger insert
+        // failed would carry no reply id either, and a replayed completion would
+        // insert a second agent bubble.
+        let meta = RemoteAgentBackgroundMetadata(
+            bodyPath: "/tmp/body.json",
+            conversationID: "cid",
+            backendRawValue: "openclaw",
+            attemptID: UUID(),
+            agentMessageID: UUID()
+        )
+        XCTAssertNotEqual(meta.attemptID, meta.agentMessageID)
+    }
 }

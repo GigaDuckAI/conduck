@@ -123,9 +123,39 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
     /// `shareEnvelopeID`.
     let dispatchChatSignature: String?
 
+    /// The gateway-attempt ledger row THIS dispatch opened, when one was opened.
+    /// Carried so the terminal callback can close the exact row it belongs to
+    /// after a relaunch — `taskDescription` is the only channel that survives a
+    /// process kill mid-turn, and an attempt whose id died with the old process
+    /// could never be closed by anyone.
+    ///
+    /// `nil` is a FIRST-CLASS value, not a degraded one: capture is fail-open, so
+    /// a dispatch whose ledger insert failed (or a build that predates the
+    /// ledger) carries nil here and lands through the same path it always did,
+    /// measuring nothing and fabricating nothing. That is why the enqueue site
+    /// pre-encodes BOTH variants of this envelope before the insert is attempted
+    /// — no encode may fail between a successful insert and `task.resume()`.
+    /// ADDITIVE + TOLERANT — same `decodeIfPresent` rationale as
+    /// `shareEnvelopeID`.
+    let attemptID: UUID?
+
+    /// The `Message.id` the agent reply will be inserted under, minted at
+    /// dispatch. Makes reply insertion idempotent INDEPENDENTLY OF THE LEDGER: a
+    /// duplicate or replayed terminal callback probes for this id, finds the
+    /// reply it would have written, and returns that instead of a second bubble.
+    ///
+    /// Deliberately NOT derived from `attemptID`: the fail-open measurement layer
+    /// must never be the only duplicate guard, so this field is carried on both
+    /// pre-encoded variants — including the one whose `attemptID` is nil.
+    /// `nil` (old blobs) falls back to a freshly minted id, i.e. exactly today's
+    /// behaviour. ADDITIVE + TOLERANT — same `decodeIfPresent` rationale as
+    /// `shareEnvelopeID`.
+    let agentMessageID: UUID?
+
     /// Explicit memberwise init with `shareEnvelopeID` / `userMessageID` /
     /// `stampsActiveConversation` / `requestHadHistoryImages` /
-    /// `outputBoxKey` / `dispatchChatSignature` DEFAULTED to `nil` so the
+    /// `outputBoxKey` / `dispatchChatSignature` / `attemptID` /
+    /// `agentMessageID` DEFAULTED to `nil` so the
     /// existing construction sites (CarPlay uploader, the converse `send(...)`'s
     /// non-share callers, tests) stay byte-identical — only sites that know the
     /// value pass one. (A synthesized memberwise init can't carry a default,
@@ -141,7 +171,9 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
         requestHadHistoryImages: Bool? = nil,
         fileTransferLaneID: String? = nil,
         outputBoxKey: String? = nil,
-        dispatchChatSignature: String? = nil
+        dispatchChatSignature: String? = nil,
+        attemptID: UUID? = nil,
+        agentMessageID: UUID? = nil
     ) {
         self.bodyPath = bodyPath
         self.conversationID = conversationID
@@ -154,6 +186,8 @@ struct RemoteAgentBackgroundMetadata: Codable, Sendable {
         self.fileTransferLaneID = fileTransferLaneID
         self.outputBoxKey = outputBoxKey
         self.dispatchChatSignature = dispatchChatSignature
+        self.attemptID = attemptID
+        self.agentMessageID = agentMessageID
     }
 
     /// JSON-encode + UTF-8 stringify for attachment to

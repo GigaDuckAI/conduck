@@ -75,7 +75,7 @@ final class RemoteAgentTransportPairingTests: XCTestCase {
             )
             XCTFail("A refused challenge must not resolve as a reply.")
         } catch {
-            XCTAssertEqual((error as? AppError)?.errorCode,
+            XCTAssertEqual(error.unwrappedAppError?.errorCode,
                            AppError.remoteAgentCertMismatch.errorCode,
                            "The pin verdict must reach the user. A send that dropped the evaluator sees only -999 and reports a benign cancel — the interception signal, discarded. Got: \(error)")
         }
@@ -108,7 +108,7 @@ final class RemoteAgentTransportPairingTests: XCTestCase {
             )
             XCTFail("Expected the cancelled transport failure to propagate.")
         } catch {
-            let code = (error as? AppError)?.errorCode
+            let code = error.unwrappedAppError?.errorCode
             XCTAssertEqual(code, AppError.remoteAgentUnreachable.errorCode,
                            "A -999 on a lane that answered no challenge must classify as unreachable. Got: \(error)")
             XCTAssertNotEqual(code, AppError.remoteAgentCertMismatch.errorCode,

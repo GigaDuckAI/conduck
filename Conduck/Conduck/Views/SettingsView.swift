@@ -64,14 +64,15 @@ struct SettingsView: View {
     /// Settings entry unchanged.
     var autoOpenGuidedSetup: Bool = false
 
-    /// The deep-linkable preferences destinations — the three rows in
-    /// `preferencesSection`. Kept name-aligned with `MacSettingsView.Category`
-    /// (sans `.about`, which iOS has no destination row for) so a single
-    /// `.voice` token deep-links on every platform.
+    /// The deep-linkable destinations — the three rows in `preferencesSection`
+    /// plus the Usage dashboard in `diagnosticsSection`. Kept name-aligned with
+    /// `MacSettingsView.Category` (sans `.about`, which iOS has no destination
+    /// row for) so a single `.voice` token deep-links on every platform.
     enum Category: String, CaseIterable, Identifiable, Hashable {
         case general
         case personalAI
         case voice
+        case usage
 
         var id: String { rawValue }
     }
@@ -84,6 +85,10 @@ struct SettingsView: View {
                     case .general:    GeneralSettingsView(viewModel: viewModel)
                     case .personalAI: PersonalAISettingsView(viewModel: viewModel, guidedHost: $guidedHost)
                     case .voice:      VoiceProviderListView(viewModel: viewModel)
+                    // Self-owns its model: an iPhone push has no longer-lived
+                    // host to hold one, and leaving the screen tears the push
+                    // down anyway.
+                    case .usage:      UsageDashboardView()
                     }
                 }
         }
@@ -299,12 +304,26 @@ struct SettingsView: View {
         }
     }
 
-    /// Diagnostics — a local, on-device health check for the configured gateways
-    /// + voice setup. A header-less standalone row (mirrors About) placed by the
-    /// config destinations, not the Setup walkthroughs: it's about what you
-    /// configured. Passive — the row never probes; checks run inside the screen.
+    /// The two INSPECTION surfaces — Usage (what your gateway actually did) and
+    /// Diagnostics (whether it is set up correctly). A header-less group
+    /// (mirrors About) placed by the config destinations, not the Setup
+    /// walkthroughs: both are about what you configured. Neither belongs in
+    /// `preferencesSection` — nothing on either screen is a preference. Passive:
+    /// neither row probes or fetches; the work happens inside the screen.
     private var diagnosticsSection: some View {
         Section {
+            // Value-based so a future deep-link can push it programmatically,
+            // resolved by the `.navigationDestination(for:)` in `body`.
+            NavigationLink(value: Category.usage) {
+                Label {
+                    Text(UsageDashboardIdentity.title)
+                        .foregroundStyle(Color.primary)
+                } icon: {
+                    Image(systemName: UsageDashboardIdentity.systemImage)
+                        .foregroundStyle(Color.primary)
+                }
+            }
+
             NavigationLink {
                 DiagnosticsView()
             } label: {

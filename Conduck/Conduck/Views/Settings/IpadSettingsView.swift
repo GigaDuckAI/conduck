@@ -67,6 +67,14 @@ struct IpadSettingsView: View {
     /// button flicker. Persists for the whole Settings session (mirrors macOS).
     @State private var diagnosticsRunner = DiagnosticsRunner()
 
+    /// Owned HERE for the same reason as the runner above: the `detail` `switch`
+    /// rebuilds the Usage category on every sidebar change, and a self-owned
+    /// model would refetch and re-aggregate the whole attempt ledger each
+    /// return. Constructing it is free — it fetches nothing until the Usage
+    /// screen calls `start()` — so building one for a session that never opens
+    /// Usage costs nothing either.
+    @State private var usageModel = UsageDashboardModel()
+
     /// Hosts the guided gateway-setup full-screen cover at the split-view root.
     /// `PersonalAISettingsView` (in the detail column) drives it via a `Binding`
     /// rather than attaching the cover itself — keeping the presentation off a
@@ -87,6 +95,7 @@ struct IpadSettingsView: View {
         case general
         case personalAI
         case voice
+        case usage
         case diagnostics
         case about
 
@@ -97,6 +106,7 @@ struct IpadSettingsView: View {
             case .general:    return LocalizedStringResource("settings.general.section.title", defaultValue: "General")
             case .personalAI: return LocalizedStringResource("settings.remoteAgent.section.title", defaultValue: "Personal AI")
             case .voice:      return LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice")
+            case .usage:      return UsageDashboardIdentity.title
             case .diagnostics: return LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics")
             case .about:      return LocalizedStringResource("settings.mac.about.title", defaultValue: "About")
             }
@@ -107,6 +117,7 @@ struct IpadSettingsView: View {
             case .general:    return "gearshape"
             case .personalAI: return "brain.head.profile"
             case .voice:      return "waveform"
+            case .usage:      return UsageDashboardIdentity.systemImage
             case .diagnostics: return "stethoscope"
             case .about:      return "info.circle"
             }
@@ -118,6 +129,7 @@ struct IpadSettingsView: View {
             case .general:    self = .general
             case .personalAI: self = .personalAI
             case .voice:      self = .voice
+            case .usage:      self = .usage
             }
         }
     }
@@ -357,6 +369,11 @@ struct IpadSettingsView: View {
         case .voice:
             NavigationStack {
                 VoiceProviderListView(viewModel: viewModel)
+                    .toolbar { closeToolbar }
+            }
+        case .usage:
+            NavigationStack {
+                UsageDashboardView(model: usageModel)
                     .toolbar { closeToolbar }
             }
         case .diagnostics:

@@ -12,6 +12,11 @@
 // certificate refusals that also arrive as a cancel, transport vs HTTP vs
 // decode, the missing-response guard, and the anti-phantom-reply
 // conversationID guard.
+//
+// Also locks the SECOND pure translation of the same completion —
+// `WatchAudioUploader.terminalObservation(...)`, what the gateway-attempt
+// ledger records — so the measurement and the copy the user reads can never
+// drift apart.
 
 import XCTest
 @testable import ConduckWatch_Watch_App
@@ -437,5 +442,165 @@ final class WatchConverseCompletionVerdictTests: XCTestCase {
         }
         XCTAssertTrue(text.contains("maximum context length"))
         XCTAssertEqual(conversationID, cid)
+    }
+
+    // MARK: - Ledger observation assembly
+    //
+    // `WatchAudioUploader.terminalObservation(for:attemptID:completedAt:reported:)`
+    // is the second pure translation of the same completion — what the
+    // gateway-attempt ledger records, beside what the user is shown. Locked here
+    // so the two can never drift: a wrist turn that reads as a failure must not
+    // be counted as a success, and the two cancellations must stay apart.
+
+    /// A dispatch carrying no attempt id — a task enqueued by a build that
+    /// predates the ledger — must produce NO observation. Landing it as one
+    /// would fabricate a row for a dispatch nobody measured.
+    func testNoAttemptIDProducesNoObservation() {
+        let observation = WatchAudioUploader.terminalObservation(
+            for: .reply(text: "hi", conversationID: cid, stampsActiveConversation: false),
+            attemptID: nil,
+            completedAt: Date(),
+            reported: nil
+        )
+        XCTAssertNil(observation)
+    }
+
+    /// The decoded-reply verdict is the ONLY success, and it carries the
+    /// gateway's reported usage through untouched — including on the fields the
+    /// gateway chose to omit.
+    func testReplyVerdictObservesSuccessAndCarriesReportedUsage() {
+        let attemptID = UUID()
+        let completedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let reported = GatewayResponseMetadata(
+            reportedModel: "some-model",
+            finishReason: "stop",
+            reportedInputTokens: 11,
+            reportedOutputTokens: 22
+        )
+        let observation = WatchAudioUploader.terminalObservation(
+            for: .reply(text: "hi", conversationID: cid, stampsActiveConversation: true),
+            attemptID: attemptID,
+            completedAt: completedAt,
+            reported: reported
+        )
+        XCTAssertEqual(observation?.attemptID, attemptID)
+        XCTAssertEqual(observation?.outcome, .succeeded)
+        XCTAssertEqual(observation?.completedAt, completedAt)
+        XCTAssertNil(observation?.appErrorCode)
+        XCTAssertEqual(observation?.metadata, reported)
+    }
+
+    /// A live in-process cancel (registry entry present) is `cancelled`. The
+    /// Message still goes to `failed` so Retry appears — the two answers are
+    /// deliberately different, and this pins the ledger's half.
+    func testCleanupOnlyObservesCancelled() {
+        let observation = WatchAudioUploader.terminalObservation(
+            for: .cleanupOnly,
+            attemptID: UUID(),
+            completedAt: Date(),
+            reported: nil
+        )
+        XCTAssertEqual(observation?.outcome, .cancelled)
+        XCTAssertNil(observation?.appErrorCode)
+    }
+
+    /// The relaunch case is `unknown`, NOT `cancelled` and NOT `failed`. Every
+    /// background task returns cancelled after a force-quit and the claim that
+    /// would have said whether the user meant it died with the old process, so
+    /// the only honest record is that the callback could not be classified.
+    func testCancelledAcrossLaunchObservesUnknown() {
+        let observation = WatchAudioUploader.terminalObservation(
+            for: .failure(kind: .cancelledAcrossLaunch, conversationID: cid),
+            attemptID: UUID(),
+            completedAt: Date(),
+            reported: nil
+        )
+        XCTAssertEqual(observation?.outcome, .unknown)
+        XCTAssertNil(observation?.appErrorCode)
+    }
+
+    /// A certificate refusal arrives as `URLError.cancelled` too, and must NOT
+    /// borrow either cancellation outcome: the delegate refused the task for a
+    /// stated reason, which is a failure.
+    func testCertificateRefusalObservesFailedNotCancelled() {
+        for kind: WatchConverseCompletionVerdict.FailureKind in [
+            .certificateUntrusted, .certificatePinMismatch, .certificateKeyUnpinnable,
+            .responseOverCap, .insecureConnectionBlocked
+        ] {
+            let observation = WatchAudioUploader.terminalObservation(
+                for: .failure(kind: kind, conversationID: cid),
+                attemptID: UUID(),
+                completedAt: Date(),
+                reported: nil
+            )
+            XCTAssertEqual(observation?.outcome, .failed, "\(kind) must observe as failed")
+        }
+    }
+
+    /// A mapped HTTP status carries Conduck's OWN error code — never the status
+    /// itself, which is content the ledger may not store.
+    func testMappedStatusCarriesAppErrorCodeNotTheStatus() {
+        let observation = WatchAudioUploader.terminalObservation(
+            for: .failure(kind: .httpStatus(429), conversationID: cid),
+            attemptID: UUID(),
+            completedAt: Date(),
+            reported: nil
+        )
+        XCTAssertEqual(observation?.outcome, .failed)
+        let expected = RemoteAgentStatusMap.unified.map(429)?.errorCode
+        XCTAssertNotNil(expected)
+        XCTAssertEqual(observation?.appErrorCode, expected)
+        XCTAssertNotEqual(observation?.appErrorCode, 429)
+    }
+
+    /// A transport error proves no code, and guessing one would pin the row on
+    /// copy the wrist cannot prove. Nil IS the classification.
+    func testTransportFailureObservesFailedWithNoCode() {
+        let observation = WatchAudioUploader.terminalObservation(
+            for: .failure(kind: .transport(URLError(.timedOut)), conversationID: cid),
+            attemptID: UUID(),
+            completedAt: Date(),
+            reported: nil
+        )
+        XCTAssertEqual(observation?.outcome, .failed)
+        XCTAssertNil(observation?.appErrorCode)
+    }
+
+    /// A non-2xx body's reported usage is kept: a gateway can bill for work it
+    /// then failed to return, so a failed turn's usage is as real as a
+    /// successful one's.
+    func testFailedTurnStillCarriesReportedUsage() {
+        let reported = GatewayResponseMetadata(reportedInputTokens: 40, reportedTotalTokens: 40)
+        let observation = WatchAudioUploader.terminalObservation(
+            for: .failure(kind: .httpStatus(500), conversationID: cid),
+            attemptID: UUID(),
+            completedAt: Date(),
+            reported: reported
+        )
+        XCTAssertEqual(observation?.metadata, reported)
+    }
+
+    // MARK: - Dispatch shape
+
+    /// Shape coverage for the wrist's converse dispatch: it has to be `async
+    /// throws` and take an explicit `inputMode`, because the ledger row is
+    /// opened INSIDE it, at the last boundary before `resume()`. The closure is
+    /// built and never invoked — calling it would start a real upload.
+    func testUploadConverseTakesInputModeAndIsAwaitable() {
+        let dispatch = {
+            try await WatchAudioUploader.shared.uploadConverse(
+                ref: "openclaw",
+                url: URL(string: "https://example.invalid")!,
+                token: "",
+                model: nil,
+                priorTurns: [],
+                newUserText: "hi",
+                conversationID: UUID(),
+                userMessageID: UUID(),
+                inputMode: .voice,
+                stampsActiveConversation: false
+            )
+        }
+        _ = dispatch
     }
 }

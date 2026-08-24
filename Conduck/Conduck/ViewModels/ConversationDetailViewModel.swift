@@ -40,6 +40,20 @@ import SwiftUI
 enum TurnModality: String {
     case voice
     case text
+
+    /// How the usage ledger records a turn dispatched with this modality.
+    ///
+    /// A SWITCH, not `GatewayInputMode(rawValue:)`. The two vocabularies agree
+    /// today and are free to stop agreeing — `GatewayInputMode` also carries
+    /// `shared` and `unknown`, which no composer modality can produce — and a
+    /// raw-value bridge would answer a renamed case with a silent `unknown`
+    /// instead of a compile error.
+    var inputMode: GatewayInputMode {
+        switch self {
+        case .voice: return .voice
+        case .text: return .text
+        }
+    }
 }
 
 /// A raw, not-yet-processed attachment the composer staged for a turn. The VM
@@ -835,8 +849,15 @@ final class ConversationDetailViewModel {
     /// A method rather than a `didSet` on `inFlightStartedAt`: `@Observable`
     /// rewrites stored properties into accessors, so a property observer there is
     /// a compile hazard, not a hook.
-    private func beginInFlight(at date: Date = Date()) {
+    private func beginInFlight(userMessageID: UUID, at date: Date = Date()) {
         inFlightStartedAt = date
+        // The EXACT turn this VM has in flight, retained so a Stop cancels that
+        // turn and no other. REQUIRED, not defaulted: every dispatch knows its
+        // id by the time it gets here (the optimistic user row is already
+        // written), and a default would let a future call site claim the
+        // in-flight state without saying what it claimed it for — which is
+        // exactly the conversation-wide guess this field exists to replace.
+        inFlightUserMessageID = userMessageID
         inFlightClaim = InFlightTurnRegistry.shared.noteBegan(
             conversationID, lane: .viewModel, isCancellable: true, at: date)
         #if os(macOS)
@@ -855,9 +876,24 @@ final class ConversationDetailViewModel {
     /// no-op — which is exactly what the two macOS release sites need.
     private func endInFlight() {
         inFlightStartedAt = nil
+        // Dropped with the claim, never separately: a retained id outliving the
+        // turn would aim the next Stop at a message that already resolved.
+        inFlightUserMessageID = nil
         if let token = inFlightClaim { InFlightTurnRegistry.shared.noteEnded(token) }
         inFlightClaim = nil
     }
+
+    /// The user `Message.id` of the turn THIS VM currently has in flight, or nil
+    /// between turns. Written by `beginInFlight`, cleared by `endInFlight`, and
+    /// read only by `cancelInFlight` — which needs it because the background
+    /// session's conversation-wide cancel picks the first in-flight task in the
+    /// conversation, and sibling turns can overlap (a Watch relay or a Shortcut
+    /// running alongside an in-app send). Cancelling by conversation there stops
+    /// a bystander's turn and, worse for the ledger, attributes the cancel to
+    /// the wrong attempt.
+    ///
+    /// `@ObservationIgnored` — bookkeeping for one method, never a view input.
+    @ObservationIgnored private var inFlightUserMessageID: UUID?
 
     /// Whether a cancel qualified by `token` applies to the turn identified by
     /// `current`. A pure function rather than an inline guard because the
@@ -1728,6 +1764,12 @@ final class ConversationDetailViewModel {
     /// the hold ladder, the lane breaker and the identity guards around it.
     private func landMacForegroundReply(
         reply: String,
+        /// The reply row's id, MINTED AT DISPATCH rather than here. It is what
+        /// makes the assistant insert idempotent: the store dedupes on it, so a
+        /// landing that runs twice for one dispatch cannot produce two replies
+        /// — and that guarantee has to survive a missing attempt row, which is
+        /// why it rides the dispatch and not the ledger.
+        agentMessageID: UUID,
         userMessageID: UUID,
         dispatchRef: RemoteAgentRef,
         dispatchFileLane: SettingsManager.FileTransferSnapshot?,
@@ -1741,10 +1783,15 @@ final class ConversationDetailViewModel {
         dispatchChatSignature: String?,
         stampsQuickPointer: Bool,
         surfacesInPopover: Bool,
-        speaksReply: Bool
+        speaksReply: Bool,
+        /// What the hop reported at its terminal boundary, when this dispatch
+        /// opened an attempt row to close. The store closes it in the SAME save
+        /// as the reply and the sent flip, so the ledger cannot disagree with
+        /// the thread. Nil when the begin never inserted — measurement is
+        /// fail-open and never blocks a valid reply.
+        attempt: TerminalAttemptObservation?
     ) async throws -> MessageRecord {
         let conversationID = self.conversationID
-        let agentMessageID = UUID()
         let laneID = dispatchFileLane?.durableLaneID
         let persist: @MainActor () async throws -> MessageRecord = {
             try await ConversationStore.shared.completeAgentTurn(
@@ -1755,7 +1802,8 @@ final class ConversationDetailViewModel {
                 sourceDevice: SourceDevice.current,
                 agentMessageID: agentMessageID,
                 outputScanLaneID: laneID,
-                outputBoxKey: outputBoxKey
+                outputBoxKey: outputBoxKey,
+                attempt: attempt
             )
         }
         let afterPersistBeforeRelease: @MainActor (MessageRecord) async -> Void = {
@@ -3996,7 +4044,7 @@ final class ConversationDetailViewModel {
         // here, and claims the conversation in `InFlightTurnRegistry` so the list
         // row, the quit guard, and any VM minted for this thread later see the
         // same turn.
-        beginInFlight()
+        beginInFlight(userMessageID: userMessageID)
         #if !os(macOS)
         // macOS already claimed `isAwaitingReply` synchronously at the top (race
         // guard); only the non-macOS path sets it here.
@@ -4019,6 +4067,12 @@ final class ConversationDetailViewModel {
                 self.endInFlight()
                 self.inFlightTask = nil
             }
+            // Declared OUTSIDE the `do` because Swift scopes a `do`-body binding
+            // to that body, and both catch arms have to be able to close the
+            // attempt this dispatch opened. Nil until the begin lands (and after
+            // one that failed), which is the fail-open state: every terminalize
+            // below is then a no-op and the turn lands exactly as it would have.
+            var attemptContext: GatewayAttemptContext?
             do {
                 // READY lane on the bound gateway → the per-turn file-delivery
                 // instruction rides (mirrors `BackgroundRemoteAgent.send`,
@@ -4083,6 +4137,34 @@ final class ConversationDetailViewModel {
                     authScheme: snapshot.authScheme,
                     model: snapshot.model
                 )
+                // The reply row's id, minted HERE so the store's dedupe has a
+                // stable key for this dispatch (see `landMacForegroundReply`).
+                let agentMessageID = UUID()
+                // THE MEASUREMENT BOUNDARY. Everything that can fail locally —
+                // lane revalidation, the outbox mint, the pinning session, the
+                // signature read — is already done, so a row opened here always
+                // describes a request that was actually about to go out. Opening
+                // earlier would record local preflight errors as gateway usage.
+                let attemptDraft = GatewayAttemptDraft(
+                    attemptID: UUID(),
+                    conversationID: conversationID,
+                    userMessageID: userMessageID,
+                    // The ROUTE, never the address: the slot's raw ref, resolved
+                    // to a display name at render time from settings.
+                    gatewayRef: snapshot.ref.rawString,
+                    // The Mac's two lanes told apart by the CALLER: this
+                    // parameter is per-send (one VM serves both the menu bar and
+                    // the window), so it names the surface running this dispatch.
+                    origin: Self.dispatchOrigin(fromMenuBarSurface: surfacesInPopover),
+                    inputMode: modality.inputMode,
+                    requestedModel: snapshot.model
+                )
+                // Checked immediately before the awaited insert, and again
+                // immediately after it: a Stop landing in that window must not
+                // dispatch, and must not leave a row reading `inFlight` forever.
+                try Task.checkCancellation()
+                attemptContext = await ConversationStore.shared.beginGatewayAttempt(draft: attemptDraft)
+                try Task.checkCancellation()
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,
@@ -4101,13 +4183,29 @@ final class ConversationDetailViewModel {
                     transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
                 )
                 // Cooperative-cancel check: a Cancel tapped between the reply
-                // landing and this point should drop the reply.
-                guard !Task.isCancelled else { return }
+                // landing and this point drops the reply — but neither half may
+                // be left in flight. The attempt closes `cancelled` with the
+                // hop's OWN completion instant and whatever the gateway
+                // reported (it did the work and may have billed for it), and
+                // the throw routes the user turn through the same status-only
+                // flip every other cancel takes.
+                if Task.isCancelled {
+                    await ConversationStore.shared.terminalizeGatewayAttempt(
+                        TerminalAttemptObservation(
+                            attemptID: attemptContext?.attemptID,
+                            completedAt: reply.completedAt,
+                            outcome: .cancelled,
+                            metadata: reply.metadata
+                        )
+                    )
+                    throw CancellationError()
+                }
                 // Persist the reply + sent flip FIRST and release the awaiting UI
                 // before output-file probes begin. The slow, optional detector
                 // patches chips onto the durable bubble asynchronously.
                 _ = try await self.landMacForegroundReply(
-                    reply: reply,
+                    reply: reply.text,
+                    agentMessageID: agentMessageID,
                     userMessageID: userMessageID,
                     dispatchRef: snapshot.ref,
                     dispatchFileLane: dispatchFileLane,
@@ -4116,7 +4214,13 @@ final class ConversationDetailViewModel {
                     dispatchChatSignature: dispatchChatSignature,
                     stampsQuickPointer: stampsQuickPointer,
                     surfacesInPopover: surfacesInPopover,
-                    speaksReply: speaksReply
+                    speaksReply: speaksReply,
+                    attempt: TerminalAttemptObservation(
+                        attemptID: attemptContext?.attemptID,
+                        completedAt: reply.completedAt,
+                        outcome: .succeeded,
+                        metadata: reply.metadata
+                    )
                 )
             } catch is CancellationError {
                 // User cancelled — leave the user bubble; no agent bubble. Flip
@@ -4126,14 +4230,33 @@ final class ConversationDetailViewModel {
                 // live-cancel flip). STATUS-ONLY (guarded to `sending` rows):
                 // a cancel is not a gateway verdict, so any pre-existing
                 // classification stays and no new one is written.
+                //
+                // The attempt closes `cancelled` here too. On the post-reply
+                // race above this is a second, richer-loser call and updates
+                // nothing (terminal rows are written once); on every earlier
+                // cancel it is the ONLY writer, and without it the row would
+                // sit `inFlight` until the read-time grace called it
+                // unconfirmed.
+                await ConversationStore.shared.terminalizeGatewayAttempt(
+                    TerminalAttemptObservation(
+                        attemptID: attemptContext?.attemptID,
+                        completedAt: Date(),
+                        outcome: .cancelled
+                    )
+                )
                 await ConversationStore.shared.markPendingUserTurn(messageID: userMessageID, to: "failed")
             } catch {
-                // Terminal failure (body-classified carrier, bare AppError, or
+                // Terminal failure (either failure carrier, a bare AppError, or
                 // anything else) — ONE shared handler persists the
                 // classification (wire code included when the gateway sent
                 // one) + raises the banner. `hadHistoryImages` was computed
                 // from the ACTUAL assembled request at dispatch.
-                await self.recordSendFailure(error, userMessageID: userMessageID, requestHadHistoryImages: requestHadHistoryImages)
+                await self.recordSendFailure(
+                    error,
+                    userMessageID: userMessageID,
+                    requestHadHistoryImages: requestHadHistoryImages,
+                    attempt: Self.terminalObservation(for: error, attemptID: attemptContext?.attemptID)
+                )
             }
         }
         inFlightTask = task
@@ -4162,6 +4285,12 @@ final class ConversationDetailViewModel {
                 inputFileTransferSnapshot: dispatchFileLane,
                 fileTransferSnapshot: dispatchFileLane,
                 conversationID: conversationID,
+                // Ledger provenance, stated rather than inferred: this is the
+                // in-app composer on iPhone/iPad. The quick-capture and share
+                // lanes reach the same transport through their own callers and
+                // stamp their own origins there.
+                origin: .app,
+                inputMode: modality.inputMode,
                 // EXACT per-message status flips in the background delegate (a
                 // conversation-wide flip would alias a concurrent sibling
                 // turn's status — e.g. a long headless think in this thread).
@@ -4545,7 +4674,21 @@ final class ConversationDetailViewModel {
     ///
     /// Only `user` turns with `status == "failed"` are retryable; anything else
     /// is a no-op.
-    func retry(_ message: MessageRecord, omittingPhotos: Bool = false) async {
+    ///
+    /// `fromPopover` names the surface RUNNING this retry — the menu-bar
+    /// popover's own Retry button passes `true`; every window/in-app caller
+    /// keeps the default. It is deliberately NOT derived from
+    /// `popoverReplyMessageIDs`: that set is keyed by MESSAGE and describes the
+    /// ORIGINAL dispatch, and the popover lane and the window lane can share one
+    /// VM instance for the same conversation, so a failed quick capture retried
+    /// from the window would otherwise credit the menu bar in the usage ledger.
+    /// The set still governs reply surfacing and the speak verdict — only the
+    /// ledger's origin reads this parameter.
+    func retry(
+        _ message: MessageRecord,
+        omittingPhotos: Bool = false,
+        fromPopover: Bool = false
+    ) async {
         guard message.role == "user", message.status == "failed" else { return }
         // A plain re-fire of a TERMINAL failure sends the identical request into
         // the identical refusal — a certificate this device won't accept, a
@@ -4610,7 +4753,7 @@ final class ConversationDetailViewModel {
         // is a racing write against an account-wide column, so a stale clear
         // landing after a later acknowledgement — or the reverse — would
         // silence a live failure with no way for the user to get the mark back.
-        beginInFlight()
+        beginInFlight(userMessageID: message.id)
         await reload()
 
         // Route the retry by THIS conversation's bound backend (per-conversation
@@ -4703,6 +4846,11 @@ final class ConversationDetailViewModel {
         // NOT in the set (a window/in-app turn, or any stale id) never does.
         let surfacesInPopover = popoverReplyMessageIDs.contains(userMessageID)
         #endif
+        // A retry acquires no new input, so the ledger records how the ORIGINAL
+        // turn was captured, read off the stored `sourceDevice` tag through the
+        // single derivation helper. A legacy row with no modality suffix yields
+        // `unknown`, which is the honest answer rather than a guess.
+        let retryInputMode = GatewayInputMode.from(sourceDevice: message.sourceDevice)
 
         // Rebuild all three server-backed input shapes only after exact-lane
         // ownership succeeds: server-only files, dual images (original file
@@ -4824,6 +4972,9 @@ final class ConversationDetailViewModel {
                 self.endInFlight()
                 self.inFlightTask = nil
             }
+            // Scoped outside the `do` for the reason `sendUserTurn`'s twin gives
+            // — both catch arms close the attempt this dispatch opened.
+            var attemptContext: GatewayAttemptContext?
             do {
                 // Mirrors `sendUserTurn`'s macOS branch — retry must produce
                 // the same wire shape as the original send.
@@ -4877,6 +5028,24 @@ final class ConversationDetailViewModel {
                     authScheme: snapshot.authScheme,
                     model: snapshot.model
                 )
+                // A retry ALWAYS mints a fresh attempt id — it never reopens or
+                // overwrites the terminal the first dispatch already wrote, so
+                // two tries of one turn count as two attempts of one turn.
+                let agentMessageID = UUID()
+                let attemptDraft = GatewayAttemptDraft(
+                    attemptID: UUID(),
+                    conversationID: conversationID,
+                    userMessageID: userMessageID,
+                    gatewayRef: snapshot.ref.rawString,
+                    // The surface RUNNING this retry, not the one that ran the
+                    // original send: the caller states it (see `fromPopover`).
+                    origin: Self.dispatchOrigin(fromMenuBarSurface: fromPopover),
+                    inputMode: retryInputMode,
+                    requestedModel: snapshot.model
+                )
+                try Task.checkCancellation()
+                attemptContext = await ConversationStore.shared.beginGatewayAttempt(draft: attemptDraft)
+                try Task.checkCancellation()
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
                     url: snapshot.url,
@@ -4895,12 +5064,27 @@ final class ConversationDetailViewModel {
                     outboxKey: outboxKey,
                     transport: .pinned(session: pinnedSession, evaluator: trustEvaluator)
                 )
-                guard !Task.isCancelled else { return }
+                // The post-reply cancel race — same rule as the original-send
+                // path: drop the reply, close the attempt honestly, take the
+                // shared cancel flip rather than returning with both halves
+                // still reading in flight.
+                if Task.isCancelled {
+                    await ConversationStore.shared.terminalizeGatewayAttempt(
+                        TerminalAttemptObservation(
+                            attemptID: attemptContext?.attemptID,
+                            completedAt: reply.completedAt,
+                            outcome: .cancelled,
+                            metadata: reply.metadata
+                        )
+                    )
+                    throw CancellationError()
+                }
                 // Same persistence-first ordering as the original-send path.
                 // Output chips patch asynchronously after the durable reply and
                 // sent flip release the awaiting UI.
                 _ = try await self.landMacForegroundReply(
-                    reply: reply,
+                    reply: reply.text,
+                    agentMessageID: agentMessageID,
                     userMessageID: userMessageID,
                     dispatchRef: snapshot.ref,
                     dispatchFileLane: readyOutputLane,
@@ -4909,18 +5093,36 @@ final class ConversationDetailViewModel {
                     dispatchChatSignature: dispatchChatSignature,
                     stampsQuickPointer: stampsQuickPointer,
                     surfacesInPopover: surfacesInPopover,
-                    speaksReply: speaksReply
+                    speaksReply: speaksReply,
+                    attempt: TerminalAttemptObservation(
+                        attemptID: attemptContext?.attemptID,
+                        completedAt: reply.completedAt,
+                        outcome: .succeeded,
+                        metadata: reply.metadata
+                    )
                 )
             } catch is CancellationError {
                 // Mirror sendUserTurn's macOS cancel flip — no delegate exists
                 // on this foreground path to terminalize the turn. Status-only:
                 // the pre-retry classification stays (cancel is not a gateway
                 // verdict).
+                await ConversationStore.shared.terminalizeGatewayAttempt(
+                    TerminalAttemptObservation(
+                        attemptID: attemptContext?.attemptID,
+                        completedAt: Date(),
+                        outcome: .cancelled
+                    )
+                )
                 await ConversationStore.shared.markPendingUserTurn(messageID: userMessageID, to: "failed")
             } catch {
                 // Terminal failure — the shared handler (classification +
                 // banner in one place; see recordSendFailure).
-                await self.recordSendFailure(error, userMessageID: userMessageID, requestHadHistoryImages: requestHadHistoryImages)
+                await self.recordSendFailure(
+                    error,
+                    userMessageID: userMessageID,
+                    requestHadHistoryImages: requestHadHistoryImages,
+                    attempt: Self.terminalObservation(for: error, attemptID: attemptContext?.attemptID)
+                )
             }
         }
         inFlightTask = task
@@ -4949,6 +5151,11 @@ final class ConversationDetailViewModel {
                 inputFileTransferSnapshot: existingInputLane,
                 fileTransferSnapshot: readyOutputLane,
                 conversationID: conversationID,
+                // The surface running the RETRY owns the origin (this one is
+                // in-app); the input mode still describes the original capture,
+                // because a retry acquires nothing new.
+                origin: .app,
+                inputMode: retryInputMode,
                 // Exact per-message flips — same rationale as sendUserTurn.
                 userMessageID: userMessageID,
                 // Inherited quick-lane provenance — see sendUserTurn's twin.
@@ -4975,13 +5182,73 @@ final class ConversationDetailViewModel {
     private func recordSendFailure(
         _ error: Error,
         userMessageID: UUID,
-        requestHadHistoryImages: Bool?
+        requestHadHistoryImages: Bool?,
+        /// The attempt this failure closes, on a path that OWNS the terminal —
+        /// the macOS foreground branches, which have no delegate behind them.
+        ///
+        /// DEFAULTED NIL, and the default is the load-bearing case: on iOS the
+        /// background delegate is the single terminal owner, so this VM's catch
+        /// arm exists only to keep the Message UX and must not write a second
+        /// terminal for the same attempt.
+        attempt: TerminalAttemptObservation? = nil
     ) async {
         await ConversationStore.shared.failTurn(
             messageID: userMessageID,
-            classification: .init(from: error, hadHistoryImages: requestHadHistoryImages)
+            classification: .init(from: error, hadHistoryImages: requestHadHistoryImages),
+            attempt: attempt
         )
         setSendError(error.unwrappedAppError ?? .remoteAgentUnreachable, messageID: userMessageID)
+    }
+
+    /// The terminal observation a foreground failure closes its attempt with.
+    ///
+    /// A `RemoteAgentSendFailure` carries the instant the hop ended AND whatever
+    /// the error body reported — a gateway can bill for work it then failed to
+    /// return, so those tokens are exactly as real as a success's. Anything else
+    /// never reached a response (a local preflight throw, a transport refusal
+    /// wrapped elsewhere) and is stamped `now` with no metadata.
+    ///
+    /// `appErrorCode` is Conduck's OWN taxonomy code, never a server status: the
+    /// ledger stays content-free, and the code is the same one the message row
+    /// persists, so the dashboard and the thread can never tell different
+    /// stories about one failure.
+    ///
+    /// Static + pure so the mapping is unit-testable without a round trip, and
+    /// compiled on every platform even though only the macOS branches call it —
+    /// the suite that pins it runs on an iOS simulator.
+    nonisolated static func terminalObservation(
+        for error: Error,
+        attemptID: UUID?,
+        now: Date = Date()
+    ) -> TerminalAttemptObservation {
+        if let failure = error as? RemoteAgentSendFailure {
+            return TerminalAttemptObservation(
+                attemptID: attemptID,
+                completedAt: failure.completedAt,
+                outcome: .failed,
+                appErrorCode: failure.appError.errorCode,
+                metadata: failure.metadata
+            )
+        }
+        return TerminalAttemptObservation(
+            attemptID: attemptID,
+            completedAt: now,
+            outcome: .failed,
+            appErrorCode: (error.unwrappedAppError ?? .remoteAgentUnreachable).errorCode
+        )
+    }
+
+    /// The ledger origin for a Mac dispatch, from the surface that is RUNNING
+    /// it. One VM instance serves both the menu-bar popover and the window for
+    /// the same conversation, so the surface can never be inferred from the
+    /// turn — every caller states it: the popover lanes pass `true`, the window
+    /// and in-app lanes pass `false`.
+    ///
+    /// Static + pure for the same reason as `terminalObservation` above: the
+    /// branches that call it are macOS-fenced, but the suite that pins it runs
+    /// on an iOS simulator.
+    nonisolated static func dispatchOrigin(fromMenuBarSurface: Bool) -> GatewayAttemptOrigin {
+        fromMenuBarSurface ? .menuBar : .app
     }
 
     // MARK: - Compat mode ("Keep chatting without photos")
@@ -5043,12 +5310,15 @@ final class ConversationDetailViewModel {
     /// every such cancel. `canStopLiveTurn` has already established that this
     /// device holds a usable handle before any of this is reachable from the UI.
     ///
-    /// KNOWN LIMITATION, not fixed here: the non-macOS arm routes to
-    /// `BackgroundRemoteAgent.cancel(conversationID:)`, which picks
-    /// `inFlight.values.first(where:)` — so when TWO background turns overlap in
-    /// one conversation it may cancel the wrong one. The single-turn case, which
-    /// is what the composer's Stop offers, is exact. Fixing the overlap needs a
-    /// task-identity handle threaded through `BackgroundRemoteAgent`.
+    /// The non-macOS arm cancels by EXACT user `Message.id` whenever this VM
+    /// holds one (`inFlightUserMessageID`, retained from the dispatch that
+    /// claimed the in-flight state). The conversation-wide call survives only as
+    /// the fallback for a VM with nothing retained — a Stop arriving for a turn
+    /// this instance did not dispatch. That distinction matters twice over:
+    /// sibling turns can overlap in one conversation (a Watch relay or a
+    /// Shortcut running beside an in-app send), so a conversation-wide cancel
+    /// can stop a bystander's turn, and it would credit the cancel to that
+    /// bystander's attempt in the ledger.
     func cancelInFlight(expecting token: Date? = nil) {
         guard Self.cancelApplies(expecting: token, current: liveTurnStartedAt) else { return }
         #if os(macOS)
@@ -5057,7 +5327,11 @@ final class ConversationDetailViewModel {
         // when the session data task is torn down.
         inFlightTask?.cancel()
         #else
-        BackgroundRemoteAgent.shared.cancel(conversationID: conversationID)
+        if let inFlightUserMessageID {
+            BackgroundRemoteAgent.shared.cancel(userMessageID: inFlightUserMessageID)
+        } else {
+            BackgroundRemoteAgent.shared.cancel(conversationID: conversationID)
+        }
         // The delegate's `.cancelled` path resolves the awaiting continuation
         // with `CancellationError`; `sendUserTurn`'s `defer` clears the flags.
         #endif

@@ -60,11 +60,23 @@
 // is lit in every phase and — when the byte counters prove nothing left — says
 // so without blaming a machine it cannot see (`ConverseCancelVerdict`).
 //
-// THAT MAKES STOP LOAD-BEARING, so `cancel(conversationID:)` may never quietly
-// find nothing. It looks in the in-memory registry first and falls back to the
-// session's own live task set matched on recovery metadata, because the turn
-// most likely to be parked is the one that outlived a process kill — and that
-// is exactly the turn the registry cannot see.
+// THAT MAKES STOP LOAD-BEARING, so `cancel(userMessageID:)` may never quietly
+// find nothing. It marks the pending-dispatch claim, looks in the in-memory
+// registry, and falls back to the session's own live task set matched on
+// recovery metadata, because the turn most likely to be parked is the one that
+// outlived a process kill — and that is exactly the turn the registry cannot
+// see.
+//
+// THIS FILE ALSO OPENS AND CLOSES THE GATEWAY-ATTEMPT LEDGER ROW for every turn
+// it dispatches. Two rules shape where those calls sit. The row is opened at the
+// FINAL pre-transport boundary — after every fallible preparation, so a lane
+// that moved or a body that would not encode is never recorded as gateway usage
+// — and both task-metadata variants are encoded BEFORE the insert, so nothing
+// that can fail remains between a successful insert and `task.resume()`. And
+// every attempt write on the landing side stays inside the counted background
+// wake barrier (`beginPersistenceWork`/`endPersistenceWork`), or the OS
+// completion handler is released before the terminal save lands. Capture is
+// FAIL-OPEN throughout: a dispatch always outranks its own measurement.
 //
 // Trust pinning: the TASK-level `urlSession(_:task:didReceive:)` delegate
 // recovers the turn's gateway identity (`refRawValue`) from the task's
@@ -133,8 +145,15 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
     private struct InFlightTurn {
         let taskIdentifier: Int
         let conversationID: UUID
+        /// The EXACT user `Message.id` this task is delivering, when the
+        /// dispatch site knew it (every modern caller does). It is what makes
+        /// `cancel(userMessageID:)` exact: two turns can overlap in one
+        /// conversation, and matching on the conversation alone picks whichever
+        /// entry the dictionary iterates to first — cancelling one turn and
+        /// attributing the stop to the other.
+        let userMessageID: UUID?
         var continuation: CheckedContinuation<String, Error>?
-        /// Set by `cancel(conversationID:)` — i.e. WE asked for this task to
+        /// Set by `cancel(...)` — i.e. WE asked for this task to
         /// stop. `URLError.cancelled` (-999) is reported identically whether the
         /// client cancelled or the peer reset the stream, so this flag is the
         /// only thing that tells the two apart on this lane.
@@ -194,6 +213,27 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
     /// resurrection into a "you stopped this" the user never did. Queue-confined
     /// like the sets around it, and removed on every completion path.
     private var cancelRequestedTaskIDs = Set<Int>()
+
+    /// User `Message.id`s whose dispatch is INSIDE `send` right now — past the
+    /// preparation it can still throw from, but with no `URLSessionTask` for a
+    /// Stop to find yet. Armed immediately before the awaited ledger insert and
+    /// disarmed on every exit from `send`.
+    ///
+    /// It exists because opening the attempt row is an AWAIT: without it, a Stop
+    /// arriving while that insert is in flight sees no task, does nothing, and
+    /// the turn dispatches anyway — the user watches a request they cancelled
+    /// leave the device. Queue-confined, like the sets around it.
+    private var pendingDispatchIDs = Set<UUID>()
+
+    /// The subset of `pendingDispatchIDs` a Stop has since named. Read once, on
+    /// `queue`, in the same critical section that creates and resumes the task,
+    /// so the decision and the dispatch cannot be separated by a cancel.
+    ///
+    /// A cancel may only mark an ARMED id. A bare set would otherwise keep a
+    /// cancel that arrived when nothing was dispatching, and a retry — which
+    /// re-sends the very same user `Message.id` — would be refused on the
+    /// strength of a Stop the user aimed at the previous attempt.
+    private var pendingDispatchCancels = Set<UUID>()
 
     /// Task identifiers whose response body exceeded
     /// `Constants.maxBackgroundResponseBytes` and were cancelled for it. Same
@@ -371,7 +411,9 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
     ///
     /// - Throws: `AppError` from the `.remoteAgent*` family on failure, or
     ///   `CancellationError` if the turn was cancelled via
-    ///   `cancel(conversationID:)`.
+    ///   `cancel(userMessageID:)` — including a cancel that arrives while this
+    ///   method is still inside its ledger insert, in which case no task is
+    ///   created at all.
     @discardableResult
     func send(
         backend: RemoteAgentBackend,
@@ -410,12 +452,26 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         // reply has no explicit output-scan lane. Never resolve a replacement here.
         fileTransferSnapshot: SettingsManager.FileTransferSnapshot?,
         conversationID: UUID,
+        // The user-facing surface this dispatch is running from, and how the
+        // turn's input was acquired. REQUIRED (no defaults), so every call site
+        // is compiler-forced to state its own provenance — a default here would
+        // let a new surface inherit whichever value happened to be written first
+        // and silently mis-attribute every attempt it ever makes. A RETRY names
+        // the surface running the retry, and derives its mode from the failed
+        // turn's `sourceDevice` via `GatewayInputMode.from(sourceDevice:)`.
+        origin: GatewayAttemptOrigin,
+        inputMode: GatewayInputMode,
         shareEnvelopeID: UUID? = nil,
         // The user `Message.id` of THIS turn, when the caller knows it (in-app
         // VM, headless intent, share drain). Threaded into the recovery
         // metadata so the delegate flips the EXACT turn's status instead of
         // the conversation-wide `markPendingUserTurns` (which aliases sibling
         // in-flight turns). Optional + defaulted → source-compatible.
+        //
+        // It is ALSO the ledger's correlation key and the exact-cancel key, so a
+        // dispatch that cannot name its user turn opens no attempt row at all —
+        // an uncorrelated row could never be closed, retried against, or counted
+        // as a retry of anything.
         userMessageID: UUID? = nil,
         // True ONLY for headless quick captures (ConverseIntent, Watch
         // headless trigger): the delegate's success path then stamps the
@@ -487,6 +543,15 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
             .appendingPathComponent("conduck-converse-body-\(UUID().uuidString).json")
         try bodyData.write(to: bodyURL, options: [.atomic])
 
+        // The reply's `Message.id`, minted HERE and carried on BOTH metadata
+        // variants below. Reply-insertion idempotency has to hold when the
+        // ledger is absent, so it can never be derived from the attempt id.
+        let agentMessageID = UUID()
+        // The CANDIDATE attempt id. Minted before the insert because the task
+        // metadata has to be encoded before it, and only ever used if the insert
+        // actually opens a row.
+        let attemptID = UUID()
+
         let metadata = RemoteAgentBackgroundMetadata(
             bodyPath: bodyURL.path,
             conversationID: conversationID.uuidString,
@@ -514,15 +579,40 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
             // describe whatever the user edited to while the body was encoding.
             dispatchChatSignature: await SettingsManager.shared.gatewayChatSuccessSignature(
                 for: ref, url: url, authScheme: authScheme, model: model
-            )
+            ),
+            // The nil-variant. Its attempt-bearing twin is derived below; both
+            // are encoded BEFORE the ledger insert so that the only thing left
+            // between a successful insert and `task.resume()` is choosing which
+            // already-valid string to attach.
+            attemptID: nil,
+            agentMessageID: agentMessageID
         )
-        let metadataString: String
+        let unmeasuredMetadataString: String
         do {
-            metadataString = try metadata.encodedString()
+            unmeasuredMetadataString = try metadata.encodedString()
         } catch {
             try? FileManager.default.removeItem(at: bodyURL)
             throw AppError.remoteAgentInvalidResponse
         }
+        // The attempt-bearing variant. Its encode failure is FAIL-OPEN — the
+        // dispatch falls back to the string above and simply measures nothing.
+        // Only a failure of BOTH aborts the turn (the guard above), because
+        // without any metadata the delegate could not land the reply at all.
+        let measuredMetadataString: String? = try? RemoteAgentBackgroundMetadata(
+            bodyPath: metadata.bodyPath,
+            conversationID: metadata.conversationID,
+            backendRawValue: metadata.backendRawValue,
+            refRawValue: metadata.refRawValue,
+            shareEnvelopeID: metadata.shareEnvelopeID,
+            userMessageID: metadata.userMessageID,
+            stampsActiveConversation: metadata.stampsActiveConversation,
+            requestHadHistoryImages: metadata.requestHadHistoryImages,
+            fileTransferLaneID: metadata.fileTransferLaneID,
+            outputBoxKey: metadata.outputBoxKey,
+            dispatchChatSignature: metadata.dispatchChatSignature,
+            attemptID: attemptID,
+            agentMessageID: agentMessageID
+        ).encodedString()
 
 #if DEBUG
         RemoteAgentDiagnostics.log.log("send(bg): convo=\(conversationID.uuidString, privacy: .public) \(RemoteAgentDiagnostics.shapeSummary(body.messages, bodyBytes: bodyData.count), privacy: .public)")
@@ -551,6 +641,55 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
             }
         }
 
+        // --- THE FINAL PRE-TRANSPORT BOUNDARY ---
+        //
+        // Everything above can still fail, and a failure above is LOCAL
+        // PREPARATION — a lane that moved, a body that would not encode. None of
+        // it is gateway usage, so none of it may leave a recorded attempt behind.
+        // Everything below is either infallible or the dispatch itself.
+        //
+        // Arm the Stop claim BEFORE the awaited insert, because that await is a
+        // window in which a Stop can find no task at all. Disarmed on every exit
+        // from this method: the awaited path holds it until the reply lands,
+        // which costs nothing (a Stop then finds the live task and cancels it
+        // through the ordinary lane) and closes the gap where a marked-but-
+        // unarmed id could outlive its dispatch.
+        if let userMessageID { armPendingDispatch(userMessageID) }
+        defer { if let userMessageID { disarmPendingDispatch(userMessageID) } }
+
+        // Open the ledger row. BEST-EFFORT, and deliberately last: nil means the
+        // turn dispatches unmeasured, never that it does not dispatch.
+        //
+        // TWO PRECONDITIONS, BOTH CHECKED BEFORE THE INSERT RATHER THAN REPAIRED
+        // AFTER IT. A turn that cannot name its user message opens nothing — an
+        // uncorrelated row could never be closed, retried against, or counted as
+        // a retry of anything. And a turn whose attempt-bearing metadata would
+        // not encode opens nothing either: the id could not ride the wire, so
+        // no terminal callback could ever close the row and it would sit
+        // `inFlight` forever.
+        let attemptContext: GatewayAttemptContext?
+        if let userMessageID, measuredMetadataString != nil {
+            attemptContext = await ConversationStore.shared.beginGatewayAttempt(
+                draft: GatewayAttemptDraft(
+                    attemptID: attemptID,
+                    conversationID: conversationID,
+                    userMessageID: userMessageID,
+                    // The SLOT, never the URL behind it — the ledger is
+                    // content-free.
+                    gatewayRef: ref.rawString,
+                    origin: origin,
+                    inputMode: inputMode,
+                    requestedModel: model
+                )
+            )
+        } else {
+            attemptContext = nil
+        }
+        // Only a row that actually opened may be named on the wire.
+        let metadataString = attemptContext == nil
+            ? unmeasuredMetadataString
+            : (measuredMetadataString ?? unmeasuredMetadataString)
+
         // Fire-and-forget (headless): enqueue + return immediately, registering
         // NO continuation. The background URLSession is owned by the system, so
         // the upload completes — and the delegate delivers the reply +
@@ -558,39 +697,197 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         // an empty string; headless callers ignore the value (the reply arrives
         // as a notification).
         if !awaitReply {
-            let task = session.uploadTask(with: request, fromFile: bodyURL)
-            task.taskDescription = metadataString
-            register(
-                continuation: nil,
-                taskIdentifier: task.taskIdentifier,
-                conversationID: conversationID,
-                bodyFileURL: bodyURL
-            )
-            task.resume()
+            // AWAITED even though nothing is awaited downstream: the decision
+            // has to land before `send` returns, or the `defer` above would
+            // disarm the Stop claim ahead of the recheck that reads it. A
+            // refusal needs no signal back — this caller has no continuation,
+            // and the user turn was already flipped for it.
+            await withCheckedContinuation { (gate: CheckedContinuation<Void, Never>) in
+                queue.async {
+                    _ = self.resumeOrRefuse(
+                        request: request,
+                        bodyURL: bodyURL,
+                        metadataString: metadataString,
+                        conversationID: conversationID,
+                        userMessageID: userMessageID,
+                        attemptContext: attemptContext,
+                        continuation: nil
+                    )
+                    gate.resume()
+                }
+            }
             return ""
         }
 
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            let task = session.uploadTask(with: request, fromFile: bodyURL)
-            task.taskDescription = metadataString
-            register(
-                continuation: continuation,
-                taskIdentifier: task.taskIdentifier,
-                conversationID: conversationID,
-                bodyFileURL: bodyURL
-            )
-            task.resume()
+            queue.async {
+                // ONE CRITICAL SECTION: read the Stop claim, create the task,
+                // attach the already-valid metadata, register, resume. Splitting
+                // the read from the resume — even by a queue hop — reopens the
+                // race this whole boundary exists to close.
+                guard self.resumeOrRefuse(
+                    request: request,
+                    bodyURL: bodyURL,
+                    metadataString: metadataString,
+                    conversationID: conversationID,
+                    userMessageID: userMessageID,
+                    attemptContext: attemptContext,
+                    continuation: continuation
+                ) else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+            }
+        }
+    }
+
+    /// The atomic tail of `send`: decide whether the Stop claim has been marked
+    /// and, if not, create + register + resume exactly one task. MUST be called
+    /// on `queue`.
+    ///
+    /// Returns `true` when a task was resumed. `false` means the dispatch was
+    /// REFUSED — the user asked to stop while the ledger insert was in flight —
+    /// in which case this method has already terminalized any row that opened
+    /// and flipped the user turn, and the caller only has to resolve its own
+    /// continuation. It never resumes the caller's continuation itself: the two
+    /// call sites disagree about what a refusal means to them.
+    private func resumeOrRefuse(
+        request: URLRequest,
+        bodyURL: URL,
+        metadataString: String,
+        conversationID: UUID,
+        userMessageID: UUID?,
+        attemptContext: GatewayAttemptContext?,
+        continuation: CheckedContinuation<String, Error>?
+    ) -> Bool {
+        let stopped = userMessageID.map { pendingDispatchCancels.contains($0) } ?? false
+        guard !stopped else {
+            // No task is created and none is resumed — the request never leaves
+            // the device. The row (if one opened) is the cancel's, and the user
+            // turn flips `failed` so the Retry chip is the way back, matching
+            // what a live Stop on a dispatched turn does.
+            let observation = attemptContext.map {
+                TerminalAttemptObservation(
+                    attemptID: $0.attemptID,
+                    completedAt: Date(),
+                    outcome: .cancelled
+                )
+            }
+            try? FileManager.default.removeItem(at: bodyURL)
+            beginPersistenceWork()
+            Task {
+                if let observation {
+                    await ConversationStore.shared.terminalizeGatewayAttempt(observation)
+                }
+                if let userMessageID {
+                    await ConversationStore.shared.markPendingUserTurn(
+                        messageID: userMessageID, to: "failed"
+                    )
+                }
+                self.endPersistenceWork()
+            }
+            return false
+        }
+
+        let task = session.uploadTask(with: request, fromFile: bodyURL)
+        task.taskDescription = metadataString
+        registerLocked(
+            continuation: continuation,
+            taskIdentifier: task.taskIdentifier,
+            conversationID: conversationID,
+            userMessageID: userMessageID,
+            bodyFileURL: bodyURL
+        )
+        task.resume()
+        return true
+    }
+
+    /// Arm the pending-dispatch Stop claim for one exact user turn. Clears any
+    /// mark left by a previous dispatch of the same id (a retry re-sends the very
+    /// same `Message.id`), so an old Stop can never refuse a new send.
+    private func armPendingDispatch(_ userMessageID: UUID) {
+        queue.async {
+            self.pendingDispatchIDs.insert(userMessageID)
+            self.pendingDispatchCancels.remove(userMessageID)
+        }
+    }
+
+    /// Disarm on every exit from `send`, marked or not.
+    private func disarmPendingDispatch(_ userMessageID: UUID) {
+        queue.async {
+            self.pendingDispatchIDs.remove(userMessageID)
+            self.pendingDispatchCancels.remove(userMessageID)
         }
     }
 
     // MARK: - Cancellation
 
-    /// Cancel the in-flight turn for `conversationID`, if any. Cancels the
+    /// Cancel the EXACT turn delivering `userMessageID`, cancelling the
     /// underlying `URLSessionTask` so no stale reply lands later (the delegate
     /// sees `.cancelled`, drops the turn, and does NOT append an agent bubble).
+    /// This is the cancel every caller that knows which turn it means should
+    /// use.
+    ///
+    /// THREE PLACES A TURN CAN BE, and a Stop has to reach all of them:
+    ///
+    /// 1. `pendingDispatchIDs` — inside `send`, past the point of no fallible
+    ///    preparation but with no task yet, because opening the ledger row is an
+    ///    await. Marking is all that can be done here; `resumeOrRefuse` reads the
+    ///    mark in the same critical section that would have resumed the task, so
+    ///    a Stop that arrives during that window refuses the dispatch outright
+    ///    rather than watching a cancelled request leave the device.
+    /// 2. The in-memory registry, matched on the exact `userMessageID` this
+    ///    process recorded at dispatch.
+    /// 3. The session's own live task set, matched on the decoded recovery
+    ///    metadata — the only place a turn that outlived a process kill exists,
+    ///    and precisely the turn most likely to be parked.
+    ///
+    /// All three are marked/searched, not just the first that hits: a turn can
+    /// legitimately be registered AND live, and the pending mark is cheap
+    /// insurance against a dispatch that has not reached its recheck yet.
+    func cancel(userMessageID: UUID) {
+        queue.async {
+            // Only an ARMED id may be marked — see `pendingDispatchCancels`.
+            if self.pendingDispatchIDs.contains(userMessageID) {
+                self.pendingDispatchCancels.insert(userMessageID)
+            }
+            // Record the INTENT before asking the task to stop — same ordering
+            // rationale as `cancel(conversationID:)` below.
+            if let entry = self.inFlight.values.first(where: { $0.userMessageID == userMessageID }) {
+                self.inFlight[entry.taskIdentifier]?.cancelRequested = true
+                self.cancelRequestedTaskIDs.insert(entry.taskIdentifier)
+                self.session.getAllTasks { tasks in
+                    for task in tasks where task.taskIdentifier == entry.taskIdentifier {
+                        task.cancel()
+                    }
+                }
+                return
+            }
+            self.session.getAllTasks { tasks in
+                let matches = tasks.filter { task in
+                    task.taskDescription
+                        .flatMap { try? RemoteAgentBackgroundMetadata.decode($0) }?
+                        .userMessageID == userMessageID
+                }
+                guard !matches.isEmpty else { return }
+                self.queue.async {
+                    for task in matches { self.cancelRequestedTaskIDs.insert(task.taskIdentifier) }
+                    for task in matches { task.cancel() }
+                }
+            }
+        }
+    }
+
+    /// DEPRECATED-IN-SPIRIT conversation-scoped fallback, kept for the callers
+    /// that genuinely cannot name a turn (a lane holding only a thread id). It
+    /// picks `inFlight.values.first(where:)`, so with two overlapping turns in
+    /// one conversation it cancels whichever entry the dictionary iterates to
+    /// first and the wrong turn can be attributed as cancelled. Prefer
+    /// `cancel(userMessageID:)` — the ledger's cancel attribution is only as
+    /// exact as the cancel that produced it.
+    ///
     /// TWO WAYS TO FIND THE TASK, because Stop is the ONLY bound on a wait
     /// nothing else bounds and it may not be allowed to silently do nothing.
-    ///
     /// The in-memory registry answers for a turn THIS process dispatched. It
     /// cannot answer for one the system resurrected across a launch — the
     /// registry died with the old process — and that turn is precisely the one
@@ -602,6 +899,11 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
     /// So a miss falls through to the session's own live task set, matched on
     /// the decoded recovery metadata — the same authoritative cross-launch
     /// source `hasLiveConverseTask` and `liveConversationIDs` read.
+    ///
+    /// It reaches no PENDING dispatch: a caller holding only a thread id cannot
+    /// name the turn whose claim would have to be marked, and marking every
+    /// pending turn in a conversation would refuse a sibling the user never
+    /// stopped.
     func cancel(conversationID: UUID) {
         queue.async {
             // Record the INTENT before asking the task to stop. The delegate
@@ -711,6 +1013,28 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         return live
     }
 
+    /// The gateway-attempt ids THIS device is currently carrying a live task
+    /// for, decoded from `session.allTasks` metadata.
+    ///
+    /// Read by the dashboard's effective-outcome overlay, and by nothing that
+    /// writes. An open row is not evidence a turn is running: attempts sync
+    /// across devices while `URLSession` registries are device-local, so all a
+    /// Mac can say about an iPhone's open row is that it has no local task for
+    /// it. This answers only the local half of that question, which is why its
+    /// absence derives `pending`/`unconfirmed` for display and never a write.
+    ///
+    /// `allTasks` and not the in-memory registry, for the same reason
+    /// `liveConversationIDs` reads it: the registry is empty after the relaunch
+    /// this feature exists to survive.
+    func liveAttemptIDs() async -> Set<UUID> {
+        let tasks = await session.allTasks
+        return Set(tasks.compactMap { task in
+            task.taskDescription
+                .flatMap { try? RemoteAgentBackgroundMetadata.decode($0) }?
+                .attemptID
+        })
+    }
+
     // MARK: - Registry helpers
 
     /// Latch the DISPLAY departure fact for one task and, on its FIRST set
@@ -743,31 +1067,34 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         }
     }
 
-    private func register(
+    /// Record one freshly created task. MUST be called on `queue` — it runs
+    /// inside the same critical section that resumes the task, so that no cancel
+    /// can slip between "this turn is registered" and "this turn is running".
+    private func registerLocked(
         continuation: CheckedContinuation<String, Error>?,
         taskIdentifier: Int,
         conversationID: UUID,
+        userMessageID: UUID?,
         bodyFileURL: URL
     ) {
-        queue.async {
-            self.inFlight[taskIdentifier] = InFlightTurn(
-                taskIdentifier: taskIdentifier,
-                conversationID: conversationID,
-                continuation: continuation
-            )
-            self.responseBuffers[taskIdentifier] = Data()
-            // Fresh task, fresh latches. `taskIdentifier` is unique only among
-            // OUTSTANDING tasks in a session, so a leftover latch from a
-            // completed task with the same id would claim a departure that
-            // belongs to a different turn.
-            self.anyBytesDepartedTaskIDs.remove(taskIdentifier)
-            self.bodyFullySentTaskIDs.remove(taskIdentifier)
-            self.cancelRequestedTaskIDs.remove(taskIdentifier)
-            self.bodyURLs[taskIdentifier] = bodyFileURL
+        inFlight[taskIdentifier] = InFlightTurn(
+            taskIdentifier: taskIdentifier,
+            conversationID: conversationID,
+            userMessageID: userMessageID,
+            continuation: continuation
+        )
+        responseBuffers[taskIdentifier] = Data()
+        // Fresh task, fresh latches. `taskIdentifier` is unique only among
+        // OUTSTANDING tasks in a session, so a leftover latch from a
+        // completed task with the same id would claim a departure that
+        // belongs to a different turn.
+        anyBytesDepartedTaskIDs.remove(taskIdentifier)
+        bodyFullySentTaskIDs.remove(taskIdentifier)
+        cancelRequestedTaskIDs.remove(taskIdentifier)
+        bodyURLs[taskIdentifier] = bodyFileURL
 #if DEBUG
-            self.diagSentAt[taskIdentifier] = Date()
+        diagSentAt[taskIdentifier] = Date()
 #endif
-        }
     }
 }
 
@@ -909,6 +1236,11 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let id = task.taskIdentifier
+        // STAMPED FIRST, before the queue hop and before any decode: this is the
+        // instant the hop ended, and everything after it is this app's own
+        // persistence. Carried through the awaited store work so the elapsed
+        // time the ledger records measures the gateway and not us.
+        let completedAt = Date()
 
         // Recover the metadata envelope from `taskDescription`. May be nil on
         // a foreign/older task; degrade gracefully (no cleanup, no append).
@@ -931,6 +1263,11 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // The exact user `Message.id` for per-message status flips; nil on old
         // taskDescription blobs / unthreaded callers → conversation-wide fallback.
         let userMessageID: UUID? = metadata?.userMessageID
+        // The ledger row this dispatch opened, and the id its reply must be
+        // inserted under. Both nil on a pre-upgrade blob or a dispatch whose
+        // insert failed — such a turn lands exactly as it always did, measuring
+        // nothing and fabricating no row after the fact.
+        let attemptID: UUID? = metadata?.attemptID
         // The URL loading system's own cumulative send counter, read once here
         // (off the serial queue, on the task, after it terminated). It covers
         // out-of-process attempts this process never witnessed, which is why
@@ -964,6 +1301,31 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             // that survived carries the flag itself, and a resurrected task can
             // only have this.
             let stopWasRequested = self.cancelRequestedTaskIDs.remove(id) != nil
+
+            // What the gateway said about the turn, parsed INDEPENDENTLY of the
+            // strict reply decoder and from ANY complete body — a non-2xx
+            // response can still report usage for work the gateway did and
+            // failed to return. Parsed once, and only when there is a row to
+            // write it to. Never logged; see `GatewayResponseMetadata`.
+            let reported: GatewayResponseMetadata? =
+                attemptID == nil ? nil : GatewayResponseMetadata.parse(buffered)
+            /// Build this landing's terminal observation, or nil when this
+            /// dispatch has no row. `completedAt` is the stamp taken at the top
+            /// of the callback, never a fresh `Date()` down here.
+            ///
+            /// `@Sendable` because the persistence branches call it from inside
+            /// the `Task`s that hold the background-wake barrier open; it
+            /// captures three `Sendable` values and nothing else.
+            let observe: @Sendable (GatewayAttemptOutcome, Int?) -> TerminalAttemptObservation? = { outcome, code in
+                guard let attemptID else { return nil }
+                return TerminalAttemptObservation(
+                    attemptID: attemptID,
+                    completedAt: completedAt,
+                    outcome: outcome,
+                    appErrorCode: code,
+                    metadata: reported
+                )
+            }
 
             // A turn with no awaiting continuation is FIRE-AND-FORGET (the
             // headless Action-Button intent) — or a relaunched turn whose
@@ -999,7 +1361,13 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                     if responseOverCap {
                         resolve(.failure(AppError.remoteAgentInvalidResponse))
                         if let cid = conversationID {
-                            self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: .remoteAgentInvalidResponse, notifyUser: notifyUserOnFailure)
+                            self.postTurnFailed(
+                                conversationID: cid,
+                                userMessageID: userMessageID,
+                                error: .remoteAgentInvalidResponse,
+                                notifyUser: notifyUserOnFailure,
+                                attempt: observe(.failed, AppError.remoteAgentInvalidResponse.errorCode)
+                            )
                         }
                         return
                     }
@@ -1035,7 +1403,17 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         if let certError {
                             resolve(.failure(certError))
                             if let cid = conversationID {
-                                self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: certError, notifyUser: notifyUserOnFailure)
+                                // A trust/internal cancellation keeps its
+                                // CLASSIFIED failure and never becomes a user
+                                // cancel — the request was refused by this
+                                // device, which is a verdict, not a Stop.
+                                self.postTurnFailed(
+                                    conversationID: cid,
+                                    userMessageID: userMessageID,
+                                    error: certError,
+                                    notifyUser: notifyUserOnFailure,
+                                    attempt: observe(.failed, certError.errorCode)
+                                )
                             }
                             return
                         }
@@ -1082,14 +1460,37 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         // it as the transport failure it is.
                         if entry == nil, !stopWasRequested {
                             if let cid = conversationID {
-                                self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: nil, notifyUser: true)
+                                // THE ATTEMPT IS `unknown`, NOT `failed`, AND
+                                // NOT `cancelled`. An authoritative terminal
+                                // callback did arrive, so the row is entitled to
+                                // close — but nobody in this process can say
+                                // what it means: the live cancel claim died with
+                                // the previous launch, and a force-quit reports
+                                // every resurrected task as `.cancelled`
+                                // regardless of what the gateway did. The
+                                // MESSAGE still goes `failed`, because the user
+                                // needs the Retry chip either way; the ledger
+                                // simply refuses to guess.
+                                self.postTurnFailed(
+                                    conversationID: cid,
+                                    userMessageID: userMessageID,
+                                    error: nil,
+                                    notifyUser: true,
+                                    attempt: observe(.unknown, nil)
+                                )
                             }
                             return
                         }
                         if entry != nil, entry?.cancelRequested != true, !stopWasRequested {
                             let peerReset = AppError.remoteAgentUnreachable
                             if let cid = conversationID {
-                                self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: peerReset, notifyUser: notifyUserOnFailure)
+                                self.postTurnFailed(
+                                    conversationID: cid,
+                                    userMessageID: userMessageID,
+                                    error: peerReset,
+                                    notifyUser: notifyUserOnFailure,
+                                    attempt: observe(.failed, peerReset.errorCode)
+                                )
                             }
                             resolve(.failure(peerReset))
                             return
@@ -1135,20 +1536,42 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                                     } else {
                                         await ConversationStore.shared.markPendingUserTurns(conversationID: cid, to: "failed")
                                     }
+                                    // Terminalized on its own because the status
+                                    // writer this branch uses carries no
+                                    // classification and therefore no attempt
+                                    // join. A second save, not a second truth:
+                                    // the write is update-only out of `inFlight`
+                                    // and claimed, so it lands once or not at
+                                    // all.
+                                    if let observation = observe(.cancelled, nil) {
+                                        await ConversationStore.shared.terminalizeGatewayAttempt(observation)
+                                    }
                                 case .provableNonDelivery(let error):
                                     let classification = ConversationStore.TurnFailureClassification(
                                         failureCode: error.errorCode,
                                         wireCode: nil,
                                         hadHistoryImages: nil
                                     )
+                                    // OUTCOME `cancelled`, code carried anyway:
+                                    // the user stopped this turn, and this
+                                    // device can also prove nothing left it. The
+                                    // outcome names who ended the attempt; the
+                                    // code records what the client could show
+                                    // for it.
+                                    let observation = observe(.cancelled, error.errorCode)
                                     if let mid = userMessageID {
                                         await ConversationStore.shared.failTurn(
-                                            messageID: mid, classification: classification
+                                            messageID: mid,
+                                            classification: classification,
+                                            attempt: observation
                                         )
                                     } else {
                                         await ConversationStore.shared.failPendingUserTurns(
                                             conversationID: cid, classification: classification
                                         )
+                                        if let observation {
+                                            await ConversationStore.shared.terminalizeGatewayAttempt(observation)
+                                        }
                                     }
                                 }
                                 self.endPersistenceWork()
@@ -1160,12 +1583,24 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                     let mapped = Self.mapURLError(urlError)
                     resolve(.failure(mapped))
                     if let cid = conversationID {
-                        self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: mapped, notifyUser: notifyUserOnFailure)
+                        self.postTurnFailed(
+                            conversationID: cid,
+                            userMessageID: userMessageID,
+                            error: mapped,
+                            notifyUser: notifyUserOnFailure,
+                            attempt: observe(.failed, mapped.errorCode)
+                        )
                     }
                 } else {
                     resolve(.failure(AppError.remoteAgentUnreachable))
                     if let cid = conversationID {
-                        self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: .remoteAgentUnreachable, notifyUser: notifyUserOnFailure)
+                        self.postTurnFailed(
+                            conversationID: cid,
+                            userMessageID: userMessageID,
+                            error: .remoteAgentUnreachable,
+                            notifyUser: notifyUserOnFailure,
+                            attempt: observe(.failed, AppError.remoteAgentUnreachable.errorCode)
+                        )
                     }
                 }
                 return
@@ -1175,7 +1610,13 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             guard let http = task.response as? HTTPURLResponse else {
                 resolve(.failure(AppError.remoteAgentInvalidResponse))
                 if let cid = conversationID {
-                    self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: .remoteAgentInvalidResponse, notifyUser: notifyUserOnFailure)
+                    self.postTurnFailed(
+                        conversationID: cid,
+                        userMessageID: userMessageID,
+                        error: .remoteAgentInvalidResponse,
+                        notifyUser: notifyUserOnFailure,
+                        attempt: observe(.failed, AppError.remoteAgentInvalidResponse.errorCode)
+                    )
                 }
                 return
             }
@@ -1197,7 +1638,8 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                         error: classified.appError,
                         wireCode: classified.wireCode,
                         hadHistoryImages: metadata?.requestHadHistoryImages,
-                        notifyUser: notifyUserOnFailure
+                        notifyUser: notifyUserOnFailure,
+                        attempt: observe(.failed, classified.appError.errorCode)
                     )
                 }
                 return
@@ -1206,7 +1648,13 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             if let mapped = backend.statusMap.map(http.statusCode) {
                 resolve(.failure(mapped))
                 if let cid = conversationID {
-                    self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: mapped, notifyUser: notifyUserOnFailure)
+                    self.postTurnFailed(
+                        conversationID: cid,
+                        userMessageID: userMessageID,
+                        error: mapped,
+                        notifyUser: notifyUserOnFailure,
+                        attempt: observe(.failed, mapped.errorCode)
+                    )
                 }
                 return
             }
@@ -1222,7 +1670,13 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             } catch {
                 resolve(.failure(AppError.remoteAgentInvalidResponse))
                 if let cid = conversationID {
-                    self.postTurnFailed(conversationID: cid, userMessageID: userMessageID, error: .remoteAgentInvalidResponse, notifyUser: notifyUserOnFailure)
+                    self.postTurnFailed(
+                        conversationID: cid,
+                        userMessageID: userMessageID,
+                        error: .remoteAgentInvalidResponse,
+                        notifyUser: notifyUserOnFailure,
+                        attempt: observe(.failed, AppError.remoteAgentInvalidResponse.errorCode)
+                    )
                 }
                 return
             }
@@ -1256,6 +1710,12 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                     fileTransferLaneID: metadata?.fileTransferLaneID,
                     outputBoxKey: metadata?.outputBoxKey,
                     dispatchChatSignature: metadata?.dispatchChatSignature,
+                    // Deterministic when this dispatch minted one — that is what
+                    // makes a replayed completion return the reply it already
+                    // wrote instead of inserting a second bubble.
+                    agentMessageID: metadata?.agentMessageID,
+                    // Reply + exact user flip + attempt terminal, in ONE save.
+                    attempt: observe(.succeeded, nil),
                     didPersist: {
                         resolve(.success(reply))
                     }
@@ -1376,11 +1836,24 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         /// metadata). nil = unknown / pre-upgrade blob → no success recorded,
         /// which is the fail-closed direction.
         dispatchChatSignature: String? = nil,
+        /// The `Message.id` this reply must be inserted under, minted at
+        /// dispatch and carried in the durable task metadata (or handed over
+        /// directly by the macOS foreground drain). It is what makes reply
+        /// insertion idempotent across a replayed or duplicated completion, and
+        /// it owes nothing to the ledger — `nil` (a pre-upgrade blob) falls back
+        /// to a fresh id, i.e. exactly the old behaviour.
+        agentMessageID: UUID? = nil,
+        /// What this landing observed at the terminal boundary, when the
+        /// dispatch opened a ledger row. Joined to the SAME save as the reply
+        /// and the user flip. Nil for a legacy landing or a dispatch that
+        /// measured nothing — neither fabricates a row.
+        attempt: TerminalAttemptObservation? = nil,
         didPersist: (() -> Void)? = nil
     ) async -> Bool {
-        let agentMessageID = UUID()
+        let agentMessageID = agentMessageID ?? UUID()
         // Persist the reply + exact user sent-flip + explicit output-scan lane
-        // in ONE Core Data transaction whenever modern metadata identifies the
+        // + the attempt's one terminal transition in ONE Core Data transaction
+        // whenever modern metadata identifies the
         // user turn. A process death can therefore never expose a sent user
         // bubble without its reply, or a reply whose recovery lane was lost.
         if let userMessageID {
@@ -1392,7 +1865,8 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                 sourceDevice: SourceDevice.current,
                 agentMessageID: agentMessageID,
                 outputScanLaneID: fileTransferLaneID,
-                outputBoxKey: outputBoxKey
+                outputBoxKey: outputBoxKey,
+                attempt: attempt
             )) != nil else {
                 return false
             }
@@ -1812,7 +2286,12 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         error: AppError?,
         wireCode: AdapterWireCode? = nil,
         hadHistoryImages: Bool? = nil,
-        notifyUser: Bool
+        notifyUser: Bool,
+        /// This landing's terminal observation, when the dispatch opened a
+        /// ledger row. Rides the SAME save as the classification below. Nil
+        /// leaves the ledger untouched, which is what a legacy or unmeasured
+        /// landing is entitled to.
+        attempt: TerminalAttemptObservation? = nil
     ) {
         // Authoritative send-state flip on the delegate path (mirrors the
         // success path in `recordReply`): mark the pending user turn `failed`
@@ -1846,9 +2325,20 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
                 )
             }
             if let userMessageID {
-                await ConversationStore.shared.failTurn(messageID: userMessageID, classification: classification)
+                await ConversationStore.shared.failTurn(
+                    messageID: userMessageID,
+                    classification: classification,
+                    attempt: attempt
+                )
             } else {
                 await ConversationStore.shared.failPendingUserTurns(conversationID: conversationID, classification: classification)
+                // A conversation-wide flip has no exact turn to join a row to,
+                // so the attempt closes on its own. Structurally unreachable
+                // today (a dispatch with no exact user id opens no row) and kept
+                // so a future wide caller cannot strand one `inFlight`.
+                if let attempt {
+                    await ConversationStore.shared.terminalizeGatewayAttempt(attempt)
+                }
             }
             // Fire-and-forget headless turns (no awaiting caller) get a
             // user-facing failure notification so the error isn't silent now

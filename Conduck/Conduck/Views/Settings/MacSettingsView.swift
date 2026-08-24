@@ -65,6 +65,17 @@ struct MacSettingsView: View {
     /// Copy button flicker. This instance persists for the whole Settings session.
     @State private var diagnosticsRunner = DiagnosticsRunner()
 
+    /// Owned HERE for the same reason as the runner above: the `detail` `switch`
+    /// rebuilds the Usage category on every sidebar change, and a self-owned
+    /// model would refetch and re-aggregate the whole attempt ledger each
+    /// return. Constructing it is free — it fetches nothing until the Usage
+    /// screen calls `start()` — so building one for a session that never opens
+    /// Usage costs nothing either. Deliberately NOT pre-warmed the way
+    /// Diagnostics is: Diagnostics pre-reads to kill a visible reflow, whereas
+    /// this one would be a whole-ledger Core Data sweep for a screen nobody may
+    /// open.
+    @State private var usageModel = UsageDashboardModel()
+
     /// Drives the unified "Discard changes?" confirm shared by every outer exit
     /// (Done, Esc, sidebar switch) when a buffered editor has unsaved edits.
     @State private var showingDiscardConfirm = false
@@ -77,6 +88,7 @@ struct MacSettingsView: View {
         case general
         case personalAI
         case voice
+        case usage
         case diagnostics
         case about
 
@@ -87,6 +99,7 @@ struct MacSettingsView: View {
             case .personalAI:   return LocalizedStringResource("settings.mac.personalAI.title", defaultValue: "Personal AI")
             case .voice:        return LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice")
             case .general:      return LocalizedStringResource("settings.mac.general.title", defaultValue: "General")
+            case .usage:        return UsageDashboardIdentity.title
             case .diagnostics:  return LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics")
             case .about:        return LocalizedStringResource("settings.mac.about.title", defaultValue: "About")
             }
@@ -97,6 +110,7 @@ struct MacSettingsView: View {
             case .personalAI:   return "brain.head.profile"
             case .voice:        return "waveform"
             case .general:      return "gearshape"
+            case .usage:        return UsageDashboardIdentity.systemImage
             case .diagnostics:  return "stethoscope"
             case .about:        return "info.circle"
             }
@@ -373,6 +387,8 @@ struct MacSettingsView: View {
             MacVoiceCategory(viewModel: viewModel)
         case .general:
             MacGeneralCategory(viewModel: viewModel)
+        case .usage:
+            MacUsageCategory(model: usageModel)
         case .diagnostics:
             MacDiagnosticsCategory(runner: diagnosticsRunner)
         case .about:

@@ -1311,7 +1311,10 @@ struct DictationPopoverView: View {
     private func sendErrorActions(vm: ConversationDetailViewModel) -> some View {
         HStack(spacing: 12) {
             if let failed = lastFailedUserTurn, sendErrorIsRetryable(vm) {
-                Button(action: { Task { await vm.retry(failed) } }) {
+                // `fromPopover: true` — this button IS the menu-bar surface, so
+                // the usage ledger credits the attempt to the menu bar even when
+                // the original send came from the window (one VM serves both).
+                Button(action: { Task { await vm.retry(failed, fromPopover: true) } }) {
                     Text(String(localized: LocalizedStringResource(
                         "popover.retry",
                         defaultValue: "Retry"

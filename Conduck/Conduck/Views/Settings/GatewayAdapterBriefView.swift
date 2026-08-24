@@ -249,7 +249,7 @@ struct GatewayAdapterBriefView: View {
     /// source, never stales on a contract revision) — deliberately NARROWED to
     /// stop before that brief's exposure and pairing, because this guided flow
     /// owns those via `conduck-connect` — with a self-contained fallback list for
-    /// tools without web access, aligned to contract revision 1.7. The full
+    /// tools without web access, aligned to contract revision 1.8. The full
     /// contract is at `Constants.adapterContractURL`; both raw `.md` URLs are
     /// hardcoded inline below. `internal` so a content-lock test can read it via
     /// `@testable import`.
@@ -273,6 +273,17 @@ struct GatewayAdapterBriefView: View {
     /// through `conduck-connect` and the engine's own standing instructions, so
     /// importing it here would hand an autonomous coding agent work that is not its
     /// to do — the same boundary the exposure/pairing rule below draws.
+    ///
+    /// Revision 1.8 is purely additive — one new "Optional response metadata"
+    /// section — and it DOES move one thing here: item 10 below. The fields are
+    /// permanently optional and no adapter becomes nonconforming by omitting
+    /// them, so nothing in items 1-9 changes and the conformance checker does
+    /// not test them. They are carried anyway because the two SHOULDs are
+    /// adapter-code decisions best made while the adapter is being written: a
+    /// `usage` figure covering one model call out of several is worse than none
+    /// (nothing downstream can tell them apart), and a truncated reply with no
+    /// `finish_reason` is indistinguishable from a finished one. An offline
+    /// build that never hears the recommendation reports nothing forever.
     ///
     /// **Workflow-ownership boundary — the load-bearing rule of this string.**
     /// This text is pasted into an AUTONOMOUS coding agent, so what it can act on
@@ -311,6 +322,7 @@ struct GatewayAdapterBriefView: View {
     7. If you answer a request before reading its body to the end (a 401, a 413), either drain the remainder or close the connection — never leave it and read the next request off the same one. Loopback curl cannot catch this; behind a pooling HTTPS front it corrupts later requests that are themselves fine.
     8. Install it under a supervisor (launchd, systemd, or equivalent) so it survives restarts and logouts, then re-run both checks against the SUPERVISED instance — a supervisor changes the environment, working directory and user, so a green foreground run proves nothing about it.
     9. Safety: never pass chat text through a shell; tool approvals fail closed (no auto-approve-everything); never log message content or tokens.
+    10. Optional, but do it if you can: alongside "choices", report top-level "model" and "id", a "usage" object with prompt_tokens / completion_tokens / total_tokens, and a "finish_reason" on the single choices entry. All four are optional and omitting them is fully conformant. Report a number only when you actually have it — never a placeholder zero — and make "usage" cover the WHOLE turn (every model call the agent made answering it, tool loops and sub-agents included), since a figure covering one call out of several is worse than no figure. If the engine stopped on an output limit, say so with "finish_reason": "length".
 
     If you can reach GitHub but not conduck.com, you can still run the automated conformance check — download it and pass the URL and token explicitly, never bare (with no URL it waits at an interactive prompt and a non-interactive run dies there):
     curl -fsSLO https://github.com/gigaduckai/conduck-connect/releases/latest/download/conduck-connect.sh

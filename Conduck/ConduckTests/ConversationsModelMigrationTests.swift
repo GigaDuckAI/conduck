@@ -5,11 +5,18 @@
 //
 // REAL step-by-step lightweight-migration coverage for the Conversations Core
 // Data model — one test per adjacent version pair. Every version is strictly
-// ADDITIVE (new OPTIONAL attributes only, which is also what CloudKit requires),
-// so automatic lightweight migration must open the older on-disk store unchanged
+// ADDITIVE (new OPTIONAL attributes, and from v11 a new entity with its optional
+// relationship — all of which CloudKit likewise requires to be optional), so
+// automatic lightweight migration must open the older on-disk store unchanged
 // and default each new column to nil on the rows already there. Each shipped
 // version is installed on the founder's devices, so every pair is a live upgrade
 // path, not a hypothetical.
+//
+// From v11 the file also covers DELETION, which is not a migration question but
+// belongs beside the relationship that answers it: an attempt row must die with
+// the message it measured, and an attempt row that arrived without its
+// relationship must be reachable by its scalar conversation id, because the
+// cascade cannot see it.
 //
 // Each test loads BOTH model versions explicitly from the compiled `.momd` in
 // the host app bundle (the `Conversations <N>.mom` layout, same as
@@ -321,7 +328,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     func testV8StoreMigratesToV9WithNilOutputDeliveryCensus() async throws {
         let v8 = try requiredModel(named: "Conversations 8.mom")
         let v9 = try requiredModel(named: "Conversations 9.mom")
-        let v10 = try requiredModel(named: "Conversations 10.mom")
+        let current = try requiredModel(named: "Conversations 11.mom")
         let conversationID = UUID()
         let messageID = UUID()
         let boxKey = "\(conversationID.uuidString)/out-0123456789abcdef"
@@ -433,16 +440,16 @@ final class ConversationsModelMigrationTests: XCTestCase {
         // added — a failure about the test's staging, not about the migration
         // it is meant to pin. Each new model version therefore moves this half
         // forward while the assertions above stay exactly where they were, and
-        // the chained v8 → v9 → v10 load is a free extra: it proves the census
-        // columns survive the NEXT lightweight migration too.
-        let v10Container = try await loadStore(model: v10)
-        let v10Context = v10Container.newBackgroundContext()
-        try await v10Context.perform {
+        // the chained v8 → v9 → v11 load is a free extra: it proves the census
+        // columns survive every LATER lightweight migration too.
+        let currentContainer = try await loadStore(model: current)
+        let currentContext = currentContainer.newBackgroundContext()
+        try await currentContext.perform {
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
             request.fetchLimit = 1
             let message = try XCTUnwrap(
-                v10Context.fetch(request).first,
+                currentContext.fetch(request).first,
                 "the row must survive the second lightweight migration too"
             )
 
@@ -469,7 +476,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
             message.setValue(NSNumber(value: Int32(0)), forKey: "outputRefusedShapeCount")
             message.setValue(NSNumber(value: Int32(0)), forKey: "outputRefusedShapeOverlongCount")
             message.setValue(NSNumber(value: Int32(0)), forKey: "outputRefusedShapeWhitespaceCount")
-            try v10Context.save()
+            try currentContext.save()
             XCTAssertEqual(MessageRecord(managedObject: message).outputDeliveryOutcome?.shapeRefused,
                            .nothingRefused,
                            "an explicit zero survives as zero — the distinction the whole feature "
@@ -712,12 +719,359 @@ final class ConversationsModelMigrationTests: XCTestCase {
         }
     }
 
-    /// The model the APP opens is v10. A pointer left on v9 would ship code that
-    /// reads four columns from a store that has none — and, worse, would not fail
-    /// loudly: KVC on a missing attribute is what the record's tolerant reads are
-    /// built to survive, so every marker would simply always be nil and every row
-    /// would read unseen forever.
-    func testTheCurrentModelVersionIsV10() throws {
+    /// v11 opens the gateway-attempt ledger: a store of what each dispatch to a
+    /// gateway did, kept beside the conversation it belongs to rather than sent
+    /// anywhere. This is the first version that adds an ENTITY rather than a
+    /// column, which lightweight migration handles the same way — the new table
+    /// simply starts empty.
+    ///
+    /// THE THING THIS TEST EXISTS TO CATCH is a v10 store arriving with anything
+    /// in the ledger at all. Nothing may be back-filled: the ledger's whole claim
+    /// is that it measures dispatches it actually observed, and a migration that
+    /// invented a row per historical message would make every coverage figure and
+    /// every reliability rate a fiction from the first launch. An empty ledger on
+    /// a full history is the correct, and the only honest, migration result.
+    func testV10StoreMigratesToV11WithAnEmptyGatewayAttemptLedger() async throws {
+        let v10 = try requiredModel(named: "Conversations 10.mom")
+        let v11 = try requiredModel(named: "Conversations 11.mom")
+        let conversationID = UUID()
+        let messageID = UUID()
+        let attemptID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        do {
+            let container = try await loadStore(model: v10)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let conversation = NSEntityDescription.insertNewObject(
+                    forEntityName: "Conversation",
+                    into: context
+                )
+                conversation.setValue(conversationID, forKey: "id")
+                conversation.setValue("openclaw", forKey: "backend")
+                conversation.setValue(Date(timeIntervalSince1970: 1_799_000_000), forKey: "createdAt")
+                conversation.setValue(startedAt, forKey: "lastActivityAt")
+                conversation.setValue(conversationID.uuidString, forKey: "sessionID")
+
+                let message = NSEntityDescription.insertNewObject(
+                    forEntityName: "Message",
+                    into: context
+                )
+                message.setValue(messageID, forKey: "id")
+                message.setValue("user", forKey: "role")
+                message.setValue("an unmeasured turn", forKey: "text")
+                message.setValue(startedAt, forKey: "createdAt")
+                message.setValue("iphone-voice", forKey: "sourceDevice")
+                message.setValue("sent", forKey: "status")
+                message.setValue(conversation, forKey: "conversation")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v11)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let messageRequest = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            messageRequest.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
+            messageRequest.fetchLimit = 1
+            let message = try XCTUnwrap(
+                context.fetch(messageRequest).first,
+                "the v10 message row must survive migration"
+            )
+
+            // Old columns preserved.
+            XCTAssertEqual(message.value(forKey: "text") as? String, "an unmeasured turn")
+            XCTAssertEqual(message.value(forKey: "sourceDevice") as? String, "iphone-voice")
+            XCTAssertEqual(message.value(forKey: "status") as? String, "sent")
+
+            // THE ASSERTION. The ledger is empty, and the message that predates
+            // it is linked to nothing.
+            let attemptRequest = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+            XCTAssertEqual(
+                try context.count(for: attemptRequest), 0,
+                "migration back-fills NOTHING — a fabricated attempt per historical message would "
+                + "make every rate and every coverage figure a fiction before the first dispatch")
+            XCTAssertEqual((message.value(forKey: "gatewayAttempts") as? NSSet)?.count, 0)
+
+            // And the ledger is writable post-migration, at its NATIVE types.
+            // The three identities are `UUID` columns, not UUID strings: a
+            // production CloudKit schema is additive-only, so what deploys here
+            // can never be re-typed, and a string column would add a
+            // malformed-value parsing path with nowhere honest to fail.
+            let attempt = NSEntityDescription.insertNewObject(
+                forEntityName: "GatewayAttempt", into: context)
+            attempt.setValue(attemptID, forKey: "id")
+            attempt.setValue(conversationID, forKey: "conversationID")
+            attempt.setValue(messageID, forKey: "userMessageID")
+            attempt.setValue("openclaw", forKey: "gatewayRef")
+            attempt.setValue(startedAt, forKey: "startedAt")
+            attempt.setValue("inFlight", forKey: "outcome")
+            attempt.setValue("app", forKey: "originSurface")
+            attempt.setValue("voice", forKey: "inputMode")
+            attempt.setValue(NSNumber(value: Int16(1)), forKey: "recordVersion")
+            attempt.setValue(message, forKey: "userMessage")
+            try context.save()
+
+            XCTAssertEqual(attempt.value(forKey: "id") as? UUID, attemptID)
+            XCTAssertEqual(attempt.value(forKey: "conversationID") as? UUID, conversationID)
+            XCTAssertEqual(attempt.value(forKey: "userMessageID") as? UUID, messageID)
+            XCTAssertEqual(attempt.value(forKey: "startedAt") as? Date, startedAt)
+            XCTAssertEqual((message.value(forKey: "gatewayAttempts") as? NSSet)?.count, 1,
+                           "the inverse is maintained, so the cascade has something to follow")
+
+            // An OPEN row reports nothing about its ending, and says so with nil
+            // rather than with a zero. Everything the dashboard divides by rests
+            // on that: a scalar column would report every unfinished attempt as
+            // having completed instantly, reported zero tokens, and failed with
+            // error code 0.
+            for column in ["completedAt", "appErrorCode", "reportedInputTokens",
+                           "reportedOutputTokens", "reportedTotalTokens", "reportedModel",
+                           "reportedResponseID", "finishReason", "requestedModel"] {
+                XCTAssertNil(
+                    attempt.value(forKey: column),
+                    "GatewayAttempt.\(column) must be nil on an open row — a default here is a "
+                    + "measurement nobody took")
+            }
+        }
+    }
+
+    /// v11 is ADDITIVE: it adds exactly one entity, exactly one relationship on
+    /// `Message`, and NOTHING else — no new column on any pre-existing entity, no
+    /// removal anywhere. Asserted against the compiled models rather than the XML,
+    /// so an edit to v10 in place — the one genuine data-loss path in this change
+    /// — shows up here as v10 already carrying an entity it never shipped.
+    ///
+    /// The per-attribute assertions are the permanent half. The production
+    /// CloudKit schema is additive-only: the types, the optionality and the
+    /// absence of defaults that deploy with this entity are what it keeps
+    /// forever, and a `defaultValueString` on any counter would make "the gateway
+    /// reported nothing" indistinguishable from "the gateway reported zero" for
+    /// every row ever written.
+    func testV11AddsTheGatewayAttemptEntityAndNothingElse() throws {
+        let v10 = try requiredModel(named: "Conversations 10.mom")
+        let v11 = try requiredModel(named: "Conversations 11.mom")
+
+        XCTAssertEqual(Set(v11.entitiesByName.keys).subtracting(v10.entitiesByName.keys),
+                       ["GatewayAttempt"],
+                       "exactly one new entity — anything else is a schema this release never "
+                       + "reviewed")
+        XCTAssertTrue(Set(v10.entitiesByName.keys).subtracting(v11.entitiesByName.keys).isEmpty,
+                      "an entity removal is data loss, not a migration")
+
+        // Pre-existing entities gain no columns, and only `Message` gains a
+        // relationship.
+        for (name, oldEntity) in v10.entitiesByName {
+            let newEntity = try XCTUnwrap(v11.entitiesByName[name])
+            XCTAssertEqual(Set(newEntity.attributesByName.keys),
+                           Set(oldEntity.attributesByName.keys),
+                           "\(name) keeps exactly its v10 columns — the ledger lives in its own "
+                           + "entity precisely so no existing row grows")
+            let addedRelationships = Set(newEntity.relationshipsByName.keys)
+                .subtracting(oldEntity.relationshipsByName.keys)
+            let expectedRelationships: Set<String> = name == "Message" ? ["gatewayAttempts"] : []
+            XCTAssertEqual(addedRelationships, expectedRelationships,
+                           "only `Message` gains a link to the ledger — an attempt is measured "
+                           + "against a turn, and `conversationID` covers the rest")
+        }
+
+        let attempt = try XCTUnwrap(v11.entitiesByName["GatewayAttempt"])
+        let expectedTypes: [String: NSAttributeType] = [
+            "id": .UUIDAttributeType,
+            "conversationID": .UUIDAttributeType,
+            "userMessageID": .UUIDAttributeType,
+            "gatewayRef": .stringAttributeType,
+            "startedAt": .dateAttributeType,
+            "completedAt": .dateAttributeType,
+            "outcome": .stringAttributeType,
+            "appErrorCode": .integer32AttributeType,
+            "originSurface": .stringAttributeType,
+            "inputMode": .stringAttributeType,
+            "requestedModel": .stringAttributeType,
+            "reportedModel": .stringAttributeType,
+            "reportedResponseID": .stringAttributeType,
+            "finishReason": .stringAttributeType,
+            "reportedInputTokens": .integer64AttributeType,
+            "reportedOutputTokens": .integer64AttributeType,
+            "reportedTotalTokens": .integer64AttributeType,
+            "recordVersion": .integer16AttributeType,
+        ]
+        XCTAssertEqual(Set(attempt.attributesByName.keys), Set(expectedTypes.keys),
+                       "the entity ships exactly these columns; an extra one is permanent and a "
+                       + "missing one is a fact the account can never carry")
+        for (name, attribute) in attempt.attributesByName {
+            XCTAssertEqual(attribute.attributeType, expectedTypes[name],
+                           "\(name) ships at its settled type: a production CloudKit schema is "
+                           + "additive-only, so the type it deploys with is the type it keeps")
+            XCTAssertTrue(attribute.isOptional,
+                          "\(name) must be optional — CloudKit requires it, and the domain rules "
+                          + "that make a field mandatory on a NEW write are enforced in the store")
+            XCTAssertNil(attribute.defaultValue,
+                         "\(name) must carry NO default: a defaulted counter reports zero tokens "
+                         + "for a gateway that reported none, and a defaulted date closes an "
+                         + "attempt nobody saw end")
+        }
+
+        // The relationship pair, in both directions. The cascade is what makes
+        // the deletion promise true — an attempt cannot outlive the turn it
+        // measured — and the nullify keeps a surviving attempt from taking a
+        // message with it.
+        let cascade = try XCTUnwrap(
+            v11.entitiesByName["Message"]?.relationshipsByName["gatewayAttempts"])
+        XCTAssertTrue(cascade.isToMany)
+        XCTAssertTrue(cascade.isOptional)
+        XCTAssertEqual(cascade.deleteRule, .cascadeDeleteRule)
+        XCTAssertEqual(cascade.destinationEntity?.name, "GatewayAttempt")
+        XCTAssertEqual(cascade.inverseRelationship?.name, "userMessage")
+        XCTAssertFalse(cascade.isOrdered,
+                       "CloudKit rejects an ordered relationship; attempts are ordered in code by "
+                       + "startedAt")
+
+        let inverse = try XCTUnwrap(attempt.relationshipsByName["userMessage"])
+        XCTAssertFalse(inverse.isToMany)
+        XCTAssertEqual(inverse.maxCount, 1)
+        XCTAssertTrue(inverse.isOptional)
+        XCTAssertEqual(inverse.deleteRule, .nullifyDeleteRule)
+        XCTAssertEqual(inverse.inverseRelationship?.name, "gatewayAttempts")
+        XCTAssertEqual(Set(attempt.relationshipsByName.keys), ["userMessage"],
+                       "no direct Conversation relationship — `conversationID` supplies deletion "
+                       + "and query identity without a second merge surface")
+    }
+
+    /// DELETING A CONVERSATION DELETES ITS MEASUREMENTS. The dashboard's promise
+    /// is that it describes conversations the user has kept, so the graph has to
+    /// carry the deletion the whole way down: conversation → messages → attempts,
+    /// in one pass, with nothing left addressable afterwards.
+    func testDeletingAConversationCascadesThroughMessagesToAttempts() async throws {
+        let v11 = try requiredModel(named: "Conversations 11.mom")
+        let container = try await loadStore(model: v11)
+        let context = container.newBackgroundContext()
+
+        try await context.perform {
+            let conversation = NSEntityDescription.insertNewObject(
+                forEntityName: "Conversation", into: context)
+            conversation.setValue(UUID(), forKey: "id")
+            conversation.setValue("openclaw", forKey: "backend")
+            conversation.setValue(Date(), forKey: "createdAt")
+
+            let message = NSEntityDescription.insertNewObject(
+                forEntityName: "Message", into: context)
+            message.setValue(UUID(), forKey: "id")
+            message.setValue("user", forKey: "role")
+            message.setValue("ask", forKey: "text")
+            message.setValue(Date(), forKey: "createdAt")
+            message.setValue("iphone-text", forKey: "sourceDevice")
+            message.setValue(conversation, forKey: "conversation")
+
+            // Two attempts on one turn: the retry shape, which is exactly the
+            // case a per-message delete has to get right.
+            for outcome in ["failed", "succeeded"] {
+                let attempt = NSEntityDescription.insertNewObject(
+                    forEntityName: "GatewayAttempt", into: context)
+                attempt.setValue(UUID(), forKey: "id")
+                attempt.setValue(outcome, forKey: "outcome")
+                attempt.setValue(Date(), forKey: "startedAt")
+                attempt.setValue(message, forKey: "userMessage")
+            }
+            try context.save()
+
+            let attemptRequest = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+            XCTAssertEqual(try context.count(for: attemptRequest), 2)
+
+            context.delete(conversation)
+            try context.save()
+
+            XCTAssertEqual(try context.count(for: attemptRequest), 0,
+                           "the cascade runs the whole depth of the graph in one save")
+            XCTAssertEqual(
+                try context.count(for: NSFetchRequest<NSManagedObject>(entityName: "Message")), 0)
+        }
+    }
+
+    /// AND THE CASCADE IS NOT ENOUGH ON ITS OWN, which is why the scalar
+    /// `conversationID` is stored beside the relationship rather than derived
+    /// from it.
+    ///
+    /// A row can genuinely arrive with no `userMessage`: CloudKit imports records
+    /// and relationships out of order, and a client old enough not to know the
+    /// entity cannot run the cascade at all. Such a row is invisible to
+    /// `Conversation → Message → GatewayAttempt` and would survive the deletion
+    /// of everything it describes. The scalar is what a delete-by-conversation
+    /// can still reach, and this test pins both halves of that: the cascade
+    /// misses the detached row, and the scalar predicate finds it.
+    func testADetachedAttemptSurvivesTheCascadeAndIsReachableByItsScalarConversationID()
+        async throws {
+        let v11 = try requiredModel(named: "Conversations 11.mom")
+        let container = try await loadStore(model: v11)
+        let context = container.newBackgroundContext()
+        let conversationID = UUID()
+
+        try await context.perform {
+            let conversation = NSEntityDescription.insertNewObject(
+                forEntityName: "Conversation", into: context)
+            conversation.setValue(conversationID, forKey: "id")
+            conversation.setValue("hermes", forKey: "backend")
+            conversation.setValue(Date(), forKey: "createdAt")
+
+            let message = NSEntityDescription.insertNewObject(
+                forEntityName: "Message", into: context)
+            message.setValue(UUID(), forKey: "id")
+            message.setValue("user", forKey: "role")
+            message.setValue("ask", forKey: "text")
+            message.setValue(Date(), forKey: "createdAt")
+            message.setValue("mac-text", forKey: "sourceDevice")
+            message.setValue(conversation, forKey: "conversation")
+
+            // Attached: the cascade will take this one.
+            let attached = NSEntityDescription.insertNewObject(
+                forEntityName: "GatewayAttempt", into: context)
+            attached.setValue(UUID(), forKey: "id")
+            attached.setValue(conversationID, forKey: "conversationID")
+            attached.setValue("succeeded", forKey: "outcome")
+            attached.setValue(message, forKey: "userMessage")
+
+            // Detached: same conversation by scalar, no relationship at all.
+            let detachedID = UUID()
+            let detached = NSEntityDescription.insertNewObject(
+                forEntityName: "GatewayAttempt", into: context)
+            detached.setValue(detachedID, forKey: "id")
+            detached.setValue(conversationID, forKey: "conversationID")
+            detached.setValue("succeeded", forKey: "outcome")
+            try context.save()
+
+            context.delete(conversation)
+            try context.save()
+
+            let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+            let survivors = try context.fetch(request)
+            XCTAssertEqual(survivors.count, 1,
+                           "the cascade cannot see a row that never had the relationship — which is "
+                           + "precisely the row an out-of-order CloudKit import produces")
+            XCTAssertEqual(survivors.first?.value(forKey: "id") as? UUID, detachedID)
+
+            // The scalar is the handle that still reaches it.
+            let byScalar = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+            byScalar.predicate = NSPredicate(
+                format: "conversationID == %@", conversationID as CVarArg)
+            let reachable = try context.fetch(byScalar)
+            XCTAssertEqual(reachable.count, 1)
+            for row in reachable { context.delete(row) }
+            try context.save()
+
+            XCTAssertEqual(try context.count(for: request), 0,
+                           "an explicit scalar-keyed delete completes what the cascade started — "
+                           + "this is the sweep `deleteConversation` owes the ledger")
+        }
+    }
+
+    /// The model the APP opens is v11. A pointer left on v10 would ship code that
+    /// reads a whole entity from a store that has none — and, worse, would not
+    /// fail loudly at the ledger's edges: KVC on a missing attribute is what the
+    /// record's tolerant reads are built to survive, so the dashboard would simply
+    /// report an account that has never dispatched anything.
+    func testTheCurrentModelVersionIsV11() throws {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         let momd = try XCTUnwrap(
             bundles.compactMap { $0.url(forResource: "Conversations", withExtension: "momd") }.first,
@@ -725,6 +1079,6 @@ final class ConversationsModelMigrationTests: XCTestCase {
         let plist = try XCTUnwrap(
             NSDictionary(contentsOf: momd.appendingPathComponent("VersionInfo.plist")),
             "a compiled momd always carries VersionInfo.plist")
-        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 10")
+        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 11")
     }
 }

@@ -652,6 +652,11 @@ struct ConverseIntent: AppIntent {
                 inputFileTransferSnapshot: dispatchFileLane,
                 fileTransferSnapshot: dispatchFileLane,
                 conversationID: conversationID,
+                // Provenance for the gateway-attempt ledger. The headless
+                // quick-capture lane IS this intent — Shortcut, Action Button,
+                // Siri — and everything it hands over was spoken.
+                origin: .quickCapture,
+                inputMode: .voice,
                 // EXACT per-message status flips in the delegate (a
                 // conversation-wide flip would alias a concurrent in-app
                 // sibling turn's status).

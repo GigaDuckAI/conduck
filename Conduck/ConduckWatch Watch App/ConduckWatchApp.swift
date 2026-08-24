@@ -111,6 +111,26 @@ struct ConduckWatchApp: App {
         // conversational surface backed by `ConversationStore`).
         Task { await ConversationStore.shared.warmUp() }
 
+        // Stale-"sending" recovery. The wrist writes its user turn as `sending`
+        // and lets the converse delegate resolve it — so a jetsam or a
+        // force-quit mid-turn strands that turn at `sending`, with the Retry
+        // chip (which requires `failed`) permanently out of reach. watchOS
+        // jetsams a backgrounded app aggressively, which makes this the surface
+        // that needs the sweep MOST, and the phone's own launch sweep cannot
+        // cover it: live Watch tasks run in another process on another device
+        // and are invisible there.
+        //
+        // Runs AFTER the two sessions are materialized above, so `allTasks`
+        // already reports the tasks the relaunch resurrected.
+        //
+        // MESSAGE-LEVEL ONLY. It never touches a `GatewayAttempt` row: a device
+        // that cannot find a local task has learned nothing about the attempt,
+        // and writing that ignorance down would race the real answer arriving
+        // from the device that owns the task. A stranded attempt is READ as
+        // `unconfirmed` once its grace lapses, and repaired for free by any
+        // later terminal callback or CloudKit sync.
+        Task { await Self.sweepStaleWatchSends() }
+
         // Privacy hygiene — reclaim capture audio and request bodies an abnormal
         // termination stranded in `temporaryDirectory` (see TempScratchSweeper).
         // The wrist needs this MORE than the phone, not less: every cleanup for
@@ -147,6 +167,27 @@ struct ConduckWatchApp: App {
             _showOnboarding = State(initialValue: false)
         }
         #endif
+    }
+
+    /// Flip user turns stranded at `sending` past the store's grace to `failed`,
+    /// excluding every conversation this wrist still holds a live background
+    /// task for — that task's delegate will resolve its turn authoritatively,
+    /// and the exclusion, not the grace, is what makes the sweep safe for turns
+    /// this device owns.
+    ///
+    /// The grace is what covers the turns it CANNOT see: a `sending` row written
+    /// by the iPhone or the Mac and arrived by CloudKit, whose in-flight task is
+    /// invisible from here. That blindness is symmetric — the phone's launch
+    /// sweep is equally blind to live Watch tasks — and the grace is chosen to
+    /// exceed a real turn's duration plus sync skew by a wide margin.
+    ///
+    /// Best-effort and non-throwing: a launch or a background wake must never
+    /// block on it.
+    private static func sweepStaleWatchSends() async {
+        let live = await WatchAudioUploader.shared.liveConversationIDs()
+        await ConversationStore.shared.sweepStaleSendingUserTurns(
+            excludingConversationIDs: live
+        )
     }
 
     var body: some Scene {
@@ -230,6 +271,11 @@ struct ConduckWatchApp: App {
             print("[Watch] Background STT URLSession task completed (id: \(WatchAudioUploader.sessionIdentifier))")
             #endif
             await WatchAudioUploader.shared.handleBackgroundEvents(.stt)
+            // A wake is the wrist's usual way back into memory after the jetsam
+            // that stranded a turn, so recovery runs here as well as at launch —
+            // AFTER the drain, so a turn this very wake just resolved is already
+            // off `sending` and a task still running is still in `allTasks`.
+            await Self.sweepStaleWatchSends()
         }
         .backgroundTask(.urlSession(WatchAudioUploader.converseSessionIdentifier)) {
             // System wakes the app when the agent converse upload completes
@@ -241,6 +287,8 @@ struct ConduckWatchApp: App {
             print("[Watch] Background converse URLSession task completed (id: \(WatchAudioUploader.converseSessionIdentifier))")
             #endif
             await WatchAudioUploader.shared.handleBackgroundEvents(.converse)
+            // Same post-drain recovery as the STT wake above.
+            await Self.sweepStaleWatchSends()
         }
     }
 }

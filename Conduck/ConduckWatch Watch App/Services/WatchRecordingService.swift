@@ -1951,6 +1951,11 @@ final class WatchRecordingService {
             // glyph reader splits on `-`). Bound recordings are still voice, so
             // we key on `pendingTypedSend`, not on `pendingConversationID`.
             let sourceDeviceTag = pendingTypedSend ? "watch-text" : "watch-voice"
+            // The same fact in the ledger's vocabulary, captured HERE beside the
+            // display tag rather than at the dispatch call below: several awaits
+            // sit in between, and this actor is reentrant, so a later read could
+            // see a sibling turn's flag.
+            let inputMode: GatewayInputMode = pendingTypedSend ? .text : .voice
 
             // Append the user turn to the store (source of truth before upload).
             // `status: "sending"` — matching CarPlay and iOS — is what makes a
@@ -2015,7 +2020,7 @@ final class WatchRecordingService {
             // Start the background converse upload. The stamping verdict rides
             // along so the reply-time pointer refresh obeys the same
             // implicit-only rule as the pre-hop stamp above.
-            try WatchAudioUploader.shared.uploadConverse(
+            try await WatchAudioUploader.shared.uploadConverse(
                 ref: ref,
                 url: url,
                 token: token,
@@ -2030,6 +2035,11 @@ final class WatchRecordingService {
                 // Watch does not race itself — an iPhone, Mac, CarPlay or share
                 // turn can be writing this same conversation right now.
                 userMessageID: userRecord.id,
+                // How the user PRODUCED this turn. Passed explicitly rather than
+                // re-derived from the source-device tag inside the uploader: the
+                // tag is a display fact, and the uploader is one layer too far
+                // from the composer to know that a bound recording is still voice.
+                inputMode: inputMode,
                 stampsActiveConversation: stampsQuickPointer
             )
         } catch {

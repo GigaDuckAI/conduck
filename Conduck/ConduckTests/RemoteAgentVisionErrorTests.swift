@@ -71,7 +71,7 @@ final class RemoteAgentVisionErrorTests: XCTestCase {
             )
             XCTFail("Expected an AppError throw for HTTP \(status); got a reply: \(reply)")
             throw AppError.remoteAgentInvalidResponse  // unreachable; keeps signature non-optional
-        } catch let classified as ClassifiedRemoteAgentFailure {
+        } catch let classified as RemoteAgentSendFailure {
             // Body-classified failures ride the classified carrier
             // (wire code + AppError); the taxonomy case is what these tests pin.
             return classified.appError

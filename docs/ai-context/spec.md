@@ -498,6 +498,30 @@ There is one non-obvious threat to that guarantee. The audio package brings in a
 
 ---
 
+## Usage measurement, and what the ledger never holds
+
+Conduck keeps a private ledger of gateway attempts — one record for each time a turn is dispatched to the user's AI — alongside the conversations, in the same local database and the same private iCloud mirror. It exists so the app can tell the user how their own setup is behaving: how often turns land, how long a complete answer takes, and whatever their gateway is willing to say about tokens. It changes nothing about the no-server rule. The measurement is as local as the conversation it describes, and there is nowhere for it to go.
+
+**The ledger is content-free, and that is a release-blocking constraint rather than a preference.** A record carries identifiers, timings, an outcome, a stable local error code, and the handful of things the gateway itself reported. It never carries what was said, where it was sent, or what authenticated it — no prompt or reply text, no address or host, no token, no gateway name, no provider error string, no HTTP status. The gateway a record belongs to is stored as the same opaque reference a conversation binds to, and the name a person reads is resolved when a screen is drawn rather than written down. The few strings that do arrive from the wire are bounded by the same limit the app already applies to a model name and are rejected outright when they contain control or bidirectional-control characters, because a ledger is read back into an interface and text from someone else's server is untrusted input.
+
+**Why:** "there is nothing to disclose because there is no server" holds only while what is stored could not embarrass the user if it were disclosed anyway. Usage data is precisely where that discipline erodes, one convenient field at a time — a host here, a status code there, each defensible alone.
+
+**Capture fails open, so a recorded attempt is not the same thing as a dispatch.** Every write on this path is best-effort: if the ledger cannot be written, the turn goes out anyway and nothing is surfaced to the user. Measurement may never reduce the availability of the send path. The consequence has to be carried through to what the user reads — these are *recorded* attempts, and calling them totals would assert a completeness the design deliberately declines to provide.
+
+**An attempt's final state is derived when it is read, never guessed when it is written.** Only what the app actually observed is stored: in flight at dispatch, then succeeded, failed or cancelled when the transfer ends. A record still reading in flight means the ending was never witnessed, usually because the process was killed — and reading it back separates an attempt young enough to still be running from one that cannot be, using the process's own live-transfer set rather than any stored flag, and the same grace the stranded-turn sweep uses. Neither reading is ever written back. A start time far enough in the future is unresolvable rather than fresh, because the clock on the device that wrote it is not one this device controls.
+
+**Attempts die with the conversation they describe, and orphans are hidden rather than collected.** Deleting a conversation deletes its attempts in the same transaction, and there is no separate retention policy — the user's own deletion is the retention policy. A record whose conversation is gone regardless, which two devices on different builds can produce between them, is filtered out of every read instead of being deleted: a delete driven by mere absence is a delete racing sync.
+
+**Every dispatching surface writes to the ledger, or the history is permanently skewed.** A build that measured some routes and not others would not under-report evenly; it would make whichever surfaces were instrumented look like the whole of how the app is used, and no later release can repair a period recorded that way. Adding a new way to dispatch a turn means instrumenting it in the same change.
+
+**Two properties of the send path hold because of this ledger, and they matter well beyond it.** The agent's reply is written under an identifier minted at dispatch, so the same reply landing twice — a duplicate callback, or a late one after a relaunch — cannot produce a second copy of it. And a cancellation names the exact turn being cancelled rather than the conversation holding it, so stopping one turn leaves a sibling running beside it alone.
+
+**What the dashboard can describe is only what the user kept.** It reads the conversation store, so a deleted conversation takes its measurements with it. The date measurement begins at is also a different date from the one the retained history begins at — turns kept from before there was a ledger have no attempt behind them — and both are surfaced rather than reconciled into one misleading "data since". Per-field coverage is surfaced for the same reason: a gateway that reports no token usage is the ordinary case, and it must never read as a gateway reporting none used.
+
+**Rejected:** advertising an accounting capability in the pairing payload, or discovering one from the model list. A capability recorded at pairing is a snapshot of behaviour that can change the next day without any pairing event, and the absence of usage in a reply already means exactly what a negative advertisement would have meant. Nothing about parsing a reply may ever be gated on the gateway having announced it first. **Also rejected:** storing any cost figure. There is no truthful source for one — the app does not hold the user's provider billing relationship — and a number that looks like money is believed in a way a token count is not.
+
+---
+
 ## Things that look wrong and are not
 
 Each of these has been "fixed" or nearly fixed by someone who did not know why it was that way.

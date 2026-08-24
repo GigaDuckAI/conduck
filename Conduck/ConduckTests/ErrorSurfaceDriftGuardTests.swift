@@ -403,6 +403,15 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
             flag; no `AppError` reaches any of them.
             """
         ),
+        "Conduck/Views/Settings/UsageDashboardView.swift": .notErrorDriven(
+            reason: """
+            Re-runs the dashboard's own LOCAL Core Data read after a fetch \
+            throw. Nothing on this screen touches a gateway — no request is \
+            replayed, no `AppError` exists to be withheld — and the previous \
+            summary stays on screen underneath, so the control offers a \
+            re-read, not a re-send.
+            """
+        ),
         "Conduck/Views/Onboarding/HostedModelGatewayStepView.swift": .notErrorDriven(
             reason: """
             Re-runs a boolean liveness probe against OpenRouter — a hosted service \

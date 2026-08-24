@@ -64,28 +64,51 @@ extension ClassifiedRemoteAgentFailure: LocalizedError {
 }
 
 extension Error {
-    /// The `AppError` inside this error, unwrapping a
-    /// `ClassifiedRemoteAgentFailure` carrier — for handlers that only need
-    /// the taxonomy case and not the wire code. `nonisolated`: failure
-    /// writers run on delegate queues and store actors alike.
+    /// The `AppError` inside this error, unwrapping either carrier — for
+    /// handlers that only need the taxonomy case and not the wire code.
+    /// `nonisolated`: failure writers run on delegate queues and store actors
+    /// alike.
+    ///
+    /// TWO CARRIERS, ONE TAXONOMY. `ClassifiedRemoteAgentFailure` is thrown by
+    /// the body classifier both send paths share;
+    /// `RemoteAgentSendFailure` is what the FOREGROUND client throws once it
+    /// also carries the turn's reported metadata and timing. Neither is an
+    /// `AppError`, and a handler that missed one would silently bucket a
+    /// precisely classified failure as `.remoteAgentUnreachable` — which is how
+    /// a user gets "check your server is running" for a rejected token.
     nonisolated var unwrappedAppError: AppError? {
         if let classified = self as? ClassifiedRemoteAgentFailure { return classified.appError }
+        if let sendFailure = self as? RemoteAgentSendFailure { return sendFailure.appError }
         return self as? AppError
+    }
+
+    /// The adapter-contract wire code inside this error, from either carrier;
+    /// nil when the classification came from the status map, the regex
+    /// heuristics, or the transport. The twin of `unwrappedAppError`, and for
+    /// the same reason: the two carriers must be asked as one.
+    nonisolated var unwrappedWireCode: AdapterWireCode? {
+        if let classified = self as? ClassifiedRemoteAgentFailure { return classified.wireCode }
+        if let sendFailure = self as? RemoteAgentSendFailure { return sendFailure.wireCode }
+        return nil
     }
 }
 
 extension ConversationStore.TurnFailureClassification {
     /// Build the persisted classification from an arbitrary thrown converse
     /// error — THE one mapping every failure writer uses, so no catch arm can
-    /// drop the wire code by hand-building the fields: a
-    /// `ClassifiedRemoteAgentFailure` contributes code + wire code, a bare
-    /// `AppError` contributes its code, anything else buckets to
-    /// `remoteAgentUnreachable`.
+    /// drop the wire code by hand-building the fields: either carrier
+    /// (`ClassifiedRemoteAgentFailure`, `RemoteAgentSendFailure`) contributes
+    /// code + wire code, a bare `AppError` contributes its code, anything else
+    /// buckets to `remoteAgentUnreachable`.
+    ///
+    /// Both halves read through the `Error` extensions above rather than
+    /// downcasting here, so a third carrier is taught to the app in one place
+    /// instead of two that can disagree.
     init(from error: Error, hadHistoryImages: Bool?) {
         let appError = error.unwrappedAppError ?? .remoteAgentUnreachable
         self.init(
             failureCode: appError.errorCode,
-            wireCode: (error as? ClassifiedRemoteAgentFailure)?.wireCode?.rawValue,
+            wireCode: error.unwrappedWireCode?.rawValue,
             hadHistoryImages: hadHistoryImages
         )
     }
