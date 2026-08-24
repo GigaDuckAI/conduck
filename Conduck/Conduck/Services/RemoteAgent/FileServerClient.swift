@@ -571,12 +571,21 @@ enum FileServerListingVerdict: Equatable, Sendable {
 ///     witness back off after ONE observation instead of three (a host that is
 ///     simply not there will not be there next turn either), while a server
 ///     that is answering keeps its benefit of the doubt.
+///   - `.noObservation` — the request never really asked: the DEVICE had no
+///     network path, or our own dispatch task cancelled it (the user's Stop).
+///     Split from `.unreachable` because it is evidence about this device, not
+///     about the lane — an offline phone says nothing about whether the file
+///     server is there, and a fault the user's own tap caused is not a fault
+///     of their server. The breaker charges it NOTHING: recording it as
+///     `.unreachable` opened a cooldown that suppressed the folder on the very
+///     retry the user sent once their connection came back.
 ///
 /// Carries no status, no URL, and no key: it is a taxonomy value, and the
 /// privacy invariants at the top of this file apply to it.
 ///
-/// `.unreachable` is the one case `classifyAbsenceWitness(status:)` can never
-/// return — it describes the absence of a status line, not a status. `.absent`
+/// `.unreachable` and `.noObservation` are the two cases
+/// `classifyAbsenceWitness(status:)` can never return — each describes the
+/// absence of a status line, not a status. `.absent`
 /// is the one case that form UNDER-reports: a compliant `207` whose inner
 /// response is the `404` that was asked for reads as `.occupied` from the status
 /// line alone, and only the body-aware overload can see it for what it is. Every
@@ -587,6 +596,7 @@ enum FileServerAbsenceWitness: Equatable, Sendable {
     case occupied
     case indeterminate
     case unreachable
+    case noObservation
 }
 
 /// The stages of the staged Test Connection, in order. `Int` raw value =
@@ -3430,16 +3440,16 @@ enum FileServerClient {
             ) {
             case .absent:
                 return .capable
-            case .cannotAnswer, .occupied, .indeterminate, .unreachable:
+            case .cannotAnswer, .occupied, .indeterminate, .unreachable, .noObservation:
                 // EVERY answer short of a definite miss is unverified here,
                 // `405`/`501` INCLUDED — and that is not an oversight. Step 1
                 // just got a `207`, so this server demonstrably performs
                 // `PROPFIND`; a refusal on the missing-resource route says the
                 // route cannot answer the absence question, which is a
                 // configuration fact and not the method incapability the amber
-                // lane is meant to describe. `.unreachable` is unreachable from a
-                // status (its own doc says so) and rides along for
-                // exhaustiveness.
+                // lane is meant to describe. `.unreachable` and `.noObservation`
+                // are unreachable from a status (their own doc says so) and ride
+                // along for exhaustiveness.
                 return .unverified(listingStageError(status: status))
             }
         case .certificate(let refusal):

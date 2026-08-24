@@ -1248,8 +1248,13 @@ final class ReadStateStoreTests: XCTestCase {
 
         store.markViewed(created.id, lastActivityAt: nil, now: now)
         store.acknowledgeFailure(created.id, attemptID: firstAttempt)
-        try await waitUntil("the acknowledgement to reach the record") {
-            try await self.fetched(created.id, from: conversations)?.failureSeenAttemptID == firstAttempt
+        // Both writes ride separate async hops, so wait for BOTH markers — the
+        // final assertions read them both, and waiting on just the
+        // acknowledgement raced the viewed marker's write-back under full-suite
+        // load.
+        try await waitUntil("both markers to reach the record") {
+            let record = try await self.fetched(created.id, from: conversations)
+            return record?.failureSeenAttemptID == firstAttempt && record?.lastViewedAt == self.now
         }
         let acknowledged = try await fetched(created.id, from: conversations)
         XCTAssertTrue(

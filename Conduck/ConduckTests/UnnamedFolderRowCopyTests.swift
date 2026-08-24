@@ -175,13 +175,16 @@ final class UnnamedFolderRowCopyTests: XCTestCase {
             "So is a bad gateway from a reverse proxy.")
     }
 
-    /// The only genuinely silent answer is the one no status line can produce, so
-    /// it can never be inferred from what the row has in hand.
+    /// The only genuinely silent answers are the two no status line can produce,
+    /// so neither can ever be inferred from what the row has in hand.
     func testTheSilentAnswerIsUnreachableToTheClassifier() {
         for status in [200, 207, 301, 401, 403, 404, 405, 429, 500, 502, 504] {
             XCTAssertNotEqual(
                 FileServerClient.classifyAbsenceWitness(status: status), .unreachable,
                 "`.unreachable` describes the ABSENCE of a status line; a status \(status) can never mean it.")
+            XCTAssertNotEqual(
+                FileServerClient.classifyAbsenceWitness(status: status), .noObservation,
+                "`.noObservation` describes a request that never asked; a status \(status) proves one did.")
         }
     }
 
@@ -199,11 +202,15 @@ final class UnnamedFolderRowCopyTests: XCTestCase {
     /// And the outcomes that stay SILENT must not be dragged into the row's story:
     /// a lane that cannot list — structurally, or because it has proved it claims
     /// every fresh name — is a standing property of the user's own server, not a
-    /// fault, so the copy above is never shown for it.
+    /// fault, and a witness that never reached the lane at all (an offline device,
+    /// our own cancellation) proved nothing the copy could truthfully report; the
+    /// copy above is never shown for any of them.
     func testTheSilentOutcomesDrawNoRow() {
-        for outcome: BackgroundFileTransfer.OutboxMintOutcome in [.noLane, .laneCannotReturn] {
+        for outcome: BackgroundFileTransfer.OutboxMintOutcome in [
+            .noLane, .laneCannotReturn, .noObservation
+        ] {
             XCTAssertFalse(outcome.isActionableFault,
-                           "\(outcome) is a standing configuration the settings screen states plainly — a per-turn complaint about it is the noise this row was rebuilt to avoid.")
+                           "\(outcome) is a standing configuration the settings screen states plainly, or a request this device never really made — a per-turn complaint about either is the noise this row was rebuilt to avoid.")
         }
         XCTAssertFalse(BackgroundFileTransfer.OutboxMintOutcome.named("conv/out-box").isActionableFault,
                        "A turn that got its folder has nothing to report.")

@@ -719,20 +719,29 @@ final class BackgroundFileTransfer: NSObject {
         snapshot: SettingsManager.FileTransferSnapshot,
         collectionKey: String
     ) async -> FileServerAbsenceWitness {
-        let (session, _) = Self.makeEphemeralSession(
+        let (session, evaluator) = Self.makeEphemeralSession(
             snapshot: snapshot, timeout: Constants.fileServerAbsenceWitnessTimeout)
         defer { session.finishTasksAndInvalidate() }
         return await Self.witnessCollectionAbsent(
-            snapshot: snapshot, collectionKey: collectionKey, session: session)
+            snapshot: snapshot, collectionKey: collectionKey, session: session,
+            evaluator: evaluator)
     }
 
     /// The assertion on a CALLER-SUPPLIED session — `internal static` so a
     /// `URLProtocol`-stubbed session can drive the real request without a live
     /// file server, the same seam shape as `listCollection`.
+    ///
+    /// `evaluator` is nil for an injected session: a mock raises no server-trust
+    /// challenge, so there are no verdicts to read and a bare `-999` can only be
+    /// a genuine cancellation. Production always passes the evaluator that
+    /// answered this attempt, because a certificate refusal and a benign
+    /// cancellation are both a bare `-999` and only the evaluator can tell them
+    /// apart — the same rule `probeExistsWithLength` states on its seam.
     static func witnessCollectionAbsent(
         snapshot: SettingsManager.FileTransferSnapshot,
         collectionKey: String,
-        session: URLSession
+        session: URLSession,
+        evaluator: RemoteAgentTrustEvaluator? = nil
     ) async -> FileServerAbsenceWitness {
         let request = FileServerClient.buildPropfindRequest(
             snapshot: snapshot,
@@ -747,19 +756,48 @@ final class BackgroundFileTransfer: NSObject {
         // being buffered on the dispatch critical path. The `207` is the sole
         // case where the sentence Conduck came for can only be in the body.
         //
-        // ANY FAILURE OF THAT READ IS `.unreachable`, A `207` THAT DIED
-        // MID-BODY INCLUDED. The `try?` cannot tell "no response ever arrived"
-        // from "a response whose body stopped arriving", so both are charged the
-        // one-observation patience rather than the three an answered failure
-        // earns — see `FileLaneWitnessBreaker.FailureSeverity.unreachable`,
-        // which states why a broken transfer is read as a fact about the
-        // connection rather than about the collection.
-        guard let answer = try? await Self.boundedListingResponse(
-            session: session,
-            request: request,
-            maxBytes: FileServerClient.absenceWitnessMaxBytes,
-            readsBodyWhen: { $0 == 207 }
-        ) else { return .unreachable }
+        // A FAILURE OF THAT READ IS `.unreachable`, A `207` THAT DIED MID-BODY
+        // INCLUDED — "no response ever arrived" and "a response whose body
+        // stopped arriving" are both charged the one-observation patience
+        // rather than the three an answered failure earns; see
+        // `FileLaneWitnessBreaker.FailureSeverity.unreachable`, which states
+        // why a broken transfer is read as a fact about the connection rather
+        // than about the collection.
+        //
+        // THE EXCEPTION IS A FACT ABOUT THIS DEVICE, never about the lane: a
+        // failure classed `.offline` (no network path) or a cancel that is
+        // genuinely ours (our own dispatch stopped) witnesses `.noObservation`,
+        // because the request never really asked. Charging those as
+        // `.unreachable` is what put a cooldown on a healthy server the moment
+        // the user sent from a dead spot — and then suppressed the folder on
+        // the retry they sent once their connection came back. The split is NOT
+        // re-derived here: `witnessTransportVerdict` routes the code through
+        // `RemoteAgentTrustEvaluator.classifyTransportError` with this attempt's
+        // own trust record plus `Task.isCancelled` read inside the catch, which
+        // is what keeps the two lane-authored `-999`s — a pin refusal, and a
+        // peer resetting the stream — charged as `.unreachable`. The exception
+        // is drawn on the MEASURED error, never on a pre-flight path check: a
+        // `-1009` is the device saying it did not ask, where a path snapshot is
+        // a prediction that can race the send. `.networkConnectionLost` stays
+        // `.unreachable` on purpose — a connection that existed and died is an
+        // observation the lane participated in.
+        let answer: (status: Int, body: Data, exceededCap: Bool)
+        do {
+            answer = try await Self.boundedListingResponse(
+                session: session,
+                request: request,
+                maxBytes: FileServerClient.absenceWitnessMaxBytes,
+                readsBodyWhen: { $0 == 207 })
+        } catch is CancellationError {
+            return .noObservation
+        } catch let error as URLError {
+            return Self.witnessTransportVerdict(
+                code: error.code,
+                signals: evaluator?.attemptSignals ?? .empty,
+                isTaskCancelled: Task.isCancelled)
+        } catch {
+            return .unreachable
+        }
         return FileServerClient.classifyAbsenceWitness(
             status: answer.status,
             body: answer.body,
@@ -770,6 +808,40 @@ final class BackgroundFileTransfer: NSObject {
             // about.
             requestedURL: FileServerClient.listingCollectionURL(
                 snapshot: snapshot, collectionKey: collectionKey))
+    }
+
+    /// Which witness verdict one transport failure earns, resolved through the
+    /// SHARED classifier rather than a local reading of the code — the
+    /// device-vs-lane split is `RemoteAgentTrustEvaluator.classifyTransportError`'s
+    /// to own, and `-999` cannot be read at all without two pieces of this
+    /// attempt's own record. The trust signals extract the pin delegate's
+    /// refusals (a `cancelAuthenticationChallenge` reaches the caller as the
+    /// same bare `.cancelled` a user's Stop produces), and those stay
+    /// `.unreachable`: a pin doing its job is evidence about the lane, and the
+    /// folder-less row it may draw is rendered as a consequence, never a TLS
+    /// diagnosis (the NO TRUST TAXONOMY note above). What remains `.cancelled`
+    /// after the signals still has two authors — our own dispatch being stopped,
+    /// and a peer resetting the stream mid-request — and only `isTaskCancelled`
+    /// can split them, the same rule `RemoteAgentClient.mapTransportError`
+    /// states: Conduck is the only party that knows whether IT cancelled.
+    /// Callers read it INSIDE the catch, after the await failed. So `.offline`
+    /// and a cancel that is genuinely ours witness `.noObservation` and charge
+    /// nothing; a peer reset keeps the one-strike `.unreachable` patience a
+    /// tunnel hiccup has always earned.
+    static func witnessTransportVerdict(
+        code: URLError.Code,
+        signals: RemoteAgentTrustEvaluator.AttemptTrustSignals,
+        isTaskCancelled: Bool
+    ) -> FileServerAbsenceWitness {
+        switch RemoteAgentTrustEvaluator.classifyTransportError(code, signals: signals) {
+        case .offline:
+            return .noObservation
+        case .cancelled:
+            return isTaskCancelled ? .noObservation : .unreachable
+        case .timeout, .unreachable, .notEstablished, .blockedByATS,
+             .untrustedCert, .certMismatch, .certKeyUnpinnable:
+            return .unreachable
+        }
     }
 
     /// Name the box for ONE dispatch and, when this device can, witness that it
@@ -953,6 +1025,17 @@ final class BackgroundFileTransfer: NSObject {
             // cooldown on ONE observation instead of three.
             FileLaneWitnessBreaker.shared.recordFailure(lane: lane, severity: .unreachable)
             return .witnessFailed
+        case .noObservation:
+            // The request never really asked — the device was offline, or our
+            // own dispatch task was cancelled — so there is NOTHING to charge:
+            // no failure, no streak, no cooldown, no `faultedSince`. The turn is
+            // still folder-less and says so through the outcome, but the lane's
+            // health is untouched, which is what lets the retry the user sends
+            // once their connection is back witness normally and get its key.
+            // Deliberately, an in-progress `.occupied` run is left intact too:
+            // only an ANSWER can break or extend a proof about occupancy, and a
+            // request that never reached the lane is not an answer.
+            return .noObservation
         }
     }
 
@@ -1855,18 +1938,19 @@ extension BackgroundFileTransfer: URLSessionDelegate {
 
 extension BackgroundFileTransfer {
 
-    /// What naming a per-dispatch output folder produced. FIVE CASES, and the
-    /// split between the silent three and the surfaced two is the contract:
+    /// What naming a per-dispatch output folder produced. SIX CASES, and the
+    /// split between the silent four and the surfaced two is the contract:
     ///
     /// | Outcome | Folder on the wire | What the thread says |
     /// |---|---|---|
     /// | `.named` | yes | nothing (the chips speak for themselves) |
     /// | `.noLane` | no | nothing |
     /// | `.laneCannotReturn` | no | nothing |
+    /// | `.noObservation` | no | nothing |
     /// | `.witnessFailed` | no | the folder-less row |
     /// | `.witnessSuppressed` | no | the folder-less row |
     ///
-    /// THE SILENT THREE ARE SILENT FOR THE SAME REASON: the user is not missing
+    /// THE SILENT FOUR ARE SILENT FOR THE SAME REASON: the user is not missing
     /// anything they were promised. No lane means they never asked for file
     /// return; a return-incapable lane is a limitation the File transfer page
     /// states plainly and no retry of the turn can change — repairing the server
@@ -1874,6 +1958,20 @@ extension BackgroundFileTransfer {
     /// turn is a device
     /// that holds no file-server credential by design. A row on any of those is
     /// a per-turn complaint about a standing, displayed, correct configuration.
+    /// A no-observation turn never asked the lane anything — the device was
+    /// offline, or our own dispatch was cancelled — so there is no evidence to
+    /// hang a complaint on, and the retry mints its own fresh folder on a lane
+    /// whose health this turn deliberately left untouched.
+    ///
+    /// ONE SHAPE GOES QUIET UNDER THIS CASE, accepted deliberately: iOS's
+    /// background transport waits for connectivity, so an offline send can park,
+    /// deliver when the radio returns, and land a folder-less reply under a
+    /// healthy lane with no row. The row derives from two live facts — a lane
+    /// failing NOW, a turn inside that streak — precisely so no per-turn verdict
+    /// is ever stored, and the only ways to keep the parked shape visible are
+    /// charging a healthy lane (the false cooldown this case exists to kill) or
+    /// persisting the verdict. The reply's own text still names whatever the
+    /// agent wrote, and the manual name search still reaches it.
     ///
     /// THE SURFACED TWO ARE SURFACED FOR THE OPPOSITE REASON: the lane WAS
     /// configured, WAS tested green, and stopped working. That is the one case
@@ -1910,6 +2008,11 @@ extension BackgroundFileTransfer {
         /// for any name at all. The second is process-local and writes nothing
         /// durable.
         case laneCannotReturn
+        /// The witness never reached the lane — the device had no network path,
+        /// or our own dispatch task was cancelled. Evidence about this device,
+        /// not the lane, so the breaker is charged nothing and the turn is
+        /// folder-less without being a fault of anything the user configured.
+        case noObservation
         /// The lane was probed this turn and did not witness the folder absent.
         case witnessFailed
         /// The lane has failed enough times in a row that it was not probed this
