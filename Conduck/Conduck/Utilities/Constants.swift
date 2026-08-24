@@ -783,37 +783,71 @@ enum Constants {
     /// converse delegate. Reuses the shared 300/600 s timeouts above.
     nonisolated static let remoteAgentCarPlayConverseSessionIdentifier = identityNamespace + ".carplay.converse"
 
-    /// CarPlay VAD speech threshold (`docs/ai-context/spec.md`). Higher
-    /// than the in-app default (`EndOfSpeechDetector.SensitivityLevel.medium`
-    /// = 0.5) to reject road / cabin noise and HFP-mic artefacts — a moving
-    /// car is a far noisier capture environment than a hand-held phone. The
-    /// research-recommended band is ~0.65–0.7; 0.65 keeps short command-style
-    /// utterances detectable while still rejecting steady road noise.
+    /// CarPlay VAD speech threshold — the probability one 256 ms chunk must
+    /// reach for `EndOfSpeechDetector` to count it as speech. Higher than a
+    /// hand-held phone would need, to reject road / cabin noise and HFP-mic
+    /// artefacts. The research-recommended band is ~0.65–0.7; 0.65 keeps short
+    /// command-style utterances detectable while still rejecting steady road
+    /// noise. FluidAudio releases at threshold − 0.15, so this also sets the
+    /// 0.50 exit. `SpeechCorroborationGate` applies the SAME value when it
+    /// decides whether an episode was more than a single loud chunk.
     static let carPlayVADThreshold: Float = 0.65
 
-    /// CarPlay VAD minimum-silence duration (seconds) before declaring
-    /// end-of-speech (`docs/ai-context/spec.md`). Shorter than the
-    /// FluidAudio default (0.75 s) only marginally — ~0.8 s gives a
-    /// conversational turn a brief natural pause without ending the turn on a
-    /// mid-sentence breath, which matters more in a noisy cabin where false
-    /// end-of-speech is costly (the loop would re-arm and capture road noise).
-    static let carPlayVADMinSilence: TimeInterval = 0.8
+    /// CarPlay VAD minimum-silence duration (seconds) before `EndOfSpeechDetector`
+    /// declares end-of-speech.
+    ///
+    /// QUANTIZED, and the arithmetic matters more than the number. The streaming
+    /// VAD consumes 4096-sample frames at 16 kHz, so this is rounded up to whole
+    /// 256 ms chunks, and the first silent chunk contributes nothing to the
+    /// library's counter — which costs one more:
+    ///
+    ///     felt = (ceil(minSilence / 0.256) + 1) × 0.256
+    ///
+    /// | this value | felt trailing silence |
+    /// |---|---|
+    /// | (0.512, 0.768] | 1.024 s |
+    /// | (0.768, 1.024] | 1.280 s |
+    /// | (1.024, 1.280] | 1.536 s |
+    /// | (1.280, 1.536] | 1.792 s |
+    /// | (1.536, 1.792] | 2.048 s |
+    ///
+    /// So the dial has dead zones: anything set inside one band behaves exactly
+    /// like every other value in that band. 1.5 s buys a felt endpoint of
+    /// 1.792 s — enough for a driver to pause and think mid-sentence without the
+    /// turn being cut off, which is the failure that matters here. Ending a turn
+    /// early is expensive twice over: the thought is truncated, and the loop
+    /// re-arms into road noise. Compute a candidate with
+    /// `CarPlayVADQuantization.feltEndOfSpeechDelay(minSilence:)` rather than
+    /// guessing.
+    static let carPlayVADMinSilence: TimeInterval = 1.5
 
-    /// CarPlay zero-input follow-up timeout (seconds). After the loop re-arms
-    /// the mic for the next turn, if no `onSpeechStart` fires within this
-    /// window the session speaks a brief sign-off and ends — the cabin-noise /
-    /// no-follow-up guard (`docs/ai-context/spec.md`). Same
-    /// magnitude as the cold-connect `initialSilenceTimeout` (10 s) but shorter:
-    /// a re-arm after a spoken reply is a deliberate "your turn" prompt, so a
-    /// shorter patience window before signing off reads as conversational.
-    static let carPlayFollowUpSilenceTimeout: TimeInterval = 5
+    /// CarPlay COLD-CONNECT initial-silence timeout (seconds), armed on a
+    /// session's first listen. If no speech is corroborated inside this window
+    /// the session classifies the capture pipeline and ends — speaking the
+    /// ordinary sign-off when the pipeline was healthy, and a distinct line when
+    /// it was not (`CapturePipelineHealth`). Longer than it looks like it needs
+    /// to be, because this window also covers the driver still connecting the
+    /// phone, finding the app, or deciding what to ask.
+    static let carPlayInitialSilenceTimeout: TimeInterval = 15
+
+    /// CarPlay zero-input FOLLOW-UP timeout (seconds), armed on every re-arm
+    /// after a spoken reply. Same outcome as the cold-connect window above.
+    ///
+    /// Long on purpose, and the trade is deliberate: a driver mid-conversation
+    /// may need to think, or to attend to the road, before answering, and
+    /// killing a live conversation is a far worse failure than holding the audio
+    /// route too long. The cost of the ceiling is real — after the last reply of
+    /// a conversation the session (and with it the paused car radio) is held for
+    /// up to this long before the sign-off. The End button and Mute both cover a
+    /// driver who is done, which is what makes the ceiling affordable.
+    static let carPlayFollowUpSilenceTimeout: TimeInterval = 30
 
     /// CarPlay HFP route-settle delay (seconds) after TTS finishes, before the
     /// loop restarts the capture engine to re-arm the mic. Skipping this races
     /// the Bluetooth-HFP route renegotiation that follows a playback→capture
     /// transition and crashes `engine.start()` with FourCC `'!obj'`
     /// (560947818) — the same g1 audio-race the scene delegate guards on the
-    /// initial turn (`docs/ai-context/spec.md`).
+    /// initial turn.
     /// (`'!int'` is the DIFFERENT code 560557684 = `CannotInterruptOthers`.)
     static let carPlayHFPSettleDelay: TimeInterval = 0.3
 
