@@ -53,10 +53,12 @@ final class CarPlayVoiceTimingContractTests: XCTestCase {
         // 15 s cold-connect: the driver may still be connecting the phone,
         // finding the app, or deciding what to ask.
         XCTAssertEqual(Constants.carPlayInitialSilenceTimeout, 15)
-        // 30 s follow-up: mid-conversation a driver may need to think, or to
+        // 20 s follow-up: mid-conversation a driver may need to think, or to
         // attend to the road. Killing a live conversation is the worse failure,
-        // and End and Mute both cover a driver who is done.
-        XCTAssertEqual(Constants.carPlayFollowUpSilenceTimeout, 30)
+        // and End and Mute both cover a driver who is done — while the ceiling
+        // also bounds how long the car's paused radio is held after the last
+        // reply (founder-tuned down from 30 s for exactly that cost).
+        XCTAssertEqual(Constants.carPlayFollowUpSilenceTimeout, 20)
         XCTAssertGreaterThan(
             Constants.carPlayFollowUpSilenceTimeout,
             Constants.carPlayInitialSilenceTimeout,
@@ -283,6 +285,108 @@ final class CarPlayVoiceTimingContractTests: XCTestCase {
         XCTAssertFalse(detectorSource().contains("SensitivityLevel"))
     }
 
+    // MARK: - Capture lifecycle (stale commit + observer lifetime)
+
+    func testACommitNeverLandsOnADeadSession() throws {
+        let body = try functionBody("private func startListening(isFollowUp: Bool) async", in: recordingServiceSource())
+        // Everything from the engine-start call onward: the suspension the
+        // stale-commit guard exists for.
+        let retryCall = try XCTUnwrap(body.range(of: "startCaptureEngineWithRetry("))
+        let afterRetry = String(body[retryCall.upperBound...])
+        let staleGuard = try XCTUnwrap(
+            afterRetry.range(of: "guard sessionActive else {"),
+            "a session ended mid-engine-start must not be committed — a running engine nothing stops is the persistent-'nope' wedge"
+        )
+        let commit = try XCTUnwrap(afterRetry.range(of: "state = .recording"))
+        XCTAssertTrue(staleGuard.lowerBound < commit.lowerBound)
+        let between = String(afterRetry[staleGuard.upperBound..<commit.lowerBound])
+        for cleanup in ["removeTap(onBus: 0)", "engine.stop()", "detector.stop()"] {
+            XCTAssertTrue(between.contains(cleanup), "the discarded engine must actually be stopped: missing \(cleanup)")
+        }
+        let muteGuard = try XCTUnwrap(afterRetry.range(of: "guard !isMicMuted else {"))
+        XCTAssertTrue(
+            staleGuard.lowerBound < muteGuard.lowerBound,
+            "a dead session wins over mute-parking — endSession already reset the mute flag"
+        )
+    }
+
+    func testEveryRetryAbortIsLogged() throws {
+        let body = try functionBody("private func startCaptureEngineWithRetry(", in: recordingServiceSource())
+        let aborts = body.components(separatedBy: "CarPlay engine retry abort").count - 1
+        XCTAssertGreaterThanOrEqual(
+            aborts, 4,
+            "every silent guard exit logs its reason — the field diagnosis that took a night of archaeology takes one log line"
+        )
+        XCTAssertTrue(body.contains("CarPlay hard recovery begin"), "recovery entry is visible")
+        XCTAssertTrue(
+            body.contains("isVoiceModalPresented?() ?? true"),
+            "hard recovery aborts when the voice modal is gone — the one signal that can go stale independently of sessionActive"
+        )
+    }
+
+    func testObserversCannotOutliveTheService() throws {
+        let source = recordingServiceSource()
+        let wrapper = try XCTUnwrap(
+            source.range(of: "final class NotificationToken"),
+            "the release-driven observer wrapper is what makes a skipped didDisconnect unable to leak observers"
+        )
+        let afterWrapper = String(source[wrapper.upperBound...])
+        XCTAssertTrue(
+            afterWrapper.contains("deinit { NotificationCenter.default.removeObserver"),
+            "the wrapper's whole job is removal on release"
+        )
+        for setup in ["setupInterruptionObserver", "setupRouteChangeObserver", "setupMediaResetObserver"] {
+            let body = try functionBody("private func \(setup)()", in: source)
+            XCTAssertTrue(
+                body.contains("NotificationToken("),
+                "\(setup) must hand its registration to the release-driven wrapper"
+            )
+        }
+        XCTAssertTrue(
+            source.contains("engineConfigChangeObserver = NotificationToken("),
+            "the per-listen reconfig observer leaks the same way the session observers did"
+        )
+    }
+
+    func testAReconnectTearsDownTheStaleService() throws {
+        let source = sceneDelegateSource()
+        let connect = try functionBody("didConnect interfaceController: CPInterfaceController", in: source)
+        let teardown = try XCTUnwrap(
+            connect.range(of: "stale.teardown()"),
+            "a hard drop can skip didDisconnect; the next connect must not build on a live stale service"
+        )
+        let fresh = try XCTUnwrap(connect.range(of: "CarPlayRecordingService()"))
+        XCTAssertTrue(teardown.lowerBound < fresh.lowerBound, "teardown of the old before construction of the new")
+        let didDisconnect = try functionBody("func sceneDidDisconnect(", in: source)
+        XCTAssertTrue(
+            didDisconnect.contains("disconnectCleanup()"),
+            "UIKit's scene-discard path cleans up even when the CarPlay-specific callback was skipped"
+        )
+    }
+
+    func testStartFailureHintIsOneShot() throws {
+        let source = sceneDelegateSource()
+        let start = try functionBody("private func startSession(service: CarPlayRecordingService, conversationID: UUID?)", in: source)
+        XCTAssertTrue(
+            start.contains("oneShotStartFailureHint = false"),
+            "the hint is consumed the moment the driver acts again"
+        )
+        let picker = try functionBody("private func refreshPicker()", in: source)
+        XCTAssertTrue(
+            picker.contains("oneShotStartFailureHint"),
+            "the picker is where a silent start failure becomes visible"
+        )
+    }
+
+    func testTheStartFailureHintStringsExistInTheCatalog() throws {
+        let catalog = try stringCatalog()
+        XCTAssertNotNil(
+            catalog["carplay.hint.captureStartFailed.title"],
+            "the one-shot picker row is the only feedback a silent start failure gets"
+        )
+        XCTAssertNotNil(catalog["carplay.hint.captureStartFailed.detail"])
+    }
+
     // MARK: - Source access
 
     /// `.../Conduck/Conduck` — the project container holding every target's
@@ -310,6 +414,10 @@ final class CarPlayVoiceTimingContractTests: XCTestCase {
 
     private func detectorSource() -> String {
         source("Conduck/CarPlay/EndOfSpeechDetector.swift")
+    }
+
+    private func sceneDelegateSource() -> String {
+        source("Conduck/CarPlay/CarPlaySceneDelegate.swift")
     }
 
     private func stringCatalog() throws -> [String: Any] {

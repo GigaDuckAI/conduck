@@ -52,6 +52,14 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// background/disconnect (the system may tear the modal down).
     private var isVoicePresented = false
 
+    /// One-shot picker hint: the last session ended because the microphone
+    /// could not be started (activation failure / engine-start exhaustion).
+    /// Those ends are SILENT by doctrine, so this row is their only feedback.
+    /// Set via the service's `onCaptureStartFailed`; cleared on the next
+    /// session start and on disconnect. Not observable state — the `.idle`
+    /// transition's own `refreshPicker` renders it.
+    private var oneShotStartFailureHint = false
+
     /// Re-armed after every observation fire (`@Observable` tracking is one-shot).
     private var observationGeneration = 0
 
@@ -80,6 +88,17 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         didConnect interfaceController: CPInterfaceController
     ) {
         Self.log.info("didConnect")
+        // A hard drop (cable yank, host kill, Simulator collapse) can skip
+        // `didDisconnect` entirely; the previous connection's service would
+        // then still be referenced here with its session-lifecycle observers
+        // live — handlers on the SHARED `AVAudioSession` acting behind the new
+        // session's back, and a possibly-running capture engine holding the
+        // HFP input (the persistent-'nope' wedge). Tear it down first.
+        if let stale = recordingService {
+            Self.log.info("didConnect found a stale recordingService — tearing it down first")
+            stale.teardown()
+            recordingService = nil
+        }
         self.interfaceController = interfaceController
         interfaceController.delegate = self
 
@@ -93,6 +112,12 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         // means it can't drift if a dismiss signal is ever dropped.
         service.isVoiceModalPresented = { [weak self] in
             self?.interfaceController?.presentedTemplate != nil
+        }
+
+        // Mic-couldn't-start feedback: the service fires this BEFORE its silent
+        // `endSession`, so the `.idle`-driven `refreshPicker` sees the flag.
+        service.onCaptureStartFailed = { [weak self] in
+            self?.oneShotStartFailureHint = true
         }
 
         // Build the picker once; rebuilt-in-place on refresh + permission states.
@@ -169,6 +194,21 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         didDisconnect interfaceController: CPInterfaceController
     ) {
         Self.log.info("didDisconnect")
+        disconnectCleanup()
+    }
+
+    /// The scene's session was discarded by UIKit. `CPTemplateApplicationSceneDelegate`
+    /// refines `UISceneDelegate`, so this is a legitimate override point — and
+    /// it fires on abrupt teardown paths that can skip the CarPlay-specific
+    /// `didDisconnect` callback. Idempotent with it via `disconnectCleanup()`.
+    func sceneDidDisconnect(_ scene: UIScene) {
+        Self.log.info("sceneDidDisconnect")
+        disconnectCleanup()
+    }
+
+    /// Shared, idempotent connection teardown — reachable from `didDisconnect`,
+    /// `sceneDidDisconnect`, and (defensively) the top of the next `didConnect`.
+    private func disconnectCleanup() {
         observationGeneration &+= 1
         if let conversationsObserver {
             NotificationCenter.default.removeObserver(conversationsObserver)
@@ -183,6 +223,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         self.recordingService = nil
         self.listTemplate = nil
         self.isVoicePresented = false
+        self.oneShotStartFailureHint = false
         // Session-local override dies with the connection — the next drive
         // starts from the iPhone's device-local default again.
         self.sessionDefaultRefOverride = nil
@@ -286,6 +327,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// what that plan decided.
     private func startSession(service: CarPlayRecordingService, conversationID: UUID?) {
         guard case .idle = service.state, !service.sessionActive else { return }
+        // Consumed: the driver is acting again — the hint's job is done. (The
+        // row disappears on the refresh after this session ends, whatever its
+        // outcome; a NEW start failure sets it again.)
+        oneShotStartFailureHint = false
         Task { @MainActor in
             // Capture the effective CarPlay ref (session-local override ?? the
             // iPhone's device-local default) and stash it on the service so a
@@ -515,8 +560,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             return
         }
 
+        // The one-shot start-failure hint occupies a row of the template's
+        // fixed item budget while shown; `recentCap` already reserves row 0.
         let cap = CarPlayConversationLabel.recentCap(
-            maximumItemCount: CPListTemplate.maximumItemCount
+            maximumItemCount: CPListTemplate.maximumItemCount - (oneShotStartFailureHint ? 1 : 0)
         )
 
         Task { @MainActor in
@@ -577,7 +624,22 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 guard !service.sessionActive else { return }  // disabled mid-session
                 self.startSession(service: service, conversationID: nil)
             }
-            let newSection = CPListSection(items: [newItem])
+            var firstSectionItems: [CPListItem] = [newItem]
+
+            // One-shot mic-couldn't-start hint, ABOVE "New voice chat" — the
+            // only feedback a silent start-failure end gets (no TTS over a
+            // wedged session; no CPAlertTemplate, which races the voice-modal
+            // dismiss animation). Informational: tapping it does nothing.
+            if oneShotStartFailureHint {
+                let hint = CPListItem(
+                    text: String(localized: "carplay.hint.captureStartFailed.title", defaultValue: "Mic couldn't start"),  // xcstrings
+                    detailText: String(localized: "carplay.hint.captureStartFailed.detail", defaultValue: "Tap New voice chat to try again.")  // xcstrings
+                )
+                hint.setImage(UIImage(systemName: "mic.slash.fill"))
+                hint.handler = { _, completion in completion() }
+                firstSectionItems.insert(hint, at: 0)
+            }
+            let newSection = CPListSection(items: firstSectionItems)
 
             // "Recent" section — conversations to continue (label + date only).
             var sections: [CPListSection] = [newSection]

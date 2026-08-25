@@ -840,7 +840,7 @@ enum Constants {
     /// a conversation the session (and with it the paused car radio) is held for
     /// up to this long before the sign-off. The End button and Mute both cover a
     /// driver who is done, which is what makes the ceiling affordable.
-    static let carPlayFollowUpSilenceTimeout: TimeInterval = 30
+    static let carPlayFollowUpSilenceTimeout: TimeInterval = 20
 
     /// CarPlay HFP route-settle delay (seconds) after TTS finishes, before the
     /// loop restarts the capture engine to re-arm the mic. Skipping this races

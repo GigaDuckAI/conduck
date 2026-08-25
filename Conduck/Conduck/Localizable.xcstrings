@@ -710,6 +710,28 @@
         }
       }
     },
+    "carplay.hint.captureStartFailed.detail" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap New voice chat to try again."
+          }
+        }
+      }
+    },
+    "carplay.hint.captureStartFailed.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Mic couldn't start"
+          }
+        }
+      }
+    },
     "carplay.error.fileTransferNotConfigured.speak" : {
       "extractionState" : "manual",
       "localizations" : {

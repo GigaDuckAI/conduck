@@ -69,6 +69,23 @@ import CarPlay
 import UIKit
 import os.log
 
+/// Removes its NotificationCenter observer when released, so a service instance
+/// dropped WITHOUT an explicit `teardown()` (an abrupt CarPlay drop can skip
+/// `didDisconnect` entirely) cannot leak its observers into the default center.
+/// The leak this closes is not cosmetic: a leaked route-change observer logs a
+/// `state=nil` line per fire, and leaked interruption/media-reset handlers on a
+/// still-referenced stale instance act on the SHARED `AVAudioSession` behind a
+/// new session's back. NotificationCenter is thread-safe; removal from `deinit`
+/// on any thread is documented-safe — which is also why the wrapper exists at
+/// all: the `@Observable @MainActor` service itself cannot safely touch its
+/// stored properties from a nonisolated `deinit`, so property release does the
+/// work instead.
+private final class NotificationToken: @unchecked Sendable {
+    private let token: NSObjectProtocol
+    init(_ token: NSObjectProtocol) { self.token = token }
+    deinit { NotificationCenter.default.removeObserver(token) }
+}
+
 /// Orchestrates a CarPlay multi-turn voice conversation SESSION.
 ///
 /// Session state machine:
@@ -269,6 +286,16 @@ final class CarPlayRecordingService {
     /// missing wiring as a no-op, never as "modal gone").
     @ObservationIgnored var isVoiceModalPresented: (@MainActor () -> Bool)?
 
+    /// Fired when the microphone could not be started at all (activation
+    /// failure, or engine-start retry exhaustion) and the scene is still
+    /// active. The scene delegate uses it to show a one-shot visible hint on
+    /// the picker — the ONLY feedback channel these failures have, because
+    /// their sessions end SILENTLY by doctrine (speaking over a wedged audio
+    /// session is what escalates a recoverable start failure into a
+    /// `mediaserverd` teardown + CarPlay-scene drop). Display copy lives in
+    /// the scene layer. Nil wiring is a no-op.
+    @ObservationIgnored var onCaptureStartFailed: (@MainActor () -> Void)?
+
     // MARK: - Recording state
 
     private var captureEngine: AVAudioEngine?
@@ -278,7 +305,7 @@ final class CarPlayRecordingService {
     private var recordingMaxDurationTimer: Timer?
     private var initialSilenceTimer: Timer?
     private var endOfSpeechDetector: EndOfSpeechDetector?
-    private var engineConfigChangeObserver: NSObjectProtocol?
+    private var engineConfigChangeObserver: NotificationToken?
 
     /// Capture-pipeline counters for the CURRENT listen. Rebuilt per listen and
     /// re-epoched whenever the tap is reinstalled, so a no-speech verdict
@@ -375,17 +402,17 @@ final class CarPlayRecordingService {
     /// Short background task wrapping the FOREGROUND STT hop only (the converse
     /// hop runs on a background URLSession that needs no `beginBackgroundTask`).
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
-    private var interruptionObserver: NSObjectProtocol?
+    private var interruptionObserver: NotificationToken?
     /// DIAGNOSTIC (CarPlay dashboard-fall investigation): observes audio
     /// route changes so we can see whether a route renegotiation fires right
     /// before a `sceneWillResignActive`. Log-only — no behavior change.
-    private var routeChangeObserver: NSObjectProtocol?
+    private var routeChangeObserver: NotificationToken?
 
     /// Observes `mediaServicesWereResetNotification`. When `mediaserverd` is torn
     /// down (the `Connection invalidated` / `IPCAUClient can't connect` cascade
     /// a failed `engine.start()` can trigger on CarPlay), EVERY audio object is
     /// invalid; Apple requires disposing + recreating them before reuse.
-    private var mediaResetObserver: NSObjectProtocol?
+    private var mediaResetObserver: NotificationToken?
 
     // MARK: - Init / deinit
 
@@ -396,20 +423,16 @@ final class CarPlayRecordingService {
         refreshPermission()
     }
 
-    /// Explicit teardown from the scene delegate's `didDisconnect`.
+    /// Explicit teardown from the scene delegate's `didDisconnect` (and, since
+    /// abrupt drops can skip that callback, defensively from the next
+    /// `didConnect` and from `sceneDidDisconnect`). Idempotent. Observer
+    /// removal is release-driven (`NotificationToken`), so nil-ing here keeps
+    /// the orderly-path timing while an un-torn-down instance still cannot
+    /// leak its registrations.
     func teardown() {
-        if let observer = interruptionObserver {
-            NotificationCenter.default.removeObserver(observer)
-            interruptionObserver = nil
-        }
-        if let observer = routeChangeObserver {
-            NotificationCenter.default.removeObserver(observer)
-            routeChangeObserver = nil
-        }
-        if let observer = mediaResetObserver {
-            NotificationCenter.default.removeObserver(observer)
-            mediaResetObserver = nil
-        }
+        interruptionObserver = nil
+        routeChangeObserver = nil
+        mediaResetObserver = nil
         // Ensure the session is fully torn down. The scene is disconnecting, so
         // no dismiss completion will fire — free the audio session DIRECTLY
         // (idempotent; deactivate-exactly-once preserved).
@@ -573,7 +596,7 @@ final class CarPlayRecordingService {
     /// engine, transition to `.recording`. `isFollowUp` selects the silence
     /// guard: the cold-connect first listen uses
     /// `Constants.carPlayInitialSilenceTimeout` (15 s); a re-armed follow-up
-    /// uses `Constants.carPlayFollowUpSilenceTimeout` (30 s). Either expiry runs
+    /// uses `Constants.carPlayFollowUpSilenceTimeout` (20 s). Either expiry runs
     /// the same classify-then-sign-off path.
     private func startListening(isFollowUp: Bool) async {
         guard sessionActive else { return }
@@ -614,8 +637,11 @@ final class CarPlayRecordingService {
                 // End SILENTLY (no error TTS): there is no usable session to
                 // speak on, and speaking over a half-activated session is what
                 // escalates a recoverable start failure into a `mediaserverd`
-                // teardown + CarPlay-scene drop. The modal dismissing back to the
-                // picker is the feedback. (See `startCaptureEngineWithRetry`.)
+                // teardown + CarPlay-scene drop. The one-shot picker hint is
+                // the feedback instead (gated on the modal still being up, same
+                // reasoning as the retry-exhaustion site — see
+                // `startCaptureEngineWithRetry`'s caller).
+                if isSceneActive, isVoiceModalPresented?() ?? true { onCaptureStartFailed?() }
                 endSession(speak: nil)
                 return
             }
@@ -703,8 +729,36 @@ final class CarPlayRecordingService {
             detector.stop()
             try? FileManager.default.removeItem(at: url)
             // Recovery may have ended the session (End / disconnect mid-retry) —
-            // only end here if it is still live.
-            if sessionActive { endSession(speak: nil) }
+            // only end here if it is still live. The hint fires BEFORE the end,
+            // so the `.idle`-driven picker refresh already sees it. It is also
+            // gated on the voice modal still being up: a retry aborted because
+            // the DRIVER dismissed the modal is not a microphone failure, and
+            // "Mic couldn't start" would be a false accusation — while a
+            // genuine start failure always still has the modal presented (g1).
+            if sessionActive {
+                if isSceneActive, isVoiceModalPresented?() ?? true { onCaptureStartFailed?() }
+                endSession(speak: nil)
+            }
+            return
+        }
+
+        // The retry call above is a suspension point: End / backgrounding /
+        // templateDidDisappear can have ended the session while the engine was
+        // (successfully) starting. Committing then would put a RUNNING engine
+        // and a live input tap on a dead session — `endSession` already ran
+        // (guarded on `sessionActive`, so it never re-runs) and `teardown()`
+        // won't fire until disconnect, so nothing would ever stop the engine
+        // holding the HFP input: the persistent-'nope' wedge that survives
+        // until a device reboot. Discard everything instead. No state change —
+        // the terminal path already drove `state` to `.idle` — and no
+        // deactivate here (the session end that raced us owns the
+        // deactivate-once).
+        guard sessionActive else {
+            Self.log.info("CarPlay listen abort: session ended during engine start — discarding running engine")
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            detector.stop()
+            try? FileManager.default.removeItem(at: url)
             return
         }
 
@@ -727,15 +781,16 @@ final class CarPlayRecordingService {
 
         // g8: observe reconfig only AFTER a successful start, on the engine
         // that actually started.
-        engineConfigChangeObserver = NotificationCenter.default.addObserver(
+        engineConfigChangeObserver = NotificationToken(NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
-            queue: nil
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleEngineConfigurationChange()
+            queue: nil,
+            using: { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleEngineConfigurationChange()
+                }
             }
-        }
+        ))
 
         self.captureEngine = engine
         self.captureFile = captureFile
@@ -773,9 +828,23 @@ final class CarPlayRecordingService {
     ) async -> AVAudioEngine? {
         let maxAttempts = 3
         for attempt in 0..<maxAttempts {
-            guard sessionActive else { return nil }
+            guard sessionActive else {
+                Self.log.info("CarPlay engine retry abort (attempt \(attempt, privacy: .public)): session ended")
+                return nil
+            }
 
             if attempt >= 1 {
+                // Self-heal, same reasoning as `reArmAfterSettle`:
+                // `templateDidDisappear` is empirically unreliable, so the
+                // modal can be gone while `sessionActive` is still (briefly)
+                // true. Recovering a mic for a screen that no longer exists
+                // only churns deactivate/reactivate against a collapsing
+                // scene. Attempt 0 never checks this — g1 guarantees the modal
+                // is fully presented before `beginSession` runs.
+                guard isVoiceModalPresented?() ?? true else {
+                    Self.log.info("CarPlay engine retry abort (attempt \(attempt, privacy: .public)): voice modal gone")
+                    return nil
+                }
                 // Hard recovery: internal deactivate (no notify-others) +
                 // reactivate to clear a wedged RemoteIO/`mediaserverd` connection.
                 // `audioActivated` deliberately stays TRUE across the whole cycle:
@@ -787,17 +856,32 @@ final class CarPlayRecordingService {
                 // can stay wedged (the radio/nav-stuck mode the deactivate-once
                 // invariant guards). A redundant `setActive(false)` on an
                 // already-inactive session there is a benign, logged no-op.
-                try? CarPlayAudioSession.deactivateForRecovery()
+                Self.log.info("CarPlay hard recovery begin (attempt \(attempt, privacy: .public)): deactivate/reactivate cycle")
+                do {
+                    try CarPlayAudioSession.deactivateForRecovery()
+                } catch {
+                    // Swallowed on purpose (behavior unchanged from `try?`) —
+                    // the reactivate below is the recovery's real gate; this
+                    // line just stops the deactivate half failing invisibly.
+                    Self.log.error("CarPlay deactivateForRecovery failed (attempt \(attempt, privacy: .public)): \(Self.audioDiag(error), privacy: .public)")
+                }
                 try? await Task.sleep(for: .seconds(Constants.carPlayColdStartSettleDelay))
-                guard sessionActive else { return nil }
+                guard sessionActive else {
+                    Self.log.info("CarPlay engine retry abort (attempt \(attempt, privacy: .public)): session ended during recovery settle")
+                    return nil
+                }
                 do {
                     try CarPlayAudioSession.configureAndActivate()
+                    Self.log.info("CarPlay recovery re-activate OK (attempt \(attempt, privacy: .public))")
                 } catch {
                     Self.log.error("CarPlay recovery re-activate failed (attempt \(attempt, privacy: .public)): \(Self.audioDiag(error), privacy: .public)")
                     continue
                 }
                 try? await Task.sleep(for: .seconds(Constants.carPlayColdStartSettleDelay))
-                guard sessionActive else { return nil }
+                guard sessionActive else {
+                    Self.log.info("CarPlay engine retry abort (attempt \(attempt, privacy: .public)): session ended after recovery re-activate")
+                    return nil
+                }
             }
 
             let engine = AVAudioEngine()
@@ -833,7 +917,7 @@ final class CarPlayRecordingService {
     }
 
     /// Arm the no-speech guard. First listen → `carPlayInitialSilenceTimeout`
-    /// (15 s); follow-up → `carPlayFollowUpSilenceTimeout` (30 s). Both expiries
+    /// (15 s); follow-up → `carPlayFollowUpSilenceTimeout` (20 s). Both expiries
     /// run `handleSilenceTimeout`, which decides what to say on the way out.
     ///
     /// Single-slot ownership is preserved: one `initialSilenceTimer` at a time,
@@ -1139,10 +1223,7 @@ final class CarPlayRecordingService {
     /// Stop the capture engine, remove the tap, release the file. Idempotent.
     /// Does NOT deactivate the audio session — that is session-scoped.
     private func tearDownCapture() {
-        if let observer = engineConfigChangeObserver {
-            NotificationCenter.default.removeObserver(observer)
-            engineConfigChangeObserver = nil
-        }
+        engineConfigChangeObserver = nil
         if let engine = captureEngine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -2185,15 +2266,16 @@ final class CarPlayRecordingService {
     // MARK: - Audio interruption
 
     private func setupInterruptionObserver() {
-        interruptionObserver = NotificationCenter.default.addObserver(
+        interruptionObserver = NotificationToken(NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: AVAudioSession.sharedInstance(),
-            queue: .main
-        ) { [weak self] notification in
-            Task { @MainActor in
-                self?.handleInterruption(notification)
+            queue: .main,
+            using: { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleInterruption(notification)
+                }
             }
-        }
+        ))
     }
 
     /// DIAGNOSTIC (CarPlay dashboard-fall): log every audio route change with
@@ -2201,19 +2283,25 @@ final class CarPlayRecordingService {
     /// change. Lets the next run show whether a route renegotiation precedes a
     /// `sceneWillResignActive` at TTS-start.
     private func setupRouteChangeObserver() {
-        routeChangeObserver = NotificationCenter.default.addObserver(
+        routeChangeObserver = NotificationToken(NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance(),
-            queue: .main
-        ) { [weak self] notification in
-            let reasonRaw = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 99
-            let session = AVAudioSession.sharedInstance()
-            let outs = session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ",")
-            let ins = session.currentRoute.inputs.map(\.portType.rawValue).joined(separator: ",")
-            Task { @MainActor in
-                Self.log.info("ROUTE CHANGE reason=\(reasonRaw, privacy: .public) state=\(String(describing: self?.state), privacy: .public) outs=[\(outs, privacy: .public)] ins=[\(ins, privacy: .public)]")
+            queue: .main,
+            using: { [weak self] notification in
+                let reasonRaw = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 99
+                let session = AVAudioSession.sharedInstance()
+                let outs = session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ",")
+                let ins = session.currentRoute.inputs.map(\.portType.rawValue).joined(separator: ",")
+                Task { @MainActor in
+                    // A dead instance stays silent: the multiplied `state=nil`
+                    // stream from leaked observers buried the live instance's
+                    // line (and was the fingerprint of the observer leak the
+                    // NotificationToken wrapper now closes).
+                    guard let self else { return }
+                    Self.log.info("ROUTE CHANGE reason=\(reasonRaw, privacy: .public) state=\(String(describing: self.state), privacy: .public) outs=[\(outs, privacy: .public)] ins=[\(ins, privacy: .public)]")
+                }
             }
-        }
+        ))
     }
 
     // MARK: - Media-services reset (mediaserverd torn down)
@@ -2224,15 +2312,16 @@ final class CarPlayRecordingService {
     /// objects — every subsequent session fails until they are recreated. Apple's
     /// contract: dispose all audio objects on reset and rebuild before reuse.
     private func setupMediaResetObserver() {
-        mediaResetObserver = NotificationCenter.default.addObserver(
+        mediaResetObserver = NotificationToken(NotificationCenter.default.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification,
             object: AVAudioSession.sharedInstance(),
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleMediaServicesReset()
+            queue: .main,
+            using: { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleMediaServicesReset()
+                }
             }
-        }
+        ))
     }
 
     private func handleMediaServicesReset() {
