@@ -132,9 +132,13 @@ actor SettingsManager {
     }
     #endif
 
-    /// Whether iCloud is available on this device. Cheap check — `nil`
-    /// token means the user is signed out of iCloud OR the entitlement is
-    /// mis-provisioned. Either way we degrade to local-only.
+    /// Whether an iCloud *account* is evidenced on this device — the ubiquity
+    /// identity token, which tracks iCloud Drive, not KVS. Cheap check — `nil`
+    /// means signed out of iCloud, iCloud Drive off, or the entitlement is
+    /// mis-provisioned; KVS and iCloud Keychain can both still be syncing.
+    /// Gates KVS push-UP writes (publishing local values into the cloud),
+    /// never cache READS: reading `iCloudStore` is always safe — it returns
+    /// the local cache, and every hydration site skips an absent key.
     private var iCloudAvailable: Bool {
         #if DEBUG
         if iCloudSyncSuspendedForTesting { return false }
@@ -4545,13 +4549,18 @@ actor SettingsManager {
     /// same read order as `defaultRemoteAgentRef()`. Empty when none. The WRITE
     /// path (`upsertCustomGateway`/`deleteCustomGateway`) operates on THIS, never
     /// the QA-augmented `customGateways()`, so a QA phantom can't be persisted.
+    /// The KVS arm is a cache READ, deliberately not behind `iCloudAvailable`:
+    /// a nil ubiquity token (iCloud Drive off) does not stop KVS from syncing,
+    /// and a fresh install on such a device must still see the roster.
     private func persistedCustomGateways() -> [CustomGateway] {
         if let data = defaults.data(forKey: Constants.customGatewaysRegistryKey),
            let list = try? JSONDecoder().decode([CustomGateway].self, from: data) {
             return list.map { Self.withAdmissibleDisplayName($0) }
         }
-        if iCloudAvailable,
-           let data = iCloudStore.data(forKey: Constants.customGatewaysRegistryKey),
+        #if DEBUG
+        if iCloudSyncSuspendedForTesting { return [] }
+        #endif
+        if let data = iCloudStore.data(forKey: Constants.customGatewaysRegistryKey),
            let list = try? JSONDecoder().decode([CustomGateway].self, from: data) {
             return list.map { Self.withAdmissibleDisplayName($0) }
         }
@@ -4728,6 +4737,13 @@ actor SettingsManager {
         if wasDefault {
             repointDefaultAfterForget(of: ref)
         }
+
+        // Flag everything this delete removed for upload. `synchronize()` is
+        // an advisory nudge, not a fence — it promises no ordering or
+        // immediacy — but it runs here at the operation boundary, AFTER the
+        // roster shrink and the per-uuid purge, so the whole delete is dirty
+        // by the time the system schedules the push.
+        iCloudStore.synchronize()
     }
 
     /// Remove the per-ref slots that no dedicated setter owns — the gateway's
@@ -4784,12 +4800,26 @@ actor SettingsManager {
     /// the retention trim because `date` predates every kept record.
     @discardableResult
     func retireCustomGatewayBadge(id: UUID, at date: Date = Date()) -> Bool {
-        guard let gateway = persistedCustomGateways().first(where: { $0.id == id }),
-              let badge = RetiredGatewayBadge.freeze(gateway, at: date),
+        guard let gateway = persistedCustomGateways().first(where: { $0.id == id }) else {
+            return false
+        }
+        return retireCustomGatewayBadge(gateway, at: date)
+    }
+
+    /// Freeze from an entry the CALLER already holds. The inbound roster paths
+    /// (`handleICloudChange` / `reconcileCustomGatewaysFromKVSCache`) overwrite
+    /// the local roster BEFORE retiring — the shrunken roster is what reveals
+    /// which entries vanished — so a by-id lookup there comes up empty and
+    /// would silently freeze nothing. They pass the outgoing snapshot entry
+    /// instead; the by-id overload above stays for the Forget site, which runs
+    /// while the entry still exists.
+    @discardableResult
+    func retireCustomGatewayBadge(_ gateway: CustomGateway, at date: Date = Date()) -> Bool {
+        guard let badge = RetiredGatewayBadge.freeze(gateway, at: date),
               let updated = retiredGatewayBadges().retiring(badge)
         else { return false }
         persistRetiredGatewayBadges(updated)
-        return updated.contains { $0.id == id }
+        return updated.contains { $0.id == gateway.id }
     }
 
     /// App Group ONLY — never iCloud KVS (`RetiredGatewayBadge` carries the
@@ -4831,7 +4861,10 @@ actor SettingsManager {
     func retireVanishedCustomGateways(previous: [CustomGateway], current: [CustomGateway]) {
         let surviving = Set(current.map(\.id))
         for gone in previous where !surviving.contains(gone.id) {
-            retireCustomGatewayBadge(id: gone.id)
+            // Freeze from the SNAPSHOT entry, not by id: both callers have
+            // already overwritten the persisted roster, so `gone` is the last
+            // copy of the monogram and colour anywhere on this device.
+            retireCustomGatewayBadge(gone)
         }
         pruneRetiredBadges(liveIDs: surviving)
     }
@@ -4863,6 +4896,7 @@ actor SettingsManager {
         if let data = try? JSONEncoder().encode(list) {
             defaults.set(data, forKey: Constants.customGatewaysRegistryKey)
             iCloudStore.set(data, forKey: Constants.customGatewaysRegistryKey)
+            iCloudStore.synchronize()
         }
         postSettingsDidChangeRemotely()
     }
@@ -6236,12 +6270,30 @@ actor SettingsManager {
     /// Pull current iCloud KVS values into local App Groups UserDefaults.
     /// Called from `ConduckApp` `.task` on launch. On first launch of a
     /// second device, this hydrates settings from the cloud before any view
-    /// reads from UserDefaults. Trimmed to
-    /// `stt.preferredLanguage` + identity keys only (no emoji/polish/vocab).
+    /// reads from UserDefaults.
+    ///
+    /// Two tiers, split by the `iCloudAvailable` guard: the custom-gateway
+    /// reconcile runs UNGATED first — it is a pure cache read, and it is the
+    /// only cold-launch path that lands a peer's Forget when the live KVS
+    /// change notification was missed (app quit while `syncdefaultsd` applied
+    /// the delta — no notification is replayed at next launch) or the
+    /// ubiquity token is nil (iCloud Drive off) while KVS still syncs.
+    /// Everything push-up-bearing stays behind the guard.
     func performInitialSync() async {
-        guard iCloudAvailable else { return }
-
         iCloudStore.synchronize()
+
+        // UNGATED — see the tier note above and the method's own rationale.
+        // POST when it adopted something: launch tasks and view-model loads
+        // start independently, so a view model that read the stale roster
+        // FIRST would otherwise never hear about this adoption — and the
+        // activation catch-up can't repair it either, because by then the
+        // stores already agree and its own change check stays quiet. A no-op
+        // reconcile posts nothing, so a clean launch broadcasts nothing.
+        if reconcileCustomGatewaysFromKVSCache() {
+            postSettingsDidChangeRemotely()
+        }
+
+        guard iCloudAvailable else { return }
 
         // Preferred language — iCloud wins when both have values (second
         // device adopts first device's preference). If only local has a
@@ -6445,50 +6497,10 @@ actor SettingsManager {
             }
         }
 
-        // PER-UUID custom-GATEWAY roster + slots. Mirrors the custom voice-
-        // endpoint block above (the two are clones — see `persistedCustomGateways()`
-        // / `customVoiceEndpoints()`). Hydrate the ROSTER JSON first (iCloud-wins-
-        // then-push) so a fresh device knows which gateway uuids exist; then hydrate
-        // each per-uuid URL + auth-scheme slot. Token = Keychain (iCloud-Keychain-
-        // synced separately); cert = per-device (App Groups, no KVS) — not synced;
-        // model/colour/monogram ride INSIDE the roster JSON. The built-in URL loop
-        // above (`RemoteAgentBackend.allCases`) never reaches customs.
-        // HYDRATE-ONLY, exactly like the per-uuid slots below. A push-up here is
-        // the SAME resurrection bug one level up: the roster is the index of
-        // which gateways exist, so a device whose KVS cache is empty (never
-        // downloaded, or reset by an iCloud account change) would re-publish its
-        // stale roster and bring back every gateway a peer had forgotten —
-        // listed in the picker, with no URL behind them, because the slots
-        // themselves correctly refuse to push up.
-        if let iCloudGatewayRoster = iCloudStore.data(forKey: Constants.customGatewaysRegistryKey) {
-            // Retire whatever this hydration is about to drop. A Forget on
-            // ANOTHER device reaches here as a shrunken roster, and the outgoing
-            // local entry is the last place that gateway's monogram and colour
-            // exist — read it BEFORE the overwrite or its conversations lose
-            // their badge on this device only.
-            let previous = persistedCustomGateways()
-            defaults.set(iCloudGatewayRoster, forKey: Constants.customGatewaysRegistryKey)
-            retireVanishedCustomGateways(previous: previous, current: persistedCustomGateways())
-        }
-        let gatewayUUIDs = ((try? JSONDecoder().decode(
-            [CustomGateway].self,
-            from: defaults.data(forKey: Constants.customGatewaysRegistryKey) ?? Data()
-        )) ?? []).map { $0.id }
-        // HYDRATE-ONLY, for the same two reasons as the built-in loop above: a
-        // push-up would resurrect a gateway a peer device forgot, and an absent
-        // KVS key at launch is not evidence that anything was deleted.
-        for uuid in gatewayUUIDs {
-            let ref = RemoteAgentRef.custom(uuid)
-            for key in [
-                Constants.remoteAgentURLKey(for: ref),
-                Constants.remoteAgentAuthSchemeKey(for: ref),
-                Constants.remoteAgentModelKey(for: ref)
-            ] {
-                if let iCloudValue = iCloudStore.string(forKey: key), !iCloudValue.isEmpty {
-                    defaults.set(iCloudValue, forKey: key)
-                }
-            }
-        }
+        // PER-UUID custom-GATEWAY roster + slots hydrate in
+        // `reconcileCustomGatewaysFromKVSCache()`, which runs UNGATED above the
+        // account guard at the top of this method — see that method for the
+        // hydrate-only / no-push-up rationale.
 
         // FILE-SERVER config (`fileServer.url.*` / `fileServer.available.*` /
         // `fileServer.folderCapable.*`): iCloud-wins INBOUND hydration only,
@@ -6544,6 +6556,103 @@ actor SettingsManager {
         // inconclusive and left its one-shot flag unset; this is where that gets
         // a second look, with iCloud's initial download already applied.
         retryDeferredDefaultSeedIfPending()
+    }
+
+    /// Hydrate the custom-gateway roster + per-uuid slots from the local KVS
+    /// cache. The cold-launch / foreground counterpart of `handleICloudChange`'s
+    /// roster branch: a peer's Forget that arrived while this process was quit
+    /// (or while the notification was dropped) exists ONLY as silently-applied
+    /// KVS cache state, and this is the read that adopts it. Returns whether
+    /// anything durable changed — roster bytes OR a per-uuid slot value — so
+    /// callers post `settingsDidChangeRemotely` exactly when there is
+    /// something for an open screen to react to, and never on a quiet pass.
+    ///
+    /// Read-only against KVS and deliberately NOT behind `iCloudAvailable` —
+    /// reading the cache is always safe, and the nil-ubiquity-token device
+    /// (iCloud Drive off, KVS still syncing) is precisely the one that needs
+    /// this catch-up. Mirrors the custom voice-endpoint block in
+    /// `performInitialSync` (the two are clones — see `persistedCustomGateways()`
+    /// / `customVoiceEndpoints()`). Hydrate the ROSTER JSON first so a fresh
+    /// device knows which gateway uuids exist; then hydrate each per-uuid
+    /// URL + auth-scheme + model slot. Token = Keychain (iCloud-Keychain-synced
+    /// separately); cert = per-device (App Groups, no KVS) — not synced;
+    /// colour/monogram ride INSIDE the roster JSON.
+    ///
+    /// HYDRATE-ONLY, both halves. A push-up here is the resurrection bug: the
+    /// roster is the index of which gateways exist, so a device whose KVS cache
+    /// is empty (never downloaded, or reset by an iCloud account change) would
+    /// re-publish its stale roster and bring back every gateway a peer had
+    /// forgotten. An ABSENT KVS roster key is likewise never treated as a
+    /// delete — signed-out devices keep their local roster untouched. And no
+    /// destruction on a roster guess: vanished entries get their badge retired
+    /// (`retireVanishedCustomGateways`, self-correcting if the roster catches
+    /// up), never a `purgeGatewayOwnedSlots` or pointer clear — those stay on
+    /// the explicit-delete and `.serverChange` paths.
+    @discardableResult
+    func reconcileCustomGatewaysFromKVSCache() -> Bool {
+        #if DEBUG
+        // Same seam as `handleICloudChange`: suspending suites drive the live
+        // singleton and must not have real-KVS residue mirrored into their
+        // controlled App-Group `defaults` mid-run.
+        if iCloudSyncSuspendedForTesting { return false }
+        #endif
+
+        var changed = false
+        let before = defaults.data(forKey: Constants.customGatewaysRegistryKey)
+        // Adopt the KVS roster only when it DECODES. Bytes that don't — a
+        // future schema, or plain corruption — must not overwrite the valid
+        // local copy: both reads would then fail open to `[]` and every
+        // gateway on this device would be retired as vanished. Undecodable
+        // means "unknown", and unknown preserves local state; a valid encoded
+        // `[]` still clears the last gateway.
+        if let iCloudGatewayRoster = iCloudStore.data(forKey: Constants.customGatewaysRegistryKey),
+           (try? JSONDecoder().decode([CustomGateway].self, from: iCloudGatewayRoster)) != nil {
+            // Retire whatever this hydration is about to drop. A Forget on
+            // ANOTHER device reaches here as a shrunken roster, and the outgoing
+            // local entry is the last place that gateway's monogram and colour
+            // exist — read it BEFORE the overwrite or its conversations lose
+            // their badge on this device only.
+            let previous = persistedCustomGateways()
+            defaults.set(iCloudGatewayRoster, forKey: Constants.customGatewaysRegistryKey)
+            retireVanishedCustomGateways(previous: previous, current: persistedCustomGateways())
+            changed = defaults.data(forKey: Constants.customGatewaysRegistryKey) != before
+        }
+        let gatewayUUIDs = ((try? JSONDecoder().decode(
+            [CustomGateway].self,
+            from: defaults.data(forKey: Constants.customGatewaysRegistryKey) ?? Data()
+        )) ?? []).map { $0.id }
+        for uuid in gatewayUUIDs {
+            let ref = RemoteAgentRef.custom(uuid)
+            for key in [
+                Constants.remoteAgentURLKey(for: ref),
+                Constants.remoteAgentAuthSchemeKey(for: ref),
+                Constants.remoteAgentModelKey(for: ref)
+            ] {
+                // A slot-only edit (peer changed a URL or auth scheme without
+                // touching the roster) counts as a change too — the callers'
+                // notification decision hangs on this verdict, and a silent
+                // slot rewrite would leave open Settings screens stale.
+                if let iCloudValue = iCloudStore.string(forKey: key), !iCloudValue.isEmpty,
+                   defaults.string(forKey: key) != iCloudValue {
+                    defaults.set(iCloudValue, forKey: key)
+                    changed = true
+                }
+            }
+        }
+        return changed
+    }
+
+    /// Foreground catch-up: flush + adopt any KVS delta `syncdefaultsd` applied
+    /// silently while the app was backgrounded (a long-lived macOS menu-bar
+    /// process can miss the live change notification entirely). Posts
+    /// `settingsDidChangeRemotely` ONLY when something actually changed — the
+    /// post wakes `PhoneSessionManager` into a token-bearing Watch broadcast,
+    /// which must not fire on every activation.
+    func catchUpGatewayRosterOnActivate() {
+        iCloudStore.synchronize()
+        if reconcileCustomGatewaysFromKVSCache() {
+            postSettingsDidChangeRemotely()
+        }
     }
 
     // MARK: - Per-uuid key families
@@ -7037,10 +7146,24 @@ actor SettingsManager {
             // overwrite so a peer's Forget retires the badge here too, instead
             // of blanking the rows of conversations this device still holds.
             let previousRoster = persistedCustomGateways()
+            let rosterBytesBefore = defaults.data(forKey: Constants.customGatewaysRegistryKey)
+            // Three inbound shapes, three verdicts: decodable Data = adopt;
+            // key genuinely ABSENT = deletion (this is a notification that
+            // NAMED the key, so absence is an intentional signal here, unlike
+            // the launch reconcile); present but undecodable or wrong-typed =
+            // UNKNOWN — preserve local state, because writing it through would
+            // fail both roster reads open to `[]` and retire every gateway.
+            // `data(forKey:)` alone can't tell absent from wrong-typed —
+            // `object(forKey:)` is the existence check.
+            var adoptedAuthoritativeRoster = false
             if let data = iCloudStore.data(forKey: Constants.customGatewaysRegistryKey) {
-                defaults.set(data, forKey: Constants.customGatewaysRegistryKey)
-            } else {
+                if (try? JSONDecoder().decode([CustomGateway].self, from: data)) != nil {
+                    defaults.set(data, forKey: Constants.customGatewaysRegistryKey)
+                    adoptedAuthoritativeRoster = true
+                }
+            } else if iCloudStore.object(forKey: Constants.customGatewaysRegistryKey) == nil {
                 defaults.removeObject(forKey: Constants.customGatewaysRegistryKey)
+                adoptedAuthoritativeRoster = true
             }
             let currentRoster = persistedCustomGateways()
             retireVanishedCustomGateways(previous: previousRoster, current: currentRoster)
@@ -7056,13 +7179,30 @@ actor SettingsManager {
             // such undo, and losing it silently is exactly the failure the
             // ignore-but-retain policy in `lastUsedRemoteAgentRef()` exists to
             // avoid.
-            if case .serverChange = change.reason {
+            //
+            // The check is END-STATE (is the pointer's uuid in the roster this
+            // event delivered?), not a previous-vs-current transition: an
+            // activation catch-up can adopt the same shrink moments before this
+            // queued notification runs, and the transition is gone by the time
+            // the confirmed `.serverChange` arrives — but the confirmation is
+            // what authorizes the clear. Guarded on `adoptedAuthoritativeRoster`
+            // so an undecodable delivery clears nothing.
+            if case .serverChange = change.reason, adoptedAuthoritativeRoster {
                 let surviving = Set(currentRoster.map(\.id))
-                for gone in previousRoster where !surviving.contains(gone.id) {
-                    clearLastUsedRemoteAgentRefIfPointing(at: .custom(gone.id))
+                if let raw = defaults.string(forKey: Constants.remoteAgentLastUsedBackendKey),
+                   let pointed = RemoteAgentRef(rawString: raw),
+                   let pointedID = pointed.customID,
+                   !surviving.contains(pointedID) {
+                    clearLastUsedRemoteAgentRefIfPointing(at: pointed)
                 }
             }
-            didChange = true
+            // Only when the bytes actually moved. An activation catch-up can
+            // adopt this same delta moments before the queued notification
+            // lands here; an unconditional flag would then re-post and fire a
+            // second token-bearing Watch broadcast for nothing.
+            if defaults.data(forKey: Constants.customGatewaysRegistryKey) != rosterBytesBefore {
+                didChange = true
+            }
         }
 
         // Mirror remote FILE-SERVER config changes (`fileServer.url.*` /

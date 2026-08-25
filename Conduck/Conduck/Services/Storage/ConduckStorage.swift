@@ -111,9 +111,11 @@ protocol KVSChangeSource: Sendable {
 
 // MARK: - Cloud availability
 
-/// Whether this device currently has an iCloud account. A `nil` ubiquity token
-/// means signed out OR a mis-provisioned entitlement — either way, degrade to
-/// local-only.
+/// Whether this device evidences an iCloud account via the ubiquity identity
+/// token — which tracks iCloud Drive, not KVS. `nil` means signed out, iCloud
+/// Drive off, or a mis-provisioned entitlement; KVS and iCloud Keychain can
+/// still be syncing. Consumers gate KVS push-UP writes on this, never cache
+/// reads — reading the KVS local cache is always safe.
 protocol CloudAvailability: Sendable {
     var isAvailable: Bool { get }
 }
