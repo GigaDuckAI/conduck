@@ -191,10 +191,10 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
     ///
     /// The COMPLEMENT of `attributedDeviceGroups`, and the reason that filter
     /// is auditable: it is what lets a test assert the dropped attempts are
-    /// still inside `recordedAttempts` rather than quietly gone. No screen
-    /// renders it — a count of things the ledger failed to measure says
-    /// nothing a user can act on — but a filter whose complement cannot be
-    /// named is a filter nothing can check.
+    /// still inside `recordedAttempts` rather than quietly gone. The by-device
+    /// cards print it in their missing-mass footer when it is not zero — the
+    /// one case where dropping the row from the list would leave the rows'
+    /// shares visibly not adding up with nothing on screen saying why.
     var unattributedDeviceAttempts: Int {
         deviceGroups.first { $0.key == UsageDeviceBucket.unknown.rawValue }?.attempts ?? 0
     }
@@ -210,6 +210,14 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
     /// rate still hold them.
     var attributedGatewayGroups: [GatewayUsageGroup] {
         byGateway.filter { $0.key != nil }
+    }
+
+    /// The complement of `attributedGatewayGroups`, mirroring the device pair
+    /// above for the same two reasons: it makes the filter auditable, and it is
+    /// the count the by-gateway cards' missing-mass footer prints when the
+    /// listed rows' shares do not reach the whole.
+    var unattributedGatewayAttempts: Int {
+        byGateway.first { $0.key == nil }?.attempts ?? 0
     }
 
     /// `inputModes` without the slice nothing observed. Beside Typed and Voice
@@ -762,16 +770,6 @@ nonisolated struct GatewayUsageGroup: Sendable, Equatable, Identifiable {
     /// Samples behind `meanResponseTime`.
     let responseSampleCount: Int
     let tokens: GatewayUsageTokens
-    /// Member attempts with a usable token total — the same best-available rule
-    /// as `tokenMeasuredAttempts`, terminal rows only by construction. Paired
-    /// with `terminalAttempts` so a row's token figure can say how much of the
-    /// group actually reported, instead of presenting a partial sum as the
-    /// whole.
-    let tokenReportingAttempts: Int
-    /// Member attempts with a terminal outcome — `GatewayUsageOutcomeMix
-    /// .resolved` semantics. The coverage denominator: an open attempt has not
-    /// had its chance to report and may not be counted against the gateway.
-    let terminalAttempts: Int
     /// Per-requested-model breakdown WITHIN this gateway, populated only when
     /// more than one distinct model was requested through it — a single-model
     /// gateway's breakdown would just restate the row above it.
@@ -1391,8 +1389,6 @@ nonisolated enum GatewayUsageAggregator {
                 : samples.reduce(0, +) / Double(samples.count),
             responseSampleCount: samples.count,
             tokens: tokens(for: members),
-            tokenReportingAttempts: members.count(where: { bestAvailableTokens($0) != nil }),
-            terminalAttempts: mix.resolved,
             models: models
         )
     }

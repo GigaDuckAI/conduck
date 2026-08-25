@@ -143,9 +143,9 @@ struct UsageDeviceDetailView: View {
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.activity.header", defaultValue: "Activity"))
-        } footer: {
-            Text(UsageDetailFormat.rangeCaption(for: model.range))
         }
+        // NO RANGE FOOTER: the picker at the top of this screen already names
+        // the window, one card above.
     }
 
     // MARK: - Reliability
@@ -289,16 +289,24 @@ struct UsageDeviceDetailView: View {
             ForEach(summary.attributedGatewayGroups) { group in
                 UsageGroupCompactRow(
                     label: UsageGatewayLabel.name(for: group.key, roster: gatewayRoster),
-                    group: group
+                    group: group,
+                    share: UsageDetailFormat.shareText(
+                        group.attempts, of: summary.recordedAttempts)
                 )
             }
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.byGateway.header", defaultValue: "By gateway"))
+        } footer: {
+            // ONLY the missing mass, and only when there is some — this
+            // screen's scope has its own denominator, so the overview cannot
+            // have said it. Everything else worth a footer (that a removed
+            // gateway keeps its history) was said there.
+            if summary.unattributedGatewayAttempts > 0 {
+                Text(UsageDetailFormat.unattributedGatewayFooter(
+                    summary.unattributedGatewayAttempts, of: summary.recordedAttempts))
+            }
         }
-        // NO FOOTER. The overview's own by-gateway card carries the one thing
-        // worth saying — that an edited or removed gateway keeps its history —
-        // and this screen is only reached from there.
     }
 }
 

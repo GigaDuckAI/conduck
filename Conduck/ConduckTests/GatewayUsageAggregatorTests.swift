@@ -1503,26 +1503,41 @@ final class GatewayUsageAggregatorTests: XCTestCase {
     /// best-available rule (a reported total, or both components), the
     /// denominator is terminal attempts — an open attempt has not had its
     /// chance to report and may not be counted against the gateway.
-    func testGroupTokenCoverageCountsExcludeOpenAttempts() {
-        let liveID = UUID()
-        let summary = summarize(
-            [
-                attempt(gateway: "openclaw", outcome: .succeeded, total: 100),
-                attempt(gateway: "openclaw", outcome: .failed),
-                attempt(gateway: "openclaw", outcome: .cancelled, input: 5, output: 7),
-                attempt(id: liveID, gateway: "openclaw", outcome: .inFlight, total: 900),
-            ],
-            live: [liveID]
-        )
+    /// The gateway complement mirrors the device one: what the attributed list
+    /// drops must remain countable, or the share footer could not say why the
+    /// visible rows sum short.
+    func testUnattributedGatewayAttemptsAreTheAttributedListsComplement() {
+        let summary = summarize([
+            attempt(gateway: "openclaw"),
+            attempt(gateway: "openclaw"),
+            attempt(gateway: nil),
+        ])
 
-        let openclaw = summary.byGateway[0]
-        XCTAssertEqual(openclaw.terminalAttempts, 3, "the open attempt stays out")
+        XCTAssertEqual(summary.unattributedGatewayAttempts, 1)
         XCTAssertEqual(
-            openclaw.tokenReportingAttempts, 2,
-            "a reported total counts, both components count, a silent failure does not")
-        XCTAssertLessThanOrEqual(
-            openclaw.tokenReportingAttempts, openclaw.terminalAttempts,
-            "coverage can never exceed its own denominator")
+            summary.attributedGatewayGroups.reduce(0) { $0 + $1.attempts }
+                + summary.unattributedGatewayAttempts,
+            summary.recordedAttempts,
+            "attributed rows plus the complement must be the whole")
+    }
+
+    /// The fragment is the bare volume on every basis — a reported total
+    /// renders unqualified, a client sum never does, and no per-row coverage
+    /// clause exists: partial data reads the same as full, by decision.
+    func testTokensFragmentIsTheBareVolume() {
+        let summary = summarize([
+            attempt(gateway: "openclaw", outcome: .succeeded, total: 120),
+            attempt(gateway: "openclaw", outcome: .failed),
+            attempt(gateway: "hermes", outcome: .succeeded, input: 5, output: 7),
+        ])
+        let byKey = Dictionary(
+            uniqueKeysWithValues: summary.byGateway.map { ($0.key, $0) })
+
+        XCTAssertEqual(UsageDetailFormat.tokensFragment(byKey["openclaw"]!), "120 tokens")
+        XCTAssertEqual(
+            UsageDetailFormat.tokensFragment(byKey["hermes"]!),
+            "12 tokens (input + output)",
+            "a client sum keeps its qualifier")
     }
 
     // MARK: - 9. Turn reliability

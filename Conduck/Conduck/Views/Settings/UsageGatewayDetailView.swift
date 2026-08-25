@@ -197,9 +197,9 @@ struct UsageGatewayDetailView: View {
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.activity.header", defaultValue: "Activity"))
-        } footer: {
-            Text(UsageDetailFormat.rangeCaption(for: model.range))
         }
+        // NO RANGE FOOTER: the picker at the top of this screen already names
+        // the window, one card above.
     }
 
     // MARK: - Reliability
@@ -379,15 +379,18 @@ struct UsageGatewayDetailView: View {
 
         return Section {
             ForEach(summary.byRequestedModel) { group in
-                // Same caption sentence as the gateway rows: success rate,
-                // average reply time, then the token volume with its coverage —
-                // model choice is the cost lever, and the row is where a
-                // partial figure can say so in words. Rows stay RANKED BY
-                // ATTEMPTS, so partial token data never decides visibility.
+                // Same caption sentence as the gateway rows: the sample, the
+                // success rate, the average reply time, then the token volume —
+                // model choice is the cost lever. The trailing value is the
+                // model's SHARE of this gateway's attempts; the absolute count
+                // sits at the caption's front. Rows stay RANKED BY ATTEMPTS,
+                // so partial token data never decides visibility.
                 UsageValueRow(
                     verbatimLabel: UsageDetailFormat.modelLabel(for: group.key),
-                    value: UsageDetailFormat.attemptsText(group.attempts),
-                    verbatimCaption: UsageDetailFormat.groupDetailTextWithTokens(group)
+                    value: UsageDetailFormat.shareText(
+                        group.attempts, of: summary.recordedAttempts) ?? "",
+                    verbatimCaption: UsageDetailFormat.rankedRowCaption(
+                        group, includeTokens: true)
                 )
             }
 
@@ -480,34 +483,37 @@ struct UsageGatewayDetailView: View {
                 UsageGroupCompactRow(
                     label: UsageDeviceBucketDisplay.label(forKey: group.key),
                     icon: UsageDeviceBucketDisplay.icon(forKey: group.key),
-                    group: group
+                    group: group,
+                    share: UsageDetailFormat.shareText(
+                        group.attempts, of: summary.recordedAttempts)
                 )
             }
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.detail.byDevice.header", defaultValue: "By device"))
+        } footer: {
+            // ONLY the missing mass, and only when there is some — this
+            // screen's scope has its own denominator, so the overview cannot
+            // have said it. Anything else worth a footer was said there.
+            if summary.unattributedDeviceAttempts > 0 {
+                Text(UsageDetailFormat.unattributedDeviceFooter(
+                    summary.unattributedDeviceAttempts, of: summary.recordedAttempts))
+            }
         }
-        // NO FOOTER. This screen is only ever reached by pushing from the
-        // overview, whose own by-device card already says whatever needed
-        // saying — repeating it here is the second telling, not the first.
     }
 
     // MARK: - Image history
 
     /// Image cost, split the way the user thinks about it: turns they attached
     /// images to, and earlier images the app sent again so the agent keeps
-    /// seeing them. The replay row is the lever — the footer names the
-    /// per-gateway Image history setting that bounds it. A turn must never
+    /// seeing them — the footer says only that resending happens; the
+    /// per-gateway Image history setting that bounds it is where the lever
+    /// lives. A turn must never
     /// appear in BOTH rows for the same image: the attached row counts
     /// user-added images only, so the one photo in a two-turn thread reads as
     /// "1 attached, 1 sent again", not as two image turns plus a resend.
-    /// Coverage is one footer sentence for the whole card, only when partial —
-    /// a row recorded before the app measured attachments reads as unmeasured
-    /// rather than as zero.
     private var attachmentSection: some View {
         let context = summary.attachmentContext
-        let coverage = GatewayUsageAggregator.ratio(
-            context.measuredAttempts, summary.recordedAttempts)
 
         return Section {
             UsageValueRow(
@@ -537,20 +543,12 @@ struct UsageGatewayDetailView: View {
                 "settings.usage.detail.imageHistory.header",
                 defaultValue: "Image history"))
         } footer: {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(LocalizedStringResource(
-                    "settings.usage.detail.imageHistory.footer",
-                    defaultValue: """
-                        Conduck re-sends some earlier images so your AI can \
-                        still see them. Use this gateway's Image history \
-                        setting to choose how much is re-sent. A new \
-                        conversation starts without the old conversation's \
-                        images.
-                        """))
-                if let coverageLine = UsageDetailFormat.imageHistoryCoverage(coverage) {
-                    Text(coverageLine)
-                }
-            }
+            Text(LocalizedStringResource(
+                "settings.usage.detail.imageHistory.footer.v2",
+                defaultValue: """
+                    Conduck re-sends some earlier images so your AI can \
+                    still see them.
+                    """))
         }
     }
 }
@@ -1068,10 +1066,31 @@ struct UsageValueRow: View {
 /// the slice is read against its siblings on how well and how fast it went, and
 /// the caption already states the sample those rates come from. The screen's own
 /// Activity card holds the attempt total for the whole scope.
+/// The trailing share figure on a ranked row. One view so every list styles
+/// and announces it the same way: monospaced beside its siblings, and read to
+/// VoiceOver with its denominator said in words — a bare "52 percent" right
+/// after a caption's own success percentage is two rates with nothing telling
+/// them apart.
+struct UsageShareLabel: View {
+    let share: String
+
+    var body: some View {
+        Text(verbatim: share)
+            .monospacedDigit()
+            .foregroundStyle(AppColors.textSecondary)
+            .accessibilityLabel(Text(verbatim: String(
+                localized: "settings.usage.share.a11y",
+                defaultValue: "\(share) of attempts")))
+    }
+}
+
 struct UsageGroupCompactRow: View {
     let label: String
     var icon: String? = nil
     let group: GatewayUsageGroup
+    /// The group's share of the screen's scope, already formatted. Optional
+    /// because the row cannot know its denominator — the caller's summary does.
+    var share: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -1086,8 +1105,11 @@ struct UsageGroupCompactRow: View {
                 Text(verbatim: label)
                     .foregroundStyle(AppColors.textPrimary)
                 Spacer(minLength: 12)
+                if let share {
+                    UsageShareLabel(share: share)
+                }
             }
-            Text(UsageDetailFormat.groupDetailText(group))
+            Text(UsageDetailFormat.rankedRowCaption(group))
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(AppColors.textTertiary)
@@ -1295,16 +1317,57 @@ enum UsageDetailFormat {
         return parts.joined(separator: " · ")
     }
 
-    /// `groupDetailText` plus the group's token reading — the caption for rows
-    /// that compare cost as well as health (gateway rows, model rows). The
-    /// device rows deliberately never call this: tokens are not a property of
-    /// the keyboard a turn was typed on.
-    static func groupDetailTextWithTokens(_ group: GatewayUsageGroup) -> String {
-        var parts = [groupDetailText(group)]
-        if let tokens = tokensFragment(group) {
+    /// The caption every ranked group row prints: the group's sample first,
+    /// then its rates. The attempt count leads because the trailing share these
+    /// rows carry is meaningless without it — a bare percentage hides whether
+    /// the comparison is 1 of 2 or 500 of 1,000. Tokens join only for rows that
+    /// compare cost as well as health (gateway rows, model rows) — tokens are
+    /// not a property of the keyboard a turn was typed on.
+    static func rankedRowCaption(
+        _ group: GatewayUsageGroup,
+        includeTokens: Bool = false
+    ) -> String {
+        var parts = [attemptsText(group.attempts), groupDetailText(group)]
+        if includeTokens, let tokens = tokensFragment(group) {
             parts.append(tokens)
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// A group's share of its scope's attempts, honestly rounded: a
+    /// tiny-but-real share prints "<1 %" and never a false "0 %", a
+    /// dominant-but-not-total one prints ">99 %" and never a false "100 %" —
+    /// the whole reads as exactly 100 % only when it IS the whole. Nil when
+    /// nothing is in scope: no share exists over an empty denominator.
+    static func shareText(_ count: Int, of total: Int) -> String? {
+        guard total > 0, count > 0 else { return nil }
+        guard count < total else { return percentText(1) }
+        let ratio = Double(count) / Double(total)
+        let rounded = (ratio * 100).rounded()
+        if rounded < 1 {
+            return String(localized: "settings.usage.share.trace",
+                          defaultValue: "<\(percentText(0.01))")
+        }
+        if rounded > 99 {
+            return String(localized: "settings.usage.share.nearAll",
+                          defaultValue: ">\(percentText(0.99))")
+        }
+        return percentText(ratio)
+    }
+
+    /// The missing-mass footers under the by-device and by-gateway cards,
+    /// present only when unattributed attempts exist. That is the one case
+    /// where dropping the "Not recorded" row from the list — right, it is not
+    /// a sixth device — leaves the visible shares summing short with nothing
+    /// saying why.
+    static func unattributedDeviceFooter(_ missing: Int, of total: Int) -> String {
+        String(localized: "settings.usage.byDevice.footer.unattributed",
+               defaultValue: "Device was not recorded on \(missing) of \(total) attempts.")
+    }
+
+    static func unattributedGatewayFooter(_ missing: Int, of total: Int) -> String {
+        String(localized: "settings.usage.byGateway.footer.unattributed",
+               defaultValue: "Gateway was not recorded on \(missing) of \(total) attempts.")
     }
 
     /// The group's token volume with its coverage said beside it. SAME BASIS
@@ -1313,49 +1376,24 @@ enum UsageDetailFormat {
     /// a Conduck-computed figure as the gateway's own number in the one place
     /// groups are compared against each other.
     ///
-    /// PARTIAL COVERAGE IS SAID IN THE ROW, not implied: token gaps cluster by
-    /// gateway, so a group's sum can be a fraction of what the group actually
-    /// spent, and a bare figure would read as the whole. Full coverage stays
-    /// silent (the dashboard's convention), and a group that reported nothing
-    /// renders no token figure at all — absence, never "0 tokens". The
-    /// denominator is TERMINAL attempts: an open attempt has not had its chance
-    /// to report.
+    /// A group that reported nothing renders no token figure at all — absence,
+    /// never "0 tokens". A partial sum renders like a full one on purpose: a
+    /// per-row coverage clause was tried and read as noise beside the volume,
+    /// so the honest hedges live at the card level — the qualifier on a
+    /// component sum here, the chart's own coverage caption, and the Tokens
+    /// card's per-field coverage.
     static func tokensFragment(_ group: GatewayUsageGroup) -> String? {
-        let value: String
         if let total = group.tokens.reportedTotal.sum {
-            value = String(
+            return String(
                 localized: "settings.usage.byGateway.tokens",
                 defaultValue: "\(total.formatted(.number)) tokens")
-        } else if let components = group.tokens.calculatedKnownComponents {
-            value = String(
+        }
+        if let components = group.tokens.calculatedKnownComponents {
+            return String(
                 localized: "settings.usage.byGateway.tokens.components",
                 defaultValue: "\(components.formatted(.number)) tokens (input + output)")
-        } else {
-            return nil
         }
-        guard group.tokenReportingAttempts > 0,
-              group.tokenReportingAttempts < group.terminalAttempts else {
-            return value
-        }
-        return String(
-            localized: "settings.usage.detail.tokensCoverage",
-            defaultValue: """
-                \(value) on \(group.tokenReportingAttempts) of \
-                \(group.terminalAttempts) finished attempts
-                """)
-    }
-
-    /// Coverage for the image-history card — one sentence for the whole card,
-    /// not a caption per row. Absent when everything in range was measured:
-    /// a line saying "100%" adds nothing but doubt.
-    static func imageHistoryCoverage(_ coverage: Double?) -> LocalizedStringResource? {
-        guard let coverage, coverage < 1 else { return nil }
-        return LocalizedStringResource(
-            "settings.usage.detail.imageHistory.coverage",
-            defaultValue: """
-                Image details were recorded for \(percentText(coverage)) of \
-                attempts in this range. These counts may be incomplete.
-                """)
+        return nil
     }
 
     /// The ranking basis, named honestly. ONE basis per list: a list mixing

@@ -268,6 +268,12 @@ struct UsageDashboardContent: View {
                 if !model.summary.attributedGatewayGroups.isEmpty {
                     gatewaySection
                 }
+                // Only worth a card when there is a MIX to describe — the
+                // input-mode rule. One model holding every attempt is a row
+                // saying 100 % about a name the gateway rows already imply.
+                if model.summary.byRequestedModel.count > 1 {
+                    modelSection
+                }
                 if !model.summary.threadRanking.threads.isEmpty {
                     threadsSection
                 }
@@ -406,15 +412,10 @@ struct UsageDashboardContent: View {
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.activity.header", defaultValue: "Activity"))
-        } footer: {
-            // The ONE word on this card a person cannot infer from the tiles.
-            // Everything else the old footer carried — where retries are
-            // counted, that they do not inflate this — answered a question
-            // nobody asks until they already distrust the number.
-            Text(LocalizedStringResource(
-                "settings.usage.activity.footer.turn",
-                defaultValue: "A turn is one thing you sent."))
         }
+        // NO FOOTER. The tiles and the chart's own captions carry everything
+        // this card claims; a definition of "turn" under it answered a
+        // question nobody asks until they already distrust the number.
     }
 
     private var statRow: some View {
@@ -1099,28 +1100,23 @@ struct UsageDashboardContent: View {
             Text(LocalizedStringResource(
                 "settings.usage.byDevice.header", defaultValue: "By device"))
         } footer: {
-            // ONLY where it explains something on screen. A list of device
-            // names needs no gloss; CarPlay sitting BESIDE the very iPhone
-            // driving it is the one row a person reads as a double-count, so
-            // the note appears exactly when that row does.
-            if showsCarPlayNote {
-                Text(LocalizedStringResource(
-                    "settings.usage.byDevice.footer.carPlay",
-                    defaultValue: "CarPlay is listed separately from the phone driving it."))
+            // ONLY the missing mass, and only when there is some: dropping the
+            // "Not recorded" bucket from the list is right — it is not a sixth
+            // device — but it leaves the rows' shares summing short, and that
+            // is the one arithmetic on this card that must not go unexplained.
+            if model.summary.unattributedDeviceAttempts > 0 {
+                Text(UsageDetailFormat.unattributedDeviceFooter(
+                    model.summary.unattributedDeviceAttempts,
+                    of: model.summary.recordedAttempts))
             }
         }
     }
 
-    private var showsCarPlayNote: Bool {
-        model.summary.attributedDeviceGroups
-            .contains { $0.key == UsageDeviceBucket.carPlay.rawValue }
-    }
-
-    /// TITLE AND CHEVRON ONLY on the top line. The row is read against its
-    /// siblings on the rates underneath it, and a raw attempt count at the
-    /// trailing edge is the one figure that answers nothing on its own — the
-    /// caption already carries the sample those rates are taken over, and the
-    /// drill-down carries the count itself.
+    /// TITLE, SHARE AND CHEVRON on the top line. The trailing figure is the
+    /// row's share of the range's attempts — the RELATIVE reading a row is
+    /// compared against its siblings on, which a raw count at that edge never
+    /// was. The count itself leads the caption: a share without its sample
+    /// hides whether the comparison is 1 of 2 or 500 of 1,000.
     private func deviceGroupRow(_ group: GatewayUsageGroup) -> some View {
         let bucket = UsageDeviceBucket(rawValue: group.key ?? "") ?? .unknown
         return navigationRow(value: UsageRoute.device(bucket)) {
@@ -1133,8 +1129,12 @@ struct UsageDashboardContent: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
                     Spacer(minLength: 8)
+                    if let share = UsageDetailFormat.shareText(
+                        group.attempts, of: model.summary.recordedAttempts) {
+                        UsageShareLabel(share: share)
+                    }
                 }
-                Text(UsageDetailFormat.groupDetailText(group))
+                Text(UsageDetailFormat.rankedRowCaption(group))
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(AppColors.textTertiary)
@@ -1186,15 +1186,24 @@ struct UsageDashboardContent: View {
             Text(LocalizedStringResource(
                 "settings.usage.byGateway.header", defaultValue: "By gateway"))
         } footer: {
-            // KEPT: a gateway the user deleted still having a row is the one
-            // thing on this card that looks like a bug. Which gateway a
-            // conversation was bound to needs no explaining.
-            Text(LocalizedStringResource(
-                "settings.usage.byGateway.footer.history",
-                defaultValue: """
-                    A gateway you have since edited or removed still appears for \
-                    the history it made.
-                    """))
+            VStack(alignment: .leading, spacing: 6) {
+                // KEPT: a gateway the user deleted still having a row is the
+                // one thing on this card that looks like a bug. Which gateway
+                // a conversation was bound to needs no explaining.
+                Text(LocalizedStringResource(
+                    "settings.usage.byGateway.footer.history",
+                    defaultValue: """
+                        A gateway you have since edited or removed still appears for \
+                        the history it made.
+                        """))
+                // The by-device card's missing-mass rule, applied to the same
+                // shape of problem.
+                if model.summary.unattributedGatewayAttempts > 0 {
+                    Text(UsageDetailFormat.unattributedGatewayFooter(
+                        model.summary.unattributedGatewayAttempts,
+                        of: model.summary.recordedAttempts))
+                }
+            }
         }
     }
 
@@ -1218,18 +1227,77 @@ struct UsageDashboardContent: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
                     Spacer(minLength: 8)
+                    if let share = UsageDetailFormat.shareText(
+                        group.attempts, of: model.summary.recordedAttempts) {
+                        UsageShareLabel(share: share)
+                    }
                 }
 
-                // Success rate, average reply time and the token volume with
-                // its coverage all come from the shared formatter, so a
-                // gateway row here, its own drill-down and the model rows all
-                // answer with one sentence.
-                Text(UsageDetailFormat.groupDetailTextWithTokens(group))
+                // The sample, the rates and the bare token volume from the
+                // shared formatter, so a gateway row here, its own drill-down
+                // and the model rows all answer with one sentence.
+                Text(UsageDetailFormat.rankedRowCaption(group, includeTokens: true))
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    // MARK: - By model
+
+    /// The models named across EVERY gateway, each with its share of the
+    /// range's attempts — the one place that share exists in words, since the
+    /// per-gateway Models list divides by its own gateway and the chart's
+    /// Models measure speaks per period, never about the range at rest.
+    ///
+    /// Share and sample only — no pooled success rates, reply times or token
+    /// totals: those stop meaning one thing when averaged across gateways
+    /// with different tools, networks and reporting habits.
+    ///
+    /// BOUNDED like the threads card: every model up to four, else the top
+    /// three and one folded remainder — a fold hiding exactly one model would
+    /// be longer than the row it hides. Rows navigate nowhere; there is no
+    /// model drill-down to go to.
+    private var modelSection: some View {
+        let groups = model.summary.byRequestedModel
+        let total = model.summary.recordedAttempts
+        let named = groups.count <= 4 ? groups[...] : groups.prefix(3)
+        let rest = groups[named.endIndex...]
+
+        return Section {
+            ForEach(named) { group in
+                UsageValueRow(
+                    verbatimLabel: UsageDetailFormat.modelLabel(for: group.key),
+                    value: UsageDetailFormat.shareText(group.attempts, of: total) ?? "",
+                    verbatimCaption: UsageDetailFormat.attemptsText(group.attempts)
+                )
+            }
+            if !rest.isEmpty {
+                let attempts = rest.reduce(0) { $0 + $1.attempts }
+                UsageValueRow(
+                    verbatimLabel: String(
+                        localized: "settings.usage.byModel.other",
+                        defaultValue: "Other models"),
+                    value: UsageDetailFormat.shareText(attempts, of: total) ?? "",
+                    verbatimCaption: String(
+                        localized: "settings.usage.byModel.other.caption",
+                        defaultValue: """
+                            \(UsageDetailFormat.attemptsText(attempts)) across \
+                            \(rest.count) models
+                            """)
+                )
+            }
+        } header: {
+            Text(LocalizedStringResource(
+                "settings.usage.byModel.header", defaultValue: "By model"))
+        } footer: {
+            // The one thing the rows cannot say about themselves: which of the
+            // two model names in play these are.
+            Text(LocalizedStringResource(
+                "settings.usage.byModel.footer",
+                defaultValue: "Based on the model each request asked for."))
         }
     }
 

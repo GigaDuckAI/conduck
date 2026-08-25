@@ -14384,17 +14384,6 @@
         }
       }
     },
-    "settings.usage.activity.footer.turn" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A turn is one thing you sent."
-          }
-        }
-      }
-    },
     "settings.usage.activity.header" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14428,13 +14417,13 @@
         }
       }
     },
-    "settings.usage.byDevice.footer.carPlay" : {
+    "settings.usage.byDevice.footer.unattributed" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "CarPlay is listed separately from the phone driving it."
+            "value" : "Device was not recorded on %1$lld of %2$lld attempts."
           }
         }
       }
@@ -14457,6 +14446,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "A gateway you have since edited or removed still appears for the history it made."
+          }
+        }
+      }
+    },
+    "settings.usage.byGateway.footer.unattributed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Gateway was not recorded on %1$lld of %2$lld attempts."
           }
         }
       }
@@ -14501,6 +14501,50 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%@ tokens (input + output)"
+          }
+        }
+      }
+    },
+    "settings.usage.byModel.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Based on the model each request asked for."
+          }
+        }
+      }
+    },
+    "settings.usage.byModel.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "By model"
+          }
+        }
+      }
+    },
+    "settings.usage.byModel.other" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Other models"
+          }
+        }
+      }
+    },
+    "settings.usage.byModel.other.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ across %2$lld models"
           }
         }
       }
@@ -15231,24 +15275,13 @@
         }
       }
     },
-    "settings.usage.detail.imageHistory.coverage" : {
+    "settings.usage.detail.imageHistory.footer.v2" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Image details were recorded for %@ of attempts in this range. These counts may be incomplete."
-          }
-        }
-      }
-    },
-    "settings.usage.detail.imageHistory.footer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck re-sends some earlier images so your AI can still see them. Use this gateway's Image history setting to choose how much is re-sent. A new conversation starts without the old conversation's images."
+            "value" : "Conduck re-sends some earlier images so your AI can still see them."
           }
         }
       }
@@ -15667,17 +15700,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Conversation unavailable"
-          }
-        }
-      }
-    },
-    "settings.usage.detail.tokensCoverage" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@ on %2$lld of %3$lld finished attempts"
           }
         }
       }
@@ -16514,6 +16536,39 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%1$@ measured · %2$@"
+          }
+        }
+      }
+    },
+    "settings.usage.share.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ of attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.share.nearAll" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : ">%@"
+          }
+        }
+      }
+    },
+    "settings.usage.share.trace" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "<%@"
           }
         }
       }
