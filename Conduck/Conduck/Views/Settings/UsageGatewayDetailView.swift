@@ -96,6 +96,9 @@ struct UsageGatewayDetailView: View {
                 reliabilitySection
                 responseTimeSection
                 tokensSection
+                if !largestTurns.isEmpty {
+                    largestTurnsSection
+                }
                 if !summary.byRequestedModel.isEmpty {
                     modelsSection
                 }
@@ -331,32 +334,29 @@ struct UsageGatewayDetailView: View {
                 UsageDetailRows.tokensHeadline(tokens)
                 UsageDetailRows.tokenDetail(tokens, expanded: $tokenDetailExpanded)
             }
+        } header: {
+            Text(LocalizedStringResource(
+                "settings.usage.tokens.header", defaultValue: "Reported tokens"))
+        }
+    }
 
-            // Named, because these rows answer a different question from the
-            // token totals above them and sit inside the same card. An
-            // unlabelled turn row under a "Reported tokens" header reads as a
-            // continuation of the totals.
-            if !largestTurns.isEmpty {
-                Text(LocalizedStringResource(
-                    "settings.usage.detail.largestTurns.header",
-                    defaultValue: "Largest turns"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppColors.textTertiary)
-                    .settingsCardPassiveRow()
-            }
-
+    /// Own section, not rows inside the tokens card: these rows answer a
+    /// different question from the token totals ("what did this gateway do
+    /// the most work on", not "how much"), and a turn row under a "Reported
+    /// tokens" header reads as a continuation of the totals.
+    private var largestTurnsSection: some View {
+        Section {
             ForEach(largestTurns, id: \.userMessageID) { turn in
                 UsageTurnRow(turn: turn, model: model)
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.tokens.header", defaultValue: "Reported tokens"))
+                "settings.usage.detail.largestTurns.header",
+                defaultValue: "Largest turns"))
         } footer: {
-            // The ranking basis ONLY. It says which number the "Largest turns"
-            // rows were sorted on and which turns it silently leaves out —
-            // neither is visible in the rows. The gateway-reported caveat that
-            // used to sit above it is already carried by the header's own word
-            // and by each row's coverage caption.
+            // The ranking basis ONLY. It says which number these rows were
+            // sorted on and which turns it silently leaves out — neither is
+            // visible in the rows.
             if let first = largestTurns.first {
                 Text(UsageDetailFormat.turnBasisFooter(first.basis))
             }
@@ -772,42 +772,34 @@ enum UsageDetailRows {
                     label: LocalizedStringResource(
                         "settings.usage.tokens.output", defaultValue: "Output"),
                     field: tokens.output)
-                // Per field, exactly as the rows above: a field this range
-                // never saw takes no row rather than standing an em dash where
-                // a number belongs.
-                if tokens.cachedInput.isReported {
-                    tokenRow(
-                        label: LocalizedStringResource(
-                            "settings.usage.tokens.cachedInput", defaultValue: "Cached input"),
-                        field: tokens.cachedInput)
-                }
-                if tokens.cacheWriteInput.isReported {
-                    tokenRow(
-                        label: LocalizedStringResource(
-                            "settings.usage.tokens.cacheWrites", defaultValue: "Cache writes"),
-                        field: tokens.cacheWriteInput)
-                }
-                if tokens.reasoningOutput.isReported {
-                    tokenRow(
-                        label: LocalizedStringResource(
-                            "settings.usage.tokens.reasoningOutput",
-                            defaultValue: "Reasoning output"),
-                        field: tokens.reasoningOutput)
-                }
-                // Only where a subset row is actually on screen to be misread
-                // as a sibling of the input and output rows above it.
-                if tokens.hasReportedDetail {
-                    Text(LocalizedStringResource(
-                        "settings.usage.tokens.detail.footer",
-                        defaultValue: """
-                            These are parts of the input and output figures above, counted \
-                            only where your gateway reported them.
-                            """))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .settingsCardPassiveRow()
-                }
+                // Always rowed, reported or not, exactly as the two above: an
+                // explicit "Not reported" tells the reader the gateway stayed
+                // silent, where an absent row reads as the app not measuring —
+                // and the disclosure lists the same five rows on every scope
+                // (whole range or one gateway).
+                tokenRow(
+                    label: LocalizedStringResource(
+                        "settings.usage.tokens.cachedInput", defaultValue: "Cached input"),
+                    field: tokens.cachedInput)
+                tokenRow(
+                    label: LocalizedStringResource(
+                        "settings.usage.tokens.cacheWrites", defaultValue: "Cache writes"),
+                    field: tokens.cacheWriteInput)
+                tokenRow(
+                    label: LocalizedStringResource(
+                        "settings.usage.tokens.reasoningOutput",
+                        defaultValue: "Reasoning output"),
+                    field: tokens.reasoningOutput)
+                Text(LocalizedStringResource(
+                    "settings.usage.tokens.detail.footer",
+                    defaultValue: """
+                        These are parts of the input and output figures above, counted \
+                        only where your gateway reported them.
+                        """))
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .settingsCardPassiveRow()
             }
         }
     }
