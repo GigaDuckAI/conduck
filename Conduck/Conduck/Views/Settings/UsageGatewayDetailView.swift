@@ -328,7 +328,7 @@ struct UsageGatewayDetailView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .settingsCardPassiveRow()
             } else {
-                UsageDetailRows.tokens(tokens)
+                UsageDetailRows.tokensHeadline(tokens)
                 UsageDetailRows.tokenDetail(tokens, expanded: $tokenDetailExpanded)
             }
 
@@ -694,36 +694,40 @@ enum UsageDetailRows {
         reasons.dropFirst(failureReasonRowLimit).reduce(0) { $0 + $1.count }
     }
 
-    /// The three reported token fields, each with its OWN coverage — one
-    /// coverage figure for the card would claim a completeness no gateway
-    /// promised.
+    /// THE HEADLINE IS THE ANSWER, exactly as the Reliability card's: one
+    /// total up top, everything it is made of behind Details. The
+    /// gateway-reported total wears the row when it exists; otherwise input
+    /// plus output as reported stands in, and its label says so in words —
+    /// that sum is NOT a total, because whatever the gateway counted in its
+    /// own total and reported in neither component is silently missing from
+    /// it, which is exactly why it does not get to wear the word.
     @ViewBuilder
-    static func tokens(_ tokens: GatewayUsageTokens) -> some View {
-        tokenRow(
-            label: LocalizedStringResource(
-                "settings.usage.tokens.input", defaultValue: "Input"),
-            field: tokens.input)
-        tokenRow(
-            label: LocalizedStringResource(
-                "settings.usage.tokens.output", defaultValue: "Output"),
-            field: tokens.output)
-        if tokens.reportedTotal.isReported {
-            tokenRow(
+    static func tokensHeadline(_ tokens: GatewayUsageTokens) -> some View {
+        if let total = tokens.reportedTotal.sum {
+            UsageHeadlineRow(
+                value: total.formatted(.number),
                 label: LocalizedStringResource(
-                    "settings.usage.tokens.total", defaultValue: "Total"),
-                field: tokens.reportedTotal)
+                    "settings.usage.tokens.coverage",
+                    defaultValue: "Reported on \(UsageDetailFormat.percentText(tokens.reportedTotal.coverage)) of attempts"),
+                accessibility: LocalizedStringResource(
+                    "settings.usage.tokens.headline.total.a11y",
+                    defaultValue: """
+                        \(total.formatted(.number)) tokens, reported on \
+                        \(UsageDetailFormat.percentText(tokens.reportedTotal.coverage)) of attempts
+                        """)
+            )
         } else if let components = tokens.calculatedKnownComponents {
-            // NOT labelled "Total". This is input plus output as reported;
-            // whatever the gateway counted in its own total and reported in
-            // neither component is silently missing from it, which is exactly
-            // why it does not get to wear the word.
-            UsageValueRow(
-                label: LocalizedStringResource(
-                    "settings.usage.tokens.components", defaultValue: "Input + output"),
+            UsageHeadlineRow(
                 value: components.formatted(.number),
-                caption: LocalizedStringResource(
-                    "settings.usage.tokens.components.caption",
-                    defaultValue: "Added up from the fields above — your gateway reported no total")
+                label: LocalizedStringResource(
+                    "settings.usage.tokens.headline.components",
+                    defaultValue: "Input + output added up — your gateway reported no total"),
+                accessibility: LocalizedStringResource(
+                    "settings.usage.tokens.headline.components.a11y",
+                    defaultValue: """
+                        \(components.formatted(.number)) tokens, input and output \
+                        added up — your gateway reported no total
+                        """)
             )
         }
     }
@@ -734,11 +738,13 @@ enum UsageDetailRows {
     /// chrome, the macOS pointer conventions and the accessibility behaviour are
     /// the Reliability card's by construction and cannot drift from it.
     ///
-    /// HIDDEN ENTIRELY WHEN NOTHING REPORTED ANY OF THE THREE. An expander that
-    /// opens onto three absent rows is a control that promises detail the
-    /// gateway never sent.
+    /// INPUT AND OUTPUT LIVE IN HERE, not on the card face — the headline above
+    /// answers the question most users came with, and the components are the
+    /// follow-up, exactly the Reliability card's split. Each keeps its OWN
+    /// coverage caption: a gateway that reports input but not output is common,
+    /// and one figure for the pair would claim a completeness neither has.
     ///
-    /// EVERY ROW IS A SUBSET OF A FIGURE ALREADY ABOVE IT — cached and
+    /// THE THREE ROWS BELOW THEM ARE SUBSETS, NOT SIBLINGS — cached and
     /// cache-write of the input, reasoning of the output — which is why the
     /// footer says so in words and why nothing here adds them into anything.
     /// NEVER a savings or a money framing: cached input is an efficiency fact,
@@ -748,9 +754,17 @@ enum UsageDetailRows {
         _ tokens: GatewayUsageTokens,
         expanded: Binding<Bool>
     ) -> some View {
-        if tokens.hasReportedDetail {
+        if !tokens.isEmpty {
             detailDisclosure(expanded: expanded, accessibility: tokenDetailsAccessibility) {
-                // Per field, exactly as the primary rows: a field this range
+                tokenRow(
+                    label: LocalizedStringResource(
+                        "settings.usage.tokens.input", defaultValue: "Input"),
+                    field: tokens.input)
+                tokenRow(
+                    label: LocalizedStringResource(
+                        "settings.usage.tokens.output", defaultValue: "Output"),
+                    field: tokens.output)
+                // Per field, exactly as the rows above: a field this range
                 // never saw takes no row rather than standing an em dash where
                 // a number belongs.
                 if tokens.cachedInput.isReported {
@@ -772,16 +786,20 @@ enum UsageDetailRows {
                             defaultValue: "Reasoning output"),
                         field: tokens.reasoningOutput)
                 }
-                Text(LocalizedStringResource(
-                    "settings.usage.tokens.detail.footer",
-                    defaultValue: """
-                        These are parts of the input and output figures above, counted \
-                        only where your gateway reported them.
-                        """))
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .settingsCardPassiveRow()
+                // Only where a subset row is actually on screen to be misread
+                // as a sibling of the input and output rows above it.
+                if tokens.hasReportedDetail {
+                    Text(LocalizedStringResource(
+                        "settings.usage.tokens.detail.footer",
+                        defaultValue: """
+                            These are parts of the input and output figures above, counted \
+                            only where your gateway reported them.
+                            """))
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .settingsCardPassiveRow()
+                }
             }
         }
     }

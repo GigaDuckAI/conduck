@@ -16210,6 +16210,17 @@
         }
       }
     },
+    "settings.usage.reliability.details.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reliability details"
+          }
+        }
+      }
+    },
     "settings.usage.reliability.details.collapse" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -16760,28 +16771,6 @@
         }
       }
     },
-    "settings.usage.tokens.components" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Input + output"
-          }
-        }
-      }
-    },
-    "settings.usage.tokens.components.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Added up from the fields above — your gateway reported no total"
-          }
-        }
-      }
-    },
     "settings.usage.tokens.coverage" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -16804,6 +16793,17 @@
         }
       }
     },
+    "settings.usage.tokens.details.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Token details"
+          }
+        }
+      }
+    },
     "settings.usage.tokens.footer.rulers" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -16822,6 +16822,39 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Reported tokens"
+          }
+        }
+      }
+    },
+    "settings.usage.tokens.headline.components" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Input + output added up — your gateway reported no total"
+          }
+        }
+      }
+    },
+    "settings.usage.tokens.headline.components.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ tokens, input and output added up — your gateway reported no total"
+          }
+        }
+      }
+    },
+    "settings.usage.tokens.headline.total.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ tokens, reported on %2$@ of attempts"
           }
         }
       }
@@ -16866,17 +16899,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Reasoning output"
-          }
-        }
-      }
-    },
-    "settings.usage.tokens.total" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Total"
           }
         }
       }

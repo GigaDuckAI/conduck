@@ -1042,43 +1042,11 @@ struct UsageDashboardContent: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .settingsCardPassiveRow()
             } else {
-                tokenRow(
-                    label: LocalizedStringResource(
-                        "settings.usage.tokens.input", defaultValue: "Input"),
-                    field: tokens.input
-                )
-                tokenRow(
-                    label: LocalizedStringResource(
-                        "settings.usage.tokens.output", defaultValue: "Output"),
-                    field: tokens.output
-                )
-                if tokens.reportedTotal.isReported {
-                    tokenRow(
-                        label: LocalizedStringResource(
-                            "settings.usage.tokens.total", defaultValue: "Total"),
-                        field: tokens.reportedTotal
-                    )
-                } else if let components = tokens.calculatedKnownComponents {
-                    // NOT labelled "Total". This is input plus output as
-                    // reported; whatever the gateway counted in its own total
-                    // and reported in neither component is silently missing from
-                    // it, which is exactly why it does not get to wear the word.
-                    valueRow(
-                        label: LocalizedStringResource(
-                            "settings.usage.tokens.components",
-                            defaultValue: "Input + output"),
-                        value: components.formatted(.number),
-                        caption: LocalizedStringResource(
-                            "settings.usage.tokens.components.caption",
-                            defaultValue: "Added up from the fields above — your gateway reported no total")
-                    )
-                }
-                // ONE implementation, shared with every drill-down's Tokens
-                // card, and it hides itself when no gateway in range reported
-                // any of the three. Inside this branch on purpose: the rows it
-                // reveals are PARTS of the figures above them, and a part has
-                // nothing to be a part of on a card that is telling the user
-                // nothing was reported.
+                // ONE implementation for both pieces, shared with every
+                // drill-down's Tokens card: the headline total up top, input
+                // and output behind Details — the Reliability card's shape,
+                // and it cannot drift from the drill-downs' rendering.
+                UsageDetailRows.tokensHeadline(tokens)
                 UsageDetailRows.tokenDetail(tokens, expanded: $tokenDetailExpanded)
             }
         } header: {
@@ -1100,29 +1068,6 @@ struct UsageDashboardContent: View {
                         """))
             }
         }
-    }
-
-    private func tokenRow(
-        label: LocalizedStringResource,
-        field: GatewayUsageTokenField
-    ) -> some View {
-        valueRow(
-            label: label,
-            value: field.sum.map { $0.formatted(.number) }
-                ?? String(localized: "settings.usage.tokens.absent",
-                          defaultValue: "Not reported"),
-            caption: coverageCaption(field)
-        )
-    }
-
-    /// Per FIELD, never one number for the card: a gateway that reports input
-    /// but not output is common, and a single coverage figure would claim a
-    /// completeness neither field has.
-    private func coverageCaption(_ field: GatewayUsageTokenField) -> LocalizedStringResource? {
-        guard field.isReported, let coverage = field.coverage else { return nil }
-        return LocalizedStringResource(
-            "settings.usage.tokens.coverage",
-            defaultValue: "Reported on \(percentText(coverage)) of attempts")
     }
 
     // MARK: - By device
