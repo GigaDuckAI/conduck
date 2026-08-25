@@ -1012,6 +1012,11 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
         let attempt = observation(.succeeded)
         beginPersistenceWork()
         Task {
+            // The landed reply's own tail stamp (`MessageRecord.createdAt` ==
+            // the `lastActivityAt` the append wrote) — the heard-marker stamps
+            // `lastViewedAt` with exactly this, so a NEWER tail arriving while
+            // the multi-second TTS plays stays strictly unread.
+            let replyStamp: Date
             do {
                 if let userMessageID {
                     // ONE save: the reply, the exact user turn's flip to `sent`,
@@ -1021,7 +1026,7 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
                     // reply it would have written and returns it instead of
                     // inserting a second one. A landing whose metadata predates
                     // that field mints a fresh id and keeps the older behaviour.
-                    _ = try await ConversationStore.shared.completeAgentTurn(
+                    let landed = try await ConversationStore.shared.completeAgentTurn(
                         userMessageID: userMessageID,
                         userStatus: "sent",
                         agentText: reply,
@@ -1032,6 +1037,7 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
                         outputBoxKey: outputBoxKey,
                         attempt: attempt
                     )
+                    replyStamp = landed.createdAt
                 } else {
                     // Backward-compatible landing for a pre-upgrade in-flight
                     // task. Its owner lane cannot be proven, so append without
@@ -1039,12 +1045,13 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
                     // Such a task carries no attempt id either, so the
                     // terminalization below is a no-op — it stays for the
                     // pathological blob that somehow carries one.
-                    _ = try await ConversationStore.shared.appendMessage(
+                    let landed = try await ConversationStore.shared.appendMessage(
                         role: "agent",
                         text: reply,
                         conversationID: cid,
                         sourceDevice: "carplay"
                     )
+                    replyStamp = landed.createdAt
                     await ConversationStore.shared.markPendingUserTurns(
                         conversationID: cid,
                         to: "sent"
@@ -1081,7 +1088,8 @@ extension CarPlayConverseUploader: URLSessionDataDelegate {
                 service?.handleBackgroundReply(
                     reply,
                     conversationID: cid,
-                    turnToken: turnToken
+                    turnToken: turnToken,
+                    replyStamp: replyStamp
                 )
             }
             self.endPersistenceWork()

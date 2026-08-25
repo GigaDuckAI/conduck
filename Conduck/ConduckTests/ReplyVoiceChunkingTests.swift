@@ -113,11 +113,13 @@ final class ReplyVoiceChunkingTests: XCTestCase {
         func playApple(
             _ text: String,
             onStart: (@MainActor @Sendable () -> Void)?,
-            onDone: @escaping @MainActor @Sendable () -> Void
+            onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
         ) {
             appleTexts.append(text)
             if invokeStart { onStart?() }
-            if invokeDone { onDone() }
+            // The fake models the synth's natural end (`didFinish`) — every
+            // chunking case here exercises a leg that completes its text.
+            if invokeDone { onDone(.finished) }
         }
         func stop() { stopCount += 1 }
         func pause() { pauseCount += 1 }
@@ -284,7 +286,7 @@ final class ReplyVoiceChunkingTests: XCTestCase {
             onStateChange: { activity in
                 if case .startedPlaying = activity { rec.recordStart() }
             },
-            completion: { rec.recordDone() }
+            completion: { _ in rec.recordDone() }
         )
     }
 
@@ -628,7 +630,7 @@ final class ReplyVoiceChunkingTests: XCTestCase {
             Self.longReply,
             sanitize: false,
             onStateChange: { if case .startedPlaying = $0 { rec.recordStart() } },
-            completion: { rec.recordDone() }
+            completion: { _ in rec.recordDone() }
         )
         await drain(until: rec.completions == 1)
 

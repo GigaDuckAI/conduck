@@ -41,13 +41,13 @@ final class ThreadSpeakerReconcileTests: XCTestCase {
         private(set) var cancelCount = 0
 
         private var onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?
-        private var completion: (@MainActor @Sendable () -> Void)?
+        private var completion: (@MainActor @Sendable (SpeakTerminal) -> Void)?
 
         func speak(
             _ text: String,
             sanitize: Bool,
             onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?,
-            completion: @escaping @MainActor @Sendable () -> Void
+            completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
         ) {
             self.onStateChange = onStateChange
             self.completion = completion
@@ -63,8 +63,8 @@ final class ThreadSpeakerReconcileTests: XCTestCase {
 
         /// Drive loading → playing (mirrors real `.startedPlaying`).
         func fireStart() { onStateChange?(.startedPlaying) }
-        /// Fire the turn's terminal.
-        func fireDone() { let c = completion; completion = nil; c?() }
+        /// Fire the turn's terminal — a played-to-the-end reply.
+        func fireDone() { let c = completion; completion = nil; c?(.finished) }
     }
 
     /// Mutable clock so a test can advance time past the auto-resume window.

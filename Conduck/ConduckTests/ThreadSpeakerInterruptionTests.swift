@@ -34,13 +34,13 @@ final class ThreadSpeakerInterruptionTests: XCTestCase {
         private(set) var cancelCount = 0
 
         private var onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?
-        private var completion: (@MainActor @Sendable () -> Void)?
+        private var completion: (@MainActor @Sendable (SpeakTerminal) -> Void)?
 
         func speak(
             _ text: String,
             sanitize: Bool,
             onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?,
-            completion: @escaping @MainActor @Sendable () -> Void
+            completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
         ) {
             self.onStateChange = onStateChange
             self.completion = completion

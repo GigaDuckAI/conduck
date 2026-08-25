@@ -108,10 +108,11 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
     /// so the Watch owns its own bare player here.
     private var audioPlayer: AVAudioPlayer?
 
-    /// The pending exactly-once completion (the shared state machine's terminal).
-    /// Set by `speak`; nil-then-called by `fireCompletion()` so it can never fire
-    /// twice. Mirrors `SpeechPlayer.completion`.
-    private var completion: (@MainActor @Sendable () -> Void)?
+    /// The pending exactly-once completion (the shared state machine's terminal),
+    /// TYPED with how the turn settled (`SpeakTerminal` — `.finished` only on a
+    /// natural end). Set by `speak`; nil-then-called by `fireCompletion(_:)` so
+    /// it can never fire twice. Mirrors `SpeechPlayer`'s typed Apple funnel.
+    private var completion: (@MainActor @Sendable (SpeakTerminal) -> Void)?
 
     /// OPTIONAL fire-and-forget "playback actually began" signal (drives loading
     /// → playing). NOT part of the exactly-once completion contract — fired once
@@ -342,7 +343,7 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
         _ text: String,
         sanitize: Bool,
         onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?,
-        completion: @escaping @MainActor @Sendable () -> Void
+        completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         // Supersede any prior turn: tear down its playback WITHOUT firing its
         // completion (the caller has moved on), bump the generation so a late
@@ -358,8 +359,8 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
         guard !spoken.isEmpty else {
             // Empty after sanitize (e.g. an all-emoji reply). Nothing to play —
             // fire the completion so the state machine returns to idle. No
-            // `.startedPlaying` (nothing plays).
-            completion()
+            // `.startedPlaying` (nothing plays). `.incomplete`: no audio.
+            completion(.incomplete)
             return
         }
 
@@ -477,9 +478,10 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
                         // turn. Funnel the exactly-once terminal so the shared
                         // `ThreadSpeaker` returns to idle instead of sitting in
                         // `.loading` forever (stuck spinner on the per-message
-                        // control). `fireCompletion()` is nil-then-call, so the
-                        // exactly-once invariant holds.
-                        self.fireCompletion()
+                        // control). `fireCompletion(_:)` is nil-then-call, so
+                        // the exactly-once invariant holds. `.incomplete`: the
+                        // reply was never audible.
+                        self.fireCompletion(.incomplete)
                         return
                     }
                     if useCloud, let apiKey {
@@ -705,7 +707,7 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
             onFinished: { [weak self] in
                 guard let self, turn == self.generation else { return }
                 self.chunkQueue = nil
-                self.fireCompletion()
+                self.fireCompletion(.finished)
             },
             onFallback: { [weak self] remaining, _ in
                 // Generation guard FIRST (a stale turn must not touch
@@ -752,7 +754,10 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
             appleLegOverride(
                 text,
                 { [weak self] in self?.fireStart() },
-                { [weak self] in self?.fireCompletion() }
+                // The override's callback models the synth's natural didFinish;
+                // an override that never calls back settles via the inactivity
+                // watchdog (`.incomplete`), same as a dead real leg.
+                { [weak self] in self?.fireCompletion(.finished) }
             )
             return
         }
@@ -861,7 +866,7 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
             self.audioPlayer?.stop()
             self.audioPlayer = nil
             WatchLog.note(.state, "tts.gaveup", [:])
-            self.fireCompletion()
+            self.fireCompletion(.incomplete)
         }
     }
 
@@ -924,8 +929,8 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
     /// deferred duck-restore deactivation is scheduled first, so if the
     /// completion triggers the next speak (auto-speak chaining), that turn's
     /// re-claim cancels it and the session never bounces. Mirrors
-    /// `SpeechPlayer.fireCompletion`.
-    private func fireCompletion() {
+    /// `SpeechPlayer.fireAppleCompletion(_:)` (typed terminal).
+    private func fireCompletion(_ terminal: SpeakTerminal) {
         disarmFirstAudioWatchdog()
         disarmAppleInactivityWatchdog()
         let pending = completion
@@ -939,7 +944,7 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
         currentPlayerID = nil
         audioPlayer = nil
         releaseSessionClaim()
-        pending?()
+        pending?(terminal)
     }
 
     /// Fire the OPTIONAL "playback began" signal exactly once, then clear it.
@@ -971,7 +976,7 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
             guard self.currentPlayerID == id else { return }
             if flag {
                 // Natural end — the reply played to completion.
-                self.fireCompletion()
+                self.fireCompletion(.finished)
             } else {
                 // The clip DIED mid-play — a silently-truncated reply. Treat as a
                 // PLAYBACK-FAILURE fallback rather than a terminal.
@@ -1046,15 +1051,18 @@ final class WatchReplySpeaker: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesi
         let id = ObjectIdentifier(utterance)
         Task { @MainActor in
             guard self.currentUtteranceID == id else { return }
-            self.fireCompletion()
+            self.fireCompletion(.finished)
         }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        // Reaching the funnel means the cancel was NOT caller-initiated
+        // (`cancel()`/`stopInFlight()` clear `completion` first) — the system
+        // tore the utterance down mid-reply.
         let id = ObjectIdentifier(utterance)
         Task { @MainActor in
             guard self.currentUtteranceID == id else { return }
-            self.fireCompletion()
+            self.fireCompletion(.incomplete)
         }
     }
 }

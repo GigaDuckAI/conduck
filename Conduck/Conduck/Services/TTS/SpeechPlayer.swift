@@ -10,13 +10,17 @@
 // synth `didFinish`, synth `didCancel`, audio decode error — through ONE
 // nil-then-call funnel per leg, so a completion can never fire twice.
 //
-// TYPED CLOUD TERMINAL: `playCloud` reports a `CloudPlaybackOutcome` —
+// TYPED TERMINALS: `playCloud` reports a `CloudPlaybackOutcome` —
 // `.finished` only on a natural, successful end; `.failed(stage)` on
 // undecodable bytes, a refused start, `didFinish(successfully: false)`, or a
 // mid-clip decode error. The PLAYER never decides policy: `ReplyVoice` maps a
 // failure to the Apple fallback (chat) or a loud `.failure` (preview). The
-// Apple leg's completion stays parameterless (the synth has no failure
-// terminal; `didCancel` is a caller-driven stop, not a failure).
+// Apple leg's completion carries a `SpeakTerminal`: `.finished` on the synth's
+// natural `didFinish`, `.incomplete` on a `didCancel` the caller did NOT
+// initiate (system interruption tearing the utterance down mid-reply) — an
+// explicit `stop()`/`stopInFlight` clears the completion first and fires
+// nothing. CarPlay's heard-marker relies on this distinction; see
+// `SpeakTerminal` in `SpeakEngine.swift`.
 //
 // DELEGATE IDENTITY GUARDS (ported from `WatchReplySpeaker`, the reference
 // pattern): AVFoundation delegate terminals carry no turn token, so each is
@@ -70,9 +74,12 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
     /// must never be able to fire the other leg's closure.
     private var cloudCompletion: (@MainActor @Sendable (CloudPlaybackOutcome) -> Void)?
 
-    /// The pending APPLE completion (parameterless — the synth has no failure
-    /// terminal). Set by `playApple`; nil-then-called by `fireAppleCompletion()`.
-    private var appleCompletion: (@MainActor @Sendable () -> Void)?
+    /// The pending APPLE completion, typed with how the utterance ended:
+    /// `.finished` on the synth's natural `didFinish`, `.incomplete` on
+    /// `didCancel` (a system/interruption stop — an explicit caller `stop()`
+    /// clears this slot first, so it fires nothing). Set by `playApple`;
+    /// nil-then-called by `fireAppleCompletion(_:)`.
+    private var appleCompletion: (@MainActor @Sendable (SpeakTerminal) -> Void)?
 
     /// Identity of the clip / utterance this player currently owns. Delegate
     /// terminals guard on these (via `ObjectIdentifier`, `Sendable` across the
@@ -162,7 +169,9 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
     }
 
     /// Speak `text` via Apple's on-device synthesizer on the caller's session.
-    /// Calls `onDone` exactly once on `didFinish` or `didCancel`.
+    /// Calls `onDone` exactly once, typed: `.finished` on the natural
+    /// `didFinish`, `.incomplete` on `didCancel` (a system-driven stop — an
+    /// explicit `stop()` clears the completion first and fires nothing).
     ///
     /// `onStart` (OPTIONAL, default nil) is the fire-and-forget "playback
     /// actually began" signal — fired from `speechSynthesizer(_:didStart:)`,
@@ -170,7 +179,7 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
     func playApple(
         _ text: String,
         onStart: (@MainActor @Sendable () -> Void)? = nil,
-        onDone: @escaping @MainActor @Sendable () -> Void
+        onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         playApple(text, language: nil, onStart: onStart, onProgress: nil, onDone: onDone)
     }
@@ -187,7 +196,7 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
         language: String?,
         onStart: (@MainActor @Sendable () -> Void)? = nil,
         onProgress: (@MainActor @Sendable () -> Void)? = nil,
-        onDone: @escaping @MainActor @Sendable () -> Void
+        onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         stopInFlight()
         self.appleCompletion = onDone
@@ -304,9 +313,10 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
         pending?(outcome)
     }
 
-    /// APPLE terminal funnel — parameterless (the synth has no failure
-    /// terminal). Same clear-before-call discipline as the cloud funnel.
-    private func fireAppleCompletion() {
+    /// APPLE terminal funnel — typed (`.finished` = natural `didFinish`,
+    /// `.incomplete` = a `didCancel` the caller didn't initiate). Same
+    /// clear-before-call discipline as the cloud funnel.
+    private func fireAppleCompletion(_ terminal: SpeakTerminal) {
         let pending = appleCompletion
         appleCompletion = nil
         cloudCompletion = nil
@@ -315,7 +325,7 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
         onStart = nil
         onAppleProgress = nil
         audioPlayer = nil
-        pending?()
+        pending?(terminal)
     }
 
     /// Fire the OPTIONAL "playback began" signal exactly once, then clear it.
@@ -422,7 +432,7 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
         let id = ObjectIdentifier(utterance)
         Task { @MainActor in
             guard self.currentUtteranceID == id else { return }
-            self.fireAppleCompletion()
+            self.fireAppleCompletion(.finished)
         }
     }
 
@@ -430,10 +440,14 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
         _ synthesizer: AVSpeechSynthesizer,
         didCancel utterance: AVSpeechUtterance
     ) {
+        // A `didCancel` that reaches this funnel was NOT caller-initiated
+        // (`stop()`/`stopInFlight` clear the completion first) — it is the
+        // system tearing the utterance down mid-reply (audio interruption,
+        // media-services reset). The reply was NOT fully delivered.
         let id = ObjectIdentifier(utterance)
         Task { @MainActor in
             guard self.currentUtteranceID == id else { return }
-            self.fireAppleCompletion()
+            self.fireAppleCompletion(.incomplete)
         }
     }
 }

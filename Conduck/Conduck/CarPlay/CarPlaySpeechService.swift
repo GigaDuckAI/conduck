@@ -86,9 +86,29 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
     nonisolated private static let log = Logger(subsystem: Constants.identityNamespace, category: "CarPlaySpeech")
 
     /// Callback invoked when the current utterance finishes (success) or is
-    /// cancelled. Used by `CarPlayRecordingService` to drive state machine
-    /// transitions back to idle.
-    private var completion: (@MainActor @Sendable () -> Void)?
+    /// cancelled, TYPED with how it ended (`.finished` = natural `didFinish`;
+    /// `.incomplete` = `didCancel`). Used by `CarPlayRecordingService` to drive
+    /// state machine transitions back to idle; fixed-string callers wrap a
+    /// parameterless closure that fires on either terminal (a cancelled ack
+    /// still advances their flow — see `speak(_:completion:)`).
+    private var completion: (@MainActor @Sendable (SpeakTerminal) -> Void)?
+
+    /// OPTIONAL "audio actually began" signal for the CURRENT fixed-string
+    /// utterance — fired from the synthesizer's `didStart` delegate, exactly
+    /// once, then cleared. Set ONLY by `speakAgent`'s empty-reply "Done."
+    /// branch (the fixed-string path has no `ReplyVoice` `.startedPlaying`
+    /// hook): the heard-marker needs PROOF of audio, so the optimistic
+    /// fire-before-speak this replaces was not enough. Cleared on every new
+    /// utterance / cancel / media reset.
+    private var pendingFirstAudio: (@MainActor @Sendable () -> Void)?
+
+    /// Identity of the utterance the stored callbacks belong to (mirrors
+    /// `SpeechPlayer.currentUtteranceID`). Delegate callbacks hop through
+    /// async main-actor tasks, so a SUPERSEDED utterance's late `didCancel` /
+    /// `didStart` can land AFTER a new speak installed fresh callbacks —
+    /// without this guard it would consume or fire the NEW utterance's
+    /// closures. Cleared by `fireCompletion` / cancel / reset.
+    private var currentUtteranceID: ObjectIdentifier?
 
     // MARK: - Init
 
@@ -109,18 +129,35 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
     ///
     /// - Parameters:
     ///   - phrase: The already-localized phrase to speak (1–4 words ideal).
-    ///   - completion: Called exactly once, after `didFinish` or `didCancel`.
+    ///   - completion: Called exactly once, after `didFinish` or `didCancel`
+    ///     (either terminal — a cancelled ack still advances the caller's flow).
     func speak(_ phrase: String, completion: @escaping @MainActor @Sendable () -> Void) {
+        speakFixed(phrase, onFirstAudio: nil) { _ in completion() }
+    }
+
+    /// Typed fixed-string speak — the shared implementation behind
+    /// `speak(_:completion:)` and `speakAgent`'s empty-reply "Done." branch
+    /// (which needs the terminal value + a real first-audio signal).
+    private func speakFixed(
+        _ phrase: String,
+        onFirstAudio: (@MainActor @Sendable () -> Void)?,
+        completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
+    ) {
         // If a previous utterance is still in flight (rare — means the caller
-        // didn't wait), stop it cleanly before enqueuing the new one.
+        // didn't wait), stop it cleanly before enqueuing the new one. Its late
+        // `didCancel` is identity-guarded below, so it cannot consume THIS
+        // utterance's callbacks; the superseded caller's completion is dropped
+        // (mirrors `SpeechPlayer.stopInFlight`'s replace-without-firing).
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
 
         self.completion = completion
+        self.pendingFirstAudio = onFirstAudio
 
         let utterance = AVSpeechUtterance(string: phrase)
         prepare(utterance)
+        currentUtteranceID = ObjectIdentifier(utterance)
         synthesizer.speak(utterance)
         // DIAGNOSTIC (CarPlay dashboard-fall investigation): timestamps the
         // synth-speak issue relative to the scene/route/interruption logs so we
@@ -142,11 +179,18 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
     /// audio actually STARTS — the head chunk's cloud synthesis takes seconds,
     /// and the caller must not show "Replying" over that silence (it reads as
     /// a hang). Wired to `ReplyVoice`'s `.startedPlaying` signal, which covers
-    /// every arm: cloud blob, chunked first chunk, and the Apple fallback.
+    /// every arm: cloud blob, chunked first chunk, and the Apple fallback; the
+    /// "Done." branch wires it to the fixed synth's real `didStart` instead.
+    /// It is PROOF of audio (the heard-marker gates on it) — never fire it
+    /// optimistically before playback begins.
+    ///
+    /// `completion` carries the turn's `SpeakTerminal` — `.finished` only when
+    /// the complete reply (or the "Done." substitute) was audibly delivered to
+    /// its natural end.
     func speakAgent(
         _ reply: String,
         onFirstAudio: (@MainActor @Sendable () -> Void)? = nil,
-        completion: @escaping @MainActor @Sendable () -> Void
+        completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         // Sanitize HERE (not via `ReplyVoice`'s sanitize flag) so we can detect
         // the empty-after-strip case and substitute CarPlay's own "Done."
@@ -157,10 +201,10 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
         guard !sanitized.isEmpty else {
             // All-emoji / empty reply → speak a brief non-empty fallback via the
             // on-device synth (a fixed string, not LLM content → never cloud).
-            // The on-device synth starts near-instantly — signal first audio
-            // here (the fixed-string path has no `.startedPlaying` hook).
-            onFirstAudio?()
-            speak(String(localized: "Done."), completion: completion)  // xcstrings: existing key
+            // First audio is signalled from the synth's `didStart` delegate —
+            // real proof, not the old optimistic fire (the on-device synth
+            // starts near-instantly, so the template flip is not delayed).
+            speakFixed(String(localized: "Done."), onFirstAudio: onFirstAudio, completion: completion)  // xcstrings: existing key
             return
         }
 
@@ -223,6 +267,8 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
         _replyVoice?.cancel()
         _replyVoice = nil
         completion = nil
+        pendingFirstAudio = nil
+        currentUtteranceID = nil
     }
 
     // MARK: - Voice selection
@@ -247,16 +293,27 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
         didStart utterance: AVSpeechUtterance
     ) {
         // DIAGNOSTIC: confirms TTS audio actually began (vs. the scene resigning
-        // before any audio rendered). No state mutation.
+        // before any audio rendered). Also the honest "audio began" moment for
+        // the fixed-string first-audio signal ("Done." branch) — identity-
+        // guarded so a superseded utterance's late didStart can't fire it.
         Self.log.info("synth didStart")
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor in
+            guard self.currentUtteranceID == id else { return }
+            let started = self.pendingFirstAudio
+            self.pendingFirstAudio = nil
+            started?()
+        }
     }
 
     nonisolated func speechSynthesizer(
         _ synthesizer: AVSpeechSynthesizer,
         didFinish utterance: AVSpeechUtterance
     ) {
+        let id = ObjectIdentifier(utterance)
         Task { @MainActor in
-            self.fireCompletion()
+            guard self.currentUtteranceID == id else { return }
+            self.fireCompletion(.finished)
         }
     }
 
@@ -264,16 +321,20 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
         _ synthesizer: AVSpeechSynthesizer,
         didCancel utterance: AVSpeechUtterance
     ) {
+        let id = ObjectIdentifier(utterance)
         Task { @MainActor in
-            self.fireCompletion()
+            guard self.currentUtteranceID == id else { return }
+            self.fireCompletion(.incomplete)
         }
     }
 
     @MainActor
-    private func fireCompletion() {
+    private func fireCompletion(_ terminal: SpeakTerminal) {
         let pending = completion
         completion = nil
-        pending?()
+        pendingFirstAudio = nil
+        currentUtteranceID = nil
+        pending?(terminal)
     }
 }
 #endif

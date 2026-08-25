@@ -73,6 +73,30 @@ enum SpeechActivity {
     case fallbackStarted
 }
 
+// MARK: - Speak terminal (typed turn settlement)
+
+/// How a speak TURN settled — carried by the exactly-once `completion` so a
+/// consumer can distinguish "the complete logical reply was delivered" from
+/// "the turn settled without full audio" (a watchdog gave up on a dead leg, an
+/// interruption cancelled the synth mid-reply, or nothing was speakable). The
+/// exactly-once contract is unchanged: every terminal fires the completion
+/// once; an explicit `cancel()` / supersede still fires nothing.
+///
+/// Consumer today: CarPlay's heard-marker (`CarPlayRecordingService.speakReply`
+/// marks the conversation viewed only on `.finished` — a reply the driver did
+/// not hear to the end must stay unread). The chat/Watch state machines ignore
+/// the value (any terminal returns their UI to idle).
+enum SpeakTerminal: Equatable, Sendable {
+    /// Playback reached its natural end — the complete logical reply was
+    /// delivered (an Apple fallback that re-spoke the remaining text and
+    /// finished naturally also counts: the full content became audible).
+    case finished
+    /// The turn settled WITHOUT delivering the complete reply: inactivity
+    /// watchdog gave up, the synth was cancelled by the system mid-utterance,
+    /// the engine died mid-fallback, or the sanitized text was empty.
+    case incomplete
+}
+
 // MARK: - Cloud playback outcome (typed player terminal)
 
 /// The typed terminal of one CLOUD clip playback (`SpeechPlayer.playCloud` on
@@ -134,15 +158,18 @@ enum TTSFallbackReason: Equatable, Sendable {
 /// Signatures match `ReplyVoice.speak` EXACTLY (`@MainActor @Sendable` closures,
 /// `sanitize` always passed by the state machine). `onStateChange` is the
 /// additive `.startedPlaying` progress signal; `completion` is the exactly-once
-/// terminal. `pause()` / `resume()` preserve position (no re-synthesis);
-/// `cancel()` is a hard stop that does NOT fire the pending completion.
+/// terminal, typed with how the turn settled (`SpeakTerminal`) — engines that
+/// cannot distinguish report `.finished` on their natural-end delegate and
+/// `.incomplete` elsewhere. `pause()` / `resume()` preserve position (no
+/// re-synthesis); `cancel()` is a hard stop that does NOT fire the pending
+/// completion.
 @MainActor
 protocol SpeakEngine {
     func speak(
         _ text: String,
         sanitize: Bool,
         onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?,
-        completion: @escaping @MainActor @Sendable () -> Void
+        completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     )
     func pause()
     func resume()

@@ -17,7 +17,13 @@
 // shape exists to prevent:
 //
 //   • `markViewed`         — when was this thread last on screen? Drives the
-//                            amber unseen-reply disc and the bold row.
+//                            amber unseen-reply disc and the bold row. One
+//                            AURAL exception: CarPlay marks on proven HEARD
+//                            exposure (reply audio began + TTS settled
+//                            `.finished` — `CarPlayRecordingService.speakReply`),
+//                            since the car has no thread view. Same
+//                            false-read-averse bias: anything short of a fully
+//                            delivered reply stays unread.
 //   • `acknowledgeFailure` — WHICH failure has been shown to the user? Drives
 //                            whether the red mark has been retired.
 //

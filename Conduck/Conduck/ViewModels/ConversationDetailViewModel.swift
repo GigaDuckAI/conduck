@@ -5407,7 +5407,7 @@ final class ConversationDetailViewModel {
     static func speakArrivalOnSharedEngine(_ reply: String) {
         guard SpeechExclusivity.shared.claimForAutoSpeak(ReplyVoice.shared) else { return }
         ReplyVoice.shared.cancel()
-        ReplyVoice.shared.speak(reply, sanitize: true, completion: {})
+        ReplyVoice.shared.speak(reply, sanitize: true, completion: { _ in })
     }
 
     /// Internal seam exercised by `ConversationDetailViewModelMacReplySpeakTests`

@@ -31,13 +31,13 @@ final class ThreadSpeakerFallbackMarkerTests: XCTestCase {
         private(set) var pauseCount = 0
         private(set) var resumeCount = 0
         private var onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?
-        private var completion: (@MainActor @Sendable () -> Void)?
+        private var completion: (@MainActor @Sendable (SpeakTerminal) -> Void)?
 
         func speak(
             _ text: String,
             sanitize: Bool,
             onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?,
-            completion: @escaping @MainActor @Sendable () -> Void
+            completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
         ) {
             speakCount += 1
             self.onStateChange = onStateChange
@@ -49,7 +49,8 @@ final class ThreadSpeakerFallbackMarkerTests: XCTestCase {
 
         func emitStarted() { onStateChange?(.startedPlaying) }
         func emitFallback() { onStateChange?(.fallbackStarted) }
-        func complete() { completion?() }
+        /// Fire the turn's terminal — a played-to-the-end reply.
+        func complete() { completion?(.finished) }
     }
 
     func testFallbackMarkerSetSurvivesPauseResumeAndClearsOnFreshSpeak() {

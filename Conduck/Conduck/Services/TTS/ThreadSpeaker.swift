@@ -249,9 +249,11 @@ final class ThreadSpeaker {
                     self.state = .playing
                 }
             },
-            completion: { [weak self] in
+            completion: { [weak self] _ in
                 // Reset only if THIS turn is still the active one — a superseded
-                // turn's completion must not clear a newer turn's state.
+                // turn's completion must not clear a newer turn's state. The
+                // terminal value is a CarPlay concern; any settlement returns
+                // this state machine to idle.
                 guard let self, messageID == self.speakingMessageID else { return }
                 self.speakingMessageID = nil
                 self.state = .idle

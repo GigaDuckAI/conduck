@@ -197,7 +197,7 @@ final class WatchAudioSessionOwnershipTests: XCTestCase {
         let apple = AppleLegRecorder()
         let speaker = makeSpeaker(coordinator: coordinator, apple: apple)
 
-        speaker.speak(Self.reply, sanitize: false, onStateChange: nil, completion: {})
+        speaker.speak(Self.reply, sanitize: false, onStateChange: nil, completion: { _ in })
         XCTAssertEqual(coordinator.current?.owner, .playback,
                        "speak claims the session before the category write.")
         speaker.cancel()   // leave no live turn behind
@@ -210,7 +210,7 @@ final class WatchAudioSessionOwnershipTests: XCTestCase {
         let apple = AppleLegRecorder()
         let speaker = makeSpeaker(coordinator: coordinator, apple: apple)
 
-        speaker.speak(Self.reply, sanitize: false, onStateChange: nil, completion: {})
+        speaker.speak(Self.reply, sanitize: false, onStateChange: nil, completion: { _ in })
         XCTAssertTrue(coordinator.isClaimed)
 
         speaker.cancel()
@@ -230,7 +230,7 @@ final class WatchAudioSessionOwnershipTests: XCTestCase {
         let completions = Counter()
 
         speaker.speak("", sanitize: false, onStateChange: nil,
-                      completion: { completions.bump() })
+                      completion: { _ in completions.bump() })
         XCTAssertEqual(completions.value, 1,
                        "Empty text still completes synchronously.")
         XCTAssertFalse(coordinator.isClaimed,
@@ -249,12 +249,12 @@ final class WatchAudioSessionOwnershipTests: XCTestCase {
         let apple = AppleLegRecorder()
         let speaker = makeSpeaker(coordinator: coordinator, apple: apple)
 
-        speaker.speak(Self.reply, sanitize: false, onStateChange: nil, completion: {})
+        speaker.speak(Self.reply, sanitize: false, onStateChange: nil, completion: { _ in })
         let firstClaim = coordinator.current
         // Supersede before the first turn's grace elapses: stopInFlight's
         // release schedules a deactivation, the new claim cancels it.
         speaker.speak("A different reply supersedes the first.",
-                      sanitize: false, onStateChange: nil, completion: {})
+                      sanitize: false, onStateChange: nil, completion: { _ in })
         XCTAssertTrue(coordinator.isClaimed,
                       "The superseding turn re-claims inside the grace.")
         XCTAssertNotEqual(coordinator.current, firstClaim,
@@ -275,7 +275,7 @@ final class WatchAudioSessionOwnershipTests: XCTestCase {
         let apple = AppleLegRecorder()
         let speaker = makeSpeaker(coordinator: coordinator, apple: apple)
 
-        speaker.speak(Self.reply, sanitize: false, onStateChange: nil, completion: {})
+        speaker.speak(Self.reply, sanitize: false, onStateChange: nil, completion: { _ in })
         // Another owner claims IMMEDIATELY — synchronously after `speak`
         // returns, so the speak turn's chained category op is still queued.
         // At issue time `runConfig` sees the stale claim and returns false:

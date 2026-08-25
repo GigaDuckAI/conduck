@@ -39,7 +39,7 @@ final class ReplyVoiceLanguageThreadingTests: XCTestCase {
         func playApple(
             _ text: String,
             onStart: (@MainActor @Sendable () -> Void)?,
-            onDone: @escaping @MainActor @Sendable () -> Void
+            onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
         ) {
             playApple(text, language: nil, onStart: onStart, onProgress: nil, onDone: onDone)
         }
@@ -50,12 +50,13 @@ final class ReplyVoiceLanguageThreadingTests: XCTestCase {
             language: String?,
             onStart: (@MainActor @Sendable () -> Void)?,
             onProgress: (@MainActor @Sendable () -> Void)?,
-            onDone: @escaping @MainActor @Sendable () -> Void
+            onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
         ) {
             appleLanguages.append(language)
             onStart?()
             onProgress?()
-            onDone()
+            // The leg speaks its whole text — the synth's natural end.
+            onDone(.finished)
         }
         func stop() {}
         func pause() {}
@@ -73,7 +74,7 @@ final class ReplyVoiceLanguageThreadingTests: XCTestCase {
 
     private func speakAndWait(_ rv: ReplyVoice, _ text: String) {
         let exp = expectation(description: "completion")
-        rv.speak(text, sanitize: false) { exp.fulfill() }
+        rv.speak(text, sanitize: false) { _ in exp.fulfill() }
         wait(for: [exp], timeout: 2)
     }
 

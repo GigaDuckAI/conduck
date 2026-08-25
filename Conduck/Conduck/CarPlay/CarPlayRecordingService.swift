@@ -210,6 +210,15 @@ final class CarPlayRecordingService {
     /// never speaks or re-arms — the stale-reply guard. `0` = no live turn.
     @ObservationIgnored private var currentTurnToken: UInt64 = 0
 
+    /// The turn whose reply audio ACTUALLY began (the speak path's
+    /// `onFirstAudio`, which is wired to real playback start on every arm) —
+    /// half of the heard predicate behind the aural read-marker in
+    /// `speakReply`'s completion. A completion that arrives WITHOUT this latch
+    /// (stall-timeout settlement of a leg that never produced sound) must not
+    /// mark the conversation read. Token-scoped, so a stale turn's latch can
+    /// never vouch for a newer turn; cleared in `endSession` for hygiene.
+    @ObservationIgnored private var replyAudioBeganToken: UInt64?
+
     /// The mint behind `currentTurnToken`, PROCESS-LIFETIME rather than
     /// per-instance. An instance of this service is constructed fresh on every
     /// `didConnect` and dropped on disconnect, while `CarPlayConverseUploader`
@@ -472,18 +481,19 @@ final class CarPlayRecordingService {
     // MARK: - Scene activity (drives the unsolicited-audio guard)
 
     /// The scene delegate reports foreground/background transitions. When the
-    /// app backgrounds mid-session (driver → Maps), the in-flight converse hop
-    /// still completes + syncs, but the reply is NOT spoken and the session
-    /// ends silently.
+    /// app backgrounds mid-session (driver → Maps), the session ends silently
+    /// and `endSession` CANCELS any in-flight converse (`cancel(turnToken:)`)
+    /// — the turn is marked failed with a Retry chip on the phone, not
+    /// delivered later. Only a reply whose body already fully arrived before
+    /// the cancel lands is persisted (and takes the persist-only path via
+    /// `handleBackgroundReply`'s `isSceneActive` guard — synced, not spoken).
     func setSceneActive(_ active: Bool) {
         isSceneActive = active
         if !active, sessionActive {
-            // Backgrounded mid-session: end silently. The in-flight converse
-            // (if any) still completes + syncs via the background session; its
-            // reply takes the persist-only path (handleBackgroundReply guards
-            // on `isSceneActive`). `endSession` cancels any in-flight reply
-            // TTS at its top — so a live chunk queue can't keep fetching /
-            // starting audio from the background after the deactivate below.
+            // Backgrounded mid-session: end silently. `endSession` cancels the
+            // in-flight converse AND any in-flight reply TTS — so a live chunk
+            // queue can't keep fetching / starting audio from the background
+            // after the deactivate below.
             endSession(speak: nil)
             // Background path: no dismiss completion will fire (the scene is
             // backgrounded and may have torn the modal down), so free the audio
@@ -1759,7 +1769,7 @@ final class CarPlayRecordingService {
     /// (the unsolicited-audio guard); otherwise the reply is already persisted
     /// + synced by the delegate — end the session silently. The agent turn is
     /// appended by the delegate (single owner); this method NEVER appends.
-    func handleBackgroundReply(_ reply: String, conversationID: UUID, turnToken: UInt64?) {
+    func handleBackgroundReply(_ reply: String, conversationID: UUID, turnToken: UInt64?, replyStamp: Date) {
         // Stale-reply guard: a reply for an old turn (or after the session
         // ended) does not speak. The store already has it.
         guard sessionActive,
@@ -1773,12 +1783,13 @@ final class CarPlayRecordingService {
         }
 
         guard isSceneActive else {
-            // Backgrounded: reply synced, NOT spoken. End silently.
+            // Backgrounded: reply synced, NOT spoken. End silently. The reply
+            // stays UNREAD (no heard-marker without audible delivery).
             endSession(speak: nil)
             return
         }
 
-        speakReply(reply)
+        speakReply(reply, conversationID: conversationID, replyStamp: replyStamp)
     }
 
     /// The converse delegate hit an error. Speak it + end ONLY when foreground +
@@ -1810,7 +1821,7 @@ final class CarPlayRecordingService {
     /// seconds, and flipping the voice template to "Replying" over that
     /// silence reads as a hang (founder field report) — the template stays on
     /// the thinking visual until sound actually starts.
-    private func speakReply(_ reply: String) {
+    private func speakReply(_ reply: String, conversationID: UUID, replyStamp: Date) {
         // DIAGNOSTIC (CarPlay dashboard-fall): timestamp the speaking entry +
         // current audio route so the next run shows whether a route-change /
         // interruption / sceneWillResignActive fires around TTS-start. Device-
@@ -1821,6 +1832,13 @@ final class CarPlayRecordingService {
         CarPlaySpeechService.shared.speakAgent(reply, onFirstAudio: { [weak self] in
             guard let self else { return }
             Self.log.info("speakReply FIRST AUDIO: sessionActive=\(self.sessionActive, privacy: .public) tokenMatch=\(self.currentTurnToken == token, privacy: .public)")
+            // Latch "audio really began" for THIS turn — half of the heard
+            // predicate. BEFORE the `.processing` guard: a mid-synth mute parks
+            // the state on `.muted` while the reply keeps speaking, and that
+            // reply is still being heard.
+            if self.currentTurnToken == token {
+                self.replyAudioBeganToken = token
+            }
             // Guarded to `.processing`: a mid-synth mute parks the state on
             // `.muted` (the reply still speaks, mic-mute only) and must keep
             // its visual; a stale turn / ended session must not repaint.
@@ -1828,12 +1846,26 @@ final class CarPlayRecordingService {
                   self.state == .processing else { return }
             self.state = .speaking
             self.voiceControlTemplate.activateVoiceControlState(withIdentifier: VoiceState.speaking)
-        }) { [weak self] in
+        }) { [weak self] terminal in
             guard let self else { return }
             Self.log.info("speakReply COMPLETION: sessionActive=\(self.sessionActive, privacy: .public) muted=\(self.isMicMuted, privacy: .public) tokenMatch=\(self.currentTurnToken == token, privacy: .public)")
             // Guard: the session may have ended (Stop/Cancel) or moved on while
             // TTS was playing. Only re-arm if this is still the live turn.
             guard self.sessionActive, self.currentTurnToken == token else { return }
+            // HEARD-MARKER — the codebase's one AURAL read-state writer (every
+            // other writer needs proven ON-SCREEN exposure; see the
+            // `ReadStateStore` header invariant). Same false-read-averse bias:
+            // mark only when audio genuinely began for this turn AND the turn
+            // settled `.finished` (complete reply delivered). End mid-speech
+            // fires no completion; a watchdog gave-up or system-cancelled synth
+            // lands `.incomplete`; a never-spoken reply never reaches here —
+            // all of those stay unread. Stamped with the reply's OWN tail
+            // stamp so a newer tail that arrived during TTS stays unread.
+            // BEFORE the mute fork: a reply that spoke to the end while the
+            // mic was muted was still heard.
+            if terminal == .finished, self.replyAudioBeganToken == token {
+                ReadStateStore.shared.markViewed(conversationID, lastActivityAt: replyStamp)
+            }
             if self.isMicMuted {
                 // Muted mid-reply: the reply was spoken (output is unaffected by a
                 // mic-mute); park passive on `.muted` instead of re-arming the mic.
@@ -2196,6 +2228,7 @@ final class CarPlayRecordingService {
         // session (the delegate sees `.cancelled` and drops it silently).
         let token = currentTurnToken
         currentTurnToken = 0
+        replyAudioBeganToken = nil
         if token != 0 {
             CarPlayConverseUploader.shared.cancel(turnToken: token)
         }

@@ -83,8 +83,10 @@ final class ThreadSpeakerStopAndAutoSpeakTests: XCTestCase {
         func playCloud(_ data: Data, onStart: (@MainActor @Sendable () -> Void)?, onDone: @escaping @MainActor @Sendable (CloudPlaybackOutcome) -> Void) {
             all.append(CapturedPlay(onStart: onStart, onDone: { onDone(.finished) }))
         }
-        func playApple(_ text: String, onStart: (@MainActor @Sendable () -> Void)?, onDone: @escaping @MainActor @Sendable () -> Void) {
-            all.append(CapturedPlay(onStart: onStart, onDone: onDone))
+        func playApple(_ text: String, onStart: (@MainActor @Sendable () -> Void)?, onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void) {
+            // Same adaptation as the cloud leg: firing the captured terminal
+            // reports the synth's natural end.
+            all.append(CapturedPlay(onStart: onStart, onDone: { onDone(.finished) }))
         }
         func stop() { stopCount += 1 }
         // Pause/resume record COUNTS only — they do NOT fire the latched

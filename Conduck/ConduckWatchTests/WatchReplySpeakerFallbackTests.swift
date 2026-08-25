@@ -158,7 +158,7 @@ final class WatchReplySpeakerFallbackTests: XCTestCase {
                 case .fallbackStarted: recorder.recordFallback()
                 }
             },
-            completion: { recorder.recordDone() }
+            completion: { _ in recorder.recordDone() }
         )
     }
 

@@ -179,8 +179,8 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         let session = AVAudioSession.sharedInstance()
         Self.log.info("sceneWillResignActive presented=\(String(describing: type(of: self.interfaceController?.presentedTemplate)), privacy: .public) state=\(String(describing: self.recordingService?.state), privacy: .public) out=[\(session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ","), privacy: .public)]")
         // Backgrounded (driver → Maps): the service ends any live session
-        // silently; the in-flight converse still completes + syncs but is not
-        // spoken (the unsolicited-audio guard). The service deactivates audio
+        // silently, CANCELLING the in-flight converse (the turn shows failed +
+        // Retry on the phone — see `endSession`). The service deactivates audio
         // directly on this background path (no dismiss completion to rely on).
         // Optimistically clear the flag (the system may tear the modal down
         // while backgrounded); `sceneDidBecomeActive` reconciles it against the

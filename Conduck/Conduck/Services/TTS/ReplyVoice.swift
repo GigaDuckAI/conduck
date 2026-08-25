@@ -24,9 +24,14 @@
 //
 // CONTRACT (cross-agent — the Settings half codes against `previewSample`):
 //   - `speak(_:sanitize:completion:)` — speak an agent reply via the ACTIVE TTS
-//     provider; completion (parameterless) fires EXACTLY ONCE on every path.
-//     The parameterless exactly-once completion is load-bearing for CarPlay
-//     deactivate-once. CarPlay routes through `speak`, never `previewSample`.
+//     provider; completion fires EXACTLY ONCE on every path, TYPED with how the
+//     turn settled (`SpeakTerminal`: `.finished` = the complete reply was
+//     delivered; `.incomplete` = the turn settled without full audio — watchdog
+//     gave up, system cancelled the synth, empty text). The exactly-once
+//     completion is load-bearing for CarPlay deactivate-once, and the terminal
+//     value is load-bearing for CarPlay's heard-marker (only `.finished` may
+//     mark a conversation read). CarPlay routes through `speak`, never
+//     `previewSample`.
 //   - `previewSample(providerID:voice:apiKey:completion:)` — speak a sample via
 //     an EXPLICIT provider (Settings "Speak a sample"). DIVERGES from `speak`:
 //     completion is `(Result<Void, AppError>) -> Void` and the preview does NOT
@@ -89,10 +94,14 @@ protocol SpeechPlaying: AnyObject {
         onStart: (@MainActor @Sendable () -> Void)?,
         onDone: @escaping @MainActor @Sendable (CloudPlaybackOutcome) -> Void
     )
+    /// `onDone` is TYPED (`SpeakTerminal`): `.finished` only on the synth's
+    /// natural end; `.incomplete` on a system-driven `didCancel` — a
+    /// caller-initiated `stop()` fires nothing. CarPlay's heard-marker
+    /// depends on the distinction.
     func playApple(
         _ text: String,
         onStart: (@MainActor @Sendable () -> Void)?,
-        onDone: @escaping @MainActor @Sendable () -> Void
+        onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     )
     /// Language- and progress-aware variant — `language` is a BCP-47
     /// content-language hint for the reply (nil → device language);
@@ -106,7 +115,7 @@ protocol SpeechPlaying: AnyObject {
         language: String?,
         onStart: (@MainActor @Sendable () -> Void)?,
         onProgress: (@MainActor @Sendable () -> Void)?,
-        onDone: @escaping @MainActor @Sendable () -> Void
+        onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     )
     func stop()
     /// Pause in-flight playback preserving position (chat play/pause/resume) —
@@ -122,7 +131,7 @@ extension SpeechPlaying {
     func playCloud(_ data: Data, onDone: @escaping @MainActor @Sendable (CloudPlaybackOutcome) -> Void) {
         playCloud(data, onStart: nil, onDone: onDone)
     }
-    func playApple(_ text: String, onDone: @escaping @MainActor @Sendable () -> Void) {
+    func playApple(_ text: String, onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void) {
         playApple(text, onStart: nil, onDone: onDone)
     }
     /// Default for the language/progress-aware requirement: ignore both hints
@@ -133,7 +142,7 @@ extension SpeechPlaying {
         language _: String?,
         onStart: (@MainActor @Sendable () -> Void)?,
         onProgress _: (@MainActor @Sendable () -> Void)?,
-        onDone: @escaping @MainActor @Sendable () -> Void
+        onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         playApple(text, onStart: onStart, onDone: onDone)
     }
@@ -344,12 +353,14 @@ final class ReplyVoice: SpeakEngine {
     ///     FALLBACK leg's audio actually begins (the per-message marker).
     ///     PURELY ADDITIVE — it is NOT the completion, never funnels through
     ///     the one-shot latch, and the empty-text / cancel paths never emit it.
-    ///   - completion: called exactly once when playback finishes / fails.
+    ///   - completion: called exactly once when playback finishes / fails,
+    ///     typed with how the turn settled (`.finished` = complete reply
+    ///     delivered; `.incomplete` = settled without full audio).
     func speak(
         _ text: String,
         sanitize: Bool,
         onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)? = nil,
-        completion: @escaping @MainActor @Sendable () -> Void
+        completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         // A new turn supersedes any prior in-flight one — cancel it first so a
         // stale fetch can't resurrect playback after we've moved on. A live
@@ -368,10 +379,10 @@ final class ReplyVoice: SpeakEngine {
         // Disarm both watchdogs whenever the turn terminates through the
         // latch — an Apple leg that completes without ever signalling start
         // must not leave a stale watchdog to re-speak the reply.
-        let fire = Self.makeOneShot { [weak self] in
+        let fire = Self.makeOneShot { [weak self] terminal in
             self?.disarmFirstAudioWatchdog()
             self?.disarmAppleInactivityWatchdog()
-            completion()
+            completion(terminal)
         }
         let toSpeak = sanitize ? ReplySanitizer.spoken(text) : text
 
@@ -380,9 +391,9 @@ final class ReplyVoice: SpeakEngine {
             // no Apple call — fire the completion so the loop advances. The
             // CarPlay caller substitutes its own "Done." terminal; the iOS tap
             // path simply does nothing audible. No `.startedPlaying` (nothing
-            // plays).
+            // plays). `.incomplete`: no audio was delivered here.
             inFlight = nil
-            fire()
+            fire(.incomplete)
             return
         }
 
@@ -555,7 +566,7 @@ final class ReplyVoice: SpeakEngine {
         language: String?,
         turn: Int,
         onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?,
-        fire: @escaping @MainActor @Sendable () -> Void
+        fire: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         firstAudioWatchdog?.cancel()
         let timeout = firstAudioTimeout
@@ -619,7 +630,7 @@ final class ReplyVoice: SpeakEngine {
         turn: Int,
         startedAlready: Bool,
         onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?,
-        fire: @escaping @MainActor @Sendable () -> Void
+        fire: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         disarmFirstAudioWatchdog()
 
@@ -673,7 +684,7 @@ final class ReplyVoice: SpeakEngine {
         reason: TTSFallbackReason?,
         keyState: APIKeyState,
         configSignature: String,
-        fire: @escaping @MainActor @Sendable () -> Void
+        fire: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         appleInactivityWatchdog?.cancel()
         let timeout = appleInactivityTimeout
@@ -691,7 +702,9 @@ final class ReplyVoice: SpeakEngine {
                 keyState: keyState,
                 configSignature: configSignature
             )
-            fire()
+            // The leg went silent and was killed — the reply was NOT fully
+            // delivered. `.incomplete` keeps a half-heard CarPlay reply unread.
+            fire(.incomplete)
         }
     }
 
@@ -738,7 +751,7 @@ final class ReplyVoice: SpeakEngine {
         snapshot snap: TTSSnapshot,
         turn: Int,
         onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)? = nil,
-        fire: @escaping @MainActor @Sendable () -> Void
+        fire: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         let provider = TTSProvider.lookup(id: snap.providerID)
         let sig = TTSOutcomeLog.configSignature(for: snap)
@@ -834,7 +847,7 @@ final class ReplyVoice: SpeakEngine {
                     guard let self, turn == self.generation else { return }
                     switch outcome {
                     case .finished:
-                        fire()
+                        fire(.finished)
                     case .failed(let stage):
                         self.startAppleLeg(
                             text: text, language: language,
@@ -900,7 +913,7 @@ final class ReplyVoice: SpeakEngine {
         startedFlag: StartedFlag,
         onCloudStart: @escaping @MainActor @Sendable () -> Void,
         onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?,
-        fire: @escaping @MainActor @Sendable () -> Void
+        fire: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         // Stop any prior single-blob playback BEFORE the queue starts. The
         // one-POST path gets this from `playCloud`/`playApple`'s own
@@ -931,13 +944,19 @@ final class ReplyVoice: SpeakEngine {
             onFinished: { [weak self] in
                 guard let self, turn == self.generation else { return }
                 self.chunkQueue = nil
-                fire()
+                fire(.finished)
             },
             onFallback: { [weak self] remaining, firstAudioFired in
-                guard let self, turn == self.generation else {
-                    fire()  // engine gone — still settle the turn's completion
+                // Split the two "don't run the fallback" cases: an engine that
+                // died mid-required-fallback must still SETTLE the turn
+                // (`.incomplete` — the remainder was never spoken), while a
+                // superseded/cancelled turn (`turn != generation`) must fire
+                // NOTHING — cancel's no-completion contract.
+                guard let self else {
+                    fire(.incomplete)
                     return
                 }
+                guard turn == self.generation else { return }
                 self.chunkQueue = nil
                 self.startAppleLeg(
                     text: remaining, language: language,
@@ -979,7 +998,10 @@ final class ReplyVoice: SpeakEngine {
         // a bypassed preflight still leaves a truthful trace.
         guard provider.id != TTSProvider.appleTTS.id,
               keyState == .present || keyState == .notRequired else {
-            player.playApple(text) { [weak self] in
+            // The preview contract predates the typed terminal and keeps its
+            // behavior: any settled Apple sample reports `.success` (the
+            // terminal value is a chat/CarPlay concern, not a preview one).
+            player.playApple(text) { [weak self] _ in
                 self?.outcomeLog.record(
                     surface: surface, stage: .apple, outcome: .appleOK,
                     keyState: keyState, configSignature: sig
@@ -1066,24 +1088,26 @@ final class ReplyVoice: SpeakEngine {
     /// own funnel; the Apple inactivity watchdog supplies the eventual-
     /// settlement half.
     private static func makeOneShot(
-        _ completion: @escaping @MainActor @Sendable () -> Void
-    ) -> @MainActor @Sendable () -> Void {
+        _ completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
+    ) -> @MainActor @Sendable (SpeakTerminal) -> Void {
         let box = OneShotBox(completion)
-        return { @MainActor in box.fire() }
+        return { @MainActor terminal in box.fire(terminal) }
     }
 
     /// Reference box holding the fire-once state. `@MainActor` so the `fired`
-    /// flag needs no lock (all callbacks land on the main actor).
+    /// flag needs no lock (all callbacks land on the main actor). The FIRST
+    /// terminal wins — a late second terminal (whatever its value) is a no-op,
+    /// preserving exactly-once.
     @MainActor
     private final class OneShotBox {
-        private var pending: (@MainActor @Sendable () -> Void)?
-        init(_ completion: @escaping @MainActor @Sendable () -> Void) {
+        private var pending: (@MainActor @Sendable (SpeakTerminal) -> Void)?
+        init(_ completion: @escaping @MainActor @Sendable (SpeakTerminal) -> Void) {
             self.pending = completion
         }
-        func fire() {
+        func fire(_ terminal: SpeakTerminal) {
             let c = pending
             pending = nil
-            c?()
+            c?(terminal)
         }
     }
 

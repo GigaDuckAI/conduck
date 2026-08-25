@@ -77,9 +77,12 @@ final class ThreadSpeakerTests: XCTestCase {
         func playApple(
             _ text: String,
             onStart: (@MainActor @Sendable () -> Void)?,
-            onDone: @escaping @MainActor @Sendable () -> Void
+            onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
         ) {
-            all.append(CapturedPlay(onStart: onStart, onDone: onDone))
+            // Same adaptation as the cloud leg: firing the captured terminal
+            // reports the synth's natural end (these tests drive the
+            // played-to-completion state machine).
+            all.append(CapturedPlay(onStart: onStart, onDone: { onDone(.finished) }))
         }
 
         func stop() { stopCount += 1 }

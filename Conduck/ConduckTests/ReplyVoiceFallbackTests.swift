@@ -37,9 +37,10 @@ final class ReplyVoiceFallbackTests: XCTestCase {
     /// handoff. The cloud `onStart` fires only when the clip actually began —
     /// i.e. NOT for `.undecodable` / `.startRefused` (playback never started),
     /// but YES for `.finished` and `.playbackFailed` (began, then died) —
-    /// mirroring the real `SpeechPlayer`. `appleHoldsCompletion` lets a test
-    /// keep the Apple leg "in flight" (onStart fired, onDone withheld) so a
-    /// `cancel()` can land mid-handoff.
+    /// mirroring the real `SpeechPlayer`. The Apple leg reports the TYPED
+    /// `appleTerminal` (default `.finished` = the synth's natural end).
+    /// `appleHoldsCompletion` lets a test keep the Apple leg "in flight"
+    /// (onStart fired, onDone withheld) so a `cancel()` can land mid-handoff.
     final class FakePlayer: SpeechPlaying {
         private(set) var cloudCount = 0
         private(set) var appleCount = 0
@@ -58,6 +59,9 @@ final class ReplyVoiceFallbackTests: XCTestCase {
         /// When true, the Apple leg fires onStart but WITHHOLDS onDone (the leg
         /// stays in flight) — for the cancel-mid-handoff test.
         var appleHoldsCompletion = false
+        /// Typed Apple terminal the fake reports (default: the synth's natural
+        /// end). `.incomplete` models a system `didCancel` mid-utterance.
+        var appleTerminal: SpeakTerminal = .finished
 
         func playCloud(
             _ data: Data,
@@ -78,13 +82,13 @@ final class ReplyVoiceFallbackTests: XCTestCase {
         func playApple(
             _ text: String,
             onStart: (@MainActor @Sendable () -> Void)?,
-            onDone: @escaping @MainActor @Sendable () -> Void
+            onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
         ) {
             appleCount += 1
             appleTexts.append(text)
             if invokeStart { onStart?() }
             if appleHoldsCompletion { return }
-            if invokeDone { onDone() }
+            if invokeDone { onDone(appleTerminal) }
         }
         func stop() { stopCount += 1 }
         func pause() { pauseCount += 1 }
@@ -163,23 +167,33 @@ final class ReplyVoiceFallbackTests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// Drive `speak`/`previewSample` and wait for the async route to settle.
+    /// Drive `speak` and wait for the async route to settle. Returns the
+    /// settlement box (count + the TYPED terminal the turn reported).
     private func awaitCompletion(
         timeout: TimeInterval = 2,
-        _ body: (@escaping @MainActor @Sendable () -> Void) -> Void
-    ) -> Int {
+        _ body: (@escaping @MainActor @Sendable (SpeakTerminal) -> Void) -> Void
+    ) -> TerminalBox {
         let exp = expectation(description: "completion")
-        let counter = CounterBox()
-        body { counter.bump(); exp.fulfill() }
+        let box = TerminalBox()
+        body { terminal in box.record(terminal); exp.fulfill() }
         wait(for: [exp], timeout: timeout)
         // Give any stray late callbacks a runloop turn to (incorrectly) fire.
         let spin = expectation(description: "spin")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { spin.fulfill() }
         wait(for: [spin], timeout: 1)
-        return counter.count
+        return box
     }
 
-    final class CounterBox { var count = 0; func bump() { count += 1 } }
+    /// Box capturing a `speak` settlement across the async route: how many
+    /// times the completion fired (the exactly-once contract) and the LAST
+    /// `SpeakTerminal` it carried (how the turn settled). `@MainActor` — the
+    /// one-shot latch fires on the main actor.
+    @MainActor
+    final class TerminalBox {
+        private(set) var count = 0
+        private(set) var last: SpeakTerminal?
+        func record(_ t: SpeakTerminal) { count += 1; last = t }
+    }
 
     /// Box capturing a `previewSample` outcome across the async route. `@MainActor`
     /// (the latch + route fire on the main actor).
@@ -218,11 +232,11 @@ final class ReplyVoiceFallbackTests: XCTestCase {
         let snapshot = FakeSnapshot(snap: ("openai-tts", "key-123", nil))
         let rv = ReplyVoice(fetcher: fetcher, player: player, snapshot: snapshot, outcomeLog: makeThrowawayOutcomeLog())
 
-        let fires = awaitCompletion { done in
+        let settled = awaitCompletion { done in
             rv.speak("Hello there.", sanitize: false, completion: done)
         }
 
-        XCTAssertEqual(fires, 1, "Completion must fire EXACTLY once on the cloud-success path.")
+        XCTAssertEqual(settled.count, 1, "Completion must fire EXACTLY once on the cloud-success path.")
         XCTAssertEqual(player.cloudCount, 1, "Cloud audio must be played.")
         XCTAssertEqual(player.appleCount, 0, "Apple must NOT be used when cloud succeeds.")
     }
@@ -235,11 +249,11 @@ final class ReplyVoiceFallbackTests: XCTestCase {
         let snapshot = FakeSnapshot(snap: ("openai-tts", "key-123", nil))
         let rv = ReplyVoice(fetcher: fetcher, player: player, snapshot: snapshot, outcomeLog: makeThrowawayOutcomeLog())
 
-        let fires = awaitCompletion { done in
+        let settled = awaitCompletion { done in
             rv.speak("Hello there.", sanitize: false, completion: done)
         }
 
-        XCTAssertEqual(fires, 1, "Completion must fire EXACTLY once on the cloud-fail→Apple path.")
+        XCTAssertEqual(settled.count, 1, "Completion must fire EXACTLY once on the cloud-fail→Apple path.")
         XCTAssertEqual(player.cloudCount, 0, "Cloud must NOT play when the fetch threw.")
         XCTAssertEqual(player.appleCount, 1, "Apple fallback must run when the cloud fetch throws.")
     }
@@ -252,11 +266,11 @@ final class ReplyVoiceFallbackTests: XCTestCase {
         let snapshot = FakeSnapshot(snap: ("apple-tts", nil, nil))
         let rv = ReplyVoice(fetcher: fetcher, player: player, snapshot: snapshot, outcomeLog: makeThrowawayOutcomeLog())
 
-        let fires = awaitCompletion { done in
+        let settled = awaitCompletion { done in
             rv.speak("Read this.", sanitize: false, completion: done)
         }
 
-        XCTAssertEqual(fires, 1)
+        XCTAssertEqual(settled.count, 1)
         XCTAssertEqual(player.appleCount, 1, "Apple-active must play via Apple.")
         XCTAssertEqual(player.cloudCount, 0)
     }
@@ -266,11 +280,11 @@ final class ReplyVoiceFallbackTests: XCTestCase {
         let snapshot = FakeSnapshot(snap: ("openai-tts", nil, nil))  // configured active but key cleared
         let rv = ReplyVoice(fetcher: FakeFetcher(), player: player, snapshot: snapshot, outcomeLog: makeThrowawayOutcomeLog())
 
-        let fires = awaitCompletion { done in
+        let settled = awaitCompletion { done in
             rv.speak("No key here.", sanitize: false, completion: done)
         }
 
-        XCTAssertEqual(fires, 1)
+        XCTAssertEqual(settled.count, 1)
         XCTAssertEqual(player.appleCount, 1, "A cloud provider with no key must fall back to Apple.")
         XCTAssertEqual(player.cloudCount, 0)
     }
@@ -283,11 +297,11 @@ final class ReplyVoiceFallbackTests: XCTestCase {
         let rv = ReplyVoice(fetcher: FakeFetcher(), player: player, snapshot: snapshot, outcomeLog: makeThrowawayOutcomeLog())
 
         // An all-emoji reply sanitizes to empty.
-        let fires = awaitCompletion { done in
+        let settled = awaitCompletion { done in
             rv.speak("🎉🎈✨", sanitize: true, completion: done)
         }
 
-        XCTAssertEqual(fires, 1, "Empty-after-sanitize must still fire the completion exactly once.")
+        XCTAssertEqual(settled.count, 1, "Empty-after-sanitize must still fire the completion exactly once.")
         XCTAssertEqual(player.cloudCount, 0, "Empty text must make NO cloud call.")
         XCTAssertEqual(player.appleCount, 0, "Empty text must make NO Apple call either.")
     }
@@ -307,7 +321,7 @@ final class ReplyVoiceFallbackTests: XCTestCase {
         // player path; a real SpeechPlayer's funnel would then fire).
         let exp = expectation(description: "settle")
         var fires = 0
-        rv.speak("Hello.", sanitize: false) { fires += 1 }
+        rv.speak("Hello.", sanitize: false) { _ in fires += 1 }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { exp.fulfill() }
         wait(for: [exp], timeout: 1)
 
@@ -390,8 +404,10 @@ final class ReplyVoiceFallbackTests: XCTestCase {
             outcomeLog: makeThrowawayOutcomeLog()
         )
 
-        var fires = 0
-        rv.speak("Hello there.", sanitize: false) { fires += 1 }
+        // Record every terminal the completion carries — `cancel()` must produce
+        // NONE of them, `.finished` and `.incomplete` alike.
+        var terminals: [SpeakTerminal] = []
+        rv.speak("Hello there.", sanitize: false) { terminals.append($0) }
 
         // Let the cloud Task reach the suspended fetch (snapshot resolves + the
         // fetch awaits the gate). Yield until the fetcher actually started.
@@ -412,7 +428,8 @@ final class ReplyVoiceFallbackTests: XCTestCase {
 
         XCTAssertEqual(player.cloudCount, 0, "A cancelled fetch must NOT start cloud playback.")
         XCTAssertEqual(player.appleCount, 0, "A cancelled fetch must NOT fall back to Apple playback.")
-        XCTAssertEqual(fires, 0, "cancel() abandons the turn — the completion must NOT fire.")
+        XCTAssertEqual(terminals, [],
+                       "cancel() abandons the turn — the completion must NOT fire with ANY terminal.")
     }
 
     // MARK: - onStateChange (P3, additive) fires BEFORE completion
@@ -439,7 +456,7 @@ final class ReplyVoiceFallbackTests: XCTestCase {
             onStateChange: { activity in
                 if case .startedPlaying = activity { order.record("startedPlaying") }
             },
-            completion: { order.record("completion"); exp.fulfill() }
+            completion: { _ in order.record("completion"); exp.fulfill() }
         )
         wait(for: [exp], timeout: 2)
 
@@ -462,7 +479,7 @@ final class ReplyVoiceFallbackTests: XCTestCase {
             onStateChange: { activity in
                 if case .startedPlaying = activity { order.record("startedPlaying") }
             },
-            completion: { order.record("completion"); exp.fulfill() }
+            completion: { _ in order.record("completion"); exp.fulfill() }
         )
         wait(for: [exp], timeout: 2)
 
@@ -489,7 +506,7 @@ final class ReplyVoiceFallbackTests: XCTestCase {
             "Hello there.",
             sanitize: false,
             onStateChange: { _ in stateChanges += 1 },
-            completion: { completions += 1 }
+            completion: { _ in completions += 1 }
         )
 
         // Let the cloud Task reach the suspended fetch before cancelling.
@@ -536,7 +553,7 @@ final class ReplyVoiceFallbackTests: XCTestCase {
                 "Hello whole reply.",
                 sanitize: false,
                 onStateChange: { if case .fallbackStarted = $0 { fallbackStarted += 1 } },
-                completion: { fires += 1; exp.fulfill() }
+                completion: { _ in fires += 1; exp.fulfill() }
             )
             wait(for: [exp], timeout: 2)
 
@@ -599,7 +616,7 @@ final class ReplyVoiceFallbackTests: XCTestCase {
                 "Speak me.",
                 sanitize: false,
                 onStateChange: { if case .fallbackStarted = $0 { fallbackStarted += 1 } },
-                completion: { fires += 1; exp.fulfill() }
+                completion: { _ in fires += 1; exp.fulfill() }
             )
             wait(for: [exp], timeout: 2)
 
@@ -620,9 +637,10 @@ final class ReplyVoiceFallbackTests: XCTestCase {
     // MARK: - B4. A fallback whose Apple leg never starts → gaveUp (ring honesty)
 
     /// If the fallback Apple leg produces NO audio at all (no onStart, no onDone),
-    /// the inactivity watchdog must still settle the turn exactly once, and the
-    /// ring must record `gaveUp` — NOT `appleFallback` (which claims audio that
-    /// never happened).
+    /// the inactivity watchdog must still settle the turn exactly once — as
+    /// `.incomplete`, because the reply was never delivered — and the ring must
+    /// record `gaveUp`, NOT `appleFallback` (which claims audio that never
+    /// happened).
     func testFallbackAppleLegThatNeverStartsSettlesAsGaveUp() {
         let log = makeThrowawayOutcomeLog()
         let player = FakePlayer()
@@ -635,9 +653,11 @@ final class ReplyVoiceFallbackTests: XCTestCase {
             appleInactivityTimeout: .milliseconds(50)
         )
 
-        let fires = awaitCompletion { done in rv.speak("Silent leg.", sanitize: false, completion: done) }
+        let settled = awaitCompletion { done in rv.speak("Silent leg.", sanitize: false, completion: done) }
 
-        XCTAssertEqual(fires, 1, "The inactivity watchdog settles the turn once even when Apple is dead.")
+        XCTAssertEqual(settled.count, 1, "The inactivity watchdog settles the turn once even when Apple is dead.")
+        XCTAssertEqual(settled.last, .incomplete,
+                       "A watchdog gave-up settlement reports `.incomplete` — no audio was delivered.")
         XCTAssertEqual(player.appleCount, 1, "The Apple leg was attempted.")
         let events = log.events()
         XCTAssertEqual(events.map(\.outcome), [.gaveUp],
@@ -659,9 +679,9 @@ final class ReplyVoiceFallbackTests: XCTestCase {
             firstAudioTimeout: .milliseconds(50)
         )
 
-        let fires = awaitCompletion { done in rv.speak("Reply.", sanitize: false, completion: done) }
+        let settled = awaitCompletion { done in rv.speak("Reply.", sanitize: false, completion: done) }
 
-        XCTAssertEqual(fires, 1, "Exactly one settlement — the fetch-throw Apple leg disarms the first-audio watchdog.")
+        XCTAssertEqual(settled.count, 1, "Exactly one settlement — the fetch-throw Apple leg disarms the first-audio watchdog.")
         XCTAssertEqual(player.appleCount, 1, "Exactly ONE Apple leg runs (no watchdog double-handoff).")
     }
 
@@ -677,9 +697,9 @@ final class ReplyVoiceFallbackTests: XCTestCase {
             firstAudioTimeout: .milliseconds(50)
         )
 
-        let fires = awaitCompletion { done in rv.speak("Whole reply here.", sanitize: false, completion: done) }
+        let settled = awaitCompletion { done in rv.speak("Whole reply here.", sanitize: false, completion: done) }
 
-        XCTAssertEqual(fires, 1, "The first-audio watchdog settles a stalled cloud turn exactly once.")
+        XCTAssertEqual(settled.count, 1, "The first-audio watchdog settles a stalled cloud turn exactly once.")
         XCTAssertEqual(player.appleCount, 1, "The watchdog hands the reply to a single Apple leg.")
         XCTAssertEqual(player.appleTexts, ["Whole reply here."], "Apple speaks the WHOLE reply after the stall.")
         XCTAssertEqual(player.cloudCount, 0, "No cloud audio played — the fetch never returned.")
@@ -698,31 +718,117 @@ final class ReplyVoiceFallbackTests: XCTestCase {
         let rv = ReplyVoice(fetcher: FakeFetcher(), player: player, snapshot: snapshot,
                             outcomeLog: makeThrowawayOutcomeLog())
 
-        var fires = 0
-        rv.speak("Reply.", sanitize: false) { fires += 1 }
+        // Record every terminal the completion carries — the cancelled turn must
+        // report NONE of them.
+        var terminals: [SpeakTerminal] = []
+        rv.speak("Reply.", sanitize: false) { terminals.append($0) }
 
         // Wait until the cloud failure has handed off to the (in-flight) Apple leg.
         for _ in 0..<200 where player.appleCount == 0 { await Task.yield() }
         XCTAssertEqual(player.appleCount, 1, "The cloud failure handed off to the Apple leg.")
-        XCTAssertEqual(fires, 0, "No completion yet — the Apple leg is still in flight.")
+        XCTAssertEqual(terminals, [], "No completion yet — the Apple leg is still in flight.")
 
         rv.cancel()
         for _ in 0..<10 { await Task.yield() }
         let drain = expectation(description: "drain")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { drain.fulfill() }
         await fulfillment(of: [drain], timeout: 1)
-        XCTAssertEqual(fires, 0, "cancel() during the failure→Apple handoff must suppress the completion.")
+        XCTAssertEqual(terminals, [],
+                       "cancel() during the failure→Apple handoff must suppress the completion entirely.")
 
         // A fresh speak proceeds cleanly (cloud success this time).
         player.cloudOutcome = .finished
         player.appleHoldsCompletion = false
         let exp = expectation(description: "second")
-        var secondFires = 0
-        rv.speak("Second reply.", sanitize: false) { secondFires += 1; exp.fulfill() }
+        var secondTerminals: [SpeakTerminal] = []
+        rv.speak("Second reply.", sanitize: false) { secondTerminals.append($0); exp.fulfill() }
         await fulfillment(of: [exp], timeout: 2)
 
-        XCTAssertEqual(secondFires, 1, "A fresh speak after cancel completes normally.")
-        XCTAssertEqual(fires, 0, "The cancelled turn stays silent forever.")
+        XCTAssertEqual(secondTerminals, [.finished], "A fresh speak after cancel completes normally.")
+        XCTAssertEqual(terminals, [], "The cancelled turn stays silent forever.")
+    }
+
+    // MARK: - C. Typed speak terminal (`SpeakTerminal`)
+
+    /// The exactly-once completion carries HOW the turn settled, not just THAT
+    /// it settled — CarPlay's heard-marker may only mark a conversation viewed
+    /// on `.finished`. These cases pin each terminal-producing path. (The
+    /// watchdog gave-up path is pinned in B4, and the cancel paths — which fire
+    /// NO terminal at all — above.)
+
+    /// A cloud clip that plays to its natural end delivered the complete reply.
+    func testCloudNaturalFinishReportsFinishedTerminal() {
+        let player = FakePlayer()  // cloudOutcome defaults to `.finished`
+        let snapshot = FakeSnapshot(snap: ("openai-tts", "key-123", nil))
+        let rv = ReplyVoice(fetcher: FakeFetcher(), player: player, snapshot: snapshot,
+                            outcomeLog: makeThrowawayOutcomeLog())
+
+        let settled = awaitCompletion { done in
+            rv.speak("Hello there.", sanitize: false, completion: done)
+        }
+
+        XCTAssertEqual(settled.count, 1)
+        XCTAssertEqual(settled.last, .finished,
+                       "A cloud clip that finished naturally delivered the complete reply.")
+        XCTAssertEqual(player.cloudCount, 1, "Construction: the cloud clip actually played.")
+    }
+
+    /// An INTENDED Apple leg whose synth posts its natural `didFinish` likewise
+    /// delivered the complete reply.
+    func testAppleNaturalFinishReportsFinishedTerminal() {
+        let player = FakePlayer()
+        player.appleTerminal = .finished   // the synth's natural didFinish
+        let snapshot = FakeSnapshot(snap: ("apple-tts", nil, nil))
+        let rv = ReplyVoice(fetcher: FakeFetcher(), player: player, snapshot: snapshot,
+                            outcomeLog: makeThrowawayOutcomeLog())
+
+        let settled = awaitCompletion { done in
+            rv.speak("Read this whole reply.", sanitize: false, completion: done)
+        }
+
+        XCTAssertEqual(settled.count, 1)
+        XCTAssertEqual(settled.last, .finished,
+                       "The Apple leg's natural end delivered the complete reply.")
+        XCTAssertEqual(player.appleCount, 1, "Construction: the Apple leg actually ran.")
+    }
+
+    /// The system cancelled the synth mid-utterance (`didCancel`): the leg
+    /// settled, but the driver never heard the whole reply — `.incomplete`
+    /// surfaces through the speak completion unchanged.
+    func testAppleSystemCancelReportsIncompleteTerminal() {
+        let player = FakePlayer()
+        player.appleTerminal = .incomplete   // system didCancel, not a caller stop()
+        let snapshot = FakeSnapshot(snap: ("apple-tts", nil, nil))
+        let rv = ReplyVoice(fetcher: FakeFetcher(), player: player, snapshot: snapshot,
+                            outcomeLog: makeThrowawayOutcomeLog())
+
+        let settled = awaitCompletion { done in
+            rv.speak("Interrupted halfway.", sanitize: false, completion: done)
+        }
+
+        XCTAssertEqual(settled.count, 1, "A cancelled synth still settles exactly once.")
+        XCTAssertEqual(settled.last, .incomplete,
+                       "A system didCancel must surface `.incomplete` — the reply was not fully heard.")
+        XCTAssertEqual(player.appleCount, 1, "Construction: the Apple leg actually ran.")
+    }
+
+    /// Nothing speakable (an all-emoji reply sanitizes to empty): no audio at
+    /// all, so the turn settles `.incomplete` even though nothing went wrong.
+    func testEmptyAfterSanitizeReportsIncompleteTerminal() {
+        let player = FakePlayer()
+        let snapshot = FakeSnapshot(snap: ("openai-tts", "key-123", nil))
+        let rv = ReplyVoice(fetcher: FakeFetcher(), player: player, snapshot: snapshot,
+                            outcomeLog: makeThrowawayOutcomeLog())
+
+        let settled = awaitCompletion { done in
+            rv.speak("🎉🎈✨", sanitize: true, completion: done)
+        }
+
+        XCTAssertEqual(settled.count, 1)
+        XCTAssertEqual(settled.last, .incomplete,
+                       "Empty-after-sanitize delivered no audio — `.incomplete`, never `.finished`.")
+        XCTAssertEqual(player.cloudCount, 0)
+        XCTAssertEqual(player.appleCount, 0)
     }
 }
 #endif

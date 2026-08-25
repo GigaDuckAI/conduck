@@ -46,7 +46,7 @@ final class ThreadSpeakerExclusivityTests: XCTestCase {
         func playCloud(_ data: Data, onStart: (@MainActor @Sendable () -> Void)?, onDone: @escaping @MainActor @Sendable (CloudPlaybackOutcome) -> Void) {
             starts.append(onStart)
         }
-        func playApple(_ text: String, onStart: (@MainActor @Sendable () -> Void)?, onDone: @escaping @MainActor @Sendable () -> Void) {
+        func playApple(_ text: String, onStart: (@MainActor @Sendable () -> Void)?, onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void) {
             starts.append(onStart)
         }
         func stop() { stopCount += 1 }
