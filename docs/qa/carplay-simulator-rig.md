@@ -51,6 +51,7 @@ guard ended the attempt.
 | Scene resigns with **no** preceding `ROUTE CHANGE` / `INTERRUPTION` line | CarPlay-host (Simulator) limitation, not an audio-driven bug — the open question `CarPlaySceneDelegate.sceneWillResignActive`'s comment tracks |
 | `ROUTE CHANGE … state=nil` lines | A leaked service instance survived a disconnect. Should no longer occur; if seen, file it with the log |
 | Picker shows the one-shot "Mic couldn't start" row | The session ended on an activation/engine-start failure with the scene alive — the deliberate visible form of a silent end |
+| Voice-template buttons (End/Mute) dead in the **first** session after launching the rig, while recording and playback work; app log shows **no** tap handler activity at all | CarPlay-Simulator input-focus quirk, not app code — the host never delivers the touches. Workaround: back out to the CarPlay app grid and re-enter; buttons work from then on. Observed 2026-08-25 on a run where every later mute/end tap logged normally |
 
 ## Capturing logs
 
