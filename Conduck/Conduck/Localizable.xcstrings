@@ -14527,13 +14527,13 @@
         }
       }
     },
-    "settings.usage.chart.a11y.results" : {
+    "settings.usage.chart.a11y.models" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Chart of succeeded and failed attempts per %@"
+            "value" : "Chart of attempts by model per %@"
           }
         }
       }
@@ -14549,13 +14549,13 @@
         }
       }
     },
-    "settings.usage.chart.a11y.turns.v2" : {
+    "settings.usage.chart.a11y.turns.stacked" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Chart of turns per %@"
+            "value" : "Chart of completed and failed turns per %@"
           }
         }
       }
@@ -14703,13 +14703,13 @@
         }
       }
     },
-    "settings.usage.chart.metric.results" : {
+    "settings.usage.chart.metric.models" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Results"
+            "value" : "Models"
           }
         }
       }
@@ -14780,13 +14780,13 @@
         }
       }
     },
-    "settings.usage.chart.rest.results" : {
+    "settings.usage.chart.rest.models" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Succeeded and failed attempts, per %@"
+            "value" : "Attempts by model, per %@"
           }
         }
       }
@@ -14879,50 +14879,6 @@
         }
       }
     },
-    "settings.usage.chart.selection.results.failed" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld failed"
-          }
-        }
-      }
-    },
-    "settings.usage.chart.selection.results.none" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "nothing succeeded or failed — %lld with another outcome"
-          }
-        }
-      }
-    },
-    "settings.usage.chart.selection.results.other" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld with another outcome"
-          }
-        }
-      }
-    },
-    "settings.usage.chart.selection.results.succeeded" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld succeeded"
-          }
-        }
-      }
-    },
     "settings.usage.chart.selection.tokens.none" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -14941,6 +14897,61 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%@ tokens"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.turns.completed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld completed"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.turns.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld failed"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.turns.noneResolved" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "nothing completed or failed yet"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.turns.other" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld with another outcome"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.turns.total" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld turns"
           }
         }
       }
@@ -14978,13 +14989,13 @@
         }
       }
     },
-    "settings.usage.chart.tokens.coverage" : {
+    "settings.usage.chart.tokens.coverage.v2" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Token data on %1$lld of %2$lld attempts"
+            "value" : "Usable token totals on %1$lld of %2$lld finished attempts"
           }
         }
       }
@@ -14996,6 +15007,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "No attempt in this range reported a usable token total."
+          }
+        }
+      }
+    },
+    "settings.usage.chart.tokens.noneFinished" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No attempt in this range has finished yet."
           }
         }
       }
@@ -15385,6 +15407,17 @@
         }
       }
     },
+    "settings.usage.detail.models.footer.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Token figures are volume, not what your provider bills."
+          }
+        }
+      }
+    },
     "settings.usage.detail.models.header" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -15634,6 +15667,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Conversation unavailable"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.tokensCoverage" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ on %2$lld of %3$lld finished attempts"
           }
         }
       }

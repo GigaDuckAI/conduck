@@ -640,6 +640,14 @@ nonisolated struct GatewayUsageActivityBucket: Sendable, Equatable, Identifiable
     /// once. The asymmetry is deliberate and the same one the daily buckets
     /// always had — a turn worked on across two days happened on both.
     let turns: Int
+    /// Of `turns`, the ones with at least one SUCCEEDED attempt in the period —
+    /// the same vocabulary as the range's `completedTurns`, judged from this
+    /// period's own attempts. The bottom of the Turns stack.
+    let completedTurns: Int
+    /// Of `turns`, the ones with at least one FAILED attempt and NO succeeded
+    /// attempt in the period. A turn that failed and then landed on a retry is
+    /// completed, not failed — the retry is the story's ending.
+    let failedTurns: Int
     /// The period's reliability denominator: attempts that landed SUCCEEDED or
     /// FAILED, and nothing else. Deliberately NARROWER than
     /// `GatewayUsageOutcomeMix.resolved`, which also holds cancellations and
@@ -673,6 +681,12 @@ nonisolated struct GatewayUsageActivityBucket: Sendable, Equatable, Identifiable
     /// Nil key is the slot the ledger never captured. Sums exactly to
     /// `attempts`.
     let gatewayAttempts: [String?: Int]
+    /// The period's attempts split by REQUESTED model, verbatim wire strings.
+    /// Nil key means the request carried no model and the gateway's own default
+    /// answered — a real choice, not a measurement gap, which is why the chart
+    /// names it "Gateway default" rather than "Not recorded". Sums exactly to
+    /// `attempts`.
+    let modelAttempts: [String?: Int]
 
     var id: Date { periodStart }
 
@@ -681,11 +695,15 @@ nonisolated struct GatewayUsageActivityBucket: Sendable, Equatable, Identifiable
     /// denominator.
     var failedAttempts: Int { max(0, resolvedAttempts - succeededAttempts) }
 
-    /// Attempts that reached neither of the two outcomes the Results stack
-    /// draws — cancelled, unclassifiable, or still open. Named rather than
-    /// painted into the stack: they are not failures, and a bar segment for
-    /// them would read as one.
+    /// Attempts that landed neither succeeded nor failed — cancelled,
+    /// unclassifiable, or still open. Named rather than painted red: they are
+    /// not failures, and a bar segment coloured like one would read as one.
     var otherOutcomeAttempts: Int { max(0, attempts - resolvedAttempts) }
+
+    /// Turns whose period attempts neither completed nor failed — cancelled,
+    /// unclassifiable, or still open. The faint top of the Turns stack, so the
+    /// bar's full height stays `turns`.
+    var otherOutcomeTurns: Int { max(0, turns - completedTurns - failedTurns) }
 
     /// Everything past the period bounds defaults, so a bucket built by hand —
     /// a preview, a fixture for the turns-only path — states only what it means
@@ -697,12 +715,15 @@ nonisolated struct GatewayUsageActivityBucket: Sendable, Equatable, Identifiable
         endsMidPeriod: Bool = false,
         attempts: Int,
         turns: Int,
+        completedTurns: Int = 0,
+        failedTurns: Int = 0,
         resolvedAttempts: Int = 0,
         succeededAttempts: Int = 0,
         reportedTokens: Int = 0,
         tokenMeasuredAttempts: Int = 0,
         deviceAttempts: [String?: Int] = [:],
-        gatewayAttempts: [String?: Int] = [:]
+        gatewayAttempts: [String?: Int] = [:],
+        modelAttempts: [String?: Int] = [:]
     ) {
         self.periodStart = periodStart
         self.periodEnd = periodEnd ?? periodStart
@@ -710,12 +731,15 @@ nonisolated struct GatewayUsageActivityBucket: Sendable, Equatable, Identifiable
         self.endsMidPeriod = endsMidPeriod
         self.attempts = attempts
         self.turns = turns
+        self.completedTurns = completedTurns
+        self.failedTurns = failedTurns
         self.resolvedAttempts = resolvedAttempts
         self.succeededAttempts = succeededAttempts
         self.reportedTokens = reportedTokens
         self.tokenMeasuredAttempts = tokenMeasuredAttempts
         self.deviceAttempts = deviceAttempts
         self.gatewayAttempts = gatewayAttempts
+        self.modelAttempts = modelAttempts
     }
 }
 
@@ -738,6 +762,16 @@ nonisolated struct GatewayUsageGroup: Sendable, Equatable, Identifiable {
     /// Samples behind `meanResponseTime`.
     let responseSampleCount: Int
     let tokens: GatewayUsageTokens
+    /// Member attempts with a usable token total — the same best-available rule
+    /// as `tokenMeasuredAttempts`, terminal rows only by construction. Paired
+    /// with `terminalAttempts` so a row's token figure can say how much of the
+    /// group actually reported, instead of presenting a partial sum as the
+    /// whole.
+    let tokenReportingAttempts: Int
+    /// Member attempts with a terminal outcome — `GatewayUsageOutcomeMix
+    /// .resolved` semantics. The coverage denominator: an open attempt has not
+    /// had its chance to report and may not be counted against the gateway.
+    let terminalAttempts: Int
     /// Per-requested-model breakdown WITHIN this gateway, populated only when
     /// more than one distinct model was requested through it — a single-model
     /// gateway's breakdown would just restate the row above it.
@@ -1195,12 +1229,15 @@ nonisolated enum GatewayUsageAggregator {
         // lookup key and the bucket's own identity are the same value.
         var attemptsPer: [Date: Int] = [:]
         var turnsPer: [Date: Set<UUID>] = [:]
+        var succeededTurnsPer: [Date: Set<UUID>] = [:]
+        var failedTurnsPer: [Date: Set<UUID>] = [:]
         var resolvedPer: [Date: Int] = [:]
         var succeededPer: [Date: Int] = [:]
         var tokensPer: [Date: Int64] = [:]
         var tokenAttemptsPer: [Date: Int] = [:]
         var devicesPer: [Date: [String?: Int]] = [:]
         var gatewaysPer: [Date: [String?: Int]] = [:]
+        var modelsPer: [Date: [String?: Int]] = [:]
         for item in items {
             guard let startedAt = item.record.startedAt,
                   startedAt >= firstDay,
@@ -1219,6 +1256,16 @@ nonisolated enum GatewayUsageAggregator {
             if let outcome = item.storedOutcome, outcome == .succeeded || outcome == .failed {
                 resolvedPer[key, default: 0] += 1
                 if outcome == .succeeded { succeededPer[key, default: 0] += 1 }
+                // The same two outcomes lifted to the TURN: a turn is judged
+                // from this period's own attempts, and a failed set that later
+                // proves to contain a success is corrected at emission.
+                if let turn = item.record.userMessageID {
+                    if outcome == .succeeded {
+                        succeededTurnsPer[key, default: []].insert(turn)
+                    } else {
+                        failedTurnsPer[key, default: []].insert(turn)
+                    }
+                }
             }
             if let tokens = bestAvailableTokens(item) {
                 tokenAttemptsPer[key, default: 0] += 1
@@ -1230,6 +1277,7 @@ nonisolated enum GatewayUsageAggregator {
             // reads both dimensions under one rule.
             devicesPer[key, default: [:]][device == .unknown ? nil : device.rawValue, default: 0] += 1
             gatewaysPer[key, default: [:]][item.record.gatewayRef, default: 0] += 1
+            modelsPer[key, default: [:]][item.record.requestedModel, default: 0] += 1
         }
 
         var buckets: [GatewayUsageActivityBucket] = []
@@ -1254,12 +1302,16 @@ nonisolated enum GatewayUsageAggregator {
                     endsMidPeriod: interval.end > end,
                     attempts: attemptsPer[start] ?? 0,
                     turns: turnsPer[start]?.count ?? 0,
+                    completedTurns: succeededTurnsPer[start]?.count ?? 0,
+                    failedTurns: failedTurnsPer[start]?
+                        .subtracting(succeededTurnsPer[start] ?? []).count ?? 0,
                     resolvedAttempts: resolvedPer[start] ?? 0,
                     succeededAttempts: succeededPer[start] ?? 0,
                     reportedTokens: Int(clamping: tokensPer[start] ?? 0),
                     tokenMeasuredAttempts: tokenAttemptsPer[start] ?? 0,
                     deviceAttempts: devicesPer[start] ?? [:],
-                    gatewayAttempts: gatewaysPer[start] ?? [:]
+                    gatewayAttempts: gatewaysPer[start] ?? [:],
+                    modelAttempts: modelsPer[start] ?? [:]
                 )
             )
             cursor = interval.end
@@ -1339,6 +1391,8 @@ nonisolated enum GatewayUsageAggregator {
                 : samples.reduce(0, +) / Double(samples.count),
             responseSampleCount: samples.count,
             tokens: tokens(for: members),
+            tokenReportingAttempts: members.count(where: { bestAvailableTokens($0) != nil }),
+            terminalAttempts: mix.resolved,
             models: models
         )
     }

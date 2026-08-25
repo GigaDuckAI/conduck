@@ -10,7 +10,7 @@
 // this file exists to prevent — two charts of the same ledger drift in axis,
 // colour and honesty until they disagree about the same day.
 //
-// FIVE MEASURES, ONE CHART. Turns, tokens, results, devices and gateways are
+// FIVE MEASURES, ONE CHART. Turns, tokens, models, devices and gateways are
 // five questions about the same periods, and stacking five charts down the
 // screen makes the user scroll to compare what a picker lets them flip between
 // in place. The choice is persisted under ONE key, so it follows the user from
@@ -20,16 +20,16 @@
 // and falls back to Turns for display WITHOUT writing the key, so the user's
 // choice survives the round trip.
 //
-// COUNTS, NOT RATES, AND THAT IS WHAT MAKES THE BARS SAFE TO FOLD. Results draws
-// succeeded and failed as a two-part stack rather than a success percentage: a
+// COUNTS, NOT RATES, AND THAT IS WHAT MAKES THE BARS SAFE TO FOLD. Turns draws
+// completed and failed turns as a stack rather than a success percentage: a
 // rate has no honest height on a quiet period, and folding seven daily rates
 // into a week would weight a one-attempt Sunday like a forty-attempt Monday.
 // Every bar here is a sum, so a weekly bar is exactly its days added up and the
 // share the user reads off it is pooled by construction.
 //
 // ABSENCE IS NOT ZERO, and every metric obeys it. A mark is emitted only when
-// its own value is above zero, so a period that resolved nothing draws no
-// Results bar rather than a flat bar reading "everything failed". Tokens go
+// its own value is above zero, so a period with no failed turn draws no red
+// segment rather than a sliver reading "something failed". Tokens go
 // further: zero tokens over zero measured attempts is silence, not a
 // measurement, so the bars give way to a sentence saying so, and a partial
 // measurement carries its coverage count underneath. THE COVERAGE AND EMPTINESS
@@ -38,12 +38,16 @@
 // "nothing was measured" from the bars alone would contradict the Tokens card
 // directly below it.
 //
-// A STACK MUST SUM TO ITS OWN BAR. The Devices and Gateways measures split a
-// period's attempts by dimension, and the attempts whose device or slot the
-// ledger never captured get a segment of their own — not because an unmeasured
-// bucket deserves a name, but because the alternative is a bar quietly shorter
-// than the number it claims to draw. It is never a legend peer, and it does not
-// reopen the by-device LIST rule, which governs rows rather than heights.
+// A STACK MUST SUM TO ITS OWN BAR. The Models, Devices and Gateways measures
+// split a period's attempts by dimension, and the attempts whose device or slot
+// the ledger never captured get a segment of their own — not because an
+// unmeasured bucket deserves a name, but because the alternative is a bar
+// quietly shorter than the number it claims to draw. It is never a legend peer,
+// and it does not reopen the by-device LIST rule, which governs rows rather
+// than heights. The model split is the one dimension whose nil is NOT a capture
+// gap: a request that named no model let the gateway's default answer, which is
+// a real choice — so it ranks, takes a colour and sits in the legend as
+// "Gateway default" instead of joining the grey not-recorded cap.
 //
 // AND AN ABSENT BAR MUST NOT COLLAPSE THE CALENDAR. Swift Charts derives a scale
 // from the marks it was given, so a metric that skips periods would shrink the x
@@ -83,23 +87,24 @@ import SwiftUI
 /// `UserDefaults`; the raw values are therefore storage and must not be
 /// renamed — a rename silently resets every user's chart to Turns.
 ///
-/// `reliability` keeps its raw value while its label reads "Results": the bars
-/// stopped being a rate, but the stored string is what the user's preference is
-/// written as.
+/// `"reliability"` is a RETIRED raw value — the old Results measure, whose
+/// outcome stack now lives inside Turns. Do not reuse the string: a stored
+/// preference still carrying it must keep resolving to nil, which is what lands
+/// those users on Turns, the measure that absorbed it.
 enum UsageChartMetric: String, CaseIterable, Identifiable {
     case turns
     case tokens
-    case reliability
+    case models
     case devices
     case gateways
 
     var id: String { rawValue }
 
-    /// Whether the metric splits a period's attempts by a dimension — the two
-    /// measures that stack categories, need a legend, and are withheld by the
+    /// Whether the metric splits a period's attempts by a dimension — the
+    /// measures that stack categories, need a legend, and are withheld by a
     /// drill-down that already filters on that dimension.
     var isDimensional: Bool {
-        self == .devices || self == .gateways
+        self == .models || self == .devices || self == .gateways
     }
 }
 
@@ -144,6 +149,26 @@ enum UsageChartSegments {
     /// Named segments before the tail folds into "Other". Three is what a
     /// caption line and a one-row legend can both carry at caption size.
     static let maxNamedSegments = 3
+
+    /// The stand-in key for attempts that requested no model. The model split's
+    /// nil is a real category ("the gateway's default answered"), not a capture
+    /// gap — promoting it to a key lets it rank, take a colour and reach the
+    /// legend like any named model, instead of falling into the grey
+    /// not-recorded role `build` reserves for nil. A control scalar cannot
+    /// collide with a wire string (same guarantee `GatewayUsageGroup.id` leans
+    /// on).
+    static let gatewayDefaultModelKey = "\u{1}gatewayDefault"
+
+    /// A bucket's model split with nil promoted to `gatewayDefaultModelKey` —
+    /// the one transform between the aggregator's honest nil and the chart's
+    /// named segment.
+    static func modelTotals(_ modelAttempts: [String?: Int]) -> [String?: Int] {
+        var totals: [String?: Int] = [:]
+        for (key, attempts) in modelAttempts {
+            totals[key ?? gatewayDefaultModelKey, default: 0] += attempts
+        }
+        return totals
+    }
 
     /// Range totals in, stack order out: largest, second, third, "Other",
     /// "not recorded" — always in that order, bottom to top.
@@ -219,7 +244,14 @@ struct UsageActivityChart: View {
     /// The RANGE's own totals, passed by the host rather than summed from the
     /// buckets — see the file header. Attempts with no start instant are in
     /// these and on no bar.
-    private let recordedAttempts: Int
+    ///
+    /// The denominator is TERMINAL attempts (`GatewayUsageOutcomeMix.resolved`),
+    /// not every recorded one: an attempt still running has not had its chance
+    /// to report tokens, and counting it against coverage would make an honest
+    /// gateway look partial whenever a reply is in flight. Terminal-only is also
+    /// what `tokenMeasuredAttempts` counts by construction, so the fraction can
+    /// actually reach its own denominator.
+    private let tokenCoverageDenominator: Int
     private let tokenMeasuredAttempts: Int
 
     /// Display names for gateway slots, resolved at render time. A stored name
@@ -250,14 +282,14 @@ struct UsageActivityChart: View {
 
     init(
         activity: GatewayUsageActivity,
-        recordedAttempts: Int,
+        tokenCoverageDenominator: Int,
         tokenMeasuredAttempts: Int,
         gatewayRoster: [CustomGateway] = [],
         availableMetrics: [UsageChartMetric] = UsageChartMetric.allCases,
         scope: Scope? = nil
     ) {
         self.activity = activity
-        self.recordedAttempts = recordedAttempts
+        self.tokenCoverageDenominator = tokenCoverageDenominator
         self.tokenMeasuredAttempts = tokenMeasuredAttempts
         self.gatewayRoster = gatewayRoster
         self.availableMetrics = availableMetrics
@@ -291,10 +323,15 @@ struct UsageActivityChart: View {
             captionBlock(selected: selected, stack: stack)
 
             if showsTokenEmptyState {
+                // The message holds the plot's own footprint: a measure with
+                // nothing to draw must not collapse the card and pull every
+                // section below it upward, only to push them back down on the
+                // next flick of the picker.
                 tokenEmptyState
+                    .frame(height: Self.plotHeight)
             } else {
                 chart(selected: selected, stack: stack)
-                    .frame(height: 150)
+                    .frame(height: Self.plotHeight)
                     // `.contain` rather than `.ignore`: the chart is a GROUP
                     // now, named by its label and read period by period through
                     // the descriptor. Ignoring the children would collapse it
@@ -303,21 +340,15 @@ struct UsageActivityChart: View {
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel(Text(chartAccessibilityLabel))
                     .accessibilityChartDescriptor(descriptor(stack: stack))
-
-                if legendSegments(stack).count > 1 {
-                    legendRow(stack)
-                }
             }
 
-            if let coverage = tokenCoverageCaption {
-                Text(coverage)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(AppColors.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            annotationRow(stack)
         }
     }
+
+    /// The plot's fixed height, shared with the token empty state so the two
+    /// occupy the same footprint.
+    private static let plotHeight: CGFloat = 150
 
     // MARK: - Picker
 
@@ -346,12 +377,9 @@ struct UsageActivityChart: View {
         case .tokens:
             return LocalizedStringResource(
                 "settings.usage.chart.metric.tokens", defaultValue: "Tokens")
-        case .reliability:
-            // "Results", not "Success": the bars are two counts, and a segment
-            // labelled Success beside a failure segment would name the stack
-            // after one half of itself.
+        case .models:
             return LocalizedStringResource(
-                "settings.usage.chart.metric.results", defaultValue: "Results")
+                "settings.usage.chart.metric.models", defaultValue: "Models")
         case .devices:
             return LocalizedStringResource(
                 "settings.usage.chart.metric.devices", defaultValue: "Devices")
@@ -402,8 +430,19 @@ struct UsageActivityChart: View {
                     .foregroundStyle(AppColors.borderSubtle)
                 AxisValueLabel {
                     if let raw = value.as(Double.self) {
-                        Text(axisLabel(raw))
-                            .foregroundStyle(AppColors.textTertiary)
+                        // Right-aligned over an invisible template, so every
+                        // measure reserves the same gutter: "10K" against "10"
+                        // otherwise moves the plot's left edge on each trip
+                        // round the picker. The template is the widest label
+                        // compact notation prints at this chart's scale, and
+                        // it tracks Dynamic Type where a point width cannot; a
+                        // rarer, wider label still wins — the gutter grows for
+                        // it rather than clipping.
+                        ZStack(alignment: .trailing) {
+                            Text(verbatim: "0.0K").hidden()
+                            Text(axisLabel(raw))
+                                .foregroundStyle(AppColors.textTertiary)
+                        }
                     }
                 }
             }
@@ -440,17 +479,27 @@ struct UsageActivityChart: View {
 
         switch metric {
         case .turns:
-            bar(bucket, value: bucket.turns, color: AppColors.brandAmber.opacity(strength))
+            // Completed at the bottom, failed above it, and a faint cap for the
+            // turns that landed on neither — cancelled, unclassifiable, still
+            // open — so the stack keeps summing to the period's turn count. The
+            // order is the emission order — Swift Charts stacks same-x bars as
+            // they are declared — and the capsule rounding belongs to the
+            // topmost drawn segment alone.
+            let failed = bucket.failedTurns
+            let other = bucket.otherOutcomeTurns
+            bar(bucket, value: bucket.completedTurns,
+                color: AppColors.brandAmber.opacity(strength),
+                radius: failed > 0 || other > 0 ? 0 : 2)
+            bar(bucket, value: failed,
+                color: AppColors.error.opacity(strength),
+                radius: other > 0 ? 0 : 2)
+            // NOT red and NOT amber: these turns neither delivered nor failed,
+            // and either colour would claim an outcome that did not happen.
+            bar(bucket, value: other,
+                color: AppColors.textTertiary.opacity(0.45).opacity(strength))
         case .tokens:
             bar(bucket, value: bucket.reportedTokens, color: AppColors.brandAmber.opacity(strength))
-        case .reliability:
-            // Succeeded at the bottom, failed on top. The order is the emission
-            // order — Swift Charts stacks same-x bars as they are declared.
-            bar(bucket, value: bucket.succeededAttempts,
-                color: AppColors.brandAmber.opacity(strength),
-                radius: bucket.failedAttempts > 0 ? 0 : 2)
-            bar(bucket, value: bucket.failedAttempts, color: AppColors.error.opacity(strength))
-        case .devices, .gateways:
+        case .models, .devices, .gateways:
             let split = dimensionSplit(bucket)
             // The capsule's rounding belongs to the TOPMOST drawn segment
             // alone — `cornerRadius` is per mark, so rounding every segment
@@ -537,7 +586,7 @@ struct UsageActivityChart: View {
             // Compact, because a full token count on a leading axis eats a
             // third of the plot width at every tick.
             return Int(raw.rounded()).formatted(.number.notation(.compactName))
-        case .turns, .reliability, .devices, .gateways:
+        case .turns, .models, .devices, .gateways:
             return Int(raw.rounded()).formatted(.number)
         }
     }
@@ -573,7 +622,7 @@ struct UsageActivityChart: View {
             return String(localized: "settings.usage.chart.axis.turns", defaultValue: "Turns")
         case .tokens:
             return String(localized: "settings.usage.chart.axis.tokens", defaultValue: "Tokens")
-        case .reliability, .devices, .gateways:
+        case .models, .devices, .gateways:
             return String(
                 localized: "settings.usage.chart.axis.attempts", defaultValue: "Attempts")
         }
@@ -581,14 +630,18 @@ struct UsageActivityChart: View {
 
     // MARK: - Dimension segments
 
-    /// Which of the bucket's two splits a dimension measure reads. `static` and
+    /// Which of the bucket's splits a dimension measure reads. `static` and
     /// file-visible so the audio graph builds its sentences from the same rule
     /// the bars are drawn from rather than a second copy of it.
     fileprivate static func dimensionSplit(
         _ bucket: GatewayUsageActivityBucket,
         metric: UsageChartMetric
     ) -> [String?: Int] {
-        metric == .gateways ? bucket.gatewayAttempts : bucket.deviceAttempts
+        switch metric {
+        case .gateways: return bucket.gatewayAttempts
+        case .models: return UsageChartSegments.modelTotals(bucket.modelAttempts)
+        default: return bucket.deviceAttempts
+        }
     }
 
     private func dimensionSplit(_ bucket: GatewayUsageActivityBucket) -> [String?: Int] {
@@ -604,18 +657,27 @@ struct UsageActivityChart: View {
                 totals[key, default: 0] += attempts
             }
         }
-        let isGateway = metric == .gateways
+        let metric = self.metric
         return UsageChartSegments.build(totals: totals) { key in
-            isGateway
-                ? UsageGatewayLabel.name(for: key, roster: gatewayRoster)
-                : UsageDeviceBucketDisplay.label(forKey: key)
+            switch metric {
+            case .gateways:
+                return UsageGatewayLabel.name(for: key, roster: gatewayRoster)
+            case .models:
+                // Verbatim wire strings, through the ONE site that words their
+                // absence — the sentinel maps back to nil, which that site
+                // renders as "Gateway default".
+                return UsageDetailFormat.modelLabel(
+                    for: key == UsageChartSegments.gatewayDefaultModelKey ? nil : key)
+            default:
+                return UsageDeviceBucketDisplay.label(forKey: key)
+            }
         }
     }
 
     /// Amber, blue, violet — three categorical hues in rank order — then two
     /// weights of the recessive text tone for the two segments that name no
     /// single thing. RED IS NEVER USED HERE: on this very chart it means a
-    /// failed attempt, and a device wearing it would read as a verdict.
+    /// failed turn, and a device or model wearing it would read as a verdict.
     private func color(for segment: UsageChartSegment) -> Color {
         switch segment.role {
         case .named:
@@ -640,6 +702,33 @@ struct UsageActivityChart: View {
     /// stack at all, so this is empty there.
     private func legendSegments(_ stack: [UsageChartSegment]) -> [UsageChartSegment] {
         stack.filter { $0.role != .notRecorded }
+    }
+
+    /// ONE RESERVED ROW UNDER THE PLOT, whatever the measure. Each measure has
+    /// at most one annotation — the legend on a dimensional split, the coverage
+    /// caption on partially-measured Tokens, nothing on Turns — so all of them
+    /// share a single slot whose height an invisible caption line reserves at
+    /// the live Dynamic Type size. Without the reservation, everything below
+    /// the chart would jump whenever the picker gained or lost a legend, and a
+    /// chart card that changes shape per measure reads as five different
+    /// layouts rather than five views of one thing.
+    private func annotationRow(_ stack: [UsageChartSegment]) -> some View {
+        ZStack(alignment: .leading) {
+            Text(verbatim: " ")
+                .font(.caption)
+                .hidden()
+            if let coverage = tokenCoverageCaption {
+                Text(coverage)
+                    .font(.caption)
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.8)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .lineLimit(1)
+            } else if legendSegments(stack).count > 1 {
+                legendRow(stack)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func legendRow(_ stack: [UsageChartSegment]) -> some View {
@@ -673,19 +762,18 @@ struct UsageActivityChart: View {
     /// reserves whole rows at whatever Dynamic Type size is in force, and
     /// `minimumScaleFactor` lets a long sentence shrink before it wraps.
     ///
-    /// LINE ONE GETS A SECOND ROW WHERE ITS SENTENCE NEEDS ONE, AND THE SPACE IS
-    /// RESERVED EITHER WAY. A dimension split is the longest sentence this chart
-    /// prints — a period name, an attempt total, three named segments, "other"
-    /// and "not recorded" — and it does not fit one caption row at phone width
-    /// even fully shrunk. The clauses a single row would cut are the last two,
-    /// which are exactly the mass-conservation clauses the stack exists to be
-    /// honest about: a bar capped with a grey "not recorded" segment whose
-    /// caption never names it is the lie in words instead of in pixels.
-    ///
-    /// The reservation is keyed on the METRIC, which cannot change while a
-    /// finger is down, so the region still holds one height across a whole
-    /// scrub — the property the reservation exists for. It changes only when the
-    /// user picks a different measure, which redraws the chart anyway.
+    /// LINE ONE RESERVES TWO ROWS ON EVERY MEASURE. A dimension split is the
+    /// longest sentence this chart prints — a period name, an attempt total,
+    /// three named segments, "other" and "not recorded" — and it does not fit
+    /// one caption row at phone width even fully shrunk. The clauses a single
+    /// row would cut are the last two, which are exactly the mass-conservation
+    /// clauses the stack exists to be honest about: a bar capped with a grey
+    /// "not recorded" segment whose caption never names it is the lie in words
+    /// instead of in pixels. Tokens — one figure — could live on one row, but
+    /// a per-measure reservation would change the card's height on every trip
+    /// round the picker; the whole block holds ONE footprint across all five
+    /// measures (see `annotationRow`), so Tokens pays a mostly-empty row for
+    /// the page below it standing still.
     private func captionBlock(
         selected: GatewayUsageActivityBucket?,
         stack: [UsageChartSegment]
@@ -693,7 +781,7 @@ struct UsageActivityChart: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(selected.map { selectionLine1($0, stack: stack) } ?? restCaption)
                 .foregroundStyle(selected == nil ? AppColors.textTertiary : AppColors.textPrimary)
-                .lineLimit(metric.isDimensional ? 2 : 1, reservesSpace: true)
+                .lineLimit(2, reservesSpace: true)
             Text(selected.map { selectionLine2($0) } ?? "")
                 .foregroundStyle(AppColors.textTertiary)
                 .lineLimit(1, reservesSpace: true)
@@ -714,9 +802,9 @@ struct UsageActivityChart: View {
         case .tokens:
             return String(localized: "settings.usage.chart.rest.tokens",
                           defaultValue: "Tokens per \(noun)")
-        case .reliability:
-            return String(localized: "settings.usage.chart.rest.results",
-                          defaultValue: "Succeeded and failed attempts, per \(noun)")
+        case .models:
+            return String(localized: "settings.usage.chart.rest.models",
+                          defaultValue: "Attempts by model, per \(noun)")
         case .devices:
             return String(localized: "settings.usage.chart.rest.devices",
                           defaultValue: "Attempts by device, per \(noun)")
@@ -750,14 +838,14 @@ struct UsageActivityChart: View {
         let noun = UsageActivitySentence.unitNoun(unit)
         switch metric {
         case .turns:
-            return String(localized: "settings.usage.chart.a11y.turns.v2",
-                          defaultValue: "Chart of turns per \(noun)")
+            return String(localized: "settings.usage.chart.a11y.turns.stacked",
+                          defaultValue: "Chart of completed and failed turns per \(noun)")
         case .tokens:
             return String(localized: "settings.usage.chart.a11y.tokens.v2",
                           defaultValue: "Chart of tokens per \(noun)")
-        case .reliability:
-            return String(localized: "settings.usage.chart.a11y.results",
-                          defaultValue: "Chart of succeeded and failed attempts per \(noun)")
+        case .models:
+            return String(localized: "settings.usage.chart.a11y.models",
+                          defaultValue: "Chart of attempts by model per \(noun)")
         case .devices:
             return String(localized: "settings.usage.chart.a11y.devices",
                           defaultValue: "Chart of attempts by device per \(noun)")
@@ -810,8 +898,7 @@ struct UsageActivityChart: View {
         switch metric {
         case .turns: return bucket.turns
         case .tokens: return bucket.reportedTokens
-        case .reliability: return bucket.resolvedAttempts
-        case .devices, .gateways: return bucket.attempts
+        case .models, .devices, .gateways: return bucket.attempts
         }
     }
 
@@ -837,10 +924,18 @@ struct UsageActivityChart: View {
     /// that very number. "Reported no tokens" would then be contradicted one
     /// card below. Phrased like the response-time card's own empty line, which
     /// answers the same shape of question.
+    ///
+    /// TWO SILENCES, TOLD APART. With nothing terminal in range there is no
+    /// attempt that could have reported yet, and "no attempt reported" would
+    /// read as a verdict on gateways that have not had their turn.
     private var tokenEmptyState: some View {
-        Text(LocalizedStringResource(
-            "settings.usage.chart.tokens.none",
-            defaultValue: "No attempt in this range reported a usable token total."))
+        Text(tokenCoverageDenominator == 0
+            ? LocalizedStringResource(
+                "settings.usage.chart.tokens.noneFinished",
+                defaultValue: "No attempt in this range has finished yet.")
+            : LocalizedStringResource(
+                "settings.usage.chart.tokens.none",
+                defaultValue: "No attempt in this range reported a usable token total."))
             .font(.subheadline)
             .foregroundStyle(AppColors.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -849,16 +944,19 @@ struct UsageActivityChart: View {
 
     /// Shown only where coverage is PARTIAL — a caption under every chart would
     /// train the eye to skip the one that changes what the bars mean. Both
-    /// figures are the RANGE's, so this never contradicts the Tokens card by
-    /// counting a different population from it.
+    /// figures are the RANGE's, over the same terminal-attempt population the
+    /// Tokens card's own coverage readings divide by.
     private var tokenCoverageCaption: LocalizedStringResource? {
-        guard metric == .tokens, recordedAttempts > 0 else { return nil }
-        guard tokenMeasuredAttempts > 0, tokenMeasuredAttempts < recordedAttempts else {
+        guard metric == .tokens, tokenCoverageDenominator > 0 else { return nil }
+        guard tokenMeasuredAttempts > 0, tokenMeasuredAttempts < tokenCoverageDenominator else {
             return nil
         }
         return LocalizedStringResource(
-            "settings.usage.chart.tokens.coverage",
-            defaultValue: "Token data on \(tokenMeasuredAttempts) of \(recordedAttempts) attempts")
+            "settings.usage.chart.tokens.coverage.v2",
+            defaultValue: """
+                Usable token totals on \(tokenMeasuredAttempts) of \
+                \(tokenCoverageDenominator) finished attempts
+                """)
     }
 
     // MARK: - Selection
@@ -991,9 +1089,7 @@ enum UsageActivitySentence {
 
         switch metric {
         case .turns:
-            return [String(
-                localized: "settings.usage.chart.clause.turns",
-                defaultValue: "\(bucket.turns) turns · \(bucket.attempts) attempts")]
+            return turnsBody(bucket)
         case .tokens:
             // ITS OWN SENTENCE, longer than line two's clause: this line IS the
             // Tokens measure's answer, and "no token data" alone reads as a
@@ -1005,9 +1101,7 @@ enum UsageActivitySentence {
             return [String(
                 localized: "settings.usage.chart.selection.tokens.v2",
                 defaultValue: "\(bucket.reportedTokens.formatted(.number)) tokens")]
-        case .reliability:
-            return resultsBody(bucket)
-        case .devices, .gateways:
+        case .models, .devices, .gateways:
             var parts = [String(
                 localized: "settings.usage.chart.clause.attempts",
                 defaultValue: "\(bucket.attempts) attempts")]
@@ -1037,29 +1131,32 @@ enum UsageActivitySentence {
         }
     }
 
-    /// The Results sentence. `otherOutcomeAttempts` covers cancellations,
-    /// unclassifiable landings and rows still open — it is NEVER called "not
-    /// finished" (a cancellation finished) and never painted into the stack (it
-    /// is not a failure).
-    private static func resultsBody(_ bucket: GatewayUsageActivityBucket) -> [String] {
-        guard bucket.resolvedAttempts > 0 else {
-            return [String(
-                localized: "settings.usage.chart.selection.results.none",
-                defaultValue: """
-                    nothing succeeded or failed — \(bucket.otherOutcomeAttempts) \
-                    with another outcome
-                    """)]
-        }
-        var parts = [
-            String(localized: "settings.usage.chart.selection.results.succeeded",
-                   defaultValue: "\(bucket.succeededAttempts) succeeded"),
-            String(localized: "settings.usage.chart.selection.results.failed",
-                   defaultValue: "\(bucket.failedAttempts) failed")
-        ]
-        if bucket.otherOutcomeAttempts > 0 {
+    /// The Turns sentence — the count, then its outcome stack in stack order.
+    /// `otherOutcomeTurns` covers cancellations, unclassifiable landings and
+    /// turns still open — it is NEVER called "not finished" (a cancellation
+    /// finished) and never painted red (it is not a failure). Zero counts for
+    /// completed and failed still print once anything resolved: "3 completed ·
+    /// 0 failed" is the good news said plainly.
+    private static func turnsBody(_ bucket: GatewayUsageActivityBucket) -> [String] {
+        var parts = [String(
+            localized: "settings.usage.chart.selection.turns.total",
+            defaultValue: "\(bucket.turns) turns")]
+        guard bucket.completedTurns > 0 || bucket.failedTurns > 0 else {
             parts.append(String(
-                localized: "settings.usage.chart.selection.results.other",
-                defaultValue: "\(bucket.otherOutcomeAttempts) with another outcome"))
+                localized: "settings.usage.chart.selection.turns.noneResolved",
+                defaultValue: "nothing completed or failed yet"))
+            return parts
+        }
+        parts.append(String(
+            localized: "settings.usage.chart.selection.turns.completed",
+            defaultValue: "\(bucket.completedTurns) completed"))
+        parts.append(String(
+            localized: "settings.usage.chart.selection.turns.failed",
+            defaultValue: "\(bucket.failedTurns) failed"))
+        if bucket.otherOutcomeTurns > 0 {
+            parts.append(String(
+                localized: "settings.usage.chart.selection.turns.other",
+                defaultValue: "\(bucket.otherOutcomeTurns) with another outcome"))
         }
         return parts
     }
@@ -1069,7 +1166,7 @@ enum UsageActivitySentence {
     /// What the OTHER measures say about the same period, in a fixed order so
     /// the eye lands in the same place on every scrub. The active measure's own
     /// clause is omitted — repeating line one underneath itself is noise — and
-    /// the two dimension measures, whose line one is the split, show all three.
+    /// the dimension measures, whose line one is the split, show all three.
     ///
     /// COUNTS OF COUNTS, NEVER BARE PERCENTAGES: "11 of 14 succeeded" carries
     /// its own denominator, and "79%" over fourteen attempts does not.
@@ -1079,12 +1176,17 @@ enum UsageActivitySentence {
     ) -> String {
         guard bucket.attempts > 0 else { return "" }
         var parts: [String] = []
-        if metric != .turns {
+        if metric == .turns {
+            // Line one owns the turn count AND the outcomes on this measure, so
+            // the context line carries the one count it dropped — attempts —
+            // rather than restating the sentence above it in attempt units.
+            parts.append(String(
+                localized: "settings.usage.chart.clause.attempts",
+                defaultValue: "\(bucket.attempts) attempts"))
+        } else {
             parts.append(String(
                 localized: "settings.usage.chart.clause.turns",
                 defaultValue: "\(bucket.turns) turns · \(bucket.attempts) attempts"))
-        }
-        if metric != .reliability {
             parts.append(resultsClause(bucket))
         }
         if metric != .tokens {

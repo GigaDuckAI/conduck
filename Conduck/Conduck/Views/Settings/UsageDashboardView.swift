@@ -141,6 +141,42 @@ private struct UsageActivityStat: Identifiable {
     let accessibility: LocalizedStringResource
 }
 
+// MARK: - Range section
+
+/// The 7/30/90/All control as one section — the overview and both drill-downs
+/// all render it, bound to the ONE `range` the shared model owns. The range is
+/// a setting for the whole Usage area, not per screen: changing it inside a
+/// drill-down changes the overview behind it too, so back-navigation never
+/// lands on a different window than the one just chosen.
+struct UsageRangeSection: View {
+    @Bindable var model: UsageDashboardModel
+
+    var body: some View {
+        Section {
+            SettingsSegmentedPicker(
+                selection: $model.range,
+                options: UsageDashboardModel.Range.allCases,
+                label: Text(LocalizedStringResource(
+                    "settings.usage.range.label", defaultValue: "Range")),
+                title: { Text($0.title) }
+            )
+            .settingsCardPassiveRow()
+            // THE CONTROL IS THE ROW. A grouped `Form` insets its row content
+            // and paints a card behind it, so a segmented control left at the
+            // defaults draws a pill inside a pill — two rounded rectangles of
+            // almost the same size, with a band of section fill trapped between
+            // them. Zeroing the insets lets the control span the section, and
+            // clearing the row background leaves exactly one pill on screen.
+            // Both are `List` traits: they reach nothing on macOS, where the
+            // hand-drawn card gives this row its inset through
+            // `.settingsCardPassiveRow()` above, the same as every other row in
+            // the stack.
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+        }
+    }
+}
+
 // MARK: - Shared content
 
 struct UsageDashboardContent: View {
@@ -193,10 +229,8 @@ struct UsageDashboardContent: View {
     }
 
     var body: some View {
-        @Bindable var boundModel = model
-
         PlatformSettingsForm {
-            rangeSection(selection: $boundModel.range)
+            UsageRangeSection(model: model)
 
             if let loadError = model.loadError {
                 errorSection(loadError)
@@ -266,33 +300,6 @@ struct UsageDashboardContent: View {
         // Display names only. Read once: a roster change while the screen is
         // open renames a row, which is not worth an observer.
         .task { gatewayRoster = await SettingsManager.shared.gatewayBadgeRoster() }
-    }
-
-    // MARK: - Range
-
-    private func rangeSection(selection: Binding<UsageDashboardModel.Range>) -> some View {
-        Section {
-            SettingsSegmentedPicker(
-                selection: selection,
-                options: UsageDashboardModel.Range.allCases,
-                label: Text(LocalizedStringResource(
-                    "settings.usage.range.label", defaultValue: "Range")),
-                title: { Text($0.title) }
-            )
-            .settingsCardPassiveRow()
-            // THE CONTROL IS THE ROW. A grouped `Form` insets its row content
-            // and paints a card behind it, so a segmented control left at the
-            // defaults draws a pill inside a pill — two rounded rectangles of
-            // almost the same size, with a band of section fill trapped between
-            // them. Zeroing the insets lets the control span the section, and
-            // clearing the row background leaves exactly one pill on screen.
-            // Both are `List` traits: they reach nothing on macOS, where the
-            // hand-drawn card gives this row its inset through
-            // `.settingsCardPassiveRow()` above, the same as every other row in
-            // the stack.
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
-        }
     }
 
     // MARK: - Transient states
@@ -390,7 +397,7 @@ struct UsageDashboardContent: View {
                 // range.
                 UsageActivityChart(
                     activity: model.summary.activity,
-                    recordedAttempts: model.summary.recordedAttempts,
+                    tokenCoverageDenominator: model.summary.outcomeMix.resolved,
                     tokenMeasuredAttempts: model.summary.tokenMeasuredAttempts,
                     gatewayRoster: gatewayRoster
                 )
@@ -1213,34 +1220,17 @@ struct UsageDashboardContent: View {
                     Spacer(minLength: 8)
                 }
 
-                Text(groupDetailText(group))
+                // Success rate, average reply time and the token volume with
+                // its coverage all come from the shared formatter, so a
+                // gateway row here, its own drill-down and the model rows all
+                // answer with one sentence.
+                Text(UsageDetailFormat.groupDetailTextWithTokens(group))
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-    }
-
-    private func groupDetailText(_ group: GatewayUsageGroup) -> String {
-        // Success rate + average reply time come from the shared formatter, so
-        // a gateway row here and its own drill-down answer with one sentence.
-        var parts: [String] = [UsageDetailFormat.groupDetailText(group)]
-        // SAME RULE AS THE TOKENS CARD, which sits on this very screen showing the
-        // same underlying numbers: a gateway-reported total renders bare, a client
-        // sum of the components never does. Dropping the qualifier here would
-        // present a Conduck-computed figure as the gateway's own number in the one
-        // place gateways are compared against each other.
-        if let total = group.tokens.reportedTotal.sum {
-            parts.append(String(
-                localized: "settings.usage.byGateway.tokens",
-                defaultValue: "\(total.formatted(.number)) tokens"))
-        } else if let components = group.tokens.calculatedKnownComponents {
-            parts.append(String(
-                localized: "settings.usage.byGateway.tokens.components",
-                defaultValue: "\(components.formatted(.number)) tokens (input + output)"))
-        }
-        return parts.joined(separator: " · ")
     }
 
     // MARK: - Heaviest threads

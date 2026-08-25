@@ -89,6 +89,12 @@ struct UsageGatewayDetailView: View {
 
     var body: some View {
         PlatformSettingsForm {
+            // The SAME range control as the overview, bound to the SAME model —
+            // one range for the whole Usage area, so changing it here changes
+            // the screen behind this one too. Above the empty state on purpose:
+            // an empty range is escaped in place, not by walking back.
+            UsageRangeSection(model: model)
+
             if summary.isEmpty {
                 emptySection
             } else {
@@ -176,7 +182,7 @@ struct UsageGatewayDetailView: View {
                 // split would have: this slot, and how much of the range it is.
                 UsageActivityChart(
                     activity: summary.activity,
-                    recordedAttempts: summary.recordedAttempts,
+                    tokenCoverageDenominator: summary.outcomeMix.resolved,
                     tokenMeasuredAttempts: summary.tokenMeasuredAttempts,
                     gatewayRoster: gatewayRoster,
                     availableMetrics: UsageChartMetric.allCases.filter { $0 != .gateways },
@@ -373,14 +379,15 @@ struct UsageGatewayDetailView: View {
 
         return Section {
             ForEach(summary.byRequestedModel) { group in
-                // Same caption sentence as the device and gateway slices below:
-                // success rate, then the average reply time when the model has
-                // measured replies. A model is read against its siblings on the
-                // same two questions, so it gets the same answer format.
+                // Same caption sentence as the gateway rows: success rate,
+                // average reply time, then the token volume with its coverage —
+                // model choice is the cost lever, and the row is where a
+                // partial figure can say so in words. Rows stay RANKED BY
+                // ATTEMPTS, so partial token data never decides visibility.
                 UsageValueRow(
                     verbatimLabel: UsageDetailFormat.modelLabel(for: group.key),
                     value: UsageDetailFormat.attemptsText(group.attempts),
-                    verbatimCaption: UsageDetailFormat.groupDetailText(group)
+                    verbatimCaption: UsageDetailFormat.groupDetailTextWithTokens(group)
                 )
             }
 
@@ -399,18 +406,31 @@ struct UsageGatewayDetailView: View {
             Text(LocalizedStringResource(
                 "settings.usage.detail.models.header", defaultValue: "Models"))
         } footer: {
-            // ONLY beside the reported-model row, because that row is the only
-            // thing here that can alarm: an alias resolving or a router
-            // choosing makes the served name differ from the asked-for one, and
-            // two disagreeing model names read as a fault. With no such row the
-            // list is just the models this gateway was asked for.
-            if reading != nil {
-                Text(LocalizedStringResource(
-                    "settings.usage.detail.models.footer.reported",
-                    defaultValue: """
-                        A gateway naming a different model than the one asked for \
-                        is ordinary, not a fault.
-                        """))
+            // Each line earns its place separately. The volume line appears
+            // with the first token figure, because tokens beside model names
+            // invite a billing comparison the numbers cannot support. The
+            // reported-model line appears only beside its row, which is the
+            // only thing here that can alarm: an alias resolving or a router
+            // choosing makes the served name differ from the asked-for one,
+            // and two disagreeing model names read as a fault.
+            VStack(alignment: .leading, spacing: 6) {
+                if summary.byRequestedModel
+                    .contains(where: { UsageDetailFormat.tokensFragment($0) != nil }) {
+                    Text(LocalizedStringResource(
+                        "settings.usage.detail.models.footer.tokens",
+                        defaultValue: """
+                            Token figures are volume, not what your provider \
+                            bills.
+                            """))
+                }
+                if reading != nil {
+                    Text(LocalizedStringResource(
+                        "settings.usage.detail.models.footer.reported",
+                        defaultValue: """
+                            A gateway naming a different model than the one asked for \
+                            is ordinary, not a fault.
+                            """))
+                }
             }
         }
     }
@@ -1226,7 +1246,9 @@ enum UsageDetailFormat {
                      defaultValue: "\(count) replies measured")
     }
 
-    /// The window a drill-down describes, STATED rather than re-pickable.
+    /// The window a drill-down's figures fall in, stated beside them — the
+    /// picker at the top of the screen changes it, but a footer under the data
+    /// still names the window the data is of.
     static func rangeCaption(for range: UsageDashboardModel.Range) -> String {
         String(localized: "settings.usage.detail.rangeCaption",
                defaultValue: "Showing \(rangeWindowText(range))")
@@ -1271,6 +1293,56 @@ enum UsageDetailFormat {
                 defaultValue: "average \(durationText(mean))"))
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// `groupDetailText` plus the group's token reading — the caption for rows
+    /// that compare cost as well as health (gateway rows, model rows). The
+    /// device rows deliberately never call this: tokens are not a property of
+    /// the keyboard a turn was typed on.
+    static func groupDetailTextWithTokens(_ group: GatewayUsageGroup) -> String {
+        var parts = [groupDetailText(group)]
+        if let tokens = tokensFragment(group) {
+            parts.append(tokens)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The group's token volume with its coverage said beside it. SAME BASIS
+    /// RULE AS THE TOKENS CARD: a gateway-reported total renders bare, a client
+    /// sum of the components never does — dropping the qualifier would present
+    /// a Conduck-computed figure as the gateway's own number in the one place
+    /// groups are compared against each other.
+    ///
+    /// PARTIAL COVERAGE IS SAID IN THE ROW, not implied: token gaps cluster by
+    /// gateway, so a group's sum can be a fraction of what the group actually
+    /// spent, and a bare figure would read as the whole. Full coverage stays
+    /// silent (the dashboard's convention), and a group that reported nothing
+    /// renders no token figure at all — absence, never "0 tokens". The
+    /// denominator is TERMINAL attempts: an open attempt has not had its chance
+    /// to report.
+    static func tokensFragment(_ group: GatewayUsageGroup) -> String? {
+        let value: String
+        if let total = group.tokens.reportedTotal.sum {
+            value = String(
+                localized: "settings.usage.byGateway.tokens",
+                defaultValue: "\(total.formatted(.number)) tokens")
+        } else if let components = group.tokens.calculatedKnownComponents {
+            value = String(
+                localized: "settings.usage.byGateway.tokens.components",
+                defaultValue: "\(components.formatted(.number)) tokens (input + output)")
+        } else {
+            return nil
+        }
+        guard group.tokenReportingAttempts > 0,
+              group.tokenReportingAttempts < group.terminalAttempts else {
+            return value
+        }
+        return String(
+            localized: "settings.usage.detail.tokensCoverage",
+            defaultValue: """
+                \(value) on \(group.tokenReportingAttempts) of \
+                \(group.terminalAttempts) finished attempts
+                """)
     }
 
     /// Coverage for the image-history card — one sentence for the whole card,

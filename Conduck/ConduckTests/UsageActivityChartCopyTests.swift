@@ -40,6 +40,8 @@ final class UsageActivityChartCopyTests: XCTestCase {
     private func bucket(
         attempts: Int = 0,
         turns: Int = 0,
+        completedTurns: Int = 0,
+        failedTurns: Int = 0,
         resolvedAttempts: Int = 0,
         succeededAttempts: Int = 0,
         reportedTokens: Int = 0,
@@ -48,7 +50,8 @@ final class UsageActivityChartCopyTests: XCTestCase {
         endsMidPeriod: Bool = false,
         periodDays: Int = 1,
         deviceAttempts: [String?: Int] = [:],
-        gatewayAttempts: [String?: Int] = [:]
+        gatewayAttempts: [String?: Int] = [:],
+        modelAttempts: [String?: Int] = [:]
     ) -> GatewayUsageActivityBucket {
         let start = calendar.startOfDay(for: anchor)
         return GatewayUsageActivityBucket(
@@ -58,12 +61,15 @@ final class UsageActivityChartCopyTests: XCTestCase {
             endsMidPeriod: endsMidPeriod,
             attempts: attempts,
             turns: turns,
+            completedTurns: completedTurns,
+            failedTurns: failedTurns,
             resolvedAttempts: resolvedAttempts,
             succeededAttempts: succeededAttempts,
             reportedTokens: reportedTokens,
             tokenMeasuredAttempts: tokenMeasuredAttempts,
             deviceAttempts: deviceAttempts,
-            gatewayAttempts: gatewayAttempts
+            gatewayAttempts: gatewayAttempts,
+            modelAttempts: modelAttempts
         )
     }
 
@@ -181,32 +187,44 @@ final class UsageActivityChartCopyTests: XCTestCase {
         XCTAssertTrue(sentence.hasSuffix("· 0 tokens"), sentence)
     }
 
-    /// Two counts, never a rate — and the third population is NAMED rather than
-    /// painted into the stack, because a cancellation is not a failure.
-    func testResultsLineCountsBothOutcomesAndNamesTheRest() {
+    /// The Turns line opens with the bar's height and then spends it on the
+    /// outcome stack — counts, never a rate — and the third population is NAMED
+    /// rather than painted red, because a cancellation is not a failure.
+    func testTurnsLineCountsBothOutcomesAndNamesTheRest() {
         let mixed = bucket(
-            attempts: 14, turns: 12, resolvedAttempts: 12, succeededAttempts: 9)
+            attempts: 14, turns: 12, completedTurns: 9, failedTurns: 2)
 
         let sentence = UsageActivitySentence.line1(
-            metric: .reliability, bucket: mixed, unit: .day, calendar: calendar)
+            metric: .turns, bucket: mixed, unit: .day, calendar: calendar)
 
-        XCTAssertTrue(sentence.contains("· 9 succeeded · 3 failed"), sentence)
-        XCTAssertTrue(sentence.hasSuffix("· 2 with another outcome"), sentence)
+        XCTAssertTrue(sentence.contains("· 12 turns · 9 completed · 2 failed"), sentence)
+        XCTAssertTrue(sentence.hasSuffix("· 1 with another outcome"), sentence)
     }
 
-    /// A period that resolved nothing has no rate to draw and no rate to speak.
-    /// "0 of 0 succeeded" is arithmetic nobody asked for and reads as a failure
-    /// that did not happen.
-    func testResultsLineWithNothingResolvedNamesTheOtherOutcomesInstead() {
+    /// Once anything resolved, a zero in the other half still prints — "0
+    /// failed" is the good news said plainly, not an absence to be worded
+    /// around.
+    func testTurnsLinePrintsAZeroFailedCountOnceAnythingResolved() {
+        let clean = bucket(attempts: 3, turns: 3, completedTurns: 3)
+
+        let sentence = UsageActivitySentence.line1(
+            metric: .turns, bucket: clean, unit: .day, calendar: calendar)
+
+        XCTAssertTrue(sentence.hasSuffix("· 3 turns · 3 completed · 0 failed"), sentence)
+    }
+
+    /// A period where nothing resolved has no outcomes to count, and "0
+    /// completed · 0 failed" reads as a collapse that did not happen.
+    func testTurnsLineWithNothingResolvedSaysSoInstead() {
         let unresolved = bucket(attempts: 3, turns: 3)
 
         let sentence = UsageActivitySentence.line1(
-            metric: .reliability, bucket: unresolved, unit: .day, calendar: calendar)
+            metric: .turns, bucket: unresolved, unit: .day, calendar: calendar)
 
         XCTAssertTrue(
-            sentence.hasSuffix("· nothing succeeded or failed — 3 with another outcome"),
+            sentence.hasSuffix("· 3 turns · nothing completed or failed yet"),
             sentence)
-        XCTAssertFalse(sentence.contains("0 of 0"))
+        XCTAssertFalse(sentence.contains("0 completed"))
     }
 
     /// The dimension line opens with the bar's own height and then spends it,
@@ -226,6 +244,59 @@ final class UsageActivityChartCopyTests: XCTestCase {
 
         XCTAssertTrue(sentence.contains("· 14 attempts · 9 iPhone · 3 Mac"), sentence)
         XCTAssertTrue(sentence.hasSuffix("· 2 not recorded"), sentence)
+    }
+
+    /// The model split's nil is a CHOICE, not a capture gap: the sentinel makes
+    /// "Gateway default" an ordinary ranked segment, so it competes for the top
+    /// colours by volume and never falls into the grey "not recorded" role.
+    func testModelTotalsPromoteTheGatewayDefaultToARankedSegment() {
+        let totals = UsageChartSegments.modelTotals(["gpt-5.6-luna": 1, nil: 5])
+
+        XCTAssertNil(totals[String?.none])
+        XCTAssertEqual(totals[UsageChartSegments.gatewayDefaultModelKey], 5)
+
+        let segments = UsageChartSegments.build(totals: totals) { key in
+            UsageDetailFormat.modelLabel(
+                for: key == UsageChartSegments.gatewayDefaultModelKey ? nil : key)
+        }
+        XCTAssertEqual(segments.map(\.role), [.named, .named])
+        XCTAssertEqual(
+            segments.first?.keys, [UsageChartSegments.gatewayDefaultModelKey],
+            "five default-answered attempts outrank one named model")
+        XCTAssertEqual(segments.map(\.label), ["Gateway default", "gpt-5.6-luna"])
+    }
+
+    /// The Models sentence spends the attempt total across verbatim model ids,
+    /// with the default-answered attempts named as a peer — never as "not
+    /// recorded", which on this measure would blame capture for a choice.
+    func testModelsLineNamesVerbatimModelsAndTheGatewayDefault() {
+        let raw: [String?: Int] = ["gpt-5.6-luna": 4, nil: 2]
+        let split = UsageChartSegments.modelTotals(raw)
+        let segments = UsageChartSegments.build(totals: split) { key in
+            UsageDetailFormat.modelLabel(
+                for: key == UsageChartSegments.gatewayDefaultModelKey ? nil : key)
+        }
+        let period = bucket(attempts: 6, turns: 5, modelAttempts: raw)
+
+        let sentence = UsageActivitySentence.line1(
+            metric: .models, bucket: period, unit: .day,
+            split: split, segments: segments, calendar: calendar)
+
+        XCTAssertTrue(
+            sentence.contains("· 6 attempts · 4 gpt-5.6-luna · 2 Gateway default"),
+            sentence)
+        XCTAssertFalse(sentence.contains("not recorded"))
+    }
+
+    /// The old Results measure's stored preference must strand, not crash or
+    /// revive: an unknown raw value makes `@AppStorage` fall back to its
+    /// declared default, which is Turns — the measure that absorbed Results.
+    func testRetiredResultsRawValueResolvesToNothing() {
+        XCTAssertNil(UsageChartMetric(rawValue: "reliability"))
+        XCTAssertEqual(
+            UsageChartMetric.allCases.map(\.rawValue),
+            ["turns", "tokens", "models", "devices", "gateways"],
+            "raw values are UserDefaults storage — renaming one resets user preferences")
     }
 
     // MARK: - Period naming
@@ -287,12 +358,12 @@ final class UsageActivityChartCopyTests: XCTestCase {
         // uses: compact notation localises its own suffix and separator, and a
         // hard-coded "18.2K" would make this suite pass or fail on where it ran.
         let tokens = 18_200.formatted(.number.notation(.compactName))
+        // Turns owns its count AND its outcomes on line one now, so its context
+        // line carries the one count line one dropped — attempts — and never a
+        // second outcome reading in different units.
         XCTAssertEqual(
             UsageActivitySentence.line2(metric: .turns, bucket: period),
-            "11 of 14 succeeded · \(tokens) tokens")
-        XCTAssertEqual(
-            UsageActivitySentence.line2(metric: .reliability, bucket: period),
-            "12 turns · 14 attempts · \(tokens) tokens")
+            "14 attempts · \(tokens) tokens")
         XCTAssertEqual(
             UsageActivitySentence.line2(metric: .tokens, bucket: period),
             "12 turns · 14 attempts · 11 of 14 succeeded")
@@ -305,7 +376,7 @@ final class UsageActivityChartCopyTests: XCTestCase {
             attempts: 6, turns: 5, resolvedAttempts: 6, succeededAttempts: 6,
             reportedTokens: 900, tokenMeasuredAttempts: 6)
 
-        for metric in [UsageChartMetric.devices, .gateways] {
+        for metric in [UsageChartMetric.models, .devices, .gateways] {
             XCTAssertEqual(
                 UsageActivitySentence.line2(metric: metric, bucket: period),
                 "5 turns · 6 attempts · 6 of 6 succeeded · \(900.formatted(.number.notation(.compactName))) tokens")
@@ -320,7 +391,10 @@ final class UsageActivityChartCopyTests: XCTestCase {
 
         XCTAssertEqual(
             UsageActivitySentence.line2(metric: .turns, bucket: period),
-            "nothing succeeded or failed · no token data")
+            "3 attempts · no token data")
+        XCTAssertEqual(
+            UsageActivitySentence.line2(metric: .devices, bucket: period),
+            "3 turns · 3 attempts · nothing succeeded or failed · no token data")
     }
 
     /// Nothing happened, so there is nothing for the other measures to add —

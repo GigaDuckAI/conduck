@@ -43,6 +43,12 @@ struct UsageDeviceDetailView: View {
 
     var body: some View {
         PlatformSettingsForm {
+            // The SAME range control as the overview, bound to the SAME model —
+            // one range for the whole Usage area, so changing it here changes
+            // the screen behind this one too. Above the empty state on purpose:
+            // an empty range is escaped in place, not by walking back.
+            UsageRangeSection(model: model)
+
             if summary.isEmpty {
                 emptySection
             } else {
@@ -122,7 +128,7 @@ struct UsageDeviceDetailView: View {
                 // scope line carries what it would have said.
                 UsageActivityChart(
                     activity: summary.activity,
-                    recordedAttempts: summary.recordedAttempts,
+                    tokenCoverageDenominator: summary.outcomeMix.resolved,
                     tokenMeasuredAttempts: summary.tokenMeasuredAttempts,
                     gatewayRoster: gatewayRoster,
                     availableMetrics: UsageChartMetric.allCases.filter { $0 != .devices },

@@ -1297,6 +1297,78 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertNil(period.deviceAttempts[UsageDeviceBucket.unknown.rawValue])
     }
 
+    /// The model split obeys the same mass-conservation contract as the device
+    /// and gateway splits: it partitions the period's attempts exactly, and the
+    /// nil key holds the requests that named no model — a real choice (the
+    /// gateway's default answered), kept as its own honest bucket.
+    func testModelSplitPartitionsThePeriodExactly() {
+        let today = calendar.startOfDay(for: now)
+        let summary = summarize(
+            [
+                attempt(startedAt: today.addingTimeInterval(3600), requestedModel: "fast"),
+                attempt(startedAt: today.addingTimeInterval(3660), requestedModel: "fast"),
+                attempt(startedAt: today.addingTimeInterval(3720), requestedModel: "slow"),
+                attempt(startedAt: today.addingTimeInterval(3780)),
+            ],
+            range: today...now
+        )
+
+        let period = summary.activity.buckets[0]
+        XCTAssertEqual(period.modelAttempts, ["fast": 2, "slow": 1, nil: 1])
+        XCTAssertEqual(
+            period.modelAttempts.values.reduce(0, +), period.attempts,
+            "the model stack reaches the bar's own height")
+    }
+
+    /// TURN OUTCOMES PARTITION THE PERIOD'S TURNS. Completed means at least one
+    /// succeeded attempt, failed means resolved without one, and everything
+    /// else — here a cancellation — is the derived remainder, so the three
+    /// segments always sum back to the bar's own turn count.
+    func testTurnOutcomesPartitionThePeriodsTurnsExactly() {
+        let today = calendar.startOfDay(for: now)
+        let summary = summarize(
+            [
+                attempt(startedAt: today.addingTimeInterval(3600), outcome: .succeeded),
+                attempt(startedAt: today.addingTimeInterval(3660), outcome: .failed),
+                attempt(startedAt: today.addingTimeInterval(3720), outcome: .cancelled),
+            ],
+            range: today...now
+        )
+
+        let period = summary.activity.buckets[0]
+        XCTAssertEqual(period.turns, 3)
+        XCTAssertEqual(period.completedTurns, 1)
+        XCTAssertEqual(period.failedTurns, 1)
+        XCTAssertEqual(period.otherOutcomeTurns, 1)
+        XCTAssertEqual(
+            period.completedTurns + period.failedTurns + period.otherOutcomeTurns,
+            period.turns,
+            "the outcome stack reaches the bar's own height")
+    }
+
+    /// A turn that failed and then landed on a retry IN THE SAME PERIOD is
+    /// completed, not failed — the retry is the story's ending, and a bar
+    /// painting it red would report a recovery as a loss.
+    func testARetriedTurnThatRecoversCountsAsCompletedNotFailed() {
+        let today = calendar.startOfDay(for: now)
+        let turn = UUID()
+        let summary = summarize(
+            [
+                attempt(turn: turn, startedAt: today.addingTimeInterval(3600),
+                        outcome: .failed),
+                attempt(turn: turn, startedAt: today.addingTimeInterval(3900),
+                        outcome: .succeeded),
+            ],
+            range: today...now
+        )
+
+        let period = summary.activity.buckets[0]
+        XCTAssertEqual(period.turns, 1)
+        XCTAssertEqual(period.completedTurns, 1)
+        XCTAssertEqual(period.failedTurns, 0)
+        XCTAssertEqual(period.otherOutcomeTurns, 0)
+    }
+
     // MARK: - 7e. Range-level honesty metadata
 
     /// THE RANGE COUNTS WHAT THE BARS CANNOT DRAW. An attempt with no start
@@ -1425,6 +1497,32 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertEqual(openclaw.tokens.input.sum, 10)
         XCTAssertEqual(openclaw.tokens.input.coverageDenominator, 2)
         XCTAssertEqual(openclaw.tokens.input.coverage!, 0.5, accuracy: 1e-9)
+    }
+
+    /// The counts a group's token COVERAGE clause renders. The numerator is the
+    /// best-available rule (a reported total, or both components), the
+    /// denominator is terminal attempts — an open attempt has not had its
+    /// chance to report and may not be counted against the gateway.
+    func testGroupTokenCoverageCountsExcludeOpenAttempts() {
+        let liveID = UUID()
+        let summary = summarize(
+            [
+                attempt(gateway: "openclaw", outcome: .succeeded, total: 100),
+                attempt(gateway: "openclaw", outcome: .failed),
+                attempt(gateway: "openclaw", outcome: .cancelled, input: 5, output: 7),
+                attempt(id: liveID, gateway: "openclaw", outcome: .inFlight, total: 900),
+            ],
+            live: [liveID]
+        )
+
+        let openclaw = summary.byGateway[0]
+        XCTAssertEqual(openclaw.terminalAttempts, 3, "the open attempt stays out")
+        XCTAssertEqual(
+            openclaw.tokenReportingAttempts, 2,
+            "a reported total counts, both components count, a silent failure does not")
+        XCTAssertLessThanOrEqual(
+            openclaw.tokenReportingAttempts, openclaw.terminalAttempts,
+            "coverage can never exceed its own denominator")
     }
 
     // MARK: - 9. Turn reliability
