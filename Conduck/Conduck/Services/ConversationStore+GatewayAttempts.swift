@@ -348,6 +348,35 @@ extension ConversationStore {
     }
 
     #if DEBUG
+    /// Screenshot-seed-only: move already-opened attempt rows back in time.
+    ///
+    /// `beginGatewayAttempt` stamps `startedAt` INSIDE its own transaction and
+    /// must keep doing so — that stamp is what makes the elapsed time a
+    /// measurement of the hop rather than of the actor hop in front of it — so
+    /// nothing on the real write path can open a row dated last week. A
+    /// marketing capture of Settings ▸ Usage needs exactly that: a month of
+    /// history behind the chart. This is the ONLY way to produce it, and it runs
+    /// only from `QAMode`'s screenshot seed against that mode's isolated
+    /// in-memory store.
+    ///
+    /// One transaction for the whole batch: the seed opens hundreds of rows, and
+    /// a save per row would be hundreds of round trips for data that is thrown
+    /// away when the process dies. Rows the fetch cannot find are skipped —
+    /// capture is fail-open, so a begin that returned nil simply has nothing to
+    /// backdate. Not reachable from app code.
+    func debugBackdateGatewayAttemptStarts(_ starts: [UUID: Date]) async {
+        guard !starts.isEmpty else { return }
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        await context.perform { [context] in
+            for (attemptID, startedAt) in starts {
+                guard let row = Self.gatewayAttemptRow(id: attemptID, in: context) else { continue }
+                row.setValue(startedAt, forKey: "startedAt")
+            }
+            try? context.save()
+        }
+    }
+
     /// Test-only: clear an attempt row's `startedAt` to produce the undated row
     /// a half-materialised import really can deliver (`GatewayAttempt.startedAt`
     /// is `optional="YES"`). Nothing else can build one — every begin stamps the

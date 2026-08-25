@@ -191,10 +191,17 @@ enum QAMode {
             let threadCount: Int
             if isScreenshotMode {
                 let threads = screenshotSeedThreads()
+                var seededIDs: [UUID] = []
                 for thread in threads {
-                    try await seedThread(backend: thread.backend, turns: thread.turns)
+                    seededIDs.append(
+                        try await seedThread(backend: thread.backend, turns: thread.turns))
                 }
                 threadCount = threads.count
+                // Conversations alone leave Settings ▸ Usage empty — the
+                // dashboard reads the ATTEMPT ledger, which no seeded message
+                // writes. Seeded last so it can hang history off the threads
+                // above.
+                await seedUsageHistory(conversationIDs: seededIDs)
             } else {
                 let threads = qaSeedThreads()
                 for thread in threads {
@@ -448,8 +455,12 @@ enum QAMode {
 
     /// Create one conversation and append its turns through the real store API
     /// (so `titleSnippet` denormalization, activity-stamp bumps, and CloudKit
-    /// behaviour match production).
-    private static func seedThread(backend: String, turns: [AttachedSeedTurn]) async throws {
+    /// behaviour match production). Returns the conversation's id so the
+    /// screenshot usage seed can hang a month of attempt history off threads
+    /// that really exist on this device — a ranked thread whose conversation is
+    /// absent renders as unavailable rather than as a row worth capturing.
+    @discardableResult
+    private static func seedThread(backend: String, turns: [AttachedSeedTurn]) async throws -> UUID {
         let conversation = try await ConversationStore.shared.createConversation(backend: backend)
         for turn in turns {
             _ = try await ConversationStore.shared.appendMessage(
@@ -461,6 +472,489 @@ enum QAMode {
                 attachments: turn.attachments
             )
         }
+        return conversation.id
+    }
+
+    // MARK: - Usage-history seed (screenshot mode only)
+
+    /// Days of history the usage seed lays down. Matches the dashboard's default
+    /// 30-day range, so the capture opens on a full chart rather than on a
+    /// window that is mostly empty.
+    private static let usageSeedDays = 30
+
+    /// Turns per day, OLDEST first, one entry per `usageSeedDays`. Hand-written
+    /// rather than generated: an activity chart is the one thing on the screen a
+    /// reader judges by SHAPE, and a uniform random walk reads as noise while a
+    /// smooth curve reads as fake. This is a working month — busy midweeks, thin
+    /// weekends, one near-idle day, and a today that is still running.
+    private static let usageSeedDailyTurns = [
+        6, 9, 11, 7, 3, 2, 8, 12, 10, 14,
+        9, 4, 1, 7, 11, 13, 8, 6, 3, 9,
+        15, 12, 10, 5, 2, 8, 14, 11, 9, 4
+    ]
+
+    /// The turns that did not simply succeed, named by their index in the month.
+    /// EXPLICIT RATHER THAN ROLLED: reliability is a headline figure on the
+    /// captured card, and a coin flip cannot be asked to land on a believable
+    /// rate with a non-zero incident count on every rebuild. Together these put
+    /// the resolved success rate just under 98 % — high enough to be a working
+    /// setup, never the 100 % that would read as a screen with no data behind
+    /// it. Chosen for `usageSeedDailyTurns`' 243 turns; re-pick them if that
+    /// month changes.
+    ///
+    /// A transport failure the retry then landed. Drives "recovered by retry".
+    private static let usageSeedRecoveredTurns: Set<Int> = [30, 111, 192]
+    /// Retried, and the retry failed too — so recovery is not a flat 100 %.
+    private static let usageSeedUnrecoveredTurns: Set<Int> = [140]
+    /// Failed on its only attempt.
+    private static let usageSeedFailedTurns: Set<Int> = [77]
+    /// The user stopped waiting. Outside every rate on the card, which is
+    /// exactly why one belongs in the mix.
+    private static let usageSeedCancelledTurns: Set<Int> = [44, 153]
+
+    /// One planned attempt, fully decided before anything is written. Building
+    /// the whole month first keeps the store calls a dumb replay loop and keeps
+    /// every derived figure — reliability, retry recovery, token coverage —
+    /// decided in one place where it can be reasoned about.
+    private struct SeedUsageAttempt {
+        let attemptID = UUID()
+        let conversationID: UUID
+        let userMessageID: UUID
+        let gatewayRef: String
+        let origin: GatewayAttemptOrigin
+        let inputMode: GatewayInputMode
+        let requestedModel: String?
+        let deviceClass: String?
+        let startedAt: Date
+        let completedAt: Date
+        let outcome: GatewayAttemptOutcome
+        let appErrorCode: Int?
+        let metadata: GatewayResponseMetadata?
+        let currentImages: Int
+        let priorImages: Int
+        let currentTextFiles: Int
+        let priorTextFiles: Int
+    }
+
+    /// One gateway slot's habits. Gateways do not report alike — that is a
+    /// premise of the dashboard's own copy — so the seed gives each slot its own
+    /// reporting completeness, latency band and model list rather than sprinkling
+    /// one distribution across all of them.
+    private struct SeedUsageLane {
+        let ref: String
+        /// Relative share of the month's turns.
+        let weight: Int
+        /// Requested-model values this slot sends. `nil` is a real value: an
+        /// agent gateway picks its own model, and the dashboard names that
+        /// "Gateway default".
+        var models: [String?]
+        /// Percent of landings whose body carried usage this slot could keep.
+        let reportsTokensPercent: Int
+        /// Whether this slot ever reports prompt-cache detail.
+        let reportsCacheDetail: Bool
+        /// Whether this slot ever reports reasoning-token detail.
+        let reportsReasoningDetail: Bool
+        /// Full-response time band in milliseconds.
+        let latencyMS: ClosedRange<Int>
+    }
+
+    /// A deterministic value source. NOT `SystemRandomNumberGenerator`: the same
+    /// build has to produce the same dashboard every launch, or a recapture
+    /// after a copy tweak silently changes every figure in the shot. SplitMix64
+    /// over a fixed seed — a few lines, and good enough to look organic.
+    private struct SeedRandom {
+        private var state: UInt64
+
+        init(seed: UInt64) { self.state = seed }
+
+        mutating func next() -> UInt64 {
+            state = state &+ 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return z ^ (z >> 31)
+        }
+
+        mutating func int(_ range: ClosedRange<Int>) -> Int {
+            let span = UInt64(range.upperBound - range.lowerBound + 1)
+            return range.lowerBound + Int(next() % span)
+        }
+
+        /// True `percent` of the time, in tenths of a percent so the rare
+        /// outcomes (a cancel, a truncated reply) can be tuned below 1 %.
+        mutating func chance(perMille: Int) -> Bool { int(1...1000) <= perMille }
+
+        mutating func pick<T>(_ items: [T]) -> T { items[int(0...(items.count - 1))] }
+    }
+
+    /// Lay down a month of gateway attempts behind the seeded conversations, so
+    /// Settings ▸ Usage renders a populated dashboard instead of its empty state.
+    ///
+    /// EVERY ROW GOES IN THROUGH THE REAL LEDGER API — `beginGatewayAttempt`
+    /// opens it and a `TerminalAttemptObservation` closes it, exactly as a
+    /// dispatch and its landing would — so the seeded rows carry the same
+    /// columns, the same one terminal transition and the same fail-open
+    /// behaviour as production ones. The ONE thing no real API can do is date a
+    /// row in the past (begin stamps `startedAt` inside its own transaction, and
+    /// must), which is what the DEBUG-only backdate at the end is for.
+    ///
+    /// Best-effort throughout: a begin that returns nil is skipped and the rest
+    /// of the month still lands, matching the ledger's own posture that
+    /// measurement never outranks anything.
+    private static func seedUsageHistory(conversationIDs: [UUID]) async {
+        guard isScreenshotMode, !conversationIDs.isEmpty else { return }
+        let plans = usageHistoryPlan(conversationIDs: conversationIDs)
+        var starts: [UUID: Date] = [:]
+        for plan in plans {
+            let draft = GatewayAttemptDraft(
+                attemptID: plan.attemptID,
+                conversationID: plan.conversationID,
+                userMessageID: plan.userMessageID,
+                gatewayRef: plan.gatewayRef,
+                origin: plan.origin,
+                inputMode: plan.inputMode,
+                requestedModel: plan.requestedModel,
+                deviceClass: plan.deviceClass,
+                currentTurnInlineImageCount: plan.currentImages,
+                priorTurnInlineImageCount: plan.priorImages,
+                currentTurnInlineTextFileCount: plan.currentTextFiles,
+                priorTurnInlineTextFileCount: plan.priorTextFiles
+            )
+            guard await ConversationStore.shared.beginGatewayAttempt(draft: draft) != nil else {
+                continue
+            }
+            await ConversationStore.shared.terminalizeGatewayAttempt(
+                TerminalAttemptObservation(
+                    attemptID: plan.attemptID,
+                    completedAt: plan.completedAt,
+                    outcome: plan.outcome,
+                    appErrorCode: plan.appErrorCode,
+                    metadata: plan.metadata
+                )
+            )
+            starts[plan.attemptID] = plan.startedAt
+        }
+        await ConversationStore.shared.debugBackdateGatewayAttemptStarts(starts)
+        logger.notice("QAMode seeded \(starts.count, privacy: .public) usage attempt(s)")
+    }
+
+    /// Decide the whole month. Pure — no store, no clock beyond one `Date()` at
+    /// the top — so the shape of the data is auditable in one read.
+    private static func usageHistoryPlan(conversationIDs: [UUID]) -> [SeedUsageAttempt] {
+        var rng = SeedRandom(seed: 0xC0FF_EE00_D0CC_0001)
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+
+        let lanes = usageSeedLanes()
+        // Weighted slot list, drawn from directly — the alternative is a running
+        // cumulative sum at every draw for a table that never changes.
+        var lanePool: [SeedUsageLane] = []
+        for lane in lanes {
+            for _ in 0..<lane.weight { lanePool.append(lane) }
+        }
+
+        // Threads the ledger can still point at, plus threads it outlived. Usage
+        // history is first-class and survives its conversations, so a month that
+        // maps one-to-one onto four live threads would misrepresent the feature
+        // AND read as a suspiciously tidy account. The live ones carry the
+        // heavier traffic, which is what keeps them at the top of the ranked
+        // list where the rows are navigable.
+        var threadPool: [(id: UUID, tokenScale: Double)] = []
+        for id in conversationIDs {
+            for _ in 0..<5 { threadPool.append((id, 1.0)) }
+        }
+        for index in 1...10 {
+            guard let id = UUID(
+                uuidString: String(format: "C0FFEE00-0000-4000-B000-%012X", index)
+            ) else { continue }
+            threadPool.append((id, 0.5))
+        }
+
+        var plans: [SeedUsageAttempt] = []
+        var turnIndex = 0
+        for (index, turnCount) in usageSeedDailyTurns.enumerated() {
+            let daysAgo = usageSeedDays - 1 - index
+            guard let dayStart = calendar.date(byAdding: .day, value: -daysAgo, to: today) else {
+                continue
+            }
+            // Today is still running: keep its turns safely behind the pinned
+            // 9:41 status bar rather than dropping attempts into the future.
+            let hours = daysAgo == 0 ? 5...7 : 8...21
+            for _ in 0..<turnCount {
+                let startedAt = dayStart.addingTimeInterval(
+                    TimeInterval(rng.int(hours) * 3600 + rng.int(0...59) * 60 + rng.int(0...59))
+                )
+                plans.append(contentsOf: turnAttempts(
+                    turnIndex: turnIndex,
+                    startedAt: startedAt,
+                    lane: rng.pick(lanePool),
+                    thread: rng.pick(threadPool),
+                    rng: &rng
+                ))
+                turnIndex += 1
+            }
+        }
+        return plans
+    }
+
+    /// The gateway slots the seed spreads its month across — the built-ins the
+    /// screenshot rig configures, plus the named custom slot when one was
+    /// supplied. When there is no custom slot the model names move onto Hermes,
+    /// so the By-model card still has a mix to describe instead of vanishing.
+    private static func usageSeedLanes() -> [SeedUsageLane] {
+        var lanes = [
+            SeedUsageLane(
+                ref: RemoteAgentBackend.openclaw.rawValue,
+                weight: 5,
+                models: [nil],
+                reportsTokensPercent: 100,
+                reportsCacheDetail: true,
+                reportsReasoningDetail: true,
+                latencyMS: 2_200...14_000
+            ),
+            SeedUsageLane(
+                ref: RemoteAgentBackend.hermes.rawValue,
+                weight: 3,
+                models: [nil],
+                reportsTokensPercent: 78,
+                reportsCacheDetail: false,
+                reportsReasoningDetail: true,
+                latencyMS: 1_800...9_000
+            )
+        ]
+        // Open-weight names on purpose: the custom slot IS someone's own box, and
+        // a self-hosted model list is what that box actually runs.
+        let selfHosted: [String?] = ["llama-3.3-70b", "qwen3-30b"]
+        if let override = customGatewayOverride {
+            lanes.append(SeedUsageLane(
+                ref: override.gateway.ref.rawString,
+                weight: 2,
+                models: selfHosted,
+                reportsTokensPercent: 100,
+                reportsCacheDetail: true,
+                reportsReasoningDetail: false,
+                latencyMS: 3_200...19_000
+            ))
+        } else {
+            lanes[1].models = selfHosted
+        }
+        return lanes
+    }
+
+    /// One user turn's attempts. Almost always exactly one that succeeded; the
+    /// handful of turns named in the incident sets above instead fail, get
+    /// retried, or are cancelled — which is what puts a real incident count and
+    /// a real "recovered by retry" figure on the screen.
+    private static func turnAttempts(
+        turnIndex: Int,
+        startedAt: Date,
+        lane: SeedUsageLane,
+        thread: (id: UUID, tokenScale: Double),
+        rng: inout SeedRandom
+    ) -> [SeedUsageAttempt] {
+        let turnID = UUID()
+        let surface = usageSeedSurface(&rng)
+        let model = rng.pick(lane.models)
+
+        func attempt(
+            at start: Date,
+            outcome: GatewayAttemptOutcome,
+            appErrorCode: Int?,
+            elapsed: TimeInterval,
+            metadata: GatewayResponseMetadata?
+        ) -> SeedUsageAttempt {
+            SeedUsageAttempt(
+                conversationID: thread.id,
+                userMessageID: turnID,
+                gatewayRef: lane.ref,
+                origin: surface.origin,
+                inputMode: surface.inputMode,
+                requestedModel: model,
+                deviceClass: surface.deviceClass,
+                startedAt: start,
+                completedAt: start.addingTimeInterval(elapsed),
+                outcome: outcome,
+                appErrorCode: appErrorCode,
+                metadata: metadata,
+                currentImages: surface.currentImages,
+                priorImages: surface.priorImages,
+                currentTextFiles: surface.currentTextFiles,
+                priorTextFiles: surface.priorTextFiles
+            )
+        }
+
+        func succeeded(at start: Date) -> SeedUsageAttempt {
+            attempt(
+                at: start,
+                outcome: .succeeded,
+                appErrorCode: nil,
+                elapsed: usageSeedElapsed(lane: lane, rng: &rng),
+                metadata: usageSeedMetadata(
+                    lane: lane, model: model, scale: thread.tokenScale, rng: &rng)
+            )
+        }
+
+        func failed(at start: Date) -> SeedUsageAttempt {
+            attempt(
+                at: start,
+                outcome: .failed,
+                appErrorCode: usageSeedFailureCode(&rng),
+                elapsed: TimeInterval(rng.int(6...50)),
+                metadata: nil
+            )
+        }
+
+        /// Where a retry starts: after the first attempt gave up, plus the beat
+        /// it takes to notice and tap.
+        func retryStart(after first: SeedUsageAttempt) -> Date {
+            first.completedAt.addingTimeInterval(TimeInterval(rng.int(5...90)))
+        }
+
+        if usageSeedCancelledTurns.contains(turnIndex) {
+            return [attempt(
+                at: startedAt,
+                outcome: .cancelled,
+                appErrorCode: nil,
+                elapsed: TimeInterval(rng.int(4...40)),
+                metadata: nil
+            )]
+        }
+        if usageSeedFailedTurns.contains(turnIndex) {
+            return [failed(at: startedAt)]
+        }
+        if usageSeedRecoveredTurns.contains(turnIndex) {
+            let first = failed(at: startedAt)
+            return [first, succeeded(at: retryStart(after: first))]
+        }
+        if usageSeedUnrecoveredTurns.contains(turnIndex) {
+            let first = failed(at: startedAt)
+            return [first, failed(at: retryStart(after: first))]
+        }
+        return [succeeded(at: startedAt)]
+    }
+
+    /// Which surface sent the turn, and what rode along with it. Device, origin
+    /// and input mode are decided TOGETHER because they are not independent: the
+    /// wrist is voice, a head unit is voice on iPhone hardware, and a Mac is
+    /// overwhelmingly typed.
+    private static func usageSeedSurface(
+        _ rng: inout SeedRandom
+    ) -> (
+        origin: GatewayAttemptOrigin,
+        inputMode: GatewayInputMode,
+        deviceClass: String?,
+        currentImages: Int,
+        priorImages: Int,
+        currentTextFiles: Int,
+        priorTextFiles: Int
+    ) {
+        let roll = rng.int(1...100)
+        let origin: GatewayAttemptOrigin
+        let inputMode: GatewayInputMode
+        let deviceClass: String
+        switch roll {
+        case 1...8:
+            // The wrist. `origin` alone puts it in the watch bucket.
+            origin = .watch
+            inputMode = rng.chance(perMille: 920) ? .voice : .text
+            deviceClass = GatewayAttemptDeviceClass.watch.rawValue
+        case 9...15:
+            // A head unit — the dispatch runs on the iPhone, so the class is
+            // `iphone` and `origin` is what makes it CarPlay.
+            origin = .carPlay
+            inputMode = .voice
+            deviceClass = GatewayAttemptDeviceClass.iphone.rawValue
+        case 16...37:
+            origin = rng.chance(perMille: 350) ? .menuBar : .app
+            inputMode = rng.chance(perMille: 880) ? .text : .voice
+            deviceClass = GatewayAttemptDeviceClass.mac.rawValue
+        default:
+            if rng.chance(perMille: 100) {
+                origin = .quickCapture
+                inputMode = .voice
+            } else if rng.chance(perMille: 35) {
+                origin = .share
+                inputMode = .shared
+            } else {
+                origin = .app
+                inputMode = rng.chance(perMille: 610) ? .text : .voice
+            }
+            deviceClass = GatewayAttemptDeviceClass.iphone.rawValue
+        }
+
+        let currentImages = inputMode == .shared
+            ? rng.int(1...2)
+            : (rng.chance(perMille: 60) ? rng.int(1...2) : 0)
+        let currentTextFiles = rng.chance(perMille: 45) ? 1 : 0
+        return (
+            origin: origin,
+            inputMode: inputMode,
+            deviceClass: deviceClass,
+            currentImages: currentImages,
+            // History replayed on this request — the same image riding along on
+            // the follow-up turns of a thread that has one.
+            priorImages: rng.chance(perMille: 120) ? rng.int(1...3) : 0,
+            currentTextFiles: currentTextFiles,
+            priorTextFiles: rng.chance(perMille: 70) ? 1 : 0
+        )
+    }
+
+    /// Full-response time, with the long tail an agent gateway really has: most
+    /// answers inside the lane's band, a handful several times slower because a
+    /// tool ran.
+    private static func usageSeedElapsed(lane: SeedUsageLane, rng: inout SeedRandom) -> TimeInterval {
+        let base = Double(rng.int(lane.latencyMS)) / 1_000
+        return rng.chance(perMille: 90) ? base * Double(rng.int(2...4)) : base
+    }
+
+    /// What the gateway reported about the turn. The three DETAIL figures are
+    /// SUBSETS of the two above them — cached and cache-write of the input,
+    /// reasoning of the output — and are derived that way here so the seeded
+    /// rows honour the containment the ledger documents.
+    private static func usageSeedMetadata(
+        lane: SeedUsageLane,
+        model: String?,
+        scale: Double,
+        rng: inout SeedRandom
+    ) -> GatewayResponseMetadata? {
+        guard rng.int(1...100) <= lane.reportsTokensPercent else { return nil }
+        let input = Int64(Double(rng.int(1_500...12_000)) * scale)
+        let output = Int64(Double(rng.int(120...1_800)) * scale)
+        let cached: Int64? = lane.reportsCacheDetail && rng.chance(perMille: 380)
+            ? Int64(Double(input) * Double(rng.int(30...70)) / 100)
+            : nil
+        let cacheWrite: Int64? = lane.reportsCacheDetail && rng.chance(perMille: 150)
+            ? Int64(Double(input) * Double(rng.int(5...20)) / 100)
+            : nil
+        let reasoning: Int64? = lane.reportsReasoningDetail && rng.chance(perMille: 300)
+            ? Int64(Double(output) * Double(rng.int(20...60)) / 100)
+            : nil
+        return GatewayResponseMetadata(
+            reportedModel: model,
+            reportedResponseID: nil,
+            // `length` is the one finish reason with a user-visible consequence
+            // — it is what puts a "Replies cut short" row on the card.
+            finishReason: rng.chance(perMille: 15) ? "length" : "stop",
+            reportedInputTokens: input,
+            reportedOutputTokens: output,
+            reportedTotalTokens: input + output,
+            reportedCachedInputTokens: cached,
+            reportedCacheWriteInputTokens: cacheWrite,
+            reportedReasoningOutputTokens: reasoning
+        )
+    }
+
+    /// Conduck's OWN error codes, never a server code or status. Transport
+    /// trouble reaching someone else's always-on box is what actually fails for
+    /// a self-hosted gateway.
+    private static func usageSeedFailureCode(_ rng: inout SeedRandom) -> Int {
+        rng.pick([
+            AppError.remoteAgentTimeout.errorCode,
+            AppError.remoteAgentTimeout.errorCode,
+            AppError.noInternetConnection.errorCode,
+            AppError.remoteAgentUnreachable.errorCode
+        ])
     }
 }
 
