@@ -18,7 +18,7 @@
 //      Collapsing any pair of those claims a gateway said something it did not.
 //   3. THE QUANTILE IS TYPE-7, checked against hand-computed golden values —
 //      the estimator R, NumPy and spreadsheets agree on, so a user who exports
-//      their own numbers gets the same median Conduck shows.
+//      their own numbers gets the same p90 Conduck shows.
 //   4. DERIVED OUTCOMES NEVER SETTLE WRONG. A live attempt reads `inFlight`, a
 //      young one `pending`, an old one `unconfirmed`, and a FUTURE-DATED one
 //      `unconfirmed` too — the clock-skew rule, without which a row stamped by
@@ -26,7 +26,7 @@
 //
 // Timing sanity is REJECTION, not clamping (a negative or absurd interval
 // becomes no sample at all), and that is asserted directly: clamping would
-// invent a boundary sample and drag the median toward it while leaving `n`
+// invent a boundary sample and drag the average toward it while leaving `n`
 // looking honest.
 
 import XCTest
@@ -270,7 +270,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertNil(summary.completedTurnRate)
         XCTAssertNil(summary.resolvedAttemptSuccessRate)
         XCTAssertNil(summary.attemptsPerCompletedTurn)
-        XCTAssertNil(summary.responseTime.median)
+        XCTAssertNil(summary.responseTime.mean)
         XCTAssertTrue(summary.tokens.isEmpty)
         XCTAssertEqual(summary, .empty)
     }
@@ -673,21 +673,24 @@ final class GatewayUsageAggregatorTests: XCTestCase {
 
     // MARK: - 5. Response time
 
+    /// The successful samples are 1, 1 and 10 — mean 4.0 where a median would
+    /// say 1.0 — so this pins the figure to the arithmetic mean, not merely to
+    /// "some average-ish statistic" the two would agree on.
     func testResponseTimeUsesSuccessfulAttemptsOnly() {
         let summary = summarize([
-            attempt(elapsed: 2, outcome: .succeeded),
-            attempt(elapsed: 4, outcome: .succeeded),
+            attempt(elapsed: 1, outcome: .succeeded),
+            attempt(elapsed: 1, outcome: .succeeded),
+            attempt(elapsed: 10, outcome: .succeeded),
             attempt(elapsed: 600, outcome: .failed),
             attempt(elapsed: 900, outcome: .cancelled),
         ])
 
-        XCTAssertEqual(summary.responseTime.sampleCount, 2)
-        XCTAssertEqual(summary.responseTime.median!, 3.0, accuracy: 1e-9)
-        XCTAssertEqual(summary.responseTime.mean!, 3.0, accuracy: 1e-9)
+        XCTAssertEqual(summary.responseTime.sampleCount, 3)
+        XCTAssertEqual(summary.responseTime.mean!, 4.0, accuracy: 1e-9)
     }
 
     /// REJECTED, NOT CLAMPED. A clamped outlier would show up as a boundary
-    /// sample and drag the median toward it while `n` still looked honest.
+    /// sample and drag the average toward it while `n` still looked honest.
     func testOutOfRangeTimingIsRejectedRatherThanClamped() {
         let summary = summarize([
             attempt(elapsed: 10, outcome: .succeeded),
@@ -696,26 +699,26 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         ])
 
         XCTAssertEqual(summary.responseTime.sampleCount, 1)
-        XCTAssertEqual(summary.responseTime.median!, 10.0, accuracy: 1e-9)
+        XCTAssertEqual(summary.responseTime.mean!, 10.0, accuracy: 1e-9)
     }
 
     func testTimingExactlyAtTheGraceIsAccepted() {
         let summary = summarize([attempt(elapsed: grace, outcome: .succeeded)])
 
         XCTAssertEqual(summary.responseTime.sampleCount, 1)
-        XCTAssertEqual(summary.responseTime.median!, grace, accuracy: 1e-9)
+        XCTAssertEqual(summary.responseTime.mean!, grace, accuracy: 1e-9)
     }
 
     func testAttemptWithNoCompletionStampContributesNoSample() {
         let summary = summarize([attempt(elapsed: nil, outcome: .succeeded)])
 
         XCTAssertEqual(summary.responseTime.sampleCount, 0)
-        XCTAssertNil(summary.responseTime.median)
+        XCTAssertNil(summary.responseTime.mean)
     }
 
     /// p90 is withheld below the minimum sample count, where it is
     /// interpolating between the two slowest observations and would read as
-    /// precision it does not have. The median is still shown.
+    /// precision it does not have. The average is still shown.
     func testP90IsWithheldBelowTheMinimumSampleCount() {
         let below = (1...(GatewayUsageAggregator.p90MinimumSamples - 1)).map {
             attempt(elapsed: TimeInterval($0), outcome: .succeeded)
@@ -723,7 +726,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         let belowSummary = summarize(below)
         XCTAssertEqual(belowSummary.responseTime.sampleCount, 19)
         XCTAssertNil(belowSummary.responseTime.p90)
-        XCTAssertNotNil(belowSummary.responseTime.median)
+        XCTAssertNotNil(belowSummary.responseTime.mean)
 
         let at = (1...GatewayUsageAggregator.p90MinimumSamples).map {
             attempt(elapsed: TimeInterval($0), outcome: .succeeded)
@@ -731,7 +734,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         let atSummary = summarize(at)
         XCTAssertEqual(atSummary.responseTime.sampleCount, 20)
         XCTAssertEqual(atSummary.responseTime.p90!, 18.1, accuracy: 1e-9)
-        XCTAssertEqual(atSummary.responseTime.median!, 10.5, accuracy: 1e-9)
+        XCTAssertEqual(atSummary.responseTime.mean!, 10.5, accuracy: 1e-9)
     }
 
     // MARK: - 6. Truncation
@@ -1643,18 +1646,21 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertTrue(iphone.models.isEmpty, "device rows carry no nested model breakdown")
     }
 
+    /// The mac's samples are 2, 4 and 12 — mean 6.0 where a median would say
+    /// 4.0 — so the group figure is pinned to the arithmetic mean too.
     func testDeviceGroupsCarryTheirOwnResponseTimes() {
         let summary = summarize([
             attempt(elapsed: 2, outcome: .succeeded, origin: .app, deviceClass: "mac"),
             attempt(elapsed: 4, outcome: .succeeded, origin: .app, deviceClass: "mac"),
+            attempt(elapsed: 12, outcome: .succeeded, origin: .app, deviceClass: "mac"),
             attempt(elapsed: 60, outcome: .succeeded, origin: .watch),
         ])
 
         let mac = summary.deviceGroups.first { $0.key == "mac" }!
-        XCTAssertEqual(mac.medianResponseTime!, 3.0, accuracy: 1e-9)
-        XCTAssertEqual(mac.responseSampleCount, 2)
+        XCTAssertEqual(mac.meanResponseTime!, 6.0, accuracy: 1e-9)
+        XCTAssertEqual(mac.responseSampleCount, 3)
         let watch = summary.deviceGroups.first { $0.key == "watch" }!
-        XCTAssertEqual(watch.medianResponseTime!, 60.0, accuracy: 1e-9)
+        XCTAssertEqual(watch.meanResponseTime!, 60.0, accuracy: 1e-9)
     }
 
     /// THE LIST NARROWS; THE TOTALS DO NOT. `attributedDeviceGroups` is the

@@ -554,20 +554,19 @@ nonisolated struct GatewayUsageTokens: Sendable, Equatable {
 /// non-streaming, so no earlier instant is observable.
 nonisolated struct GatewayUsageResponseTime: Sendable, Equatable {
     /// Successful attempts with usable timing. Shown ALWAYS, beside every
-    /// figure below, because a median over three samples is not a claim.
+    /// figure below, because an average over three samples is not a claim.
     let sampleCount: Int
-    /// Type-7 median. Primary, because one 20-minute agent run drags a mean
-    /// somewhere no turn actually landed.
-    let median: TimeInterval?
     /// Type-7 p90, suppressed below `GatewayUsageAggregator.p90MinimumSamples`
     /// where the estimator is interpolating between the two slowest samples and
     /// would read as precision it does not have.
     let p90: TimeInterval?
-    /// Secondary, and only ever secondary.
+    /// Arithmetic mean — the headline figure. The sample pool is already
+    /// bounded by `ConversationActivityResolver.staleSendingGrace`, so a
+    /// runaway attempt cannot land in it and drag the average.
     let mean: TimeInterval?
 
     static let empty = GatewayUsageResponseTime(
-        sampleCount: 0, median: nil, p90: nil, mean: nil)
+        sampleCount: 0, p90: nil, mean: nil)
 }
 
 /// The period ONE activity bar covers. Chosen by the aggregator from the span
@@ -735,8 +734,8 @@ nonisolated struct GatewayUsageGroup: Sendable, Equatable, Identifiable {
     let failed: Int
     /// Same denominator rule as the range total.
     let successRate: Double?
-    let medianResponseTime: TimeInterval?
-    /// Samples behind `medianResponseTime`.
+    let meanResponseTime: TimeInterval?
+    /// Samples behind `meanResponseTime`.
     let responseSampleCount: Int
     let tokens: GatewayUsageTokens
     /// Per-requested-model breakdown WITHIN this gateway, populated only when
@@ -903,7 +902,7 @@ nonisolated enum GatewayUsageAggregator {
         /// means the two stamps came from devices whose clocks disagree, and an
         /// interval past the grace means a background upload waited for
         /// connectivity far longer than the hop took. Clamping either would
-        /// invent a sample at the boundary and drag the median toward it;
+        /// invent a sample at the boundary and drag the average toward it;
         /// dropping them makes the sample count honest and leaves `n` visible
         /// beside every figure.
         let elapsed: TimeInterval?
@@ -1132,7 +1131,6 @@ nonisolated enum GatewayUsageAggregator {
         guard !samples.isEmpty else { return .empty }
         return GatewayUsageResponseTime(
             sampleCount: samples.count,
-            median: quantile(sorted: samples, probability: 0.5),
             p90: samples.count >= p90MinimumSamples
                 ? quantile(sorted: samples, probability: 0.9)
                 : nil,
@@ -1329,14 +1327,16 @@ nonisolated enum GatewayUsageAggregator {
         models: [GatewayUsageGroup]
     ) -> GatewayUsageGroup {
         let mix = outcomeMix(for: members)
-        let samples = members.compactMap { $0.responseSample }.sorted()
+        let samples = members.compactMap { $0.responseSample }
         return GatewayUsageGroup(
             key: key,
             attempts: members.count,
             succeeded: mix.succeeded,
             failed: mix.failed,
             successRate: ratio(mix.succeeded, mix.succeeded + mix.failed),
-            medianResponseTime: quantile(sorted: samples, probability: 0.5),
+            meanResponseTime: samples.isEmpty
+                ? nil
+                : samples.reduce(0, +) / Double(samples.count),
             responseSampleCount: samples.count,
             tokens: tokens(for: members),
             models: models

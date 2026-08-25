@@ -202,12 +202,12 @@ struct UsageDeviceDetailView: View {
             } else {
                 UsageStatLayout {
                     UsageStatTile(
-                        value: UsageDetailFormat.durationText(timing.median),
+                        value: UsageDetailFormat.durationText(timing.mean),
                         label: LocalizedStringResource(
-                            "settings.usage.response.median", defaultValue: "Median"),
+                            "settings.usage.response.average", defaultValue: "Average"),
                         accessibility: LocalizedStringResource(
-                            "settings.usage.response.median.a11y",
-                            defaultValue: "Median full-response time \(UsageDetailFormat.durationText(timing.median))"),
+                            "settings.usage.response.average.a11y",
+                            defaultValue: "Average full-response time \(UsageDetailFormat.durationText(timing.mean))"),
                         prominent: true
                     )
                     // Withheld below the aggregator's minimum sample count,

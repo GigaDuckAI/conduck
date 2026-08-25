@@ -39,11 +39,11 @@
 // switch, so a self-owned model would refetch the whole ledger each time the
 // user came back. The iPhone push has no such host, so it self-owns.
 //
-// EVERY FIGURE CARRIES ITS DENOMINATOR. A median with no sample count, a token
+// EVERY FIGURE CARRIES ITS DENOMINATOR. An average with no sample count, a token
 // sum with no coverage, a success rate with no statement of what resolved — each
 // of those is a claim the ledger cannot support, because capture is fail-open
 // (a dispatch that could not be recorded still happened) and a generic gateway
-// promises no usage metadata at all. So `n` sits beside the median, per-field
+// promises no usage metadata at all. So `n` sits beside the average, per-field
 // coverage sits beside every token sum, and the outcome mix is reported whole so
 // a healthy-looking success rate can never be read as the whole story.
 //
@@ -981,12 +981,12 @@ struct UsageDashboardContent: View {
             } else {
                 statLayout {
                     statTile(
-                        value: durationText(timing.median),
+                        value: durationText(timing.mean),
                         label: LocalizedStringResource(
-                            "settings.usage.response.median", defaultValue: "Median"),
+                            "settings.usage.response.average", defaultValue: "Average"),
                         accessibility: LocalizedStringResource(
-                            "settings.usage.response.median.a11y",
-                            defaultValue: "Median full-response time \(durationText(timing.median))"),
+                            "settings.usage.response.average.a11y",
+                            defaultValue: "Average full-response time \(durationText(timing.mean))"),
                         prominent: true
                     )
                     // Withheld below the aggregator's minimum sample count: a
@@ -1016,7 +1016,7 @@ struct UsageDashboardContent: View {
             Text(LocalizedStringResource(
                 "settings.usage.response.header", defaultValue: "Full-response time"))
         } footer: {
-            // KEPT: without it a median is read as model speed, and a slow
+            // KEPT: without it an average is read as model speed, and a slow
             // agent looks like a slow app. The clause that earns the line is
             // the last one.
             Text(LocalizedStringResource(
@@ -1127,33 +1127,13 @@ struct UsageDashboardContent: View {
                         .foregroundStyle(AppColors.textPrimary)
                     Spacer(minLength: 8)
                 }
-                Text(deviceDetailText(group))
+                Text(UsageDetailFormat.groupDetailText(group))
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-    }
-
-    private func deviceDetailText(_ group: GatewayUsageGroup) -> String {
-        var parts: [String] = [
-            String(localized: "settings.usage.byGateway.successRate",
-                   defaultValue: "\(percentText(group.successRate)) succeeded")
-        ]
-        if let median = group.medianResponseTime {
-            // PLAIN LANGUAGE, not "(n 12)". The sample size has to be here —
-            // a median over three replies is not a claim — but `n` is a
-            // statistician's abbreviation, and this row is read by someone
-            // asking which gateway feels faster.
-            parts.append(String(
-                localized: "settings.usage.byGateway.median.plain",
-                defaultValue: """
-                    median \(durationText(median)) over \
-                    \(repliesText(group.responseSampleCount))
-                    """))
-        }
-        return parts.joined(separator: " · ")
     }
 
     /// Icons and words reused from the turn's own device chip, so one device is
@@ -1243,22 +1223,9 @@ struct UsageDashboardContent: View {
     }
 
     private func groupDetailText(_ group: GatewayUsageGroup) -> String {
-        var parts: [String] = [
-            String(localized: "settings.usage.byGateway.successRate",
-                   defaultValue: "\(percentText(group.successRate)) succeeded")
-        ]
-        if let median = group.medianResponseTime {
-            // PLAIN LANGUAGE, not "(n 12)". The sample size has to be here —
-            // a median over three replies is not a claim — but `n` is a
-            // statistician's abbreviation, and this row is read by someone
-            // asking which gateway feels faster.
-            parts.append(String(
-                localized: "settings.usage.byGateway.median.plain",
-                defaultValue: """
-                    median \(durationText(median)) over \
-                    \(repliesText(group.responseSampleCount))
-                    """))
-        }
+        // Success rate + average reply time come from the shared formatter, so
+        // a gateway row here and its own drill-down answer with one sentence.
+        var parts: [String] = [UsageDetailFormat.groupDetailText(group)]
         // SAME RULE AS THE TOKENS CARD, which sits on this very screen showing the
         // same underlying numbers: a gateway-reported total renders bare, a client
         // sum of the components never does. Dropping the qualifier here would
@@ -1871,8 +1838,8 @@ struct UsageDashboardContent: View {
                      defaultValue: "\(count) replies")
     }
 
-    /// The sample size and the window, always together and always visible: a
-    /// median over three replies is not a claim, and the range is what makes it
+    /// The sample size and the window, always together and always visible: an
+    /// average over three replies is not a claim, and the range is what makes it
     /// one. Said in words — "12 replies measured" — because "(n 12)" is
     /// notation, and nothing else on this screen asks the reader to know any.
     private func sampleCaption(count: Int) -> String {

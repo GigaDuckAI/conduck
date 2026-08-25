@@ -14472,17 +14472,6 @@
         }
       }
     },
-    "settings.usage.byGateway.median.plain" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "median %1$@ over %2$@"
-          }
-        }
-      }
-    },
     "settings.usage.byGateway.successRate" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -15198,13 +15187,13 @@
         }
       }
     },
-    "settings.usage.detail.groupMedian" : {
+    "settings.usage.detail.groupAverage" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "median %1$@ %2$@"
+            "value" : "average %@"
           }
         }
       }
@@ -15352,17 +15341,6 @@
         }
       }
     },
-    "settings.usage.detail.model.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ succeeded"
-          }
-        }
-      }
-    },
     "settings.usage.detail.model.reported" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -15414,28 +15392,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Models"
-          }
-        }
-      }
-    },
-    "settings.usage.detail.overReplies.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "over 1 reply"
-          }
-        }
-      }
-    },
-    "settings.usage.detail.overReplies.other" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "over %lld replies"
           }
         }
       }
@@ -16430,6 +16386,28 @@
         }
       }
     },
+    "settings.usage.response.average" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Average"
+          }
+        }
+      }
+    },
+    "settings.usage.response.average.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Average full-response time %@"
+          }
+        }
+      }
+    },
     "settings.usage.response.footer.scope" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -16448,28 +16426,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Full-response time"
-          }
-        }
-      }
-    },
-    "settings.usage.response.median" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Median"
-          }
-        }
-      }
-    },
-    "settings.usage.response.median.a11y" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Median full-response time %@"
           }
         }
       }

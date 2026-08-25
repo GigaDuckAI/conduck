@@ -264,12 +264,12 @@ struct UsageGatewayDetailView: View {
             } else {
                 UsageStatLayout {
                     UsageStatTile(
-                        value: UsageDetailFormat.durationText(timing.median),
+                        value: UsageDetailFormat.durationText(timing.mean),
                         label: LocalizedStringResource(
-                            "settings.usage.response.median", defaultValue: "Median"),
+                            "settings.usage.response.average", defaultValue: "Average"),
                         accessibility: LocalizedStringResource(
-                            "settings.usage.response.median.a11y",
-                            defaultValue: "Median full-response time \(UsageDetailFormat.durationText(timing.median))"),
+                            "settings.usage.response.average.a11y",
+                            defaultValue: "Average full-response time \(UsageDetailFormat.durationText(timing.mean))"),
                         prominent: true
                     )
                     // Withheld below the aggregator's minimum sample count: a
@@ -373,12 +373,14 @@ struct UsageGatewayDetailView: View {
 
         return Section {
             ForEach(summary.byRequestedModel) { group in
+                // Same caption sentence as the device and gateway slices below:
+                // success rate, then the average reply time when the model has
+                // measured replies. A model is read against its siblings on the
+                // same two questions, so it gets the same answer format.
                 UsageValueRow(
                     verbatimLabel: UsageDetailFormat.modelLabel(for: group.key),
                     value: UsageDetailFormat.attemptsText(group.attempts),
-                    caption: LocalizedStringResource(
-                        "settings.usage.detail.model.caption",
-                        defaultValue: "\(UsageDetailFormat.percentText(group.successRate)) succeeded")
+                    verbatimCaption: UsageDetailFormat.groupDetailText(group)
                 )
             }
 
@@ -914,7 +916,7 @@ struct UsageHeadlineRow: View {
 struct UsageValueRow: View {
     private let labelText: Text
     private let value: String
-    private let caption: LocalizedStringResource?
+    private let captionText: Text?
     private let icon: String?
     private let iconTint: Color
     private let route: UsageRoute?
@@ -929,7 +931,7 @@ struct UsageValueRow: View {
     ) {
         self.labelText = Text(label)
         self.value = value
-        self.caption = caption
+        self.captionText = caption.map { Text($0) }
         self.icon = icon
         self.iconTint = iconTint
         self.route = route
@@ -945,7 +947,26 @@ struct UsageValueRow: View {
     ) {
         self.labelText = Text(verbatim: verbatimLabel)
         self.value = value
-        self.caption = caption
+        self.captionText = caption.map { Text($0) }
+        self.icon = icon
+        self.iconTint = iconTint
+        self.route = route
+    }
+
+    /// For a caption composed at the call site from already-localized parts
+    /// (`UsageDetailFormat` output). Wrapping such a `String` in a
+    /// `LocalizedStringResource` would mint a pure-placeholder catalog key.
+    init(
+        verbatimLabel: String,
+        value: String,
+        verbatimCaption: String,
+        icon: String? = nil,
+        iconTint: Color = AppColors.textTertiary,
+        route: UsageRoute? = nil
+    ) {
+        self.labelText = Text(verbatim: verbatimLabel)
+        self.value = value
+        self.captionText = Text(verbatim: verbatimCaption)
         self.icon = icon
         self.iconTint = iconTint
         self.route = route
@@ -991,8 +1012,8 @@ struct UsageValueRow: View {
                     .monospacedDigit()
                     .foregroundStyle(AppColors.textSecondary)
             }
-            if let caption {
-                Text(caption)
+            if let captionText {
+                captionText
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1183,8 +1204,8 @@ enum UsageDetailFormat {
     }
 
     /// How many replies are behind the figures, and the window they fall in —
-    /// always together and always visible: a median over three replies is not a
-    /// claim, and the window is what makes it one.
+    /// always together and always visible: an average over three replies is not
+    /// a claim, and the window is what makes it one.
     ///
     /// SAID IN WORDS, never as `(n 12)`. The sample size is the single most
     /// load-bearing caveat on this card, and a statistician's shorthand for it
@@ -1203,16 +1224,6 @@ enum UsageDetailFormat {
                      defaultValue: "1 reply measured")
             : String(localized: "settings.usage.detail.repliesMeasured.other",
                      defaultValue: "\(count) replies measured")
-    }
-
-    /// The same sample size as a TRAILING fragment, for a figure that has just
-    /// been stated — "median 4.2s over 12 replies".
-    static func overRepliesText(_ count: Int) -> String {
-        count == 1
-            ? String(localized: "settings.usage.detail.overReplies.one",
-                     defaultValue: "over 1 reply")
-            : String(localized: "settings.usage.detail.overReplies.other",
-                     defaultValue: "over \(count) replies")
     }
 
     /// The window a drill-down describes, STATED rather than re-pickable.
@@ -1254,10 +1265,10 @@ enum UsageDetailFormat {
             String(localized: "settings.usage.byGateway.successRate",
                    defaultValue: "\(percentText(group.successRate)) succeeded")
         ]
-        if let median = group.medianResponseTime {
+        if let mean = group.meanResponseTime {
             parts.append(String(
-                localized: "settings.usage.detail.groupMedian",
-                defaultValue: "median \(durationText(median)) \(overRepliesText(group.responseSampleCount))"))
+                localized: "settings.usage.detail.groupAverage",
+                defaultValue: "average \(durationText(mean))"))
         }
         return parts.joined(separator: " · ")
     }
