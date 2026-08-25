@@ -6,6 +6,211 @@ Each section is named for one App Store release — the marketing version and th
 build number Apple shows — and matches the tag that release carries in this
 repository, `v<version>-<build>`.
 
+## [1.5-11] — the measurement release
+
+App Store release, 25 August 2026. Tagged `v1.5-11`.
+
+### Usage — measuring your own setup, on your own devices
+
+- Settings gains a Usage screen on iPhone, iPad and Mac: how many turns you sent,
+  how many landed, how long a complete answer took, and whatever your gateway was
+  willing to say about tokens. It answers a question the app previously could not —
+  is this setup actually working, and which of my gateways is the slow one
+- The measurement never leaves your devices. A record is written beside the
+  conversation it describes, in the same local database and the same private iCloud
+  mirror that already holds your threads, and there is nowhere else for it to go:
+  Conduck has no server, so a dashboard that reported home would have had to invent
+  one. Nothing in this release changes what leaves the device
+- The records are content-free, and that is a release-blocking constraint rather
+  than a preference: no prompt or reply text, no gateway address or host, no token,
+  no gateway name, no provider error string, no HTTP status. What is kept is
+  timings, an outcome, a stable local error code, and the handful of fields the
+  gateway itself reported. The gateway is stored as the same opaque reference a
+  conversation already binds to, and the name you read is resolved when the screen
+  is drawn. "There is nothing to disclose because there is no server" holds only
+  while what is stored could not embarrass you if it were disclosed anyway, and
+  usage data is exactly where that erodes — one convenient field at a time
+- The few strings that do arrive from the wire are length-bounded and refused
+  outright when they carry control or bidirectional-control characters. A ledger is
+  read back into an interface, and text from someone else's server is untrusted input
+- Writing a record is best-effort and can never block, lose or duplicate a reply.
+  That is carried into the copy: these are recorded attempts, never "totals" —
+  claiming a completeness the design deliberately declines to provide would be the
+  wrong kind of accurate
+- An activity chart with five measures — Turns stacked by outcome, Tokens, Models,
+  Devices, Gateways — over 7, 30 or 90 days or all time, folding to weekly or
+  monthly buckets on the wider ranges. Selecting a period says what happened in it,
+  and the chart carries a per-period VoiceOver audio graph
+- Reliability leads with the share of resolved attempts that succeeded — cancelled
+  and unconfirmed attempts stay out of that rate — and opens onto delivered-first-try,
+  recovered-by-retry, retry rate, attempts per completed turn, and replies cut short
+- Failure reasons are grouped, and a reason opens the individual turns behind it
+  with a link into each conversation. A rate tells you something is wrong; the
+  incident list tells you which morning it happened
+- Full-response time reports the average and the 90th percentile, and states what it
+  includes: the network and any tools your agent ran, not model latency
+- Reported tokens leads with the total your gateway reported and the share of
+  attempts it reported on. Input, output, cached input, cache writes and reasoning
+  output sit behind Details and read "Not reported" where the gateway stayed silent
+  rather than taking no row — a gateway reporting nothing must never read as a
+  gateway that used nothing. Each gateway counts tokens its own way, and the card
+  says so instead of implying the figures were counted alike
+- No cost figure anywhere, deliberately. The app does not hold your billing
+  relationship with your provider, so there is no truthful source for one, and a
+  number that looks like money is believed in a way a token count is not
+- By device, by gateway and by model, with every ranked row carrying its share of
+  that scope's attempts (honest rounding: under 1 %, over 99 %, an exact 100 % only
+  for the whole) and a footer naming any mass that could not be attributed, so
+  visible shares summing short is never unexplained
+- Heaviest threads, with the full ranked list behind See all. A ranking picks one
+  basis — the gateway's own reported totals, or input plus output added up — applies
+  it to every row, names it on screen, and says plainly that threads without that
+  measurement are not ranked. Silently mixing the two would rank threads against
+  each other on numbers that were never comparable
+- Drill-downs per gateway and per device, each with its own range picker, its own
+  largest-turns section, and an Image history card that separates the turns you
+  attached images to from the earlier images re-sent along with them — which is the
+  only honest way to show why an image-carrying thread costs what it does
+- A thread whose conversation is not present reads as unavailable, never as deleted:
+  the ledger cannot tell a deletion from an import that has not arrived yet, and the
+  row becomes navigable on its own if the conversation later appears
+- Usage records outlive the conversations they describe, so tidying up your threads
+  no longer puts a hole in the trend. Where that is disclosed is a decision rather
+  than an oversight — it is said in the two places the claim can be tested: beside
+  the retained figures themselves, and in the erase-everything confirmation, which
+  is the one deletion that does take the records with it
+- Clear usage history is account-wide and is the only thing that removes a record.
+  It advances a shared cutoff first, so every device excludes everything at or before
+  it the moment the setting lands, and deletes the rows locally afterwards in
+  bounded, resumable passes. That ordering is what holds the guarantee for a device
+  that was offline during the clear: no amount of late syncing resurrects cleared
+  history, and an interrupted purge finishes on the next load rather than stranding a
+  half-cleared ledger
+- Which device a record belongs to is derived in a fixed order — the surface the
+  dispatch originated from, then the device class stamped on the record, then the
+  source device on the turn — so a car session and a wrist capture are not folded
+  into the phone that carried the request. An attempt the ledger could not place
+  leaves the breakdown it cannot be placed in and stays inside every total and rate,
+  because a row standing for "not measured" reads as one more of the things beside it
+- Every dispatching surface writes to the ledger — CarPlay, the Watch, the Converse
+  intent, the shared inbox and the background uploader. A build that measured some
+  routes and not others would not under-report evenly; it would make whichever
+  surfaces were instrumented look like the whole of how the app is used, and no later
+  release can repair a period recorded that way
+- Two send-path properties hardened to support this, and worth more than the
+  dashboard: the agent's reply is written under an identifier minted at dispatch, so
+  the same reply landing twice cannot produce a second copy of it; and a cancellation
+  now names the exact turn rather than the conversation holding it, so stopping one
+  turn leaves a sibling running beside it alone
+
+### macOS — deleting a conversation
+
+- macOS had no delete path at all: the iOS swipe renders nothing there and the host
+  suppresses the toolbar actions. Right-click a sidebar row for Delete (no
+  confirmation, matching the iOS swipe), and Delete All sits in the window toolbar's
+  sidebar band
+- The trash sits on the leading side of that band, apart from compose and the sidebar
+  toggle, and is hidden whenever the sidebar is collapsed — a collapsed bar should
+  carry no bulk-destructive action
+- Deleting the open thread resets the window to the new-chat state by the same path
+  ⌘N takes; the composer no longer stays mounted against a dead conversation
+
+### CarPlay
+
+- A session that died while its audio engine was still starting could commit a
+  running engine and a live input tap onto a dead session, which held the car's
+  hands-free microphone until the device was rebooted — every later start refused.
+  The commit re-checks the session and discards the engine instead, and the service's
+  observers, a hard disconnect and an abrupt scene teardown are all covered
+- A voice session that timed out on silence simply vanished, which on a car screen
+  reads as a crash. Both silence windows now end by speaking: the ordinary sign-off
+  when the capture pipeline is healthy, including on the cold-connect window, and one
+  line about the microphone when the pipeline is genuinely dead. Which layer failed is
+  a question for the logs, not for the driver
+- Three constraints keep that verdict honest. Counters are scoped to the current tap
+  and reset when an engine reconfiguration reinstalls it, so one healthy conversion
+  from before cannot mask a pipeline that has since died; a tap too young to have seen
+  anything convicts nobody; and an all-zero but finite probability stream is read as a
+  quiet cabin rather than a fault, because telling a silent driver their microphone is
+  broken is the worse error
+- Speech is corroborated before it counts: two consecutive chunks at or above the
+  threshold, judged on raw per-chunk probabilities rather than the detector's own
+  in-speech state, whose hysteresis keeps reporting speech across several quiet frames.
+  One loud 256 ms chunk of road noise used to be enough to declare speech. The accepted
+  cost is a genuinely short answer that yields only one qualifying chunk — it is
+  dropped, with the microphone still live
+- The silence windows are named and long on purpose (15 s before the first word, 20 s
+  after a reply): killing a live conversation is worse than holding the audio route
+  while a driver thinks or attends to the road. A muted session is never signed off
+  for not talking, and endpointing is quantized in 256 ms frames, so the tuning dial's
+  dead zones are computed rather than guessed at
+- An empty transcript and a speech provider's own no-speech verdict mean the same
+  thing to a driver: both say so and listen again, and the second in a row signs off
+- A microphone that fails to start now shows a "Mic couldn't start" row instead of
+  vanishing silently — gated on the voice modal still being up, so a driver who
+  already dismissed it is never falsely told the mic failed
+- A reply heard in the car no longer stays marked unread. Unread is derived from
+  whether a conversation's tail is newer than what you last viewed, and CarPlay was
+  the one reply surface that never wrote that marker, because the car has no thread
+  view. It writes it now, gated on proof the reply was actually heard: audio began for
+  that turn and the turn settled finished. Ending mid-speech, a system interruption
+  and a never-spoken reply all stay unread, and so does a newer reply that arrives
+  while an older one is still being read out
+
+### Watch
+
+- The launchpad no longer flashes a greyed-out Ask button and a "Recording…" caption
+  while the capture screen is being pushed. Choosing a gateway arms the recorder and
+  pushes the route in one transaction, so the still-visible root re-rendered busy
+  underneath the animation. "Still answering your last question." still shows, because
+  that case really is about the root
+
+### Sync — a peer's delete lands on quiet devices
+
+- Forgetting a custom gateway on one device left a stale row on the others. The live
+  change notification only reaches a running process — the system applies the
+  key-value delta silently while the app is quit and replays nothing at the next
+  launch — and the one cold-launch catch-up was gated on an iCloud check that reads
+  the ubiquity identity token, which tracks iCloud Drive rather than the key-value
+  store. A Mac with iCloud Drive off, or one that simply was not running, kept the
+  deleted row forever. Every device now reconciles the synced roster from the local
+  key-value cache at launch and on foreground activation, ungated
+- That reconcile only ever adopts. It acts on a roster the store actually holds, never
+  reads an absent key as a delete — a signed-out device reads exactly the same thing —
+  and never publishes the local roster upward
+- The custom voice-endpoint roster reconciles by the same rule, and it carried an
+  extra fault the gateway path did not: its launch pass was iCloud-wins-then-push-up,
+  so a device whose cache had not downloaded yet republished its stale roster and
+  brought back endpoints a peer had deleted
+- A deleted voice endpoint that was the active speech or speech-synthesis provider
+  now falls both pointers back to Apple. Unlike a dangling gateway pointer, that one
+  still resolved: the transcription path reads the endpoint's address without
+  consulting the roster, so recorded audio and a bearer token would keep going to a
+  server the user had deleted. Only a confirmed delete does this — a launch or
+  activation reconcile still leaves pointers alone, because a roster older than an
+  endpoint this device just created is indistinguishable from a delete
+
+### Files
+
+- A send from a dead spot charged the pre-dispatch folder check as "file server
+  unreachable" — one strike, cooldown open — so the retry sent once the connection
+  came back was suppressed, went out folder-less, and drew "No folder for this reply"
+  underneath a perfectly healthy server's answer. An attempt that never left the
+  device now charges nothing: no network path, or a cancellation that is genuinely
+  ours, is evidence about the device rather than about the lane. The two lane-authored
+  failures that look the same on the wire — a certificate-pin refusal and a peer
+  stream reset — keep the old one-strike patience
+
+### Project
+
+- The architecture document gains the usage ledger's constraints, the CarPlay silence,
+  endpointing and corroboration rules, and the roster-reconcile rule — stated as
+  decisions rather than as description of the code beneath them
+- A CarPlay Simulator QA runbook records the rig setup, the reboot-first rule, and how
+  to tell a Simulator that dropped a button tap from app code that ignored one
+
+Verified: iOS 4506 tests / 0 failures · watchOS 226 / 0 · Release builds green on iOS and macOS · macOS test bundle compiles · storage-seam and folder-map guards clean
+
 ## [1.4-10] — the local-server release
 
 App Store release, 22 August 2026. Tagged `v1.4-10`.
