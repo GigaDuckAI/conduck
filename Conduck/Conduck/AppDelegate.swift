@@ -390,6 +390,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // CarPlay side effects on every activation.
         NotificationCenter.default.post(name: .conversationsNeedLocalRefresh, object: nil)
         Task { await CloudSyncMonitor.shared.refresh() }
+
+        // Gateway-roster catch-up. A peer's Forget can land in the KVS cache
+        // with no change notification (dropped, or applied while this long-lived
+        // menu-bar process was inactive) — adopt it on activation so the stale
+        // row leaves the Personal AI list. Posts change only when something moved.
+        Task { await SettingsManager.shared.catchUpGatewayRosterOnActivate() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {

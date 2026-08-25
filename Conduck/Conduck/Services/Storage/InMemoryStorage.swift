@@ -151,7 +151,33 @@ final class InMemoryUbiquitousStore: UbiquitousStore, @unchecked Sendable {
     }
 
     @discardableResult
-    func synchronize() -> Bool { true }
+    func synchronize() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        synchronizeCallCountStorage += 1
+        lastSynchronizedSnapshotStorage = storage
+        return true
+    }
+
+    /// Test affordance — how many times `synchronize()` was called, so a suite
+    /// can assert a write path flags its KVS delta for upload.
+    private var synchronizeCallCountStorage = 0
+    var synchronizeCallCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return synchronizeCallCountStorage
+    }
+
+    /// Test affordance — the store's contents at the most recent
+    /// `synchronize()`, so a suite can assert the FINAL flush of a multi-write
+    /// operation covered everything (a mid-operation flush leaves later
+    /// removals dirty, and a count alone can't tell the two apart).
+    private var lastSynchronizedSnapshotStorage: [String: Any]?
+    var lastSynchronizedSnapshot: [String: Any]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastSynchronizedSnapshotStorage
+    }
 
     func dictionaryRepresentation() -> [String: Any] {
         lock.lock()
@@ -209,8 +235,10 @@ final class InMemoryKVSChangeSource: KVSChangeSource, @unchecked Sendable {
 
 // MARK: - Cloud availability
 
-/// Fixed availability. Flip to `true` to exercise the KVS read-fallback and
-/// `performInitialSync`, both of which production gates on an iCloud account.
+/// Fixed availability. Flip to `true` to exercise the account-gated push-up
+/// arms of `performInitialSync`. Setters dual-write to KVS regardless, and
+/// cache READS (the custom-gateway reconcile, the roster read-fallback) run
+/// regardless too, by design.
 final class StubCloudAvailability: CloudAvailability, @unchecked Sendable {
     private let lock = NSLock()
     private var available: Bool
@@ -402,10 +430,11 @@ extension SettingsDependencies {
     /// - Parameter cloudAvailable: defaults to `false`, matching a device
     ///   signed OUT of iCloud — the posture the headless simulator has always
     ///   had (`ubiquityIdentityToken` is nil there). This keeps the KVS
-    ///   read-fallback off by default, so one suite's dual-written KVS value
-    ///   cannot leak into another suite's read. Pass `true` to exercise the
-    ///   fallback or `performInitialSync`, both of which production gates on an
-    ///   iCloud account.
+    ///   push-up arms off by default. Cache READS — the custom-gateway
+    ///   reconcile and the roster read-fallback — run regardless (each bundle's
+    ///   KVS is its own fresh dictionary, so no cross-suite leak arises); pass
+    ///   `true` to exercise the account-gated remainder of
+    ///   `performInitialSync`.
     nonisolated static func inMemory(
         defaults: InMemoryDefaultsStore = InMemoryDefaultsStore(),
         ubiquitous: InMemoryUbiquitousStore = InMemoryUbiquitousStore(),
