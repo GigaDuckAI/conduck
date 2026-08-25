@@ -19,6 +19,15 @@
 // never the endpoint behind it. The only strings that come off the wire arrive
 // through `GatewayResponseMetadata`, already bounded and scanned there.
 //
+// THREE OF THE TOKEN COLUMNS ARE SUBSETS OF THE OTHERS, AND NOTHING MAY ADD
+// THEM INTO A TOTAL. `reportedCachedInputTokens` and
+// `reportedCacheWriteInputTokens` are parts of `reportedInputTokens`;
+// `reportedReasoningOutputTokens` is part of `reportedOutputTokens`. Containment
+// is documented and never enforced — a gateway reporting more cached input than
+// input is stored exactly as it said, the same way an inconsistent
+// `reportedTotalTokens` is — and nil on any of the three means the gateway
+// reported nothing there, which no backfill will ever change.
+//
 // ONE DERIVATION LIVES HERE AND NOWHERE ELSE: an attempt's EFFECTIVE outcome.
 // A row whose stored outcome is still `inFlight` is not evidence that a turn is
 // running — attempts sync across devices while `URLSession` registries are
@@ -337,6 +346,15 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
     let reportedInputTokens: Int64?
     let reportedOutputTokens: Int64?
     let reportedTotalTokens: Int64?
+    /// The three token-DETAIL columns, and the whole of what makes them
+    /// different from the three above: each is a SUBSET of a figure already
+    /// reported — cached and cache-write of the input, reasoning of the output.
+    /// Nothing may add one into a total. Nil is the ordinary case: most gateways
+    /// report none of them, and every row written before they existed carries
+    /// nil forever, because there is no backfill.
+    let reportedCachedInputTokens: Int64?
+    let reportedCacheWriteInputTokens: Int64?
+    let reportedReasoningOutputTokens: Int64?
     /// The measurement semantics the writing client used. Nil on a row written
     /// before the field existed.
     let recordVersion: Int?
@@ -387,6 +405,9 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
         reportedInputTokens: Int64? = nil,
         reportedOutputTokens: Int64? = nil,
         reportedTotalTokens: Int64? = nil,
+        reportedCachedInputTokens: Int64? = nil,
+        reportedCacheWriteInputTokens: Int64? = nil,
+        reportedReasoningOutputTokens: Int64? = nil,
         recordVersion: Int? = currentRecordVersion,
         hasStoredOutcome: Bool = true,
         originDeviceClass: String? = nil,
@@ -413,6 +434,9 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
         self.reportedInputTokens = reportedInputTokens
         self.reportedOutputTokens = reportedOutputTokens
         self.reportedTotalTokens = reportedTotalTokens
+        self.reportedCachedInputTokens = reportedCachedInputTokens
+        self.reportedCacheWriteInputTokens = reportedCacheWriteInputTokens
+        self.reportedReasoningOutputTokens = reportedReasoningOutputTokens
         self.recordVersion = recordVersion
         self.hasStoredOutcome = hasStoredOutcome
         self.originDeviceClass = originDeviceClass
@@ -429,7 +453,7 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
     /// a later callback, and a fabricated id is no less unmatchable than nil
     /// while keeping every downstream type non-optional.
     ///
-    /// The three `Integer 64` columns come through KVC as `NSNumber` because
+    /// The six `Integer 64` columns come through KVC as `NSNumber` because
     /// they are modelled non-scalar — which is the whole point: only an
     /// `NSNumber?` can tell a reported ZERO apart from NOTHING REPORTED, and a
     /// scalar column would read both as 0 and quietly claim every gateway
@@ -462,6 +486,12 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
             (managedObject.value(forKey: "reportedOutputTokens") as? NSNumber)?.int64Value
         self.reportedTotalTokens =
             (managedObject.value(forKey: "reportedTotalTokens") as? NSNumber)?.int64Value
+        self.reportedCachedInputTokens =
+            (managedObject.value(forKey: "reportedCachedInputTokens") as? NSNumber)?.int64Value
+        self.reportedCacheWriteInputTokens =
+            (managedObject.value(forKey: "reportedCacheWriteInputTokens") as? NSNumber)?.int64Value
+        self.reportedReasoningOutputTokens =
+            (managedObject.value(forKey: "reportedReasoningOutputTokens") as? NSNumber)?.int64Value
         self.recordVersion = (managedObject.value(forKey: "recordVersion") as? NSNumber)?.intValue
         self.originDeviceClass = managedObject.value(forKey: "originDeviceClass") as? String
         self.currentTurnInlineImageCount =
@@ -475,9 +505,9 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
         self.fallbackSourceDevice = nil
     }
 
-    /// The six reported columns viewed back as the value they were parsed from,
-    /// so aggregation reads one shape whether it is looking at a fresh landing
-    /// or a stored row.
+    /// The nine reported columns viewed back as the value they were parsed
+    /// from, so aggregation reads one shape whether it is looking at a fresh
+    /// landing or a stored row.
     var reportedMetadata: GatewayResponseMetadata {
         GatewayResponseMetadata(
             reportedModel: reportedModel,
@@ -485,7 +515,10 @@ nonisolated struct GatewayAttemptRecord: Identifiable, Hashable, Sendable {
             finishReason: finishReason,
             reportedInputTokens: reportedInputTokens,
             reportedOutputTokens: reportedOutputTokens,
-            reportedTotalTokens: reportedTotalTokens
+            reportedTotalTokens: reportedTotalTokens,
+            reportedCachedInputTokens: reportedCachedInputTokens,
+            reportedCacheWriteInputTokens: reportedCacheWriteInputTokens,
+            reportedReasoningOutputTokens: reportedReasoningOutputTokens
         )
     }
 

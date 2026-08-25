@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788.4" systemVersion="25A340" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="YES" userDefinedModelVersionIdentifier="">
+    <entity name="Attachment" representedClassName="Attachment" syncable="YES" codeGenerationType="class">
+        <attribute name="byteSize" optional="YES" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="data" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
+        <attribute name="filename" optional="YES" attributeType="String"/>
+        <attribute name="height" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isServerReference" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="mimeType" optional="YES" attributeType="String"/>
+        <attribute name="previewData" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
+        <attribute name="previewKind" optional="YES" attributeType="String"/>
+        <attribute name="sequence" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="storedKey" optional="YES" attributeType="String"/>
+        <attribute name="thumbnailData" optional="YES" attributeType="Binary"/>
+        <attribute name="width" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <relationship name="message" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Message" inverseName="attachments" inverseEntity="Message"/>
+    </entity>
+    <entity name="Conversation" representedClassName="Conversation" syncable="YES" codeGenerationType="class">
+        <attribute name="backend" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="failureSeenAttemptID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="hideEarlierPhotos" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="lastActivityAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastViewedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="sessionID" optional="YES" attributeType="String"/>
+        <attribute name="tailProjection" optional="YES" attributeType="String"/>
+        <attribute name="title" optional="YES" attributeType="String"/>
+        <attribute name="titleSnippet" optional="YES" attributeType="String"/>
+        <relationship name="messages" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Message" inverseName="conversation" inverseEntity="Message"/>
+    </entity>
+    <entity name="GatewayAttempt" representedClassName="GatewayAttempt" syncable="YES" codeGenerationType="class">
+        <attribute name="appErrorCode" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="completedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="conversationID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="currentTurnInlineImageCount" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="currentTurnInlineTextFileCount" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="finishReason" optional="YES" attributeType="String"/>
+        <attribute name="gatewayRef" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="inputMode" optional="YES" attributeType="String"/>
+        <attribute name="originDeviceClass" optional="YES" attributeType="String"/>
+        <attribute name="originSurface" optional="YES" attributeType="String"/>
+        <attribute name="outcome" optional="YES" attributeType="String"/>
+        <attribute name="priorTurnInlineImageCount" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="priorTurnInlineTextFileCount" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="recordVersion" optional="YES" attributeType="Integer 16" usesScalarValueType="NO"/>
+        <attribute name="reportedCachedInputTokens" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="reportedCacheWriteInputTokens" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="reportedInputTokens" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="reportedModel" optional="YES" attributeType="String"/>
+        <attribute name="reportedOutputTokens" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="reportedReasoningOutputTokens" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="reportedResponseID" optional="YES" attributeType="String"/>
+        <attribute name="reportedTotalTokens" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="requestedModel" optional="YES" attributeType="String"/>
+        <attribute name="startedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userMessageID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <relationship name="userMessage" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Message" inverseName="gatewayAttempts" inverseEntity="Message"/>
+    </entity>
+    <entity name="Message" representedClassName="Message" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="deliveryAttemptID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="failureCode" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="failureHadHistoryImages" optional="YES" attributeType="Boolean" usesScalarValueType="NO"/>
+        <attribute name="failureWireCode" optional="YES" attributeType="String"/>
+        <attribute name="fileTransferLaneID" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="outputBoxKey" optional="YES" attributeType="String"/>
+        <attribute name="outputRefusedShapeCount" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="outputRefusedShapeOverlongCount" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="outputRefusedShapeWhitespaceCount" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="outputRefusedTypeCount" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="outputRefusedTypeNames" optional="YES" attributeType="String"/>
+        <attribute name="outputRemainderIsRecoverable" optional="YES" attributeType="Boolean" usesScalarValueType="NO"/>
+        <attribute name="outputScanDone" optional="YES" attributeType="Boolean" usesScalarValueType="NO"/>
+        <attribute name="outputScanLaneID" optional="YES" attributeType="String"/>
+        <attribute name="outputUndeliveredCount" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="role" optional="YES" attributeType="String"/>
+        <attribute name="sourceDevice" optional="YES" attributeType="String"/>
+        <attribute name="status" optional="YES" attributeType="String"/>
+        <attribute name="text" optional="YES" attributeType="String"/>
+        <relationship name="attachments" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Attachment" inverseName="message" inverseEntity="Attachment"/>
+        <relationship name="conversation" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Conversation" inverseName="messages" inverseEntity="Conversation"/>
+        <relationship name="gatewayAttempts" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="GatewayAttempt" inverseName="userMessage" inverseEntity="GatewayAttempt"/>
+    </entity>
+</model>

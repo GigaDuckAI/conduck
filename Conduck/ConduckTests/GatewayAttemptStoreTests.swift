@@ -292,6 +292,70 @@ final class GatewayAttemptStoreTests: XCTestCase {
         XCTAssertEqual(row.reportedTotalTokens, 1_540)
     }
 
+    /// The three token-DETAIL columns travel the same shared path as the six
+    /// beside them — metadata → terminal observation → row write → defensive KVC
+    /// read — and each is a SUBSET of a figure already stored, never added into
+    /// one. Asserted with values that are deliberately NOT contained by their
+    /// parents nowhere: the point is that the write is a copy, not a check.
+    func testTerminalizeStoresTheThreeTokenDetailColumns() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let draft = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
+        _ = await store.beginGatewayAttempt(draft: draft)
+
+        await store.terminalizeGatewayAttempt(
+            TerminalAttemptObservation(
+                attemptID: draft.attemptID,
+                completedAt: Date(),
+                outcome: .succeeded,
+                metadata: GatewayResponseMetadata(
+                    reportedInputTokens: 1_200,
+                    reportedOutputTokens: 340,
+                    reportedTotalTokens: 1_540,
+                    reportedCachedInputTokens: 900,
+                    reportedCacheWriteInputTokens: 0,
+                    reportedReasoningOutputTokens: 260
+                )
+            )
+        )
+
+        let row = try await onlyAttempt(in: store)
+        XCTAssertEqual(row.reportedCachedInputTokens, 900)
+        XCTAssertEqual(row.reportedCacheWriteInputTokens, 0,
+                       "a reported zero is an observation, and the non-scalar column is what "
+                       + "keeps it apart from a column nobody wrote")
+        XCTAssertEqual(row.reportedReasoningOutputTokens, 260)
+        XCTAssertEqual(row.reportedInputTokens, 1_200,
+                       "the subsets change nothing about the figures they are parts of")
+        XCTAssertEqual(row.reportedOutputTokens, 340)
+        XCTAssertEqual(row.reportedTotalTokens, 1_540)
+    }
+
+    /// The nil case, and the reason the columns are optional: a gateway that
+    /// reported the flat counts and no detail leaves three columns unwritten,
+    /// and nothing may read that as three zeroes.
+    func testTerminalizeLeavesTheDetailColumnsNilWhenNoneWereReported() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let draft = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
+        _ = await store.beginGatewayAttempt(draft: draft)
+
+        await store.terminalizeGatewayAttempt(
+            TerminalAttemptObservation(
+                attemptID: draft.attemptID,
+                completedAt: Date(),
+                outcome: .succeeded,
+                metadata: makeMetadata()
+            )
+        )
+
+        let row = try await onlyAttempt(in: store)
+        XCTAssertEqual(row.reportedInputTokens, 1_200)
+        XCTAssertNil(row.reportedCachedInputTokens)
+        XCTAssertNil(row.reportedCacheWriteInputTokens)
+        XCTAssertNil(row.reportedReasoningOutputTokens)
+    }
+
     func testTerminalizeIsUpdateOnlyAndNeverReopensATerminalRow() async throws {
         let store = makeStore()
         let seed = try await seedTurn(in: store)

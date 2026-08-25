@@ -216,6 +216,156 @@ final class GatewayResponseMetadataTests: XCTestCase {
                        + "replace a gateway fact with a client guess nothing could tell apart")
     }
 
+    // MARK: - Token detail (`*_tokens_details`)
+
+    /// The three paths the contract names, and only those. Each is a SUBSET of
+    /// a flat figure beside it, which is why the flat figures are asserted
+    /// unchanged in the same breath: nothing may fold a subset into a total.
+    func testTheThreeTokenDetailPathsAreObserved() {
+        let metadata = parse("""
+        {
+          "usage": {
+            "prompt_tokens": 1200,
+            "completion_tokens": 340,
+            "total_tokens": 1540,
+            "prompt_tokens_details": {"cached_tokens": 900, "cache_write_tokens": 120},
+            "completion_tokens_details": {"reasoning_tokens": 260}
+          }
+        }
+        """)
+        XCTAssertEqual(metadata.reportedCachedInputTokens, 900)
+        XCTAssertEqual(metadata.reportedCacheWriteInputTokens, 120)
+        XCTAssertEqual(metadata.reportedReasoningOutputTokens, 260)
+        XCTAssertEqual(metadata.reportedInputTokens, 1200,
+                       "a detail field is a part of the flat figure, never a replacement for it")
+        XCTAssertEqual(metadata.reportedOutputTokens, 340)
+        XCTAssertEqual(metadata.reportedTotalTokens, 1540)
+    }
+
+    /// Absent and zero are different observations here for exactly the reason
+    /// they are for the flat columns: coverage counts an attempt that REPORTED,
+    /// and a nil that summed as zero would claim a gateway said something.
+    func testAbsentDetailIsNilAndAnExplicitZeroIsReported() {
+        let absent = parse(#"{"usage":{"prompt_tokens":10,"completion_tokens":5}}"#)
+        XCTAssertNil(absent.reportedCachedInputTokens)
+        XCTAssertNil(absent.reportedCacheWriteInputTokens)
+        XCTAssertNil(absent.reportedReasoningOutputTokens)
+
+        let zero = parse("""
+        {"usage":{"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+                  "completion_tokens_details":{"reasoning_tokens":0}}}
+        """)
+        XCTAssertEqual(zero.reportedCachedInputTokens, 0)
+        XCTAssertEqual(zero.reportedCacheWriteInputTokens, 0)
+        XCTAssertEqual(zero.reportedReasoningOutputTokens, 0)
+        XCTAssertFalse(zero.isEmpty,
+                       "a gateway that reported three zeroes reported something, and the "
+                       + "persistence gate reads this flag to decide whether to store the row")
+    }
+
+    /// Only the paths the contract names. A vendor dialect read into a column
+    /// named for a different one is a fact the ledger could never unlearn.
+    func testOtherVendorCacheDialectsAreNotAliased() {
+        let metadata = parse("""
+        {"usage":{"cache_creation_input_tokens":500,"cache_read_input_tokens":700,
+                  "prompt_cache_hit_tokens":800,"cached_tokens":900}}
+        """)
+        XCTAssertNil(metadata.reportedCachedInputTokens,
+                     "Anthropic's and DeepSeek's spellings — and a flat `cached_tokens` outside "
+                     + "`prompt_tokens_details` — are deliberately not parsed")
+        XCTAssertNil(metadata.reportedCacheWriteInputTokens)
+    }
+
+    /// A `details` value that is not an object costs its own three fields and
+    /// NOTHING else — the same per-field tolerance one level down.
+    func testMalformedDetailsDictionaryLeavesTheFlatFieldsIntact() {
+        for hostile in ["42", #""cached""#, "[1,2,3]", "null", "true"] {
+            let metadata = parse("""
+            {"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,
+                      "prompt_tokens_details":\(hostile),
+                      "completion_tokens_details":\(hostile)}}
+            """)
+            XCTAssertEqual(metadata.reportedInputTokens, 10, "hostile details: \(hostile)")
+            XCTAssertEqual(metadata.reportedOutputTokens, 5, "hostile details: \(hostile)")
+            XCTAssertEqual(metadata.reportedTotalTokens, 15, "hostile details: \(hostile)")
+            XCTAssertNil(metadata.reportedCachedInputTokens)
+            XCTAssertNil(metadata.reportedCacheWriteInputTokens)
+            XCTAssertNil(metadata.reportedReasoningOutputTokens)
+        }
+    }
+
+    /// The nested values inherit the flat fields' validator verbatim: a numeric
+    /// string, a Boolean, a negative, a float spelling and an overflow are each
+    /// rejected PER FIELD without touching a valid sibling in the same
+    /// dictionary.
+    func testDetailValuesInheritTheHostileInputDiscipline() {
+        let metadata = parse("""
+        {"usage":{"prompt_tokens":10,
+                  "prompt_tokens_details":{"cached_tokens":"900","cache_write_tokens":120},
+                  "completion_tokens_details":{"reasoning_tokens":true}}}
+        """)
+        XCTAssertNil(metadata.reportedCachedInputTokens, "a numeric string is a gateway with a bug")
+        XCTAssertEqual(metadata.reportedCacheWriteInputTokens, 120,
+                       "rejection is per field inside the details dictionary too")
+        XCTAssertNil(metadata.reportedReasoningOutputTokens,
+                     "JSONSerialization bridges `true` to an NSNumber whose intValue is 1")
+
+        XCTAssertNil(parse("""
+        {"usage":{"prompt_tokens_details":{"cached_tokens":-5}}}
+        """).reportedCachedInputTokens)
+        XCTAssertNil(parse("""
+        {"usage":{"prompt_tokens_details":{"cached_tokens":12.0}}}
+        """).reportedCachedInputTokens)
+        XCTAssertNil(parse("""
+        {"usage":{"completion_tokens_details":{"reasoning_tokens":9223372036854775808}}}
+        """).reportedReasoningOutputTokens)
+    }
+
+    /// Containment is documented and NEVER enforced. A gateway claiming more
+    /// cached tokens than prompt tokens is preserved exactly, the same way an
+    /// inconsistent total already is — repairing it would swap a gateway fact
+    /// for a client guess nothing could tell apart.
+    func testContainmentIsNeverEnforcedOrRepaired() {
+        let metadata = parse("""
+        {"usage":{"prompt_tokens":10,"completion_tokens":4,
+                  "prompt_tokens_details":{"cached_tokens":9999},
+                  "completion_tokens_details":{"reasoning_tokens":8888}}}
+        """)
+        XCTAssertEqual(metadata.reportedCachedInputTokens, 9999)
+        XCTAssertEqual(metadata.reportedReasoningOutputTokens, 8888)
+        XCTAssertEqual(metadata.reportedInputTokens, 10)
+        XCTAssertEqual(metadata.reportedOutputTokens, 4)
+    }
+
+    /// A gateway that reports ONLY a detail field has still reported something,
+    /// so the persistence gate must not discard the one column it had.
+    func testADetailFieldAloneIsNotAnEmptyObservation() {
+        let metadata = parse(#"{"usage":{"prompt_tokens_details":{"cached_tokens":7}}}"#)
+        XCTAssertFalse(metadata.isEmpty)
+        XCTAssertEqual(metadata.reportedCachedInputTokens, 7)
+    }
+
+    /// The whole hostile matrix at once, on the same body: nothing throws, and
+    /// every field that was valid survives.
+    func testAWhollyHostileUsageDictionaryStillCannotThrowPastTheUnit() {
+        let metadata = parse("""
+        {"model":"m1","id":"r1","choices":[{"finish_reason":"stop"}],
+         "usage":{"prompt_tokens":{"n":1},"completion_tokens":[],"total_tokens":"x",
+                  "prompt_tokens_details":{"cached_tokens":[{"a":1}],
+                                           "cache_write_tokens":{"b":[null]}},
+                  "completion_tokens_details":[{"reasoning_tokens":5}]}}
+        """)
+        XCTAssertNil(metadata.reportedInputTokens)
+        XCTAssertNil(metadata.reportedOutputTokens)
+        XCTAssertNil(metadata.reportedTotalTokens)
+        XCTAssertNil(metadata.reportedCachedInputTokens)
+        XCTAssertNil(metadata.reportedCacheWriteInputTokens)
+        XCTAssertNil(metadata.reportedReasoningOutputTokens)
+        XCTAssertEqual(metadata.reportedModel, "m1", "the valid siblings are untouched")
+        XCTAssertEqual(metadata.reportedResponseID, "r1")
+        XCTAssertEqual(metadata.finishReason, "stop")
+    }
+
     // MARK: - String bounding
 
     func testOverlongModelIsRejectedNotTruncated() {

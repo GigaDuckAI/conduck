@@ -116,9 +116,23 @@ struct UsageDeviceDetailView: View {
             }
             .settingsCardPassiveRow()
 
-            if !summary.dailyActivity.isEmpty {
-                UsageActivityChart(buckets: summary.dailyActivity)
-                    .settingsCardPassiveRow()
+            if !summary.activity.isEmpty {
+                // NO Devices MEASURE HERE — this screen is already one device,
+                // so the split would draw one segment restating the title. The
+                // scope line carries what it would have said.
+                UsageActivityChart(
+                    activity: summary.activity,
+                    recordedAttempts: summary.recordedAttempts,
+                    tokenMeasuredAttempts: summary.tokenMeasuredAttempts,
+                    gatewayRoster: gatewayRoster,
+                    availableMetrics: UsageChartMetric.allCases.filter { $0 != .devices },
+                    scope: UsageActivityChart.Scope(
+                        name: title,
+                        attempts: summary.recordedAttempts,
+                        rangeAttempts: model.summary.recordedAttempts
+                    )
+                )
+                .settingsCardPassiveRow()
             }
         } header: {
             Text(LocalizedStringResource(

@@ -710,28 +710,6 @@
         }
       }
     },
-    "carplay.hint.captureStartFailed.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Tap New voice chat to try again."
-          }
-        }
-      }
-    },
-    "carplay.hint.captureStartFailed.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Mic couldn't start"
-          }
-        }
-      }
-    },
     "carplay.error.fileTransferNotConfigured.speak" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -805,6 +783,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Your AI couldn't use a photo in this chat. Start a new voice chat."
+          }
+        }
+      }
+    },
+    "carplay.hint.captureStartFailed.detail" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap New voice chat to try again."
+          }
+        }
+      }
+    },
+    "carplay.hint.captureStartFailed.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Mic couldn't start"
           }
         }
       }
@@ -14516,57 +14516,79 @@
         }
       }
     },
-    "settings.usage.chart.a11y.reliability" : {
+    "settings.usage.chart.a11y.devices" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Chart of the share of attempts that succeeded, per day"
+            "value" : "Chart of attempts by device per %@"
           }
         }
       }
     },
-    "settings.usage.chart.a11y.tokens" : {
+    "settings.usage.chart.a11y.gateways" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Chart of tokens per day"
+            "value" : "Chart of attempts by gateway per %@"
           }
         }
       }
     },
-    "settings.usage.chart.a11y.turns" : {
+    "settings.usage.chart.a11y.results" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Chart of turns per day"
+            "value" : "Chart of succeeded and failed attempts per %@"
           }
         }
       }
     },
-    "settings.usage.chart.axis.day" : {
+    "settings.usage.chart.a11y.tokens.v2" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Day"
+            "value" : "Chart of tokens per %@"
           }
         }
       }
     },
-    "settings.usage.chart.axis.success" : {
+    "settings.usage.chart.a11y.turns.v2" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Success rate"
+            "value" : "Chart of turns per %@"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.axis.attempts" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.axis.period" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Period"
           }
         }
       }
@@ -14593,35 +14615,90 @@
         }
       }
     },
-    "settings.usage.chart.caption" : {
+    "settings.usage.chart.clause.attempts" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Turns per day"
+            "value" : "%lld attempts"
           }
         }
       }
     },
-    "settings.usage.chart.caption.reliability" : {
+    "settings.usage.chart.clause.results" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Attempts that succeeded, per day"
+            "value" : "%1$lld of %2$lld succeeded"
           }
         }
       }
     },
-    "settings.usage.chart.caption.tokens" : {
+    "settings.usage.chart.clause.results.none" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Tokens per day"
+            "value" : "nothing succeeded or failed"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.clause.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ tokens"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.clause.tokens.none" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "no token data"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.clause.turns" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld turns · %2$lld attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.metric.devices" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Devices"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.metric.gateways" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Gateways"
           }
         }
       }
@@ -14637,13 +14714,13 @@
         }
       }
     },
-    "settings.usage.chart.metric.reliability" : {
+    "settings.usage.chart.metric.results" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Success"
+            "value" : "Results"
           }
         }
       }
@@ -14670,46 +14747,244 @@
         }
       }
     },
-    "settings.usage.chart.selection" : {
+    "settings.usage.chart.period.span" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@ · %2$lld turns · %3$lld attempts"
+            "value" : "%1$@ – %2$@"
           }
         }
       }
     },
-    "settings.usage.chart.selection.reliability" : {
+    "settings.usage.chart.period.week" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@ · %2$lld of %3$lld succeeded"
+            "value" : "Week of %@"
           }
         }
       }
     },
-    "settings.usage.chart.selection.reliability.none" : {
+    "settings.usage.chart.rest.devices" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%@ · nothing finished this day"
+            "value" : "Attempts by device, per %@"
           }
         }
       }
     },
-    "settings.usage.chart.selection.tokens" : {
+    "settings.usage.chart.rest.gateways" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@ · %2$@ tokens"
+            "value" : "Attempts by gateway, per %@"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.rest.results" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Succeeded and failed attempts, per %@"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.rest.tokens" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tokens per %@"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.rest.turns" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Turns per %@"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.scope" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$lld of %3$lld attempts in this range"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.segment.count" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld %2$@"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.segment.notRecorded.count" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld not recorded"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.segment.other.count" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld other"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.segment.other.label" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Other"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.none" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "no attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.results.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld failed"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.results.none" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "nothing succeeded or failed — %lld with another outcome"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.results.other" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld with another outcome"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.results.succeeded" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld succeeded"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.tokens.none" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "no token data recorded"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.selection.tokens.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ tokens"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.soFar.day" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "so far today"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.soFar.month" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "this month so far"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.soFar.week" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "this week so far"
           }
         }
       }
@@ -14732,6 +15007,39 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "No attempt in this range reported a usable token total."
+          }
+        }
+      }
+    },
+    "settings.usage.chart.unit.day" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "day"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.unit.month" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "month"
+          }
+        }
+      }
+    },
+    "settings.usage.chart.unit.week" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "week"
           }
         }
       }
@@ -15513,6 +15821,127 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Not recorded"
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.failed.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed once"
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.failed.other" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed %lld times"
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.footer.gateway" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Only turns sent through %@."
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failures"
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.none" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No failed turns in this range."
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.reason.unrecorded" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reason not recorded"
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.recovered" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed, then recovered"
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.showing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Showing %1$lld of %2$lld"
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.showMore" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Show more"
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed turns"
+          }
+        }
+      }
+    },
+    "settings.usage.incidents.undated" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Time not recorded"
           }
         }
       }
@@ -16309,6 +16738,28 @@
         }
       }
     },
+    "settings.usage.tokens.cachedInput" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cached input"
+          }
+        }
+      }
+    },
+    "settings.usage.tokens.cacheWrites" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cache writes"
+          }
+        }
+      }
+    },
     "settings.usage.tokens.components" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -16338,6 +16789,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Reported on %@ of attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.tokens.detail.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "These are parts of the input and output figures above, counted only where your gateway reported them."
           }
         }
       }
@@ -16393,6 +16855,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Output"
+          }
+        }
+      }
+    },
+    "settings.usage.tokens.reasoningOutput" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reasoning output"
           }
         }
       }

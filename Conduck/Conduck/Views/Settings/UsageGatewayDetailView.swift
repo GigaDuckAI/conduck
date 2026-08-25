@@ -69,6 +69,11 @@ struct UsageGatewayDetailView: View {
     /// argument for it.
     @AppStorage("settings.usage.reliability.expanded") private var reliabilityExpanded = false
 
+    /// The Tokens card's own disclosure, shared with the overview's for the
+    /// reason the reliability flag is: a user who asked to see token detail once
+    /// asked to see it, not to see it on one screen.
+    @AppStorage("settings.usage.tokens.expanded") private var tokenDetailExpanded = false
+
     private var summary: GatewayUsageSummary { model.summary(forGateway: ref) }
 
     /// The range's raw rows narrowed to this slot. Needed for the reported-model
@@ -161,9 +166,24 @@ struct UsageGatewayDetailView: View {
             }
             .settingsCardPassiveRow()
 
-            if !summary.dailyActivity.isEmpty {
-                UsageActivityChart(buckets: summary.dailyActivity)
-                    .settingsCardPassiveRow()
+            if !summary.activity.isEmpty {
+                // NO Gateways MEASURE HERE. This screen is already filtered to
+                // one slot, so splitting its attempts by gateway would draw one
+                // segment restating the title. The scope line says what the
+                // split would have: this slot, and how much of the range it is.
+                UsageActivityChart(
+                    activity: summary.activity,
+                    recordedAttempts: summary.recordedAttempts,
+                    tokenMeasuredAttempts: summary.tokenMeasuredAttempts,
+                    gatewayRoster: gatewayRoster,
+                    availableMetrics: UsageChartMetric.allCases.filter { $0 != .gateways },
+                    scope: UsageActivityChart.Scope(
+                        name: title,
+                        attempts: summary.recordedAttempts,
+                        rangeAttempts: model.summary.recordedAttempts
+                    )
+                )
+                .settingsCardPassiveRow()
             }
         } header: {
             Text(LocalizedStringResource(
@@ -190,7 +210,10 @@ struct UsageGatewayDetailView: View {
                         """)
             )
 
-            UsageDetailRows.detailDisclosure(expanded: $reliabilityExpanded) {
+            UsageDetailRows.detailDisclosure(
+                expanded: $reliabilityExpanded,
+                accessibility: UsageDetailRows.reliabilityDetailsAccessibility
+            ) {
                 UsageDetailRows.reliability(summary)
 
                 if summary.truncatedReplies > 0 {
@@ -203,7 +226,10 @@ struct UsageGatewayDetailView: View {
                     )
                 }
 
-                UsageDetailRows.failureReasons(summary.failureReasons)
+                // Scoped to THIS slot: a reason row pushed from a gateway
+                // drill-down opens the turns that failed on that gateway, not
+                // every turn in the range that failed the same way.
+                UsageDetailRows.failureReasons(summary.failureReasons, gateway: .slot(ref))
             }
         } header: {
             Text(LocalizedStringResource(
@@ -303,6 +329,7 @@ struct UsageGatewayDetailView: View {
                     .settingsCardPassiveRow()
             } else {
                 UsageDetailRows.tokens(tokens)
+                UsageDetailRows.tokenDetail(tokens, expanded: $tokenDetailExpanded)
             }
 
             // Named, because these rows answer a different question from the
@@ -520,6 +547,7 @@ enum UsageDetailRows {
     @ViewBuilder
     static func detailDisclosure<Content: View>(
         expanded: Binding<Bool>,
+        accessibility: LocalizedStringResource,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
         #if os(macOS)
@@ -535,7 +563,7 @@ enum UsageDetailRows {
                     .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
                     // Decoration: the label beside it already names the row.
                     .accessibilityHidden(true)
-                detailDisclosureLabel
+                detailDisclosureLabel(accessibility: accessibility)
                 Spacer()
             }
         }
@@ -549,18 +577,37 @@ enum UsageDetailRows {
         DisclosureGroup(isExpanded: expanded) {
             content()
         } label: {
-            detailDisclosureLabel
+            detailDisclosureLabel(accessibility: accessibility)
                 .tappableDisclosureLabel(expanded)
         }
         #endif
     }
 
-    private static var detailDisclosureLabel: some View {
+    /// The one "Details" label in the usage section. Not private, because the
+    /// overview's Reliability card hand-rolls its own disclosure around its own
+    /// stored flag and renders THIS label inside it — two disclosures sit on
+    /// that screen at once, and a second copy of the label is how they would
+    /// end up at two different type sizes.
+    ///
+    /// `accessibility` names WHICH details for VoiceOver — the Reliability and
+    /// Tokens cards each put one of these on the same screen, and two rotor
+    /// entries both announcing "Details" cannot be told apart. The visible text
+    /// stays "Details": the card header above it already says which, sighted.
+    static func detailDisclosureLabel(
+        accessibility: LocalizedStringResource
+    ) -> some View {
         Text(LocalizedStringResource(
             "settings.usage.reliability.details", defaultValue: "Details"))
             .font(.subheadline)
             .foregroundStyle(AppColors.textPrimary)
+            .accessibilityLabel(Text(accessibility))
     }
+
+    /// The two VoiceOver names, one per card that owns a disclosure.
+    static let reliabilityDetailsAccessibility = LocalizedStringResource(
+        "settings.usage.reliability.details.a11y", defaultValue: "Reliability details")
+    static let tokenDetailsAccessibility = LocalizedStringResource(
+        "settings.usage.tokens.details.a11y", defaultValue: "Token details")
 
     /// The reliability upgrades, in the order they answer "did it work": how
     /// often the first try landed, how often a retry rescued a turn that did
@@ -604,16 +651,29 @@ enum UsageDetailRows {
     }
 
     /// Aggregate failure reasons — the top few by count, the tail folded into
-    /// one "Other" row. A COUNT PER REASON, never a list of incidents:
-    /// item-level investigation belongs in Diagnostics, where a single failure
-    /// can be looked at with the context that makes it actionable.
+    /// one "Other" row. A COUNT PER REASON, and the row is the way INTO the
+    /// turns behind it: passing `gateway:` makes each named reason push
+    /// `UsageIncidentListView`, scoped to this screen's slot and filtered to
+    /// that one error code.
+    ///
+    /// THE FOLDED "OTHER" ROW NEVER NAVIGATES. It stands for several distinct
+    /// codes, so there is no single filter a push could carry, and a row that
+    /// opened onto some unnamed subset would be worse than one that opens onto
+    /// nothing.
     @ViewBuilder
-    static func failureReasons(_ reasons: [FailureReasonCount]) -> some View {
+    static func failureReasons(
+        _ reasons: [FailureReasonCount],
+        gateway: UsageIncidentFilter.GatewayScope? = nil
+    ) -> some View {
         ForEach(reasons.prefix(failureReasonRowLimit), id: \.appErrorCode) { reason in
             UsageValueRow(
                 verbatimLabel: UsageFailureReasonCopy.label(forAppErrorCode: reason.appErrorCode),
                 value: reason.count.formatted(.number),
-                icon: "exclamationmark.triangle"
+                icon: "exclamationmark.triangle",
+                route: gateway.map {
+                    .incidents(UsageIncidentFilter(
+                        gateway: $0, appErrorCode: reason.appErrorCode))
+                }
             )
         }
         if otherFailureCount(reasons) > 0 {
@@ -665,6 +725,64 @@ enum UsageDetailRows {
                     "settings.usage.tokens.components.caption",
                     defaultValue: "Added up from the fields above — your gateway reported no total")
             )
+        }
+    }
+
+    /// The token-DETAIL disclosure — ONE implementation, rendered identically by
+    /// the overview's Tokens card and by every drill-down's. It reuses
+    /// `detailDisclosure` above rather than restating it, so the control, the
+    /// chrome, the macOS pointer conventions and the accessibility behaviour are
+    /// the Reliability card's by construction and cannot drift from it.
+    ///
+    /// HIDDEN ENTIRELY WHEN NOTHING REPORTED ANY OF THE THREE. An expander that
+    /// opens onto three absent rows is a control that promises detail the
+    /// gateway never sent.
+    ///
+    /// EVERY ROW IS A SUBSET OF A FIGURE ALREADY ABOVE IT — cached and
+    /// cache-write of the input, reasoning of the output — which is why the
+    /// footer says so in words and why nothing here adds them into anything.
+    /// NEVER a savings or a money framing: cached input is an efficiency fact,
+    /// and a cache WRITE is billed at a premium by several providers.
+    @ViewBuilder
+    static func tokenDetail(
+        _ tokens: GatewayUsageTokens,
+        expanded: Binding<Bool>
+    ) -> some View {
+        if tokens.hasReportedDetail {
+            detailDisclosure(expanded: expanded, accessibility: tokenDetailsAccessibility) {
+                // Per field, exactly as the primary rows: a field this range
+                // never saw takes no row rather than standing an em dash where
+                // a number belongs.
+                if tokens.cachedInput.isReported {
+                    tokenRow(
+                        label: LocalizedStringResource(
+                            "settings.usage.tokens.cachedInput", defaultValue: "Cached input"),
+                        field: tokens.cachedInput)
+                }
+                if tokens.cacheWriteInput.isReported {
+                    tokenRow(
+                        label: LocalizedStringResource(
+                            "settings.usage.tokens.cacheWrites", defaultValue: "Cache writes"),
+                        field: tokens.cacheWriteInput)
+                }
+                if tokens.reasoningOutput.isReported {
+                    tokenRow(
+                        label: LocalizedStringResource(
+                            "settings.usage.tokens.reasoningOutput",
+                            defaultValue: "Reasoning output"),
+                        field: tokens.reasoningOutput)
+                }
+                Text(LocalizedStringResource(
+                    "settings.usage.tokens.detail.footer",
+                    defaultValue: """
+                        These are parts of the input and output figures above, counted \
+                        only where your gateway reported them.
+                        """))
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .settingsCardPassiveRow()
+            }
         }
     }
 
@@ -768,25 +886,35 @@ struct UsageHeadlineRow: View {
 /// a cut-short reply, the triangle on a failure reason — keeps the recessive
 /// default. Tinting the whole row type either way would make the two say the
 /// same thing.
+///
+/// `route:` turns the SAME row into a push without a second row type. The
+/// affordance follows the platform exactly as `UsageDashboardView`'s own
+/// navigation rows do: the iOS grouped `Form` IS a `List` and supplies the
+/// system disclosure accessory for free, while the hand-drawn macOS card is not
+/// and gets a trailing-inset chevron drawn here, over a gutter the label keeps
+/// clear for it.
 struct UsageValueRow: View {
     private let labelText: Text
     private let value: String
     private let caption: LocalizedStringResource?
     private let icon: String?
     private let iconTint: Color
+    private let route: UsageRoute?
 
     init(
         label: LocalizedStringResource,
         value: String,
         caption: LocalizedStringResource? = nil,
         icon: String? = nil,
-        iconTint: Color = AppColors.textTertiary
+        iconTint: Color = AppColors.textTertiary,
+        route: UsageRoute? = nil
     ) {
         self.labelText = Text(label)
         self.value = value
         self.caption = caption
         self.icon = icon
         self.iconTint = iconTint
+        self.route = route
     }
 
     init(
@@ -794,16 +922,42 @@ struct UsageValueRow: View {
         value: String,
         caption: LocalizedStringResource? = nil,
         icon: String? = nil,
-        iconTint: Color = AppColors.textTertiary
+        iconTint: Color = AppColors.textTertiary,
+        route: UsageRoute? = nil
     ) {
         self.labelText = Text(verbatim: verbatimLabel)
         self.value = value
         self.caption = caption
         self.icon = icon
         self.iconTint = iconTint
+        self.route = route
     }
 
+    @ViewBuilder
     var body: some View {
+        if let route {
+            NavigationLink(value: route) {
+                content
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    #if os(macOS)
+                    .padding(.trailing, Self.chevronGutter)
+                    #endif
+            }
+            // `.settingsCardRowButton()` IS `.buttonStyle(.plain)` off macOS, so
+            // this one modifier gives the card row its full-bleed live frame and
+            // leaves the `Form` row untinted on iOS.
+            .settingsCardRowButton()
+            #if os(macOS)
+            .overlay(alignment: .trailing) { Self.rowChevron }
+            #endif
+        } else {
+            content
+                .settingsCardPassiveRow()
+                .accessibilityElement(children: .combine)
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 10) {
                 if let icon {
@@ -826,8 +980,24 @@ struct UsageValueRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .settingsCardPassiveRow()
-        .accessibilityElement(children: .combine)
+    }
+
+    /// Space a navigating row keeps clear so a long value never runs under the
+    /// chevron drawn on top of it.
+    static let chevronGutter: CGFloat = 16
+
+    /// Decoration, never an element: an overlay is a SIBLING of the link it sits
+    /// on, so without `accessibilityHidden` it lands in the rotor as a stray
+    /// item the row's own label already covers.
+    static var rowChevron: some View {
+        Image(systemName: "chevron.forward")
+            .font(.caption)
+            .foregroundStyle(AppColors.textTertiary)
+            #if os(macOS)
+            .padding(.trailing, SettingsCardMetrics.rowInset)
+            #endif
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

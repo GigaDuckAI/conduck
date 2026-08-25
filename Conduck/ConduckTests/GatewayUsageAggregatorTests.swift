@@ -68,6 +68,9 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         input: Int64? = nil,
         output: Int64? = nil,
         total: Int64? = nil,
+        cachedInput: Int64? = nil,
+        cacheWriteInput: Int64? = nil,
+        reasoningOutput: Int64? = nil,
         deviceClass: String? = nil,
         fallbackSourceDevice: String? = nil,
         currentImages: Int? = nil,
@@ -92,6 +95,9 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             reportedInputTokens: input,
             reportedOutputTokens: output,
             reportedTotalTokens: total,
+            reportedCachedInputTokens: cachedInput,
+            reportedCacheWriteInputTokens: cacheWriteInput,
+            reportedReasoningOutputTokens: reasoningOutput,
             originDeviceClass: deviceClass,
             currentTurnInlineImageCount: currentImages,
             priorTurnInlineImageCount: priorImages,
@@ -439,6 +445,127 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertNil(nothing.tokens.calculatedKnownComponents)
     }
 
+    // MARK: - 3b. Token detail fields
+
+    /// The three detail fields sum and cover exactly like the primaries, over
+    /// the SAME terminal-attempt denominator — a detail field measured against
+    /// its own narrower population would read as better covered than the figure
+    /// it is a part of.
+    func testTokenDetailFieldsSumAndCoverOverTheSameDenominator() {
+        let summary = summarize([
+            attempt(outcome: .succeeded, input: 100, output: 20, total: 120,
+                    cachedInput: 60, cacheWriteInput: 10, reasoningOutput: 8),
+            attempt(outcome: .failed, input: 50, cachedInput: 40),
+            attempt(outcome: .cancelled),
+            // Still open past the grace: no stored ending, so it never had its
+            // chance to report and stays out of both halves.
+            attempt(startedAt: now.addingTimeInterval(-(grace + 60)), outcome: .inFlight,
+                    cachedInput: 999, reasoningOutput: 999),
+        ])
+
+        XCTAssertEqual(summary.tokens.cachedInput.sum, 100)
+        XCTAssertEqual(summary.tokens.cachedInput.reportingAttempts, 2)
+        XCTAssertEqual(summary.tokens.cachedInput.coverageDenominator, 3,
+                       "the same terminal-attempt denominator the primary fields use")
+        XCTAssertEqual(summary.tokens.cachedInput.coverage!, 2.0 / 3.0, accuracy: 1e-9)
+
+        XCTAssertEqual(summary.tokens.cacheWriteInput.sum, 10)
+        XCTAssertEqual(summary.tokens.cacheWriteInput.coverage!, 1.0 / 3.0, accuracy: 1e-9)
+
+        XCTAssertEqual(summary.tokens.reasoningOutput.sum, 8)
+        XCTAssertEqual(summary.tokens.reasoningOutput.coverage!, 1.0 / 3.0, accuracy: 1e-9)
+    }
+
+    /// A detail field nobody reported sums to NIL, and a reported zero sums to
+    /// zero — the distinction the non-scalar columns exist for, applied one
+    /// level down.
+    func testUnreportedDetailFieldIsNilAndAReportedZeroIsZero() {
+        let unreported = summarize([attempt(outcome: .succeeded, input: 10)])
+        XCTAssertNil(unreported.tokens.cachedInput.sum)
+        XCTAssertFalse(unreported.tokens.cachedInput.isReported)
+        XCTAssertNil(unreported.tokens.cacheWriteInput.sum)
+        XCTAssertNil(unreported.tokens.reasoningOutput.sum)
+        XCTAssertFalse(unreported.tokens.hasReportedDetail)
+
+        let zero = summarize([attempt(outcome: .succeeded, input: 10, cachedInput: 0)])
+        XCTAssertEqual(zero.tokens.cachedInput.sum, 0)
+        XCTAssertTrue(zero.tokens.cachedInput.isReported)
+        XCTAssertTrue(zero.tokens.hasReportedDetail,
+                      "a gateway that reported zero cached tokens reported something, and the "
+                      + "disclosure that draws it must appear")
+    }
+
+    /// NOTHING ADDS A SUBSET INTO A TOTAL. Cached and cache-write are parts of
+    /// the input; reasoning is part of the output. Every existing figure is
+    /// asserted unchanged against a fixture that reports all six.
+    func testDetailFieldsNeverEnterAnyTotalVolumeOrRanking() {
+        let withDetail = summarize([
+            attempt(outcome: .succeeded, input: 100, output: 20, total: 120,
+                    cachedInput: 90, cacheWriteInput: 30, reasoningOutput: 15)
+        ])
+        let withoutDetail = summarize([
+            attempt(outcome: .succeeded, input: 100, output: 20, total: 120)
+        ])
+
+        XCTAssertEqual(withDetail.tokens.input.sum, 100)
+        XCTAssertEqual(withDetail.tokens.output.sum, 20)
+        XCTAssertEqual(withDetail.tokens.reportedTotal.sum, 120)
+        XCTAssertNil(withDetail.tokens.calculatedKnownComponents)
+        XCTAssertEqual(withDetail.tokenMeasuredAttempts, withoutDetail.tokenMeasuredAttempts)
+        XCTAssertEqual(withDetail.activity.buckets.map(\.reportedTokens),
+                       withoutDetail.activity.buckets.map(\.reportedTokens),
+                       "the chart's volume is the reported total, never the total plus its parts")
+        XCTAssertEqual(withDetail.threadRanking.threads.map(\.rankedTokens),
+                       withoutDetail.threadRanking.threads.map(\.rankedTokens))
+        XCTAssertEqual(withDetail.largestTurns.map(\.tokens),
+                       withoutDetail.largestTurns.map(\.tokens))
+    }
+
+    /// Containment is never enforced here either: a gateway claiming more cached
+    /// input than input is summed exactly as it reported, the same way an
+    /// inconsistent total is.
+    func testDetailSumsArePreservedEvenWhenTheyExceedTheirParent() {
+        let summary = summarize([
+            attempt(outcome: .succeeded, input: 10, output: 4, cachedInput: 9_999,
+                    reasoningOutput: 8_888)
+        ])
+        XCTAssertEqual(summary.tokens.cachedInput.sum, 9_999)
+        XCTAssertEqual(summary.tokens.reasoningOutput.sum, 8_888)
+        XCTAssertEqual(summary.tokens.input.sum, 10)
+        XCTAssertEqual(summary.tokens.output.sum, 4)
+    }
+
+    /// `isEmpty` still asks ONLY about the three primary fields. A range where a
+    /// gateway reported cached tokens and nothing else has still told the user
+    /// nothing about their token usage, and a Tokens card appearing for it would
+    /// promise reporting that gateway never did.
+    func testARangeReportingOnlyCachedTokensKeepsTheCardEmpty() {
+        let summary = summarize([attempt(outcome: .succeeded, cachedInput: 500)])
+        XCTAssertTrue(summary.tokens.isEmpty,
+                      "the detail fields gate their own rows, never the card")
+        XCTAssertEqual(summary.tokens.cachedInput.sum, 500)
+        XCTAssertTrue(summary.tokens.hasReportedDetail)
+        XCTAssertNil(summary.tokens.calculatedKnownComponents)
+        XCTAssertEqual(summary.tokenMeasuredAttempts, 0,
+                       "a cached-token count is not a token volume")
+    }
+
+    /// Per-gateway groups run the same helper over the same subset, so the
+    /// detail fields reach a drill-down without a second aggregation path.
+    func testDetailFieldsAreCarriedByPerGatewayGroups() throws {
+        let summary = summarize([
+            attempt(gateway: "openclaw", outcome: .succeeded, input: 10, cachedInput: 6),
+            attempt(gateway: "hermes", outcome: .succeeded, input: 10),
+        ])
+        let openclaw = try XCTUnwrap(summary.byGateway.first { $0.key == "openclaw" })
+        XCTAssertEqual(openclaw.tokens.cachedInput.sum, 6)
+        XCTAssertTrue(openclaw.tokens.hasReportedDetail)
+
+        let hermes = try XCTUnwrap(summary.byGateway.first { $0.key == "hermes" })
+        XCTAssertNil(hermes.tokens.cachedInput.sum)
+        XCTAssertFalse(hermes.tokens.hasReportedDetail)
+    }
+
     /// An inconsistent total survives as reported. Repairing it here would swap
     /// a gateway fact for a client guess no later reader could tell apart.
     func testInconsistentReportedTotalIsPreserved() {
@@ -625,9 +752,9 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertEqual(summary.truncatedReplies, 0)
     }
 
-    // MARK: - 7. Daily activity buckets
+    // MARK: - 7. Activity buckets
 
-    func testDailyBucketsSpanTheRequestedWindowWithGapsFilled() {
+    func testDayBucketsSpanTheRequestedWindowWithGapsFilled() {
         let today = calendar.startOfDay(for: now)
         let threeDaysAgo = calendar.date(byAdding: .day, value: -3, to: today)!
         let turn = UUID()
@@ -641,17 +768,17 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             range: threeDaysAgo...now
         )
 
-        XCTAssertEqual(summary.dailyActivity.count, 4, "four whole days, gaps included")
-        XCTAssertEqual(summary.dailyActivity[0].day, threeDaysAgo)
-        XCTAssertEqual(summary.dailyActivity[0].attempts, 2)
-        XCTAssertEqual(summary.dailyActivity[0].turns, 1, "two attempts on one turn is one turn")
-        XCTAssertEqual(summary.dailyActivity[1].attempts, 0)
-        XCTAssertEqual(summary.dailyActivity[2].attempts, 0)
-        XCTAssertEqual(summary.dailyActivity[3].attempts, 1)
+        XCTAssertEqual(summary.activity.buckets.count, 4, "four whole days, gaps included")
+        XCTAssertEqual(summary.activity.buckets[0].periodStart, threeDaysAgo)
+        XCTAssertEqual(summary.activity.buckets[0].attempts, 2)
+        XCTAssertEqual(summary.activity.buckets[0].turns, 1, "two attempts on one turn is one turn")
+        XCTAssertEqual(summary.activity.buckets[1].attempts, 0)
+        XCTAssertEqual(summary.activity.buckets[2].attempts, 0)
+        XCTAssertEqual(summary.activity.buckets[3].attempts, 1)
     }
 
     /// With no window supplied the buckets span only the observed days.
-    func testDailyBucketsWithoutARangeSpanTheObservedDays() {
+    func testBucketsWithoutARangeSpanTheObservedDays() {
         let today = calendar.startOfDay(for: now)
         let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
 
@@ -660,9 +787,9 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             attempt(startedAt: today.addingTimeInterval(120)),
         ])
 
-        XCTAssertEqual(summary.dailyActivity.count, 2)
-        XCTAssertEqual(summary.dailyActivity.first?.day, yesterday)
-        XCTAssertEqual(summary.dailyActivity.last?.day, today)
+        XCTAssertEqual(summary.activity.buckets.count, 2)
+        XCTAssertEqual(summary.activity.buckets.first?.periodStart, yesterday)
+        XCTAssertEqual(summary.activity.buckets.last?.periodStart, today)
     }
 
     /// An attempt that cannot say when it began is counted in the range totals
@@ -681,8 +808,8 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         let summary = summarize([record], range: now...now)
 
         XCTAssertEqual(summary.recordedAttempts, 1)
-        XCTAssertEqual(summary.dailyActivity.count, 1)
-        XCTAssertEqual(summary.dailyActivity[0].attempts, 0)
+        XCTAssertEqual(summary.activity.buckets.count, 1)
+        XCTAssertEqual(summary.activity.buckets[0].attempts, 0)
     }
 
     /// GOLDEN, MIDNIGHT TRANSITION. Santiago springs forward at 00:00 on
@@ -692,7 +819,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
     /// and stops short of a `lastDay` that is 00:00 — three real days of
     /// activity drawn empty and today's bar missing, while the Turns tile
     /// beside the chart still says seven.
-    func testDailyBucketsSurviveAMidnightDaylightSavingTransition() {
+    func testDayBucketsSurviveAMidnightDaylightSavingTransition() {
         let santiago = calendar(in: "America/Santiago")
         func noon(_ day: Int) -> Date {
             santiago.date(from: DateComponents(year: 2026, month: 9, day: day, hour: 12))!
@@ -706,18 +833,18 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             now: noon(10)
         )
 
-        XCTAssertEqual(summary.dailyActivity.count, 7, "one bucket per local day, transition included")
+        XCTAssertEqual(summary.activity.buckets.count, 7, "one bucket per local day, transition included")
         XCTAssertEqual(
-            summary.dailyActivity.map(\.attempts), Array(repeating: 1, count: 7),
+            summary.activity.buckets.map(\.attempts), Array(repeating: 1, count: 7),
             "every day's attempt lands in its own bucket")
         XCTAssertEqual(
-            summary.dailyActivity.map(\.day), days.map { santiago.startOfDay(for: noon($0)) },
+            summary.activity.buckets.map(\.periodStart), days.map { santiago.startOfDay(for: noon($0)) },
             "each bucket is anchored on its own day's start, not on a drifting wall clock")
     }
 
     /// The ordinary 02:00 transition, which fixed 86400-second arithmetic gets
     /// wrong even though `startOfDay` stays at midnight either side of it.
-    func testDailyBucketsSurviveAnOrdinaryDaylightSavingTransition() {
+    func testDayBucketsSurviveAnOrdinaryDaylightSavingTransition() {
         let berlin = calendar(in: "Europe/Berlin")
         func noon(_ day: Int) -> Date {
             berlin.date(from: DateComponents(year: 2026, month: 3, day: day, hour: 12))!
@@ -731,23 +858,35 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             now: noon(31)
         )
 
-        XCTAssertEqual(summary.dailyActivity.count, 5)
-        XCTAssertEqual(summary.dailyActivity.map(\.attempts), Array(repeating: 1, count: 5))
+        XCTAssertEqual(summary.activity.buckets.count, 5)
+        XCTAssertEqual(summary.activity.buckets.map(\.attempts), Array(repeating: 1, count: 5))
         XCTAssertEqual(
-            summary.dailyActivity.map(\.day), days.map { berlin.startOfDay(for: noon($0)) },
+            summary.activity.buckets.map(\.periodStart), days.map { berlin.startOfDay(for: noon($0)) },
             "the short day is still one bucket, and the days after it do not shift")
     }
 
     /// A nonsense window — a corrupt stored date, a device with a wildly wrong
-    /// clock — costs a bounded array rather than a hang.
-    func testDailyBucketGenerationIsBounded() {
-        let farPast = calendar.date(byAdding: .year, value: -200, to: now)!
+    /// clock — costs a bounded array rather than a hang. Months are the coarsest
+    /// unit there is, so a span this long is bounded by the hard ceiling rather
+    /// than by the fold.
+    ///
+    /// FOUR CENTURIES, WHICH IS MORE MONTHS THAN THE CEILING ALLOWS: ~4,800
+    /// natural months against a ceiling of `maxActivityBuckets`, so the count
+    /// lands ON the ceiling and the assertion is an equality. A span that merely
+    /// stayed under the ceiling would pass with the guard deleted, which is the
+    /// one thing this test exists to catch.
+    func testBucketGenerationIsBounded() {
+        let farPast = calendar.date(byAdding: .year, value: -400, to: now)!
         let summary = summarize([attempt(outcome: .succeeded)], range: farPast...now)
 
-        XCTAssertEqual(summary.dailyActivity.count, GatewayUsageAggregator.maxDailyBuckets)
+        XCTAssertEqual(summary.activity.unit, .month)
+        XCTAssertEqual(
+            summary.activity.buckets.count, GatewayUsageAggregator.maxActivityBuckets,
+            "the ceiling is what stops the walk, not the end of the range")
+        XCTAssertGreaterThan(summary.activity.buckets.count, GatewayUsageAggregator.maxActivityBars)
     }
 
-    // MARK: - 7b. Per-day metrics behind the chart's metric picker
+    // MARK: - 7b. Per-period metrics behind the chart's metric picker
 
     /// HAND-COMPUTED. One day, three attempts: a gateway that reported a total,
     /// a gateway that reported only components, and one that reported nothing.
@@ -758,7 +897,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
     /// a ranking: nothing here is ordered against anything, so preferring each
     /// attempt's own best evidence loses no comparability. The ranked lists
     /// keep their single pinned basis.
-    func testDailyTokensTakeTheBestAvailableFigurePerAttempt() {
+    func testPeriodTokensTakeTheBestAvailableFigurePerAttempt() {
         let today = calendar.startOfDay(for: now)
         let summary = summarize(
             [
@@ -769,8 +908,8 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             range: today...now
         )
 
-        XCTAssertEqual(summary.dailyActivity.count, 1)
-        let day = summary.dailyActivity[0]
+        XCTAssertEqual(summary.activity.buckets.count, 1)
+        let day = summary.activity.buckets[0]
         XCTAssertEqual(day.attempts, 3)
         XCTAssertEqual(
             day.reportedTokens, 1_500,
@@ -784,7 +923,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
     /// has not said what the turn cost, and adding its half to a day beside
     /// attempts that reported both would make a day look cheap in proportion to
     /// how chatty its gateways were about their own accounting.
-    func testDailyTokensIgnoreAnAttemptThatReportedOnlyOneComponent() {
+    func testPeriodTokensIgnoreAnAttemptThatReportedOnlyOneComponent() {
         let today = calendar.startOfDay(for: now)
         let summary = summarize(
             [
@@ -794,7 +933,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             range: today...now
         )
 
-        let day = summary.dailyActivity[0]
+        let day = summary.activity.buckets[0]
         XCTAssertEqual(day.attempts, 2)
         XCTAssertEqual(day.reportedTokens, 0)
         XCTAssertEqual(
@@ -816,19 +955,19 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             range: yesterday...now
         )
 
-        XCTAssertEqual(summary.dailyActivity.count, 2)
-        XCTAssertEqual(summary.dailyActivity[0].reportedTokens, 800)
-        XCTAssertEqual(summary.dailyActivity[0].tokenMeasuredAttempts, 1)
-        XCTAssertEqual(summary.dailyActivity[1].attempts, 1, "the day still had activity")
-        XCTAssertEqual(summary.dailyActivity[1].reportedTokens, 0)
-        XCTAssertEqual(summary.dailyActivity[1].tokenMeasuredAttempts, 0)
+        XCTAssertEqual(summary.activity.buckets.count, 2)
+        XCTAssertEqual(summary.activity.buckets[0].reportedTokens, 800)
+        XCTAssertEqual(summary.activity.buckets[0].tokenMeasuredAttempts, 1)
+        XCTAssertEqual(summary.activity.buckets[1].attempts, 1, "the day still had activity")
+        XCTAssertEqual(summary.activity.buckets[1].reportedTokens, 0)
+        XCTAssertEqual(summary.activity.buckets[1].tokenMeasuredAttempts, 0)
     }
 
     /// THE DENOMINATOR THE CHART DIVIDES BY. Five attempts on one day: two
     /// succeeded, one failed, one cancelled, one unclassifiable. Only the first
     /// three are resolved — a cancellation is a turn the user stopped, and
     /// counting it as a loss would draw a 40% day where the real answer is 67%.
-    func testDailyReliabilityExcludesCancelledAndUnknownFromTheDenominator() {
+    func testPeriodReliabilityExcludesCancelledAndUnknownFromTheDenominator() {
         let today = calendar.startOfDay(for: now)
         let summary = summarize(
             [
@@ -841,7 +980,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             range: today...now
         )
 
-        let day = summary.dailyActivity[0]
+        let day = summary.activity.buckets[0]
         XCTAssertEqual(day.attempts, 5)
         XCTAssertEqual(day.resolvedAttempts, 3, "succeeded + failed only")
         XCTAssertEqual(day.succeededAttempts, 2)
@@ -860,7 +999,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             range: today...now
         )
 
-        let day = summary.dailyActivity[0]
+        let day = summary.activity.buckets[0]
         XCTAssertEqual(day.attempts, 1)
         XCTAssertEqual(day.resolvedAttempts, 0)
         XCTAssertEqual(day.succeededAttempts, 0)
@@ -871,7 +1010,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
     /// denominator nor its token coverage, exactly as it is in neither range
     /// total. Its token columns are ignored along with it: a row that has not
     /// ended has not had its chance to report.
-    func testDailyMetricsExcludeAnUnconfirmedAttemptEntirely() {
+    func testPeriodMetricsExcludeAnUnconfirmedAttemptEntirely() {
         let today = calendar.startOfDay(for: now)
         let summary = summarize(
             [
@@ -886,7 +1025,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         )
 
         XCTAssertEqual(summary.outcomeMix.unconfirmed, 1, "fixture precondition")
-        let day = summary.dailyActivity[0]
+        let day = summary.activity.buckets[0]
         XCTAssertEqual(day.attempts, 2, "an unconfirmed attempt still happened")
         XCTAssertEqual(day.resolvedAttempts, 1)
         XCTAssertEqual(day.succeededAttempts, 1)
@@ -912,11 +1051,11 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             range: threeDaysAgo...now
         )
 
-        XCTAssertEqual(summary.dailyActivity.count, 4)
-        XCTAssertEqual(summary.dailyActivity[0].resolvedAttempts, 1)
-        XCTAssertEqual(summary.dailyActivity[0].reportedTokens, 700)
+        XCTAssertEqual(summary.activity.buckets.count, 4)
+        XCTAssertEqual(summary.activity.buckets[0].resolvedAttempts, 1)
+        XCTAssertEqual(summary.activity.buckets[0].reportedTokens, 700)
         for index in 1...3 {
-            let gap = summary.dailyActivity[index]
+            let gap = summary.activity.buckets[index]
             XCTAssertEqual(gap.attempts, 0)
             XCTAssertEqual(gap.turns, 0)
             XCTAssertEqual(gap.resolvedAttempts, 0, "no bar, not a failing bar")
@@ -931,7 +1070,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
     /// onto the wrong bars just as readily — and a reliability chart drawn one
     /// day out is harder to notice than a missing bar, because every bar is
     /// still full height.
-    func testDailyMetricsLandOnTheirOwnDayAcrossAMidnightTransition() {
+    func testPeriodMetricsLandOnTheirOwnDayAcrossAMidnightTransition() {
         let santiago = calendar(in: "America/Santiago")
         func noon(_ day: Int) -> Date {
             santiago.date(from: DateComponents(year: 2026, month: 9, day: day, hour: 12))!
@@ -945,17 +1084,258 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             now: noon(10)
         )
 
-        XCTAssertEqual(summary.dailyActivity.count, 7)
+        XCTAssertEqual(summary.activity.buckets.count, 7)
         XCTAssertEqual(
-            summary.dailyActivity.map(\.reportedTokens), days.map { $0 * 100 },
+            summary.activity.buckets.map(\.reportedTokens), days.map { $0 * 100 },
             "each day's tokens stay on the day that spent them")
         XCTAssertEqual(
-            summary.dailyActivity.map(\.resolvedAttempts), Array(repeating: 1, count: 7))
+            summary.activity.buckets.map(\.resolvedAttempts), Array(repeating: 1, count: 7))
         XCTAssertEqual(
-            summary.dailyActivity.map(\.succeededAttempts), Array(repeating: 1, count: 7),
+            summary.activity.buckets.map(\.succeededAttempts), Array(repeating: 1, count: 7),
             "a green day either side of the transition, and a green day on it")
         XCTAssertEqual(
-            summary.dailyActivity.map(\.tokenMeasuredAttempts), Array(repeating: 1, count: 7))
+            summary.activity.buckets.map(\.tokenMeasuredAttempts), Array(repeating: 1, count: 7))
+    }
+
+    // MARK: - 7c. Period folding
+
+    /// Monday-first UTC, pinned rather than inherited: a week boundary that
+    /// moved with the runner's locale would put the straddle cases below on
+    /// either side of the fixture's own dates.
+    private var weekCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.firstWeekday = 2
+        return calendar
+    }()
+
+    private func utc(_ month: Int, _ day: Int, hour: Int = 12) -> Date {
+        weekCalendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour))!
+    }
+
+    /// A sixty-day window: too many days to draw, few enough weeks to.
+    private func weeklySummary(_ attempts: [GatewayAttemptRecord]) -> GatewayUsageSummary {
+        summarize(
+            attempts,
+            range: weekCalendar.startOfDay(for: utc(3, 2))...utc(4, 30),
+            calendar: weekCalendar,
+            now: utc(4, 30)
+        )
+    }
+
+    /// THE FOLD IS BY SPAN, NOT BY RANGE NAME. One rule — the finest unit whose
+    /// bar count still draws as a shape — so 7 and 30 days stay daily, 90 folds
+    /// to weeks, and a multi-year ledger folds to months.
+    func testTheUnitFoldsWithTheSpanOfTheWindow() {
+        func unit(daysBack: Int) -> UsageActivityUnit {
+            let today = weekCalendar.startOfDay(for: utc(4, 30))
+            let from = weekCalendar.date(byAdding: .day, value: -(daysBack - 1), to: today)!
+            return summarize([], range: from...utc(4, 30), calendar: weekCalendar, now: utc(4, 30))
+                .activity.unit
+        }
+
+        XCTAssertEqual(unit(daysBack: UsageDashboardModel.Range.weekDays), .day)
+        XCTAssertEqual(unit(daysBack: UsageDashboardModel.Range.monthDays), .day)
+        XCTAssertEqual(unit(daysBack: UsageDashboardModel.Range.quarterDays), .week)
+        XCTAssertEqual(unit(daysBack: GatewayUsageAggregator.maxActivityBars), .day)
+        XCTAssertEqual(unit(daysBack: GatewayUsageAggregator.maxActivityBars + 1), .week)
+        XCTAssertEqual(unit(daysBack: 365 * 3), .month)
+    }
+
+    /// A WEEK'S TURNS ARE ITS DISTINCT TURNS, recomputed from the records — not
+    /// its days' turn counts added up, which would count a turn retried across
+    /// midnight twice. The straddle symmetry is kept whole: a turn worked on in
+    /// two WEEKS is in both weekly bars while the range total still counts it
+    /// once, exactly as the daily bars always behaved at midnight.
+    func testWeeklyTurnsCountDistinctTurnsAndStraddleBothWeeks() {
+        let withinOneWeek = UUID()
+        let acrossTwoWeeks = UUID()
+        let summary = weeklySummary([
+            attempt(turn: withinOneWeek, startedAt: utc(3, 2)),
+            attempt(turn: withinOneWeek, startedAt: utc(3, 3)),
+            attempt(turn: acrossTwoWeeks, startedAt: utc(3, 8)),
+            attempt(turn: acrossTwoWeeks, startedAt: utc(3, 9)),
+        ])
+
+        XCTAssertEqual(summary.activity.unit, .week)
+        XCTAssertEqual(summary.activity.buckets.count, 9, "nine calendar weeks in the window")
+        XCTAssertEqual(summary.activity.buckets[0].attempts, 3)
+        XCTAssertEqual(
+            summary.activity.buckets[0].turns, 2,
+            "two attempts on one turn is one turn, and the straddler is the second")
+        XCTAssertEqual(summary.activity.buckets[1].attempts, 1)
+        XCTAssertEqual(summary.activity.buckets[1].turns, 1, "the straddler counts here too")
+        XCTAssertEqual(
+            summary.attemptedTurns, 2,
+            "the RANGE counts the straddling turn once — the bars and the total differ on purpose")
+    }
+
+    /// EVERY WEEKLY FIGURE IS A SUM, which is what keeps a folded share honest:
+    /// three of four resolved is three over four however the days split, where
+    /// an average of daily rates would weight a one-attempt day like a busy one.
+    func testWeeklyCountsAreSumsOfTheirDays() {
+        let summary = weeklySummary([
+            attempt(startedAt: utc(3, 2), outcome: .succeeded, total: 100),
+            attempt(startedAt: utc(3, 3), outcome: .succeeded, total: 200),
+            attempt(startedAt: utc(3, 5), outcome: .succeeded),
+            attempt(startedAt: utc(3, 6), outcome: .failed),
+            attempt(startedAt: utc(3, 7), outcome: .cancelled),
+        ])
+
+        let week = summary.activity.buckets[0]
+        XCTAssertEqual(week.attempts, 5)
+        XCTAssertEqual(week.resolvedAttempts, 4, "succeeded + failed only, across the whole week")
+        XCTAssertEqual(week.succeededAttempts, 3)
+        XCTAssertEqual(week.failedAttempts, 1)
+        XCTAssertEqual(week.otherOutcomeAttempts, 1, "the cancellation is named, never stacked")
+        XCTAssertEqual(week.reportedTokens, 300)
+        XCTAssertEqual(week.tokenMeasuredAttempts, 2)
+    }
+
+    /// An idle week is a visible empty slot rather than a closed gap, for the
+    /// same reason an idle day always was: a chart that skipped it would put two
+    /// busy weeks side by side and hide the fortnight between them.
+    func testIdleWeeksEmitZeroBuckets() {
+        let summary = weeklySummary([attempt(startedAt: utc(3, 2), outcome: .succeeded)])
+
+        XCTAssertEqual(summary.activity.buckets.count, 9)
+        XCTAssertEqual(summary.activity.buckets[0].attempts, 1)
+        for gap in summary.activity.buckets.dropFirst() {
+            XCTAssertEqual(gap.attempts, 0)
+            XCTAssertEqual(gap.turns, 0)
+            XCTAssertEqual(gap.resolvedAttempts, 0, "no bar, not a failing bar")
+            XCTAssertEqual(gap.tokenMeasuredAttempts, 0)
+        }
+    }
+
+    /// THE WINDOW IS NOT SILENTLY WIDENED. A 90-day range that starts on a
+    /// Wednesday stays 90 days: its first weekly bucket begins that Wednesday
+    /// and says so, rather than reaching back to Monday and drawing 92 days
+    /// under a caption promising 90.
+    func testALeadingPartialWeekIsClippedToTheWindowAndFlagged() {
+        let start = weekCalendar.startOfDay(for: utc(3, 4))
+        let end = weekCalendar.date(
+            byAdding: .day, value: UsageDashboardModel.Range.quarterDays - 1, to: start)!
+            .addingTimeInterval(12 * 3600)
+        let summary = summarize([], range: start...end, calendar: weekCalendar, now: end)
+
+        let first = summary.activity.buckets[0]
+        XCTAssertEqual(summary.activity.unit, .week)
+        XCTAssertEqual(first.periodStart, start, "the bar begins where the window does")
+        XCTAssertTrue(first.startsMidPeriod, "and knows it is short, so the caption can say so")
+        XCTAssertEqual(
+            first.periodEnd, weekCalendar.startOfDay(for: utc(3, 9)),
+            "it still ends on the natural week boundary")
+
+        let last = summary.activity.buckets.last!
+        XCTAssertTrue(last.endsMidPeriod, "the trailing week is still running")
+        XCTAssertEqual(last.periodEnd, end, "and covers only as far as the window reaches")
+    }
+
+    /// The trailing DAY is in progress too — the same flag, one unit finer, and
+    /// the reason today's bar is allowed to be short without reading as a
+    /// collapse in activity.
+    func testTheTrailingDayIsFlaggedAsStillRunning() {
+        let today = calendar.startOfDay(for: now)
+        let summary = summarize([attempt(startedAt: today.addingTimeInterval(60))],
+                                range: today...now)
+
+        XCTAssertEqual(summary.activity.unit, .day)
+        XCTAssertTrue(summary.activity.buckets[0].endsMidPeriod)
+        XCTAssertEqual(summary.activity.buckets[0].periodEnd, now)
+    }
+
+    // MARK: - 7d. Dimension splits behind the stacked measures
+
+    /// A STACK MUST SUM TO ITS OWN BAR. Both splits partition the period's
+    /// attempts exactly, and the attempts whose device or slot was never
+    /// captured get the nil key rather than being dropped — a bar quietly
+    /// shorter than the count beside it is the failure this guards.
+    func testDimensionSplitsPartitionThePeriodExactly() {
+        let today = calendar.startOfDay(for: now)
+        let summary = summarize(
+            [
+                attempt(gateway: "openclaw", startedAt: today.addingTimeInterval(3600),
+                        deviceClass: "iphone"),
+                attempt(gateway: "openclaw", startedAt: today.addingTimeInterval(3660),
+                        deviceClass: "iphone"),
+                attempt(gateway: "hermes", startedAt: today.addingTimeInterval(3720),
+                        deviceClass: "mac"),
+                attempt(gateway: nil, startedAt: today.addingTimeInterval(3780)),
+            ],
+            range: today...now
+        )
+
+        let period = summary.activity.buckets[0]
+        XCTAssertEqual(period.attempts, 4)
+        XCTAssertEqual(period.deviceAttempts, ["iphone": 2, "mac": 1, nil: 1])
+        XCTAssertEqual(period.gatewayAttempts, ["openclaw": 2, "hermes": 1, nil: 1])
+        XCTAssertEqual(
+            period.deviceAttempts.values.reduce(0, +), period.attempts,
+            "the device stack reaches the bar's own height")
+        XCTAssertEqual(
+            period.gatewayAttempts.values.reduce(0, +), period.attempts,
+            "and so does the gateway stack")
+    }
+
+    /// The unattributed slot is the SAME nil key in both dimensions, so one
+    /// piece of chart code reads them under one rule — a device the ledger never
+    /// stamped and a slot it never stamped are the same kind of absence.
+    func testBothDimensionsSpellTheUnattributedBucketTheSameWay() {
+        let today = calendar.startOfDay(for: now)
+        let summary = summarize(
+            [attempt(gateway: nil, startedAt: today.addingTimeInterval(3600))],
+            range: today...now
+        )
+
+        let period = summary.activity.buckets[0]
+        XCTAssertEqual(period.deviceAttempts[nil], 1)
+        XCTAssertEqual(period.gatewayAttempts[nil], 1)
+        XCTAssertNil(period.deviceAttempts[UsageDeviceBucket.unknown.rawValue])
+    }
+
+    // MARK: - 7e. Range-level honesty metadata
+
+    /// THE RANGE COUNTS WHAT THE BARS CANNOT DRAW. An attempt with no start
+    /// instant reported its tokens and lands on no bar, so a coverage claim
+    /// summed from the buckets would understate it — and could tell the user
+    /// "no token data" on a range whose Tokens card is showing a figure.
+    func testRangeTokenCoverageCountsAnUndatedAttemptTheBarsOmit() {
+        let today = calendar.startOfDay(for: now)
+        let undated = GatewayAttemptRecord(
+            id: UUID(),
+            conversationID: UUID(),
+            userMessageID: UUID(),
+            gatewayRef: "openclaw",
+            startedAt: nil,
+            completedAt: nil,
+            outcome: .succeeded,
+            reportedTotalTokens: 500
+        )
+        let summary = summarize(
+            [attempt(startedAt: today.addingTimeInterval(3600), total: 100), undated],
+            range: today...now
+        )
+
+        XCTAssertEqual(summary.recordedAttempts, 2)
+        XCTAssertEqual(summary.tokenMeasuredAttempts, 2, "the range sees both")
+        XCTAssertEqual(
+            summary.activity.buckets[0].tokenMeasuredAttempts, 1,
+            "the bars see only the one that can say when it ran")
+    }
+
+    /// A window with nothing in it is detectable WITHOUT reading the buckets:
+    /// they are present and full of zeros, which is what a gap-filled chart
+    /// looks like either way.
+    func testAnEmptyWindowStillEmitsBucketsAndReportsNothingRecorded() {
+        let today = calendar.startOfDay(for: now)
+        let summary = summarize([], range: today...now)
+
+        XCTAssertEqual(summary.recordedAttempts, 0)
+        XCTAssertEqual(summary.tokenMeasuredAttempts, 0)
+        XCTAssertEqual(summary.activity.buckets.count, 1)
+        XCTAssertEqual(summary.activity.buckets[0].attempts, 0)
+        XCTAssertTrue(summary.activity.buckets[0].deviceAttempts.isEmpty)
     }
 
     // MARK: - 8. Grouping

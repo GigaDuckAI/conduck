@@ -14,9 +14,22 @@
 //
 // WHY A SECOND PARSER AND NOT A WIDER `ConverseResponse`. `Codable` decodes a
 // struct as a unit: one hostile `usage.total_tokens` would throw and take the
-// other five fields with it. `JSONSerialization` plus a per-field validator
-// gives exactly the tolerance this data needs — every field stands or falls
-// alone, and "absent" and "malformed" both mean nil.
+// other fields with it. `JSONSerialization` plus a per-field validator gives
+// exactly the tolerance this data needs — every field stands or falls alone,
+// and "absent" and "malformed" both mean nil. The two nested `*_details`
+// dictionaries obey the same rule one level down: a `details` value that is not
+// an object costs its own three fields and never the flat counts beside it.
+//
+// THE THREE DETAIL FIELDS ARE SUBSETS OF FIGURES ALREADY REPORTED, AND NOTHING
+// ANYWHERE MAY ADD THEM INTO A TOTAL. Cached and cache-write input are parts of
+// `prompt_tokens`; reasoning output is part of `completion_tokens`. Adding one
+// to a sum double-counts tokens the gateway already counted once.
+//
+// CONTAINMENT IS DOCUMENTED AND NEVER ENFORCED. Cached input ought to be ≤ the
+// prompt and reasoning output ≤ the completion, but a gateway that reports
+// otherwise is preserved EXACTLY, the same way an inconsistent
+// `reportedTotalTokens` is: repairing it would replace a gateway fact with a
+// client guess no later reader could tell apart.
 //
 // CONTENT-FREE, AND THAT IS RELEASE-BLOCKING. Nothing here touches prompt or
 // reply text, URLs, hosts, tokens, or provider error strings; the three
@@ -59,6 +72,16 @@ nonisolated struct GatewayResponseMetadata: Sendable, Equatable {
     /// convention — and repairing it here would replace a gateway fact with a
     /// client guess that no later reader could tell apart.
     let reportedTotalTokens: Int64?
+    /// `usage.prompt_tokens_details.cached_tokens` — the part of the prompt the
+    /// gateway served from its own cache.
+    let reportedCachedInputTokens: Int64?
+    /// `usage.prompt_tokens_details.cache_write_tokens` — the part of the prompt
+    /// the gateway wrote INTO that cache. Never a saving: several providers bill
+    /// a cache write at a premium over an ordinary prompt token.
+    let reportedCacheWriteInputTokens: Int64?
+    /// `usage.completion_tokens_details.reasoning_tokens` — the part of the
+    /// completion the model spent thinking rather than answering.
+    let reportedReasoningOutputTokens: Int64?
 
     init(
         reportedModel: String? = nil,
@@ -66,7 +89,10 @@ nonisolated struct GatewayResponseMetadata: Sendable, Equatable {
         finishReason: String? = nil,
         reportedInputTokens: Int64? = nil,
         reportedOutputTokens: Int64? = nil,
-        reportedTotalTokens: Int64? = nil
+        reportedTotalTokens: Int64? = nil,
+        reportedCachedInputTokens: Int64? = nil,
+        reportedCacheWriteInputTokens: Int64? = nil,
+        reportedReasoningOutputTokens: Int64? = nil
     ) {
         self.reportedModel = reportedModel
         self.reportedResponseID = reportedResponseID
@@ -74,16 +100,25 @@ nonisolated struct GatewayResponseMetadata: Sendable, Equatable {
         self.reportedInputTokens = reportedInputTokens
         self.reportedOutputTokens = reportedOutputTokens
         self.reportedTotalTokens = reportedTotalTokens
+        self.reportedCachedInputTokens = reportedCachedInputTokens
+        self.reportedCacheWriteInputTokens = reportedCacheWriteInputTokens
+        self.reportedReasoningOutputTokens = reportedReasoningOutputTokens
     }
 
     /// True when the gateway reported nothing this type could keep. Callers
-    /// that persist an observation use this to store nil rather than six empty
+    /// that persist an observation use this to store nil rather than nine empty
     /// columns, so "the gateway reports no usage" and "the parse found nothing
     /// usable" stay one state rather than two.
+    ///
+    /// The three detail fields are part of the question, not an exception to
+    /// it: a gateway that reported a cached-prompt count and nothing else has
+    /// reported something, and excluding them here would make the persistence
+    /// gate discard the one field it had.
     var isEmpty: Bool {
         reportedModel == nil && reportedResponseID == nil && finishReason == nil
             && reportedInputTokens == nil && reportedOutputTokens == nil
-            && reportedTotalTokens == nil
+            && reportedTotalTokens == nil && reportedCachedInputTokens == nil
+            && reportedCacheWriteInputTokens == nil && reportedReasoningOutputTokens == nil
     }
 
     /// Observe one complete HTTP response body. NEVER throws and never
@@ -104,6 +139,13 @@ nonisolated struct GatewayResponseMetadata: Sendable, Equatable {
         }
 
         let usage = root["usage"] as? [String: Any]
+        // The two DETAIL dictionaries, read exactly like `usage` itself: a value
+        // that is not an object — a number, a string, an array a hostile gateway
+        // sent — yields nil here and every field below reads nil from it. A
+        // malformed `details` therefore costs its own three fields and nothing
+        // else; the flat counts beside it are untouched.
+        let promptDetails = usage?["prompt_tokens_details"] as? [String: Any]
+        let completionDetails = usage?["completion_tokens_details"] as? [String: Any]
         // `choices` is scanned only for its FIRST element's finish reason. A
         // multi-choice response is not a shape this client requests, and
         // guessing which of several completions the reply decoder kept would
@@ -116,7 +158,18 @@ nonisolated struct GatewayResponseMetadata: Sendable, Equatable {
             finishReason: boundedWireString(firstChoice?["finish_reason"]),
             reportedInputTokens: nonNegativeInteger(usage?["prompt_tokens"]),
             reportedOutputTokens: nonNegativeInteger(usage?["completion_tokens"]),
-            reportedTotalTokens: nonNegativeInteger(usage?["total_tokens"])
+            reportedTotalTokens: nonNegativeInteger(usage?["total_tokens"]),
+            // THESE THREE PATHS AND NO OTHERS. Anthropic's
+            // `cache_creation_input_tokens`, DeepSeek's
+            // `prompt_cache_hit_tokens` and every other vendor dialect are
+            // deliberately NOT aliased here: a dialect read into a column named
+            // for a different one is a fact the ledger can never unlearn, and
+            // widening the parser later costs nothing because nothing was
+            // written down wrong in the meantime.
+            reportedCachedInputTokens: nonNegativeInteger(promptDetails?["cached_tokens"]),
+            reportedCacheWriteInputTokens: nonNegativeInteger(promptDetails?["cache_write_tokens"]),
+            reportedReasoningOutputTokens:
+                nonNegativeInteger(completionDetails?["reasoning_tokens"])
         )
     }
 

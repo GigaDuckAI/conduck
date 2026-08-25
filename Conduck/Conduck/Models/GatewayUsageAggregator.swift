@@ -40,6 +40,17 @@
 // because a turn still being retried has not yet delivered or failed to, and
 // leaving it in either denominator would report an outcome it has not had.
 //
+// THE ACTIVITY BARS FOLD BY SPAN, AND EVERY FOLDED FIGURE IS RECOMPUTED FROM
+// THE RECORDS. Ninety daily bars is a grey smear on a phone, so a wide window
+// is cut into weeks or months — but a week is never the sum of its days'
+// buckets. Turns are distinct `userMessageID`s inside the period, which is
+// strictly fewer than the days' turn counts added up whenever a turn was
+// retried across midnight, and rates stay pooled because a bucket stores counts
+// rather than a ratio. The one asymmetry is deliberate and inherited from the
+// daily bars: a turn straddling a period boundary is counted in BOTH periods
+// while the range total counts it once, because it really was worked on in
+// both.
+//
 // ONE RANKING BASIS PER LIST, NEVER MIXED. Heaviest threads and largest turns
 // rank on gateway-REPORTED totals when any thread in range has one, and on
 // calculated input+output components otherwise — never a per-thread choice
@@ -47,6 +58,14 @@
 // client-computed sum and call the comparison a ranking. Threads that cannot
 // answer under the chosen basis are absent from the list rather than ranked at
 // zero, and the basis travels with the list so the screen can name it.
+//
+// THE THREE TOKEN-DETAIL FIELDS ARE SUBSETS, NOT ADDITIONS. Cached input and
+// cache-write input are parts of the reported input; reasoning output is part
+// of the reported output. Nothing in this file adds one into a total, a volume
+// or a ranking basis, and nothing downstream may either — doing so double-counts
+// tokens the gateway already counted once. They are summed and covered exactly
+// like the primary fields, against the SAME terminal-attempt denominator, and
+// they change no existing number.
 //
 // EVERY RATE IS OPTIONAL AND NIL MEANS UNAVAILABLE. A zero denominator yields
 // nil, never 0.0 and never a NaN — "no attempts resolved yet" and "nothing
@@ -118,9 +137,15 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
     /// Attempts whose gateway reported the reply was cut off at the length
     /// limit. Zero is a fine answer; it is not "unavailable".
     let truncatedReplies: Int
-    /// One entry per day in the requested window, gaps filled with zeros, so a
-    /// bar chart draws quiet days as quiet rather than closing the gap.
-    let dailyActivity: [GatewayUsageDailyBucket]
+    /// The chart's bars, plus the period unit they were cut on.
+    let activity: GatewayUsageActivity
+    /// Attempts in range carrying a usable token figure — a gateway-reported
+    /// total, else both components. THE RANGE'S OWN COUNT, over every attempt
+    /// including the ones no bar can draw: an attempt with no start instant
+    /// lands in no bucket, so summing the buckets would understate coverage and
+    /// could report "no token data" for a range that plainly has some. The bars
+    /// still draw dated attempts only; that asymmetry is the honest one.
+    let tokenMeasuredAttempts: Int
     /// Per configured gateway SLOT, busiest first. Each carries its own
     /// per-model breakdown when more than one model was requested through it.
     let byGateway: [GatewayUsageGroup]
@@ -213,7 +238,8 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
         tokens: .empty,
         responseTime: .empty,
         truncatedReplies: 0,
-        dailyActivity: [],
+        activity: .empty,
+        tokenMeasuredAttempts: 0,
         byGateway: [],
         byRequestedModel: [],
         deviceGroups: [],
@@ -454,9 +480,16 @@ nonisolated struct GatewayUsageTokenField: Sendable, Equatable {
         sum: nil, reportingAttempts: 0, coverageDenominator: 0)
 }
 
-/// The three reported token fields, each summed and covered INDEPENDENTLY —
-/// one generic coverage percentage would claim a completeness no gateway
-/// promised.
+/// The reported token fields, each summed and covered INDEPENDENTLY — one
+/// generic coverage percentage would claim a completeness no gateway promised.
+///
+/// THREE PRIMARY FIELDS AND THREE DETAIL FIELDS, AND THE DIFFERENCE IS NOT
+/// COSMETIC. `input`, `output` and `reportedTotal` are whole figures. The three
+/// below are SUBSETS of them — cached and cache-write of the input, reasoning of
+/// the output — so nothing here or anywhere downstream may add one into a total.
+/// They also gate their own rows rather than the card: `isEmpty` keeps asking
+/// only about the three primary fields, because a card that appeared for a
+/// cached-token count alone would promise usage reporting a gateway never did.
 nonisolated struct GatewayUsageTokens: Sendable, Equatable {
     let input: GatewayUsageTokenField
     let output: GatewayUsageTokenField
@@ -464,6 +497,21 @@ nonisolated struct GatewayUsageTokens: Sendable, Equatable {
     /// client can compute. A gateway's inconsistent total is still its own
     /// statement about the turn.
     let reportedTotal: GatewayUsageTokenField
+    /// Part of `input`. An efficiency fact and NEVER a saving — see
+    /// `cacheWriteInput`.
+    let cachedInput: GatewayUsageTokenField
+    /// Part of `input`. Several providers bill a cache write at a PREMIUM over
+    /// an ordinary prompt token, so nothing may present this as money saved.
+    let cacheWriteInput: GatewayUsageTokenField
+    /// Part of `output` — what the model spent thinking rather than answering.
+    let reasoningOutput: GatewayUsageTokenField
+
+    /// Whether any of the three detail fields was reported in range. The
+    /// disclosure that draws them is hidden on false: an expander over three
+    /// absent rows is a control that opens onto nothing.
+    var hasReportedDetail: Bool {
+        cachedInput.isReported || cacheWriteInput.isReported || reasoningOutput.isReported
+    }
 
     /// Input + output, offered ONLY when no gateway-reported total exists and
     /// at least one component does. Label it "calculated known components"
@@ -476,12 +524,21 @@ nonisolated struct GatewayUsageTokens: Sendable, Equatable {
         return GatewayUsageAggregator.saturatingSum(input.sum ?? 0, output.sum ?? 0)
     }
 
-    /// No gateway in range reported any usage at all.
+    /// No gateway in range reported any of the three PRIMARY figures. The
+    /// detail fields are deliberately outside this question: they qualify the
+    /// primaries rather than standing in for them.
     var isEmpty: Bool {
         input.sum == nil && output.sum == nil && reportedTotal.sum == nil
     }
 
-    static let empty = GatewayUsageTokens(input: .empty, output: .empty, reportedTotal: .empty)
+    static let empty = GatewayUsageTokens(
+        input: .empty,
+        output: .empty,
+        reportedTotal: .empty,
+        cachedInput: .empty,
+        cacheWriteInput: .empty,
+        reasoningOutput: .empty
+    )
 }
 
 /// Full-response time: dispatch to terminal callback. It is NOT model latency —
@@ -506,68 +563,153 @@ nonisolated struct GatewayUsageResponseTime: Sendable, Equatable {
         sampleCount: 0, median: nil, p90: nil, mean: nil)
 }
 
-/// One calendar day of activity. Attempts and turns are kept apart here for the
-/// same reason they are everywhere else: three retries of one turn are one
-/// turn's worth of activity and three attempts' worth of load.
+/// The period ONE activity bar covers. Chosen by the aggregator from the span
+/// it was asked for, never by the caller: the chart and the bucket arithmetic
+/// have to agree about what a bar means, and a caller-supplied unit is a second
+/// opinion waiting to disagree with the buckets it labels.
+nonisolated enum UsageActivityUnit: String, Sendable, Hashable, CaseIterable {
+    case day
+    case week
+    case month
+
+    /// The calendar component the period is cut on. `weekOfYear` rather than
+    /// `weekOfMonth` so a week is the user's own calendar week, unbroken across
+    /// a month boundary.
+    var component: Calendar.Component {
+        switch self {
+        case .day: return .day
+        case .week: return .weekOfYear
+        case .month: return .month
+        }
+    }
+}
+
+/// The activity buckets and the unit they were cut on, together. The unit is
+/// part of the value because every caption the chart writes names it — "per
+/// day" and "per week" are different claims about the same bars, and a unit
+/// re-derived at render time is a second derivation that can disagree with the
+/// buckets it describes.
+nonisolated struct GatewayUsageActivity: Sendable, Equatable {
+    let unit: UsageActivityUnit
+    /// One entry per period in the requested window, gaps filled with zeros, so
+    /// a bar chart draws quiet periods as quiet rather than closing the gap.
+    let buckets: [GatewayUsageActivityBucket]
+
+    var isEmpty: Bool { buckets.isEmpty }
+
+    static let empty = GatewayUsageActivity(unit: .day, buckets: [])
+}
+
+/// One period of activity. Attempts and turns are kept apart here for the same
+/// reason they are everywhere else: three retries of one turn are one turn's
+/// worth of activity and three attempts' worth of load.
 ///
 /// The chart draws one metric at a time from this bucket, so every field below
-/// carries the same denominators the range totals use — a day's bar and the
+/// carries the same denominators the range totals use — a period's bar and the
 /// headline above it have to be the same kind of number, or the chart quietly
 /// contradicts the figure it sits under.
-nonisolated struct GatewayUsageDailyBucket: Sendable, Equatable, Identifiable {
-    /// Start of day in the calendar the aggregation ran under.
-    let day: Date
+///
+/// EVERY COUNT IS SUMMED, NEVER AVERAGED, which is what keeps a rate honest
+/// after a fold: a week's success share is its succeeded count over its
+/// resolved count, so a busy Monday outweighs a quiet Sunday exactly as it
+/// should. A bucket that stored a rate would have to average seven of them and
+/// would weight every day alike.
+nonisolated struct GatewayUsageActivityBucket: Sendable, Equatable, Identifiable {
+    /// Start of the period in the calendar the aggregation ran under, CLIPPED to
+    /// the requested window — a 90-day range stays 90 days, so its first weekly
+    /// bucket may begin mid-week rather than silently widening the range.
+    let periodStart: Date
+    /// Exclusive end of the span this bucket actually covers, clipped the same
+    /// way. Equal to the natural period end except at the two ends of the range.
+    let periodEnd: Date
+    /// The natural period began BEFORE `periodStart` — a leading partial. The
+    /// caption then names the covered span instead of the period.
+    let startsMidPeriod: Bool
+    /// The natural period ends AFTER `periodEnd` — the trailing period is still
+    /// running, which is what earns a "so far" clause.
+    let endsMidPeriod: Bool
     let attempts: Int
-    /// Distinct user turns attempted that day. A turn whose retries straddle
-    /// midnight counts in both days; the range total counts it once.
+    /// Distinct user turns attempted in the period. A turn whose retries
+    /// straddle the boundary counts in BOTH periods; the range total counts it
+    /// once. The asymmetry is deliberate and the same one the daily buckets
+    /// always had — a turn worked on across two days happened on both.
     let turns: Int
-    /// The day's reliability denominator: attempts that landed SUCCEEDED or
+    /// The period's reliability denominator: attempts that landed SUCCEEDED or
     /// FAILED, and nothing else. Deliberately NARROWER than
     /// `GatewayUsageOutcomeMix.resolved`, which also holds cancellations and
     /// unclassifiable landings — this is the denominator
-    /// `resolvedAttemptSuccessRate` divides by, so the per-day bar and the
-    /// range's success rate answer the same question. A day of nothing but
+    /// `resolvedAttemptSuccessRate` divides by, so the per-period bars and the
+    /// range's success rate answer the same question. A period of nothing but
     /// cancellations is zero here and draws NO bar, because a cancelled turn is
     /// not a turn that failed.
     let resolvedAttempts: Int
-    /// Of `resolvedAttempts`, the ones that succeeded. Numerator of the day's
-    /// success rate; meaningless without the denominator beside it.
+    /// Of `resolvedAttempts`, the ones that succeeded.
     let succeededAttempts: Int
-    /// The day's best-available token volume: for each terminal attempt, its
+    /// The period's best-available token volume: for each terminal attempt, its
     /// gateway-reported total, else its input + output when BOTH are present,
-    /// else nothing. Bases are mixed WITHIN a day on purpose — this is a volume,
-    /// not a ranking, and nothing is being ordered against anything — which is
-    /// exactly why `tokenMeasuredAttempts` travels beside it.
+    /// else nothing. Bases are mixed WITHIN a period on purpose — this is a
+    /// volume, not a ranking, and nothing is being ordered against anything —
+    /// which is exactly why `tokenMeasuredAttempts` travels beside it.
     ///
     /// Zero is ambiguous on its own (nobody reported, or everybody reported
     /// zero); the coverage count tells the two apart, and naming the figure
     /// honestly on screen is the UI's job.
     let reportedTokens: Int
     /// Attempts behind `reportedTokens`, whose denominator is `attempts`. Zero
-    /// means the day can say nothing about tokens.
+    /// means the period can say nothing about tokens.
     let tokenMeasuredAttempts: Int
+    /// The period's attempts split by device bucket. NIL KEY IS "not recorded",
+    /// matching the gateway split below, so one piece of chart code reads both
+    /// dimensions under one rule. Sums EXACTLY to `attempts` — a stack that
+    /// quietly totals below its own bar is a lie about the bar's height.
+    let deviceAttempts: [String?: Int]
+    /// The period's attempts split by gateway SLOT (`RemoteAgentRef.rawString`).
+    /// Nil key is the slot the ledger never captured. Sums exactly to
+    /// `attempts`.
+    let gatewayAttempts: [String?: Int]
 
-    var id: Date { day }
+    var id: Date { periodStart }
 
-    /// The four metric fields default to zero so a bucket built by hand — a
-    /// preview, a fixture for the turns-only path — states only what it means
-    /// to. A zeroed bucket reads as a quiet day, which is what a gap day is.
+    /// Resolved attempts that did not succeed. The top half of the Results
+    /// stack, and never a rate: a count cannot be inflated by a small
+    /// denominator.
+    var failedAttempts: Int { max(0, resolvedAttempts - succeededAttempts) }
+
+    /// Attempts that reached neither of the two outcomes the Results stack
+    /// draws — cancelled, unclassifiable, or still open. Named rather than
+    /// painted into the stack: they are not failures, and a bar segment for
+    /// them would read as one.
+    var otherOutcomeAttempts: Int { max(0, attempts - resolvedAttempts) }
+
+    /// Everything past the period bounds defaults, so a bucket built by hand —
+    /// a preview, a fixture for the turns-only path — states only what it means
+    /// to. A zeroed bucket reads as a quiet period, which is what a gap is.
     init(
-        day: Date,
+        periodStart: Date,
+        periodEnd: Date? = nil,
+        startsMidPeriod: Bool = false,
+        endsMidPeriod: Bool = false,
         attempts: Int,
         turns: Int,
         resolvedAttempts: Int = 0,
         succeededAttempts: Int = 0,
         reportedTokens: Int = 0,
-        tokenMeasuredAttempts: Int = 0
+        tokenMeasuredAttempts: Int = 0,
+        deviceAttempts: [String?: Int] = [:],
+        gatewayAttempts: [String?: Int] = [:]
     ) {
-        self.day = day
+        self.periodStart = periodStart
+        self.periodEnd = periodEnd ?? periodStart
+        self.startsMidPeriod = startsMidPeriod
+        self.endsMidPeriod = endsMidPeriod
         self.attempts = attempts
         self.turns = turns
         self.resolvedAttempts = resolvedAttempts
         self.succeededAttempts = succeededAttempts
         self.reportedTokens = reportedTokens
         self.tokenMeasuredAttempts = tokenMeasuredAttempts
+        self.deviceAttempts = deviceAttempts
+        self.gatewayAttempts = gatewayAttempts
     }
 }
 
@@ -616,10 +758,20 @@ nonisolated enum GatewayUsageAggregator {
     /// reply, not a string match.
     static let truncatedFinishReason = "length"
 
-    /// Hard ceiling on generated daily buckets, so a nonsense range — a device
-    /// with a wildly wrong clock, a corrupt stored date — costs a bounded array
+    /// How many bars the finest unit may produce before the fold moves to a
+    /// coarser one. Forty is the point past which a phone-width plot draws bars
+    /// thinner than the gap between them — 90 daily bars is a grey smear, the
+    /// same 90 days as 13 weekly bars is a shape.
+    ///
+    /// A CEILING ON THE FOLD, NOT ON THE CHART: months are the coarsest unit
+    /// there is, so a ledger spanning decades exceeds this and is bounded by
+    /// `maxActivityBuckets` instead.
+    static let maxActivityBars = 40
+
+    /// Hard ceiling on generated buckets, so a nonsense range — a device with a
+    /// wildly wrong clock, a corrupt stored date — costs a bounded array
     /// instead of a hang.
-    static let maxDailyBuckets = 3_660
+    static let maxActivityBuckets = 3_660
 
     /// Ceiling on the ranked-thread list. The screen shows five and offers the
     /// rest; a ledger with tens of thousands of threads still costs one bounded
@@ -639,8 +791,9 @@ nonisolated enum GatewayUsageAggregator {
     ///     for. Local, process-visible evidence only; its absence never means
     ///     an attempt is dead.
     ///   - now: Evaluation instant, injected so derived states are reproducible.
-    ///   - activityRange: The window the daily buckets should span, gaps
-    ///     included. Nil spans first to last observed attempt day only.
+    ///   - activityRange: The window the activity buckets should span, gaps
+    ///     included; its upper bound is what makes the trailing period read as
+    ///     still running. Nil spans first to last observed attempt day only.
     ///   - calendar: Day boundaries. The user's own calendar in production.
     ///   - grace: Both the derived-state window and the ceiling on believable
     ///     attempt timing. The shared stale-send grace, not a second constant.
@@ -679,7 +832,8 @@ nonisolated enum GatewayUsageAggregator {
             tokens: tokens(for: items),
             responseTime: responseTime(for: items),
             truncatedReplies: items.count(where: { $0.isTruncated }),
-            dailyActivity: dailyActivity(for: items, range: activityRange, calendar: calendar),
+            activity: activity(for: items, range: activityRange, calendar: calendar),
+            tokenMeasuredAttempts: items.count(where: { bestAvailableTokens($0) != nil }),
             byGateway: gatewayGroups(for: items),
             byRequestedModel: modelGroups(for: items),
             deviceGroups: deviceGroups(for: items),
@@ -922,7 +1076,13 @@ nonisolated enum GatewayUsageAggregator {
         return GatewayUsageTokens(
             input: tokenField(resolved) { $0.record.reportedInputTokens },
             output: tokenField(resolved) { $0.record.reportedOutputTokens },
-            reportedTotal: tokenField(resolved) { $0.record.reportedTotalTokens }
+            reportedTotal: tokenField(resolved) { $0.record.reportedTotalTokens },
+            // SAME helper, SAME terminal-attempt denominator. A detail field
+            // measured against its own narrower population would read as better
+            // covered than the figure it is a part of.
+            cachedInput: tokenField(resolved) { $0.record.reportedCachedInputTokens },
+            cacheWriteInput: tokenField(resolved) { $0.record.reportedCacheWriteInputTokens },
+            reasoningOutput: tokenField(resolved) { $0.record.reportedReasoningOutputTokens }
         )
     }
 
@@ -966,94 +1126,155 @@ nonisolated enum GatewayUsageAggregator {
         )
     }
 
-    // MARK: - Daily activity
+    // MARK: - Activity buckets
 
-    /// Dense day buckets across `range`, or across the observed days when no
+    /// Dense period buckets across `range`, or across the observed days when no
     /// range is given. Attempts with no `startedAt` are counted in the range
     /// totals but land in no bucket: a row that cannot say when it began cannot
     /// be drawn on a date axis, and assigning it to "today" would move a bar
-    /// that describes a day it has nothing to do with.
+    /// that describes a period it has nothing to do with.
     ///
-    /// A day is bucketed on the attempt's START, so every metric on a bucket is
-    /// "work begun that day" — a turn dispatched before midnight and answered
-    /// after it belongs to the day the user asked, which is the day they
-    /// remember.
-    private static func dailyActivity(
+    /// A period is chosen by the attempt's START, so every metric on a bucket is
+    /// "work begun in that period" — a turn dispatched before midnight and
+    /// answered after it belongs to the day the user asked, which is the day
+    /// they remember.
+    ///
+    /// COMPUTED FROM THE RECORDS, NEVER BY SUMMING DAILY BUCKETS. A week's turn
+    /// count is its distinct `userMessageID`s, which is strictly less than the
+    /// sum of its days' turn counts whenever a turn was retried across
+    /// midnight; folding day totals would silently inflate it.
+    private static func activity(
         for items: [Classified],
         range: ClosedRange<Date>?,
         calendar: Calendar
-    ) -> [GatewayUsageDailyBucket] {
-        var attemptsPerDay: [Date: Int] = [:]
-        var turnsPerDay: [Date: Set<UUID>] = [:]
-        var resolvedPerDay: [Date: Int] = [:]
-        var succeededPerDay: [Date: Int] = [:]
-        var tokensPerDay: [Date: Int64] = [:]
-        var tokenAttemptsPerDay: [Date: Int] = [:]
+    ) -> GatewayUsageActivity {
+        // Whole days either side, exactly as the daily buckets always did: a
+        // window is a set of calendar days, and a bar that started three hours
+        // into its first one would be short for a reason no reader can see.
+        let firstDay: Date
+        let lastDay: Date
+        let coverageEnd: Date
+        if let range {
+            firstDay = calendar.startOfDay(for: range.lowerBound)
+            lastDay = calendar.startOfDay(for: range.upperBound)
+            // The REQUESTED end, not the end of its day: it is what makes the
+            // trailing period "still running" rather than complete, and a
+            // period rounded up to midnight would claim hours that have not
+            // happened.
+            coverageEnd = range.upperBound
+        } else {
+            let observed = items.compactMap { $0.record.startedAt }
+                .map { calendar.startOfDay(for: $0) }
+            guard let earliest = observed.min(), let latest = observed.max() else {
+                return .empty
+            }
+            firstDay = earliest
+            lastDay = latest
+            // No window was asked for, so the last observed day is complete as
+            // far as anything here can tell — nothing claims it is still going.
+            coverageEnd = calendar.date(byAdding: .day, value: 1, to: latest)
+                .map { calendar.startOfDay(for: $0) } ?? latest
+        }
+        guard firstDay <= lastDay else { return .empty }
+
+        let unit = self.unit(from: firstDay, to: lastDay, calendar: calendar)
+
+        // One pass over the records, keyed on the CLIPPED period start so the
+        // lookup key and the bucket's own identity are the same value.
+        var attemptsPer: [Date: Int] = [:]
+        var turnsPer: [Date: Set<UUID>] = [:]
+        var resolvedPer: [Date: Int] = [:]
+        var succeededPer: [Date: Int] = [:]
+        var tokensPer: [Date: Int64] = [:]
+        var tokenAttemptsPer: [Date: Int] = [:]
+        var devicesPer: [Date: [String?: Int]] = [:]
+        var gatewaysPer: [Date: [String?: Int]] = [:]
         for item in items {
-            guard let startedAt = item.record.startedAt else { continue }
-            let day = calendar.startOfDay(for: startedAt)
-            attemptsPerDay[day, default: 0] += 1
+            guard let startedAt = item.record.startedAt,
+                  startedAt >= firstDay,
+                  calendar.startOfDay(for: startedAt) <= lastDay,
+                  let interval = calendar.dateInterval(of: unit.component, for: startedAt)
+            else { continue }
+            let key = max(interval.start, firstDay)
+            attemptsPer[key, default: 0] += 1
             if let turn = item.record.userMessageID {
-                turnsPerDay[day, default: []].insert(turn)
+                turnsPer[key, default: []].insert(turn)
             }
             // Succeeded and failed ONLY — see `resolvedAttempts`. A cancelled
             // or unclassifiable landing is neither a win nor a loss, and
             // letting it into the denominator would draw a bar that reads as a
-            // bad day when nothing bad happened.
+            // bad period when nothing bad happened.
             if let outcome = item.storedOutcome, outcome == .succeeded || outcome == .failed {
-                resolvedPerDay[day, default: 0] += 1
-                if outcome == .succeeded { succeededPerDay[day, default: 0] += 1 }
+                resolvedPer[key, default: 0] += 1
+                if outcome == .succeeded { succeededPer[key, default: 0] += 1 }
             }
             if let tokens = bestAvailableTokens(item) {
-                tokenAttemptsPerDay[day, default: 0] += 1
-                tokensPerDay[day] = saturatingSum(tokensPerDay[day] ?? 0, tokens)
+                tokenAttemptsPer[key, default: 0] += 1
+                tokensPer[key] = saturatingSum(tokensPer[key] ?? 0, tokens)
             }
+            let device = UsageDeviceBucket.from(record: item.record)
+            // The unattributed device becomes the SAME nil key the gateway
+            // split uses for its unattributed slot, so one piece of chart code
+            // reads both dimensions under one rule.
+            devicesPer[key, default: [:]][device == .unknown ? nil : device.rawValue, default: 0] += 1
+            gatewaysPer[key, default: [:]][item.record.gatewayRef, default: 0] += 1
         }
 
-        let firstDay: Date
-        let lastDay: Date
-        if let range {
-            firstDay = calendar.startOfDay(for: range.lowerBound)
-            lastDay = calendar.startOfDay(for: range.upperBound)
-        } else {
-            guard let earliest = attemptsPerDay.keys.min(),
-                  let latest = attemptsPerDay.keys.max()
-            else { return [] }
-            firstDay = earliest
-            lastDay = latest
-        }
-        guard firstDay <= lastDay else { return [] }
-
-        var buckets: [GatewayUsageDailyBucket] = []
-        var day = firstDay
-        while day <= lastDay && buckets.count < maxDailyBuckets {
+        var buckets: [GatewayUsageActivityBucket] = []
+        var cursor = firstDay
+        while cursor <= lastDay && buckets.count < maxActivityBuckets {
+            // `dateInterval` rather than a hand-rolled walk: it re-anchors on
+            // every step, so a zone whose DST transition lands AT midnight
+            // (America/Santiago, Asia/Beirut) — where `startOfDay` for the
+            // transition date is 01:00 — still produces one bucket per local
+            // period. Fixed 86400-second arithmetic drifts the same way on
+            // every transition, midnight or not.
+            guard let interval = calendar.dateInterval(of: unit.component, for: cursor),
+                  interval.end > cursor
+            else { break }
+            let start = max(interval.start, firstDay)
+            let end = min(interval.end, coverageEnd)
             buckets.append(
-                GatewayUsageDailyBucket(
-                    day: day,
-                    attempts: attemptsPerDay[day] ?? 0,
-                    turns: turnsPerDay[day]?.count ?? 0,
-                    resolvedAttempts: resolvedPerDay[day] ?? 0,
-                    succeededAttempts: succeededPerDay[day] ?? 0,
-                    reportedTokens: Int(clamping: tokensPerDay[day] ?? 0),
-                    tokenMeasuredAttempts: tokenAttemptsPerDay[day] ?? 0
+                GatewayUsageActivityBucket(
+                    periodStart: start,
+                    periodEnd: max(end, start),
+                    startsMidPeriod: interval.start < start,
+                    endsMidPeriod: interval.end > end,
+                    attempts: attemptsPer[start] ?? 0,
+                    turns: turnsPer[start]?.count ?? 0,
+                    resolvedAttempts: resolvedPer[start] ?? 0,
+                    succeededAttempts: succeededPer[start] ?? 0,
+                    reportedTokens: Int(clamping: tokensPer[start] ?? 0),
+                    tokenMeasuredAttempts: tokenAttemptsPer[start] ?? 0,
+                    deviceAttempts: devicesPer[start] ?? [:],
+                    gatewayAttempts: gatewaysPer[start] ?? [:]
                 )
             )
-            // RE-ANCHOR ON `startOfDay` AT EVERY STEP. Adding a day preserves
-            // the wall-clock time it started from, and in a zone whose DST
-            // transition happens AT midnight (America/Santiago, Asia/Beirut)
-            // `startOfDay` for the transition date is 01:00 — so an
-            // unnormalised walk carries that 01:00 forward for every later day,
-            // matches none of the lookup keys above (always a `startOfDay`), and
-            // stops a day early against a `lastDay` that is 00:00. Fixed
-            // 86400-second arithmetic drifts the same way on every transition,
-            // midnight or not.
-            guard let next = calendar.date(byAdding: .day, value: 1, to: day)
-            else { break }
-            let following = calendar.startOfDay(for: next)
-            guard following > day else { break }
-            day = following
+            cursor = interval.end
         }
-        return buckets
+        return GatewayUsageActivity(unit: unit, buckets: buckets)
+    }
+
+    /// THE FINEST UNIT THAT STILL DRAWS AS A SHAPE. Days while there are few
+    /// enough of them, then weeks, then months — one rule rather than a table
+    /// keyed off the range picker, so `.all` over a two-year ledger and a
+    /// hypothetical future range land on the same answer for the same reason.
+    ///
+    /// Months are the floor: there is no coarser unit, so a decade-long ledger
+    /// exceeds `maxActivityBars` and is bounded by `maxActivityBuckets` instead.
+    static func unit(from firstDay: Date, to lastDay: Date, calendar: Calendar) -> UsageActivityUnit {
+        func spans(_ component: Calendar.Component) -> Int {
+            guard let first = calendar.dateInterval(of: component, for: firstDay),
+                  let last = calendar.dateInterval(of: component, for: lastDay)
+            else { return Int.max }
+            let steps = calendar.dateComponents(
+                [component], from: first.start, to: last.start
+            ).value(for: component) ?? Int.max
+            return steps == Int.max ? Int.max : steps + 1
+        }
+        if spans(.day) <= maxActivityBars { return .day }
+        if spans(.weekOfYear) <= maxActivityBars { return .week }
+        return .month
     }
 
     // MARK: - Grouping

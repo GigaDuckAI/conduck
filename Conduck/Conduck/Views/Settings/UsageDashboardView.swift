@@ -121,6 +121,11 @@ enum UsageRoute: Hashable {
     case gateway(String?)
     case device(UsageDeviceBucket)
     case allThreads
+    /// The turns behind a reliability figure, always range-scoped and carrying
+    /// whatever narrowing the row that opened it already had. Reached from the
+    /// failure-reason rows on the overview and on the gateway drill-down; it is
+    /// never a top-level destination of its own.
+    case incidents(UsageIncidentFilter)
 }
 
 // MARK: - Stat tiles
@@ -154,6 +159,13 @@ struct UsageDashboardContent: View {
     /// — a user who opened the detail once asked to see detail.
     @AppStorage("settings.usage.reliability.expanded")
     private var reliabilityDetailExpanded: Bool = false
+
+    /// Whether the Tokens card's detail is open. Same rule and same posture as
+    /// the reliability flag above, and shared with the gateway drill-down's
+    /// Tokens card for the same reason — the choice is about how much the user
+    /// wants to read, not about which screen they are on.
+    @AppStorage("settings.usage.tokens.expanded")
+    private var tokenDetailExpanded: Bool = false
 
     /// Gate for the destructive clear. Held here rather than in the model: it is
     /// presentation state, and a model that owned it would have to be reset by
@@ -243,6 +255,8 @@ struct UsageDashboardContent: View {
                 UsageDeviceDetailView(model: model, bucket: bucket)
             case .allThreads:
                 UsageAllThreadsView(model: model)
+            case .incidents(let filter):
+                UsageIncidentListView(model: model, filter: filter)
             }
         }
         // Deferred first load — the hosts build the model whether or not anyone
@@ -368,12 +382,19 @@ struct UsageDashboardContent: View {
     private var activitySection: some View {
         Section {
             statRow
-            if !model.summary.dailyActivity.isEmpty {
+            if !model.summary.activity.isEmpty {
                 // The chart is a SHARED component, identical here and on both
                 // drill-downs — including which measure it is showing, which
-                // follows the user across the push rather than resetting.
-                UsageActivityChart(buckets: model.summary.dailyActivity)
-                    .settingsCardPassiveRow()
+                // follows the user across the push rather than resetting. The
+                // overview withholds no measure and scopes nothing: it IS the
+                // range.
+                UsageActivityChart(
+                    activity: model.summary.activity,
+                    recordedAttempts: model.summary.recordedAttempts,
+                    tokenMeasuredAttempts: model.summary.tokenMeasuredAttempts,
+                    gatewayRoster: gatewayRoster
+                )
+                .settingsCardPassiveRow()
             }
         } header: {
             Text(LocalizedStringResource(
@@ -633,6 +654,10 @@ struct UsageDashboardContent: View {
     /// gutter would not line up with the card rows above and below it. A real
     /// `Button` also carries keyboard activation, VoiceOver activation and a
     /// pressed state that a tap gesture on a label does not.
+    ///
+    /// The LABEL itself is `UsageDetailRows.detailDisclosureLabel`, the same one
+    /// the Tokens card's disclosure renders. Both sit on THIS screen, so a
+    /// second copy of that `Text` is exactly how the two would drift apart.
     @ViewBuilder
     private var reliabilityDetail: some View {
         #if os(macOS)
@@ -647,7 +672,8 @@ struct UsageDashboardContent: View {
                     // turn rides the same transaction as the reveal below.
                     .rotationEffect(.degrees(reliabilityDetailExpanded ? 90 : 0))
                     .accessibilityHidden(true)
-                reliabilityDetailLabel
+                UsageDetailRows.detailDisclosureLabel(
+                    accessibility: UsageDetailRows.reliabilityDetailsAccessibility)
                 Spacer()
             }
         }
@@ -665,16 +691,11 @@ struct UsageDashboardContent: View {
         DisclosureGroup(isExpanded: $reliabilityDetailExpanded) {
             reliabilityDetailRows
         } label: {
-            reliabilityDetailLabel
+            UsageDetailRows.detailDisclosureLabel(
+                accessibility: UsageDetailRows.reliabilityDetailsAccessibility)
                 .tappableDisclosureLabel($reliabilityDetailExpanded)
         }
         #endif
-    }
-
-    private var reliabilityDetailLabel: some View {
-        Text(LocalizedStringResource(
-            "settings.usage.reliability.details", defaultValue: "Details"))
-            .foregroundStyle(AppColors.textPrimary)
     }
 
     /// Everything the headline does not answer. Lifted out of the section for
@@ -850,12 +871,14 @@ struct UsageDashboardContent: View {
     // MARK: - Failure reasons
 
     /// How many distinct reasons get a row of their own before the tail is
-    /// collapsed. A long tail of one-offs is noise in an aggregate; the
-    /// individual failures live in Diagnostics, which is where an investigation
-    /// belongs.
+    /// collapsed. A long tail of one-offs is noise in an aggregate — and only a
+    /// NAMED reason can be the way into the turns behind it, since the folded
+    /// row stands for several codes and so has no single filter to push.
     private static let failureReasonRowLimit = 5
 
-    /// WHY attempts failed, in aggregate and nowhere near an item list. Copy
+    /// WHY attempts failed, in aggregate — and each named reason is the way INTO
+    /// the turns behind it: the row pushes `UsageIncidentListView`, filtered to
+    /// that one error code and to the range already on screen. Copy
     /// comes through `UsageFailureReasonCopy`, which is a thin read on
     /// `DiagnosticsExplainer` — the app's own code-to-sentence map — so a reason
     /// reads identically here, on the gateway drill-down, and on Diagnostics.
@@ -879,12 +902,19 @@ struct UsageDashboardContent: View {
                 .settingsCardPassiveRow()
 
             ForEach(top, id: \.appErrorCode) { reason in
+                // THE ROW IS THE WAY IN. A named reason pushes the turns behind
+                // it, filtered to that one error code and to the range already
+                // on screen.
                 failureReasonRow(
                     label: UsageFailureReasonCopy.label(forAppErrorCode: reason.appErrorCode),
-                    count: reason.count
+                    count: reason.count,
+                    route: .incidents(UsageIncidentFilter(
+                        gateway: .anyGateway, appErrorCode: reason.appErrorCode))
                 )
             }
             if otherCount > 0 {
+                // NO PUSH. The folded row stands for several distinct codes, so
+                // there is no single filter it could carry.
                 failureReasonRow(
                     label: String(localized: "settings.usage.reliability.reasons.other",
                                   defaultValue: "Other reasons"),
@@ -897,7 +927,28 @@ struct UsageDashboardContent: View {
     /// A cause sentence, wrapped, with its count. The label is a resolved
     /// `String` rather than a `LocalizedStringResource` because it arrives from
     /// the shared explainer already localized — which is the point of reusing it.
-    private func failureReasonRow(label: String, count: Int) -> some View {
+    ///
+    /// With a `route:` it becomes a push and inherits the screen's ONE
+    /// navigation-row treatment — the platform's own accessory on iOS, the
+    /// hand-drawn chevron on the macOS card.
+    @ViewBuilder
+    private func failureReasonRow(
+        label: String,
+        count: Int,
+        route: UsageRoute? = nil
+    ) -> some View {
+        if let route {
+            navigationRow(value: route) {
+                failureReasonRowBody(label: label, count: count)
+            }
+        } else {
+            failureReasonRowBody(label: label, count: count)
+                .settingsCardPassiveRow()
+                .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func failureReasonRowBody(label: String, count: Int) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: "xmark.circle.fill")
                 .foregroundStyle(AppColors.error)
@@ -912,8 +963,6 @@ struct UsageDashboardContent: View {
                 .monospacedDigit()
                 .foregroundStyle(AppColors.textSecondary)
         }
-        .settingsCardPassiveRow()
-        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Response time
@@ -1024,6 +1073,13 @@ struct UsageDashboardContent: View {
                             defaultValue: "Added up from the fields above — your gateway reported no total")
                     )
                 }
+                // ONE implementation, shared with every drill-down's Tokens
+                // card, and it hides itself when no gateway in range reported
+                // any of the three. Inside this branch on purpose: the rows it
+                // reveals are PARTS of the figures above them, and a part has
+                // nothing to be a part of on a card that is telling the user
+                // nothing was reported.
+                UsageDetailRows.tokenDetail(tokens, expanded: $tokenDetailExpanded)
             }
         } header: {
             Text(LocalizedStringResource(

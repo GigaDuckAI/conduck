@@ -379,10 +379,10 @@ extension ConversationStore {
     /// same call the read side makes — see its own comment for why an ABSENT
     /// column is open and an unrecognised one is not.
     ///
-    /// The six reported columns are written only when the gateway actually
-    /// reported something. `GatewayResponseMetadata.isEmpty` collapses "the
-    /// gateway reports no usage" and "the parse found nothing usable" into the
-    /// one state they are.
+    /// The reported columns are written only when the gateway actually reported
+    /// something. `GatewayResponseMetadata.isEmpty` collapses "the gateway
+    /// reports no usage" and "the parse found nothing usable" into the one state
+    /// they are.
     @discardableResult
     static func applyTerminalObservation(
         _ observation: TerminalAttemptObservation,
@@ -412,6 +412,23 @@ extension ConversationStore {
             row.setValue(
                 metadata.reportedTotalTokens.map { NSNumber(value: $0) },
                 forKey: "reportedTotalTokens"
+            )
+            // The three DETAIL columns travel with the rest and never on their
+            // own path: each is a SUBSET of a figure already written above —
+            // cached and cache-write of the input, reasoning of the output — so
+            // no reader may add one into a total. Nil stays nil; there is no
+            // backfill and no derivation.
+            row.setValue(
+                metadata.reportedCachedInputTokens.map { NSNumber(value: $0) },
+                forKey: "reportedCachedInputTokens"
+            )
+            row.setValue(
+                metadata.reportedCacheWriteInputTokens.map { NSNumber(value: $0) },
+                forKey: "reportedCacheWriteInputTokens"
+            )
+            row.setValue(
+                metadata.reportedReasoningOutputTokens.map { NSNumber(value: $0) },
+                forKey: "reportedReasoningOutputTokens"
             )
         }
         return true

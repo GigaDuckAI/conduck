@@ -270,11 +270,15 @@ final class GatewayAttemptRecordTests: XCTestCase {
             gatewayRef: "openclaw", startedAt: now, completedAt: now.addingTimeInterval(3),
             outcome: .succeeded, reportedModel: "m1", reportedResponseID: "r1",
             finishReason: "stop", reportedInputTokens: 5, reportedOutputTokens: 6,
-            reportedTotalTokens: 11)
+            reportedTotalTokens: 11, reportedCachedInputTokens: 3,
+            reportedCacheWriteInputTokens: 1, reportedReasoningOutputTokens: 4)
         XCTAssertEqual(record.reportedMetadata,
                        GatewayResponseMetadata(reportedModel: "m1", reportedResponseID: "r1",
                                                finishReason: "stop", reportedInputTokens: 5,
-                                               reportedOutputTokens: 6, reportedTotalTokens: 11))
+                                               reportedOutputTokens: 6, reportedTotalTokens: 11,
+                                               reportedCachedInputTokens: 3,
+                                               reportedCacheWriteInputTokens: 1,
+                                               reportedReasoningOutputTokens: 4))
     }
 
     /// The KVC keys the snapshot reads are the only thing tying it to the v11
@@ -312,6 +316,9 @@ final class GatewayAttemptRecordTests: XCTestCase {
             row.setValue(NSNumber(value: Int64(11)), forKey: "reportedInputTokens")
             row.setValue(NSNumber(value: Int64(22)), forKey: "reportedOutputTokens")
             row.setValue(NSNumber(value: Int64(33)), forKey: "reportedTotalTokens")
+            row.setValue(NSNumber(value: Int64(44)), forKey: "reportedCachedInputTokens")
+            row.setValue(NSNumber(value: Int64(55)), forKey: "reportedCacheWriteInputTokens")
+            row.setValue(NSNumber(value: Int64(66)), forKey: "reportedReasoningOutputTokens")
             row.setValue(NSNumber(value: Int16(GatewayAttemptRecord.currentRecordVersion)),
                          forKey: "recordVersion")
             row.setValue(GatewayAttemptDeviceClass.iphone.rawValue, forKey: "originDeviceClass")
@@ -338,6 +345,9 @@ final class GatewayAttemptRecordTests: XCTestCase {
             XCTAssertEqual(record.reportedInputTokens, 11)
             XCTAssertEqual(record.reportedOutputTokens, 22)
             XCTAssertEqual(record.reportedTotalTokens, 33)
+            XCTAssertEqual(record.reportedCachedInputTokens, 44)
+            XCTAssertEqual(record.reportedCacheWriteInputTokens, 55)
+            XCTAssertEqual(record.reportedReasoningOutputTokens, 66)
             XCTAssertEqual(record.recordVersion, GatewayAttemptRecord.currentRecordVersion)
             XCTAssertEqual(record.originDeviceClass, "iphone")
             XCTAssertEqual(record.currentTurnInlineImageCount, 2)
@@ -426,6 +436,11 @@ final class GatewayAttemptRecordTests: XCTestCase {
                          "a non-scalar Integer 64 must read nil, not 0 — coverage percentages are "
                          + "built on exactly that distinction")
             XCTAssertNil(record.reportedTotalTokens)
+            XCTAssertNil(record.reportedCachedInputTokens,
+                         "a row that predates the token-detail columns says nothing about them, "
+                         + "and there is no backfill that could ever make it say zero")
+            XCTAssertNil(record.reportedCacheWriteInputTokens)
+            XCTAssertNil(record.reportedReasoningOutputTokens)
             XCTAssertNil(record.recordVersion)
             XCTAssertNil(record.originDeviceClass)
             XCTAssertNil(record.currentTurnInlineImageCount,

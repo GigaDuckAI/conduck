@@ -332,7 +332,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     func testV8StoreMigratesToV9WithNilOutputDeliveryCensus() async throws {
         let v8 = try requiredModel(named: "Conversations 8.mom")
         let v9 = try requiredModel(named: "Conversations 9.mom")
-        let current = try requiredModel(named: "Conversations 12.mom")
+        let current = try requiredModel(named: "Conversations 13.mom")
         let conversationID = UUID()
         let messageID = UUID()
         let boxKey = "\(conversationID.uuidString)/out-0123456789abcdef"
@@ -1430,14 +1430,240 @@ final class ConversationsModelMigrationTests: XCTestCase {
         }
     }
 
-    /// The model the APP opens is v12. A pointer left on an older version would
+    /// v13 is ADDITIVE and changes NOTHING else: three optional `Integer 64`
+    /// columns on `GatewayAttempt` for the token DETAIL a gateway may report —
+    /// the cached and cache-write parts of the prompt, and the reasoning part of
+    /// the completion.
+    ///
+    /// EACH IS A SUBSET OF A FIGURE ALREADY STORED, never an addition to one, so
+    /// the three ship shaped EXACTLY like `reportedInputTokens`: `Integer 64`,
+    /// optional, non-scalar, no default. Non-scalar is the load-bearing half —
+    /// only an `NSNumber?` can tell a reported ZERO apart from NOTHING REPORTED,
+    /// and every coverage caption on the dashboard rests on that distinction.
+    func testV13AddsThreeTokenDetailAttributesAndNothingElse() throws {
+        let v12 = try requiredModel(named: "Conversations 12.mom")
+        let v13 = try requiredModel(named: "Conversations 13.mom")
+
+        XCTAssertEqual(Set(v12.entitiesByName.keys), Set(v13.entitiesByName.keys),
+                       "no entity appears or disappears — an entity change is not lightweight")
+
+        let expectedAdditions: [String: Set<String>] = [
+            "Attachment": [],
+            "Conversation": [],
+            "Message": [],
+            "GatewayAttempt": [
+                "reportedCachedInputTokens",
+                "reportedCacheWriteInputTokens",
+                "reportedReasoningOutputTokens",
+            ],
+        ]
+
+        // The column every new token column copies. Asserting against IT rather
+        // than against a restated literal is what keeps the three honest: if the
+        // shape of a token column ever changes, they change with it or this
+        // fails.
+        let reference = try XCTUnwrap(
+            v13.entitiesByName["GatewayAttempt"]?.attributesByName["reportedInputTokens"])
+
+        for (name, newEntity) in v13.entitiesByName {
+            let oldEntity = try XCTUnwrap(v12.entitiesByName[name])
+            let added = Set(newEntity.attributesByName.keys)
+                .subtracting(oldEntity.attributesByName.keys)
+            let removed = Set(oldEntity.attributesByName.keys)
+                .subtracting(newEntity.attributesByName.keys)
+            XCTAssertTrue(removed.isEmpty,
+                          "\(name) lost \(removed.sorted()) — a removal is data loss, not a migration")
+            let expectedForEntity = try XCTUnwrap(expectedAdditions[name])
+            XCTAssertEqual(added, expectedForEntity,
+                           "\(name) gains exactly the columns this version reviewed — an extra one "
+                           + "is permanent, and a missing one is a fact the account can never carry")
+            XCTAssertEqual(
+                Set(newEntity.relationshipsByName.keys), Set(oldEntity.relationshipsByName.keys),
+                "\(name) keeps its relationships — v13 changes no rule, only columns")
+
+            for attribute in added.compactMap({ newEntity.attributesByName[$0] }) {
+                XCTAssertEqual(attribute.attributeType, reference.attributeType,
+                               "\(attribute.name) ships at the same type as reportedInputTokens: a "
+                               + "production CloudKit schema is additive-only, so what deploys here "
+                               + "is what it keeps forever")
+                XCTAssertEqual(
+                    attribute.attributeValueClassName, reference.attributeValueClassName,
+                    "\(attribute.name) must be NON-SCALAR like reportedInputTokens, or a reported "
+                    + "zero and an unwritten column become the same value and every coverage "
+                    + "figure on the dashboard silently gains a denominator it never measured")
+                XCTAssertTrue(attribute.isOptional,
+                              "\(attribute.name) must be optional — CloudKit requires it, and every "
+                              + "row written before this version genuinely reported nothing")
+                XCTAssertNil(
+                    attribute.defaultValue,
+                    "\(attribute.name) must carry NO default: a default is written to every "
+                    + "pre-existing row at migration time, so a zero here would claim every "
+                    + "gateway the user has ever used reported its cache accounting and reported "
+                    + "none — a statement no gateway made, indistinguishable afterwards from one "
+                    + "that did")
+            }
+        }
+
+        // v12 stays untouched beside v13, which is the whole reason a new
+        // version exists rather than an edit in place: a v12 store already sits
+        // on the founder's QA device, and lightweight migration infers its
+        // mapping FROM the source model.
+        XCTAssertNotNil(v12.entitiesByName["GatewayAttempt"]?.attributesByName["reportedInputTokens"])
+        XCTAssertNil(
+            v12.entitiesByName["GatewayAttempt"]?.attributesByName["reportedCachedInputTokens"],
+            "a shipped model is frozen history — the new columns must exist in v13 and nowhere "
+            + "earlier, or the store on that device has metadata nothing in the bundle matches")
+    }
+
+    /// A v12 store — the one on the founder's QA device right now — opens under
+    /// v13 with every ledger row intact and the three new columns reading nil.
+    /// Nil is the load-bearing part: a pre-v13 row was written before anything
+    /// observed cache accounting, so it says NOTHING, and there is no backfill
+    /// that could ever honestly make it say zero.
+    func testV12StoreMigratesToV13WithNilTokenDetailColumns() async throws {
+        let v12 = try requiredModel(named: "Conversations 12.mom")
+        let v13 = try requiredModel(named: "Conversations 13.mom")
+        let conversationID = UUID()
+        let attemptID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_800_900_000)
+
+        do {
+            let container = try await loadStore(model: v12)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let attempt = NSEntityDescription.insertNewObject(
+                    forEntityName: "GatewayAttempt", into: context)
+                attempt.setValue(attemptID, forKey: "id")
+                attempt.setValue(conversationID, forKey: "conversationID")
+                attempt.setValue("openrouter", forKey: "gatewayRef")
+                attempt.setValue(startedAt, forKey: "startedAt")
+                attempt.setValue(startedAt.addingTimeInterval(5), forKey: "completedAt")
+                attempt.setValue("succeeded", forKey: "outcome")
+                attempt.setValue(NSNumber(value: Int64(1_200)), forKey: "reportedInputTokens")
+                attempt.setValue(NSNumber(value: Int64(340)), forKey: "reportedOutputTokens")
+                attempt.setValue(NSNumber(value: Int64(1_540)), forKey: "reportedTotalTokens")
+                attempt.setValue(NSNumber(value: Int32(0)), forKey: "currentTurnInlineImageCount")
+                attempt.setValue(NSNumber(value: Int16(1)), forKey: "recordVersion")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v13)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+            request.predicate = NSPredicate(format: "id == %@", attemptID as CVarArg)
+            request.fetchLimit = 1
+            let attempt = try XCTUnwrap(context.fetch(request).first,
+                                        "the v12 ledger row must survive migration")
+
+            XCTAssertEqual(attempt.value(forKey: "conversationID") as? UUID, conversationID)
+            XCTAssertEqual(attempt.value(forKey: "gatewayRef") as? String, "openrouter")
+            XCTAssertEqual(attempt.value(forKey: "startedAt") as? Date, startedAt)
+            XCTAssertEqual(attempt.value(forKey: "outcome") as? String, "succeeded")
+            XCTAssertEqual(attempt.value(forKey: "reportedInputTokens") as? NSNumber,
+                           NSNumber(value: Int64(1_200)))
+            XCTAssertEqual(attempt.value(forKey: "reportedOutputTokens") as? NSNumber,
+                           NSNumber(value: Int64(340)))
+            XCTAssertEqual(attempt.value(forKey: "reportedTotalTokens") as? NSNumber,
+                           NSNumber(value: Int64(1_540)))
+            XCTAssertEqual(attempt.value(forKey: "currentTurnInlineImageCount") as? NSNumber,
+                           NSNumber(value: Int32(0)),
+                           "an explicit zero from the older version survives as zero")
+
+            for column in ["reportedCachedInputTokens", "reportedCacheWriteInputTokens",
+                           "reportedReasoningOutputTokens"] {
+                XCTAssertNil(
+                    attempt.value(forKey: column),
+                    "GatewayAttempt.\(column) must be nil on a pre-v13 row — nothing observed cache "
+                    + "or reasoning accounting for it, and a zero would be a gateway statement "
+                    + "nobody made")
+            }
+
+            // The migrated row read through the bridge the app actually uses.
+            let record = GatewayAttemptRecord(managedObject: attempt)
+            XCTAssertEqual(record.reportedInputTokens, 1_200)
+            XCTAssertNil(record.reportedCachedInputTokens)
+            XCTAssertNil(record.reportedCacheWriteInputTokens)
+            XCTAssertNil(record.reportedReasoningOutputTokens)
+
+            // And a NEW row records values AND an explicit zero, which is what
+            // makes the nil above mean UNREPORTED rather than NONE.
+            let fresh = NSEntityDescription.insertNewObject(
+                forEntityName: "GatewayAttempt", into: context)
+            fresh.setValue(UUID(), forKey: "id")
+            fresh.setValue(startedAt.addingTimeInterval(60), forKey: "startedAt")
+            fresh.setValue("succeeded", forKey: "outcome")
+            fresh.setValue(NSNumber(value: Int64(900)), forKey: "reportedCachedInputTokens")
+            fresh.setValue(NSNumber(value: Int64(0)), forKey: "reportedCacheWriteInputTokens")
+            fresh.setValue(NSNumber(value: Int64(260)), forKey: "reportedReasoningOutputTokens")
+            try context.save()
+
+            let freshRecord = GatewayAttemptRecord(managedObject: fresh)
+            XCTAssertEqual(freshRecord.reportedCachedInputTokens, 900)
+            XCTAssertEqual(freshRecord.reportedCacheWriteInputTokens, 0)
+            XCTAssertEqual(freshRecord.reportedReasoningOutputTokens, 260)
+        }
+    }
+
+    /// A device that never launched a v11 build migrates v11 → v13 in one hop,
+    /// which Core Data infers as a single mapping rather than a replay of each
+    /// step. It has to land in the same place — every column of both later
+    /// versions reading nil on the row that predates them.
+    func testV11StoreMigratesToV13SkippingV12() async throws {
+        let v11 = try requiredModel(named: "Conversations 11.mom")
+        let v13 = try requiredModel(named: "Conversations 13.mom")
+        let attemptID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_800_950_000)
+
+        do {
+            let container = try await loadStore(model: v11)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let attempt = NSEntityDescription.insertNewObject(
+                    forEntityName: "GatewayAttempt", into: context)
+                attempt.setValue(attemptID, forKey: "id")
+                attempt.setValue("hermes", forKey: "gatewayRef")
+                attempt.setValue(startedAt, forKey: "startedAt")
+                attempt.setValue("succeeded", forKey: "outcome")
+                attempt.setValue(NSNumber(value: Int64(77)), forKey: "reportedTotalTokens")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v13)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+            request.predicate = NSPredicate(format: "id == %@", attemptID as CVarArg)
+            request.fetchLimit = 1
+            let attempt = try XCTUnwrap(context.fetch(request).first,
+                                        "the v11 ledger row must survive the two-version hop")
+            XCTAssertEqual(attempt.value(forKey: "reportedTotalTokens") as? NSNumber,
+                           NSNumber(value: Int64(77)))
+            for column in ["originDeviceClass", "currentTurnInlineImageCount",
+                           "reportedCachedInputTokens", "reportedCacheWriteInputTokens",
+                           "reportedReasoningOutputTokens"] {
+                XCTAssertNil(attempt.value(forKey: column),
+                             "\(column) must be nil across any number of versions at once")
+            }
+        }
+    }
+
+    /// The model the APP opens is v13. A pointer left on an older version would
     /// ship code that reads columns a store does not have — and, worse, would not
     /// fail loudly at the ledger's edges: KVC on a missing attribute is what the
     /// record's tolerant reads are built to survive, so the dashboard would simply
     /// report an account that measured nothing. A stale pointer would also leave
     /// the cascade in force, quietly deleting usage history the app now promises
     /// to keep.
-    func testTheCurrentModelVersionIsV12() throws {
+    func testTheCurrentModelVersionIsV13() throws {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         let momd = try XCTUnwrap(
             bundles.compactMap { $0.url(forResource: "Conversations", withExtension: "momd") }.first,
@@ -1445,6 +1671,18 @@ final class ConversationsModelMigrationTests: XCTestCase {
         let plist = try XCTUnwrap(
             NSDictionary(contentsOf: momd.appendingPathComponent("VersionInfo.plist")),
             "a compiled momd always carries VersionInfo.plist")
-        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 12")
+        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 13")
+    }
+
+    /// THE SOURCE MODEL MUST STAY IN THE BUNDLE. Lightweight migration infers a
+    /// mapping by finding the version whose hashes match the store's metadata;
+    /// delete an older version and every device holding a store written by it is
+    /// left with a file nothing can open — which on this app is the user's whole
+    /// conversation history.
+    func testEveryShippedModelVersionIsStillInTheBundle() throws {
+        for version in 2...13 {
+            _ = try requiredModel(named: "Conversations \(version).mom")
+        }
+        _ = try requiredModel(named: "Conversations.mom")
     }
 }

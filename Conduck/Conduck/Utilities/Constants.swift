@@ -2287,6 +2287,16 @@ enum AppColors {
     /// out on `guidedSetupBlue`.
     static let usageIconBlue = Color(red: 0.039, green: 0.518, blue: 1.0)
 
+    /// Third categorical hue for the usage chart's stacked bars (#BF59F2) — the
+    /// one after `brandAmber` and `usageIconBlue`, chosen for separation from
+    /// both in hue and in the two commonest colour-vision deficiencies.
+    ///
+    /// CATEGORICAL ONLY, NEVER SEMANTIC. It names a device or a gateway, which
+    /// is an identity rather than a verdict; nothing on these screens may read
+    /// a violet segment as good or bad. The failure half of the Results stack
+    /// uses `error`, and no device or gateway ever wears it.
+    static let usageChartViolet = Color(red: 0.749, green: 0.349, blue: 0.949)
+
     // MARK: - Semantic Colors (dark mode)
 
     /// Success (#66BB6A)
