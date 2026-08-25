@@ -979,11 +979,13 @@ struct ContentView: View {
     }
 
     private func refreshOnForeground() async {
-        // Gateway-roster catch-up FIRST: a peer's Forget can land in the KVS
+        // Synced-roster catch-up FIRST (custom gateways + custom voice
+        // endpoints): a peer's Forget or endpoint delete can land in the KVS
         // cache with no change notification (applied while suspended) — adopt
         // it before `refreshConfiguredFlag` re-reads gateway state, so the
-        // stale row leaves the Personal AI list this foreground, not the next.
-        await SettingsManager.shared.catchUpGatewayRosterOnActivate()
+        // stale row leaves the Personal AI / Voice list this foreground, not
+        // the next.
+        await SettingsManager.shared.catchUpSyncedRostersOnActivate()
         await refreshConfiguredFlag()
         await refreshPendingRetryState()
         // Share Extension drain hook. On every foreground, drain any envelopes

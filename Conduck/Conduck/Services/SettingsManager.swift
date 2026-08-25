@@ -1575,14 +1575,20 @@ actor SettingsManager {
     /// The persisted custom voice-endpoint roster (id / name). App Groups first
     /// (durable), iCloud KVS fallback (fresh device / reinstall) — same read
     /// order as `persistedCustomGateways()`. Runs the one-time migration first.
+    /// The KVS arm is a cache READ, deliberately not behind `iCloudAvailable`
+    /// (same rule as the gateway twin): a nil ubiquity token (iCloud Drive off)
+    /// does not stop KVS from syncing, and a fresh install on such a device must
+    /// still see the roster.
     func customVoiceEndpoints() -> [CustomVoiceEndpoint] {
         ensureCustomVoiceEndpointMigrated()
         if let data = defaults.data(forKey: Constants.customVoiceEndpointsRegistryKey),
            let list = try? JSONDecoder().decode([CustomVoiceEndpoint].self, from: data) {
             return list
         }
-        if iCloudAvailable,
-           let data = iCloudStore.data(forKey: Constants.customVoiceEndpointsRegistryKey),
+        #if DEBUG
+        if iCloudSyncSuspendedForTesting { return [] }
+        #endif
+        if let data = iCloudStore.data(forKey: Constants.customVoiceEndpointsRegistryKey),
            let list = try? JSONDecoder().decode([CustomVoiceEndpoint].self, from: data) {
             return list
         }
@@ -1691,10 +1697,35 @@ actor SettingsManager {
         }
 
         // Fall the active pointers back to Apple if they pointed at this endpoint.
-        if getActivePresetID() == sttPresetID {
+        retireActiveVoicePointers(for: id)
+
+        // Flag everything this delete removed for upload. `synchronize()` is an
+        // advisory nudge, not a fence, but it runs here at the operation
+        // boundary — AFTER the roster shrink, the per-uuid purge and the
+        // pointer fallback — so the whole delete is dirty by the time the
+        // system schedules the push. Mirrors `deleteCustomGateway`.
+        iCloudStore.synchronize()
+    }
+
+    /// Fall the active STT preset and TTS provider pointers back to Apple when
+    /// they name `uuid`. A custom voice endpoint has no built-in sibling to
+    /// inherit, and Apple is the universal default.
+    ///
+    /// Shared by the EXPLICIT delete above and the inbound `.serverChange` that
+    /// confirms a peer deleted the endpoint. The remote case needs it because
+    /// nothing else repairs a dangling pointer: `getActivePresetID()` returns
+    /// the local App-Group string verbatim and `getActiveTTSProviderID()` gates
+    /// neither arm, so a pointer left naming a vanished uuid keeps resolving —
+    /// `activeSTTSnapshot()` is roster-blind and would POST recorded audio and a
+    /// bearer token to the endpoint the user deleted, while the Settings row
+    /// silently renders whatever `STTProviderRegistry.lookup` falls back to.
+    /// Voice endpoints carry no badge record (see `CustomVoiceEndpoint`), so
+    /// this fallback is the only repair available on the receiving device.
+    private func retireActiveVoicePointers(for uuid: UUID) {
+        if getActivePresetID() == STTProvider.customEndpointID(for: uuid) {
             setActivePresetID(Constants.sttActivePresetIDDefault)   // apple-on-device
         }
-        if getActiveTTSProviderID() == ttsProviderID {
+        if getActiveTTSProviderID() == TTSProvider.customEndpointID(for: uuid) {
             setActiveTTSProviderID(Constants.ttsActiveProviderIDDefault)   // apple-tts
         }
     }
@@ -1786,6 +1817,11 @@ actor SettingsManager {
         if let data = try? JSONEncoder().encode(list) {
             defaults.set(data, forKey: Constants.customVoiceEndpointsRegistryKey)
             iCloudStore.set(data, forKey: Constants.customVoiceEndpointsRegistryKey)
+            // Flag the roster delta for upload. `synchronize()` is an advisory
+            // nudge, not a fence — it promises no ordering or immediacy — but
+            // without it the peers' rows wait on system scheduling alone.
+            // Mirrors `persistCustomGateways`.
+            iCloudStore.synchronize()
         }
         postSettingsDidChangeRemotely()
     }
@@ -6272,13 +6308,13 @@ actor SettingsManager {
     /// second device, this hydrates settings from the cloud before any view
     /// reads from UserDefaults.
     ///
-    /// Two tiers, split by the `iCloudAvailable` guard: the custom-gateway
-    /// reconcile runs UNGATED first — it is a pure cache read, and it is the
-    /// only cold-launch path that lands a peer's Forget when the live KVS
-    /// change notification was missed (app quit while `syncdefaultsd` applied
-    /// the delta — no notification is replayed at next launch) or the
-    /// ubiquity token is nil (iCloud Drive off) while KVS still syncs.
-    /// Everything push-up-bearing stays behind the guard.
+    /// Two tiers, split by the `iCloudAvailable` guard: the custom-gateway and
+    /// custom-voice-endpoint reconciles run UNGATED first — they are pure cache
+    /// reads, and they are the only cold-launch paths that land a peer's delete
+    /// when the live KVS change notification was missed (app quit while
+    /// `syncdefaultsd` applied the delta — no notification is replayed at next
+    /// launch) or the ubiquity token is nil (iCloud Drive off) while KVS still
+    /// syncs. Everything push-up-bearing stays behind the guard.
     func performInitialSync() async {
         iCloudStore.synchronize()
 
@@ -6289,7 +6325,14 @@ actor SettingsManager {
         // activation catch-up can't repair it either, because by then the
         // stores already agree and its own change check stays quiet. A no-op
         // reconcile posts nothing, so a clean launch broadcasts nothing.
-        if reconcileCustomGatewaysFromKVSCache() {
+        //
+        // BOTH rosters reconcile, and both verdicts are collected before the
+        // post — written as two statements rather than one `||` so the
+        // short-circuit cannot skip the voice pass on a launch where the
+        // gateway pass already adopted something.
+        let adoptedGateways = reconcileCustomGatewaysFromKVSCache()
+        let adoptedVoiceEndpoints = reconcileCustomVoiceEndpointsFromKVSCache()
+        if adoptedGateways || adoptedVoiceEndpoints {
             postSettingsDidChangeRemotely()
         }
 
@@ -6468,39 +6511,17 @@ actor SettingsManager {
             iCloudStore.set(localCustomAuth, forKey: Constants.customSTTAuthSchemeKey)
         }
 
-        // PER-UUID custom voice-endpoint roster + slots (Phase B). Hydrate the
-        // ROSTER JSON first (iCloud-wins-then-push) so a fresh device knows which
-        // uuids exist; then hydrate each per-uuid URL / STT-model / auth / TTS-
-        // model slot. Cert is per-device (App Groups, no KVS) — not synced. The
-        // per-uuid key is the shared STT slot (iCloud-Keychain-synced separately).
-        if let iCloudRoster = iCloudStore.data(forKey: Constants.customVoiceEndpointsRegistryKey) {
-            defaults.set(iCloudRoster, forKey: Constants.customVoiceEndpointsRegistryKey)
-        } else if let localRoster = defaults.data(forKey: Constants.customVoiceEndpointsRegistryKey) {
-            iCloudStore.set(localRoster, forKey: Constants.customVoiceEndpointsRegistryKey)
-        }
-        let rosterUUIDs = ((try? JSONDecoder().decode(
-            [CustomVoiceEndpoint].self,
-            from: defaults.data(forKey: Constants.customVoiceEndpointsRegistryKey) ?? Data()
-        )) ?? []).map { $0.id }
-        for uuid in rosterUUIDs {
-            for key in [
-                Constants.customSTTURLKey(for: uuid),
-                Constants.customSTTModelKey(for: uuid),
-                Constants.customSTTAuthSchemeKey(for: uuid),
-                Constants.customTTSModelKey(for: uuid)
-            ] {
-                if let iCloudValue = iCloudStore.string(forKey: key), !iCloudValue.isEmpty {
-                    defaults.set(iCloudValue, forKey: key)
-                } else if let localValue = defaults.string(forKey: key), !localValue.isEmpty {
-                    iCloudStore.set(localValue, forKey: key)
-                }
-            }
-        }
-
-        // PER-UUID custom-GATEWAY roster + slots hydrate in
-        // `reconcileCustomGatewaysFromKVSCache()`, which runs UNGATED above the
-        // account guard at the top of this method — see that method for the
+        // PER-UUID custom-GATEWAY and custom-VOICE-ENDPOINT rosters + slots
+        // hydrate in `reconcileCustomGatewaysFromKVSCache()` /
+        // `reconcileCustomVoiceEndpointsFromKVSCache()`, which run UNGATED above
+        // the account guard at the top of this method — see those methods for the
         // hydrate-only / no-push-up rationale.
+        //
+        // The voice block USED to live here, gated, and iCloud-wins-then-PUSH.
+        // Both properties were bugs: gated, it never ran on the device that most
+        // needs the catch-up (nil ubiquity token, KVS still syncing); pushing,
+        // it republished a stale local roster from a device whose KVS cache had
+        // not downloaded yet, resurrecting endpoints a peer had deleted.
 
         // FILE-SERVER config (`fileServer.url.*` / `fileServer.available.*` /
         // `fileServer.folderCapable.*`): iCloud-wins INBOUND hydration only,
@@ -6642,15 +6663,88 @@ actor SettingsManager {
         return changed
     }
 
+    /// Hydrate the custom voice-endpoint roster + per-uuid slots from the local
+    /// KVS cache. Twin of `reconcileCustomGatewaysFromKVSCache()` above, and it
+    /// exists for the same reason: a peer's delete that arrived while this
+    /// process was quit (or whose notification was dropped) exists ONLY as
+    /// silently-applied KVS cache state, and this is the read that adopts it.
+    /// Returns whether anything durable changed — roster bytes OR a per-uuid
+    /// slot — so callers post `settingsDidChangeRemotely` exactly when there is
+    /// something for an open screen to react to.
+    ///
+    /// Read-only against KVS and deliberately NOT behind `iCloudAvailable`; see
+    /// the gateway twin for the full rationale. HYDRATE-ONLY in both halves: the
+    /// roster is the index of which endpoints exist, so a device whose KVS cache
+    /// is empty (never downloaded, or reset by an iCloud account change) would
+    /// re-publish its stale roster and bring back every endpoint a peer had
+    /// deleted. An ABSENT KVS roster key is likewise never a delete — that is
+    /// what a signed-out device reads.
+    ///
+    /// Cert is a per-device pin (App Groups, no KVS) — not synced. The per-uuid
+    /// API key is the shared STT Keychain slot (iCloud-Keychain-synced
+    /// separately). No pointer fallback here, mirroring the gateway rule that a
+    /// roster GUESS never destroys stored state: retiring the active pointer is
+    /// reserved for the explicit delete and the confirmed `.serverChange`.
+    @discardableResult
+    func reconcileCustomVoiceEndpointsFromKVSCache() -> Bool {
+        #if DEBUG
+        // Same seam as `handleICloudChange`: suspending suites drive the live
+        // singleton and must not have real-KVS residue mirrored into their
+        // controlled App-Group `defaults` mid-run.
+        if iCloudSyncSuspendedForTesting { return false }
+        #endif
+
+        var changed = false
+        let before = defaults.data(forKey: Constants.customVoiceEndpointsRegistryKey)
+        // Adopt the KVS roster only when it DECODES. Bytes that don't — a
+        // future schema, or plain corruption — must not overwrite the valid
+        // local copy: both reads would then fail open to `[]`, which reads as
+        // "this user has no voice endpoints". Undecodable means "unknown", and
+        // unknown preserves local state; a valid encoded `[]` still clears the
+        // last endpoint.
+        if let iCloudRoster = iCloudStore.data(forKey: Constants.customVoiceEndpointsRegistryKey),
+           (try? JSONDecoder().decode([CustomVoiceEndpoint].self, from: iCloudRoster)) != nil {
+            defaults.set(iCloudRoster, forKey: Constants.customVoiceEndpointsRegistryKey)
+            changed = defaults.data(forKey: Constants.customVoiceEndpointsRegistryKey) != before
+        }
+        let endpointUUIDs = ((try? JSONDecoder().decode(
+            [CustomVoiceEndpoint].self,
+            from: defaults.data(forKey: Constants.customVoiceEndpointsRegistryKey) ?? Data()
+        )) ?? []).map { $0.id }
+        for uuid in endpointUUIDs {
+            for key in [
+                Constants.customSTTURLKey(for: uuid),
+                Constants.customSTTModelKey(for: uuid),
+                Constants.customSTTAuthSchemeKey(for: uuid),
+                Constants.customTTSModelKey(for: uuid)
+            ] {
+                // A slot-only edit (peer changed an endpoint's URL or model
+                // without touching the roster) counts as a change too — the
+                // callers' notification decision hangs on this verdict, and a
+                // silent slot rewrite would leave open Settings screens stale.
+                if let iCloudValue = iCloudStore.string(forKey: key), !iCloudValue.isEmpty,
+                   defaults.string(forKey: key) != iCloudValue {
+                    defaults.set(iCloudValue, forKey: key)
+                    changed = true
+                }
+            }
+        }
+        return changed
+    }
+
     /// Foreground catch-up: flush + adopt any KVS delta `syncdefaultsd` applied
     /// silently while the app was backgrounded (a long-lived macOS menu-bar
-    /// process can miss the live change notification entirely). Posts
+    /// process can miss the live change notification entirely). Covers BOTH
+    /// synced rosters — custom gateways and custom voice endpoints. Posts
     /// `settingsDidChangeRemotely` ONLY when something actually changed — the
     /// post wakes `PhoneSessionManager` into a token-bearing Watch broadcast,
-    /// which must not fire on every activation.
-    func catchUpGatewayRosterOnActivate() {
+    /// which must not fire on every activation. Both reconciles run before the
+    /// verdict is read, so neither can be short-circuited by the other.
+    func catchUpSyncedRostersOnActivate() {
         iCloudStore.synchronize()
-        if reconcileCustomGatewaysFromKVSCache() {
+        let adoptedGateways = reconcileCustomGatewaysFromKVSCache()
+        let adoptedVoiceEndpoints = reconcileCustomVoiceEndpointsFromKVSCache()
+        if adoptedGateways || adoptedVoiceEndpoints {
             postSettingsDidChangeRemotely()
         }
     }
@@ -7105,16 +7199,65 @@ actor SettingsManager {
         }
 
         // Re-mirror the custom voice-endpoint ROSTER JSON on change so the
-        // App Groups copy reflects the cloud value (a second device adds/renames
-        // an endpoint). `customVoiceEndpoints()` also reads KVS as a fallback,
-        // but mirroring locally keeps the durable read cheap + cross-process.
+        // App Groups copy reflects the cloud value (a second device adds,
+        // renames or DELETES an endpoint). `customVoiceEndpoints()` also reads
+        // KVS as a fallback, but mirroring locally keeps the durable read cheap
+        // + cross-process. Twin of the custom-gateway roster branch below.
         if changedKeys.contains(Constants.customVoiceEndpointsRegistryKey) {
+            let rosterBytesBefore = defaults.data(forKey: Constants.customVoiceEndpointsRegistryKey)
+            // Three inbound shapes, three verdicts: decodable Data = adopt;
+            // key genuinely ABSENT = deletion (this is a notification that
+            // NAMED the key, so absence is an intentional signal here, unlike
+            // the launch reconcile); present but undecodable or wrong-typed =
+            // UNKNOWN — preserve local state, because writing it through would
+            // fail both roster reads open to `[]` and read as "no endpoints".
+            // `data(forKey:)` alone can't tell absent from wrong-typed —
+            // `object(forKey:)` is the existence check.
+            var adoptedAuthoritativeRoster = false
             if let data = iCloudStore.data(forKey: Constants.customVoiceEndpointsRegistryKey) {
-                defaults.set(data, forKey: Constants.customVoiceEndpointsRegistryKey)
-            } else {
+                if (try? JSONDecoder().decode([CustomVoiceEndpoint].self, from: data)) != nil {
+                    defaults.set(data, forKey: Constants.customVoiceEndpointsRegistryKey)
+                    adoptedAuthoritativeRoster = true
+                }
+            } else if iCloudStore.object(forKey: Constants.customVoiceEndpointsRegistryKey) == nil {
                 defaults.removeObject(forKey: Constants.customVoiceEndpointsRegistryKey)
+                adoptedAuthoritativeRoster = true
             }
-            didChange = true
+            // A peer's delete also has to retire this device's active pointers.
+            //
+            // `.serverChange` ONLY, and END-STATE (is the pointer's uuid in the
+            // roster this event delivered?) rather than a previous-vs-current
+            // transition, for the same reasons the gateway branch below states:
+            // an initial-sync change can carry a roster older than an endpoint
+            // this device just created, and an activation catch-up can adopt
+            // the same shrink moments before this queued notification runs —
+            // which erases the transition but not the confirmation, and the
+            // confirmation is what authorizes the retirement. Guarded on
+            // `adoptedAuthoritativeRoster` so an undecodable delivery retires
+            // nothing.
+            //
+            // Unlike the gateway's last-used pointer, this one is NOT merely
+            // ignored while it dangles: `getActivePresetID()` returns the local
+            // string verbatim and `getActiveTTSProviderID()` gates neither arm,
+            // so the stale id keeps resolving — see `retireActiveVoicePointers`.
+            if case .serverChange = change.reason, adoptedAuthoritativeRoster {
+                let surviving = Set(customVoiceEndpoints().map(\.id))
+                if let pointed = STTProvider.customEndpointUUID(fromPresetID: getActivePresetID()),
+                   !surviving.contains(pointed) {
+                    retireActiveVoicePointers(for: pointed)
+                }
+                if let pointed = TTSProvider.customEndpointUUID(fromProviderID: getActiveTTSProviderID()),
+                   !surviving.contains(pointed) {
+                    retireActiveVoicePointers(for: pointed)
+                }
+            }
+            // Only when the bytes actually moved. An activation catch-up can
+            // adopt this same delta moments before the queued notification
+            // lands here; an unconditional flag would then re-post and fire a
+            // second token-bearing Watch broadcast for nothing.
+            if defaults.data(forKey: Constants.customVoiceEndpointsRegistryKey) != rosterBytesBefore {
+                didChange = true
+            }
         }
 
         // Mirror remote PER-CUSTOM-GATEWAY URL + auth-scheme changes

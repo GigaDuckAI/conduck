@@ -14,7 +14,7 @@
 //      launch, UNGATED by `iCloudAvailable`: a delta `syncdefaultsd` applied
 //      while the app was quit produces no notification at next launch, and a
 //      nil ubiquity token (iCloud Drive off) must not disable the catch-up.
-//   3. `catchUpGatewayRosterOnActivate` — foreground activation.
+//   3. `catchUpSyncedRostersOnActivate` — foreground activation.
 //
 // And the reconcile must stay HYDRATE-ONLY: an absent KVS key is never a
 // delete (signed-out no-wipe) and the local roster is never pushed up
@@ -249,7 +249,7 @@ final class SettingsManagerGatewayRosterSyncTests: XCTestCase {
         rig.kvs.set(encoded([gatewayA]), forKey: rosterKey)
 
         // Activation adopts the shrink FIRST — a guess, so the pointer stays.
-        await rig.manager.catchUpGatewayRosterOnActivate()
+        await rig.manager.catchUpSyncedRostersOnActivate()
         XCTAssertNotNil(rig.defaults.string(forKey: lastUsedKey),
                         "activation alone must retain the pointer (ignore-but-retain)")
 
@@ -273,7 +273,7 @@ final class SettingsManagerGatewayRosterSyncTests: XCTestCase {
         await rig.manager.handleICloudChange(
             KVSChange(reason: .serverChange, changedKeys: [rosterKey])
         )
-        await rig.manager.catchUpGatewayRosterOnActivate()
+        await rig.manager.catchUpSyncedRostersOnActivate()
 
         await MainActor.run {}
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -321,9 +321,9 @@ final class SettingsManagerGatewayRosterSyncTests: XCTestCase {
 
         let counter = NotificationCounter(name: .settingsDidChangeRemotely)
 
-        await rig.manager.catchUpGatewayRosterOnActivate()
+        await rig.manager.catchUpSyncedRostersOnActivate()
         // Second pass: stores agree now — must stay silent.
-        await rig.manager.catchUpGatewayRosterOnActivate()
+        await rig.manager.catchUpSyncedRostersOnActivate()
 
         await MainActor.run {}
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -343,10 +343,10 @@ final class SettingsManagerGatewayRosterSyncTests: XCTestCase {
 
         let counter = NotificationCounter(name: .settingsDidChangeRemotely)
 
-        await rig.manager.catchUpGatewayRosterOnActivate()
+        await rig.manager.catchUpSyncedRostersOnActivate()
         // Second activation with an unchanged cache must stay silent — the post
         // wakes a token-bearing Watch broadcast and must not fire every activation.
-        await rig.manager.catchUpGatewayRosterOnActivate()
+        await rig.manager.catchUpSyncedRostersOnActivate()
 
         // The post lands via the main queue; drain it before counting.
         await MainActor.run {}

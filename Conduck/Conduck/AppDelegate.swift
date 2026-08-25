@@ -391,11 +391,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.post(name: .conversationsNeedLocalRefresh, object: nil)
         Task { await CloudSyncMonitor.shared.refresh() }
 
-        // Gateway-roster catch-up. A peer's Forget can land in the KVS cache
-        // with no change notification (dropped, or applied while this long-lived
+        // Synced-roster catch-up (custom gateways + custom voice endpoints). A
+        // peer's Forget or endpoint delete can land in the KVS cache with no
+        // change notification (dropped, or applied while this long-lived
         // menu-bar process was inactive) — adopt it on activation so the stale
-        // row leaves the Personal AI list. Posts change only when something moved.
-        Task { await SettingsManager.shared.catchUpGatewayRosterOnActivate() }
+        // row leaves the Personal AI / Voice list. Posts change only when
+        // something moved.
+        Task { await SettingsManager.shared.catchUpSyncedRostersOnActivate() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
