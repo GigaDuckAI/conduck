@@ -2029,6 +2029,26 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertEqual(summary.attachmentContext.replayedImageTotal, 0)
     }
 
+    /// The canonical two-turn photo thread: one attached image, one follow-up
+    /// that only carried it again. The attached-images figure must read 1, not
+    /// 2 — replayed history never qualifies a turn as one the user added an
+    /// image to; that cost is `replayedImageTotal`'s alone. (Counting payload
+    /// images here double-counted the same photo across both dashboard rows.)
+    func testTurnCarryingOnlyReplayedImagesIsNotATurnWithImages() {
+        let photoTurn = UUID(), followUpTurn = UUID()
+        let summary = summarize([
+            attempt(
+                turn: photoTurn, outcome: .succeeded,
+                currentImages: 1, priorImages: 0, currentFiles: 0, priorFiles: 0),
+            attempt(
+                turn: followUpTurn, outcome: .succeeded,
+                currentImages: 0, priorImages: 1, currentFiles: 0, priorFiles: 0),
+        ])
+
+        XCTAssertEqual(summary.attachmentContext.turnsWithImages, 1)
+        XCTAssertEqual(summary.attachmentContext.replayedImageTotal, 1)
+    }
+
     func testAttachmentContextIsEmptyWhenNothingMeasured() {
         let summary = summarize([attempt(outcome: .succeeded)])
 

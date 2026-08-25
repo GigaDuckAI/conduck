@@ -470,12 +470,18 @@ struct UsageGatewayDetailView: View {
         // saying — repeating it here is the second telling, not the first.
     }
 
-    // MARK: - Attachment context
+    // MARK: - Image history
 
-    /// What the requests were CARRYING — images and extracted text files. Every
-    /// figure names its own coverage: the counts are measured per row, and a row
-    /// recorded before the app measured them reads as unmeasured rather than as
-    /// zero.
+    /// Image cost, split the way the user thinks about it: turns they attached
+    /// images to, and earlier images the app sent again so the agent keeps
+    /// seeing them. The replay row is the lever — the footer names the
+    /// per-gateway Image history setting that bounds it. A turn must never
+    /// appear in BOTH rows for the same image: the attached row counts
+    /// user-added images only, so the one photo in a two-turn thread reads as
+    /// "1 attached, 1 sent again", not as two image turns plus a resend.
+    /// Coverage is one footer sentence for the whole card, only when partial —
+    /// a row recorded before the app measured attachments reads as unmeasured
+    /// rather than as zero.
     private var attachmentSection: some View {
         let context = summary.attachmentContext
         let coverage = GatewayUsageAggregator.ratio(
@@ -484,43 +490,45 @@ struct UsageGatewayDetailView: View {
         return Section {
             UsageValueRow(
                 label: LocalizedStringResource(
-                    "settings.usage.detail.attachments.images",
-                    defaultValue: "Turns with images"),
+                    "settings.usage.detail.imageHistory.added",
+                    defaultValue: "Turns you attached images to"),
                 value: context.turnsWithImages.formatted(.number),
-                caption: UsageDetailFormat.measuredCaption(coverage),
                 icon: "photo",
                 iconTint: AppColors.usageIconBlue
             )
             UsageValueRow(
                 label: LocalizedStringResource(
-                    "settings.usage.detail.attachments.files",
-                    defaultValue: "Turns with text files"),
-                value: context.turnsWithTextFiles.formatted(.number),
-                caption: UsageDetailFormat.measuredCaption(coverage),
-                icon: "doc.text",
-                iconTint: AppColors.usageIconBlue
-            )
-            UsageValueRow(
-                label: LocalizedStringResource(
-                    "settings.usage.detail.attachments.replayed",
-                    defaultValue: "Images re-sent with later turns"),
+                    "settings.usage.detail.imageHistory.replayed",
+                    defaultValue: "Earlier images sent again"),
                 value: context.replayedImageTotal.formatted(.number),
-                caption: UsageDetailFormat.measuredCaption(coverage),
+                caption: LocalizedStringResource(
+                    "settings.usage.detail.imageHistory.replayed.caption",
+                    defaultValue: """
+                        An image counts again each time it is included with a \
+                        later turn.
+                        """),
                 icon: "arrow.triangle.2.circlepath",
                 iconTint: AppColors.usageIconBlue
             )
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.detail.attachments.header",
-                defaultValue: "What the requests carried"))
+                "settings.usage.detail.imageHistory.header",
+                defaultValue: "Image history"))
         } footer: {
-            Text(LocalizedStringResource(
-                "settings.usage.detail.attachments.footer",
-                defaultValue: """
-                    An image already sent goes out again with later turns so the \
-                    agent can still see it. That is the single biggest thing you \
-                    can change about how much work a long conversation takes.
-                    """))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(LocalizedStringResource(
+                    "settings.usage.detail.imageHistory.footer",
+                    defaultValue: """
+                        Conduck re-sends some earlier images so your AI can \
+                        still see them. Use this gateway's Image history \
+                        setting to choose how much is re-sent. A new \
+                        conversation starts without the old conversation's \
+                        images.
+                        """))
+                if let coverageLine = UsageDetailFormat.imageHistoryCoverage(coverage) {
+                    Text(coverageLine)
+                }
+            }
         }
     }
 }
@@ -1262,14 +1270,17 @@ enum UsageDetailFormat {
         return parts.joined(separator: " · ")
     }
 
-    /// Coverage for a figure derived from rows that carry a measurement. Absent
-    /// when everything in range was measured — a caption saying "100%" adds
-    /// nothing but doubt.
-    static func measuredCaption(_ coverage: Double?) -> LocalizedStringResource? {
+    /// Coverage for the image-history card — one sentence for the whole card,
+    /// not a caption per row. Absent when everything in range was measured:
+    /// a line saying "100%" adds nothing but doubt.
+    static func imageHistoryCoverage(_ coverage: Double?) -> LocalizedStringResource? {
         guard let coverage, coverage < 1 else { return nil }
         return LocalizedStringResource(
-            "settings.usage.detail.measuredCoverage",
-            defaultValue: "Measured on \(percentText(coverage)) of attempts")
+            "settings.usage.detail.imageHistory.coverage",
+            defaultValue: """
+                Image details were recorded for \(percentText(coverage)) of \
+                attempts in this range. These counts may be incomplete.
+                """)
     }
 
     /// The ranking basis, named honestly. ONE basis per list: a list mixing

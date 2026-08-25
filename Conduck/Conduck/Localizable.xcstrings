@@ -15143,61 +15143,6 @@
         }
       }
     },
-    "settings.usage.detail.attachments.files" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Turns with text files"
-          }
-        }
-      }
-    },
-    "settings.usage.detail.attachments.footer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "An image already sent goes out again with later turns so the agent can still see it. That is the single biggest thing you can change about how much work a long conversation takes."
-          }
-        }
-      }
-    },
-    "settings.usage.detail.attachments.header" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "What the requests carried"
-          }
-        }
-      }
-    },
-    "settings.usage.detail.attachments.images" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Turns with images"
-          }
-        }
-      }
-    },
-    "settings.usage.detail.attachments.replayed" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Images re-sent with later turns"
-          }
-        }
-      }
-    },
     "settings.usage.detail.byDevice.header" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -15260,6 +15205,72 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "median %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.imageHistory.added" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Turns you attached images to"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.imageHistory.coverage" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Image details were recorded for %@ of attempts in this range. These counts may be incomplete."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.imageHistory.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck re-sends some earlier images so your AI can still see them. Use this gateway's Image history setting to choose how much is re-sent. A new conversation starts without the old conversation's images."
+          }
+        }
+      }
+    },
+    "settings.usage.detail.imageHistory.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Image history"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.imageHistory.replayed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Earlier images sent again"
+          }
+        }
+      }
+    },
+    "settings.usage.detail.imageHistory.replayed.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "An image counts again each time it is included with a later turn."
           }
         }
       }
@@ -15337,17 +15348,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Largest turns"
-          }
-        }
-      }
-    },
-    "settings.usage.detail.measuredCoverage" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Measured on %@ of attempts"
           }
         }
       }
@@ -15562,12 +15562,23 @@
       }
     },
     "settings.usage.detail.threads.files" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld files"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld file"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld files"
+                }
+              }
+            }
           }
         }
       }
@@ -15584,12 +15595,23 @@
       }
     },
     "settings.usage.detail.threads.images" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld images"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld image"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld images"
+                }
+              }
+            }
           }
         }
       }
@@ -16618,12 +16640,23 @@
       }
     },
     "settings.usage.threads.files" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld files"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld file"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld files"
+                }
+              }
+            }
           }
         }
       }
@@ -16662,12 +16695,23 @@
       }
     },
     "settings.usage.threads.images" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld images"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld image"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld images"
+                }
+              }
+            }
           }
         }
       }

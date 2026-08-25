@@ -408,8 +408,15 @@ nonisolated struct AttachmentContext: Sendable, Equatable {
     /// Rows carrying attachment counts at all. Zero means the range predates
     /// the measurement, which is why every figure below travels with it.
     let measuredAttempts: Int
-    /// Distinct turns whose measured rows carried at least one inline image.
+    /// Distinct turns the USER attached at least one image to. Replayed
+    /// history never qualifies a turn — a follow-up that only carried an
+    /// earlier image again must not read as one the user added an image to
+    /// (that cost lives in `replayedImageTotal`, and counting it here too
+    /// double-counted the same image across two rows).
     let turnsWithImages: Int
+    /// Distinct turns whose measured rows carried extracted text files
+    /// (payload semantics — fresh or replayed). Aggregated but not shown:
+    /// the row read as file transfer to most users.
     let turnsWithTextFiles: Int
     /// Prior-turn images re-sent on later requests — the cost of image history,
     /// which is the one number that explains a slow, expensive thread.
@@ -952,7 +959,7 @@ nonisolated enum GatewayUsageAggregator {
         /// partial evidence, not absent evidence. Negative values from a corrupt
         /// column floor at zero; a negative attachment count is meaningless and
         /// would silently subtract from a neighbouring row's real one.
-        var attachmentCounts: (images: Int, textFiles: Int, replayedImages: Int)? {
+        var attachmentCounts: (images: Int, addedImages: Int, textFiles: Int, replayedImages: Int)? {
             let current = record.currentTurnInlineImageCount
             let prior = record.priorTurnInlineImageCount
             let currentFiles = record.currentTurnInlineTextFileCount
@@ -960,8 +967,15 @@ nonisolated enum GatewayUsageAggregator {
             guard current != nil || prior != nil || currentFiles != nil || priorFiles != nil
             else { return nil }
             let priorImages = max(0, prior ?? 0)
+            let addedImages = max(0, current ?? 0)
+            // `images` is the payload total (added + replayed) — right for the
+            // per-turn/thread rows, which explain what a request cost to carry.
+            // `addedImages` is the user-action count the image-history card
+            // uses, so a turn that only replayed history never reads as one
+            // the user attached an image to.
             return (
-                images: max(0, current ?? 0) + priorImages,
+                images: addedImages + priorImages,
+                addedImages: addedImages,
                 textFiles: max(0, currentFiles ?? 0) + max(0, priorFiles ?? 0),
                 replayedImages: priorImages
             )
@@ -1622,7 +1636,7 @@ nonisolated enum GatewayUsageAggregator {
             // An unattributed row's attachments are counted in `measured` and in
             // no turn — there is no turn to count it as.
             guard let turn = item.record.userMessageID else { continue }
-            if counts.images > 0 { turnsWithImages.insert(turn) }
+            if counts.addedImages > 0 { turnsWithImages.insert(turn) }
             if counts.textFiles > 0 { turnsWithTextFiles.insert(turn) }
         }
         return AttachmentContext(
