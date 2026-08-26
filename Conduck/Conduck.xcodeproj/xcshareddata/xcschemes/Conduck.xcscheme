@@ -80,6 +80,14 @@
             isEnabled = "NO">
          </CommandLineArgument>
          <CommandLineArgument
+            argument = "-AppleLocale en_US"
+            isEnabled = "NO">
+         </CommandLineArgument>
+         <CommandLineArgument
+            argument = "-AppleLanguages (en)"
+            isEnabled = "NO">
+         </CommandLineArgument>
+         <CommandLineArgument
             argument = "-ConduckQAOpenClawToken qa-demo"
             isEnabled = "NO">
          </CommandLineArgument>
