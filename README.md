@@ -39,6 +39,7 @@ The official app is free for individual use. Conduck-authored application code i
 - **One conversation across your devices.** Start on Mac, continue on iPhone, and check the reply from your Watch. Your threads sync through your own private iCloud.
 - **Talk, type, or share what is in front of you.** Dictate with on-device speech, attach a photo or text file, share from another app, or use Screenshot & Ask on Mac.
 - **Bring the AI that fits you.** Connect a self-hosted agent, an OpenAI-compatible model endpoint, or a hosted model through OpenRouter.
+- **See what you actually use.** A Usage screen on iPhone, iPad, and Mac counts your turns, tokens, response times, and reliability, broken down by gateway, device, and model — measured on your device, visible only to you.
 - **Keep Conduck out of the middle.** No Conduck-operated intermediary server, no account, and no analytics, ads, tracking, or telemetry. Your device talks directly to the AI and providers you chose, under your own keys.
 
 ## One client. Five surfaces.
