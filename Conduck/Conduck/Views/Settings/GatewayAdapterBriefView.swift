@@ -249,7 +249,7 @@ struct GatewayAdapterBriefView: View {
     /// source, never stales on a contract revision) — deliberately NARROWED to
     /// stop before that brief's exposure and pairing, because this guided flow
     /// owns those via `conduck-connect` — with a self-contained fallback list for
-    /// tools without web access, aligned to contract revision 1.8. The full
+    /// tools without web access, aligned to contract revision 1.9. The full
     /// contract is at `Constants.adapterContractURL`; both raw `.md` URLs are
     /// hardcoded inline below. `internal` so a content-lock test can read it via
     /// `@testable import`.
@@ -285,6 +285,20 @@ struct GatewayAdapterBriefView: View {
     /// `finish_reason` is indistinguishable from a finished one. An offline
     /// build that never hears the recommendation reports nothing forever.
     ///
+    /// Revision 1.9 is clarifications only and moves TWO things here, both
+    /// additive clauses. Item 4 gains the file-channel forwarding route: an
+    /// engine whose only image input is a file-reading tool or attachment
+    /// argument still counts as accepting images — the checker has always
+    /// graded that as forwarding — so an offline build no longer declines
+    /// images it could forward. Item 9 gains the in-prompt file-reference
+    /// hazard: an engine that expands `@path`-style references inside message
+    /// text is a file-read primitive the no-shell rule does not close. The
+    /// rest of 1.9 moves nothing: `CI=1` in the contract's own self-test block
+    /// (this string always carried it), the rclone `--dir-cache-time` flag
+    /// (file lane — out of scope here by the 1.7 boundary above), and the
+    /// `429`/`503` and `401`-before-`404` harmonizations (items 5 and 6 never
+    /// pinned those statuses).
+    ///
     /// **Workflow-ownership boundary — the load-bearing rule of this string.**
     /// This text is pasted into an AUTONOMOUS coding agent, so what it can act on
     /// is exactly what it is handed. It therefore carries the adapter-check
@@ -316,12 +330,12 @@ struct GatewayAdapterBriefView: View {
     1. Keep my agent exactly as it is. Add a separate, small HTTP service in front of it.
     2. GET /v1/models -> 200 with {"data":[{"id":"<agent-name>"}]} within 15 seconds, no cold starts on this route. Auth-protected like everything else.
     3. POST /v1/chat/completions (OpenAI chat format; the final messages element is always the current turn and always role "user"; consecutive messages MAY share a role — two "user" messages in a row is a real shape, so accept it and, if your engine needs strict alternation, combine each run of same-role messages in order rather than dropping or reordering any; the body carries the complete current message window on every request — it is bounded and may slide, so run each request as a fresh, self-contained conversation and never de-duplicate by message content; "content" may be a string or an array of text and image_url parts) -> run ONE complete agent turn — including any tools — and return 200 with {"choices":[{"message":{"role":"assistant","content":"<final answer text>"}}]}. Never return tool_calls; never stream — answer with ONE synchronous JSON body however the request asks: do not branch on "stream": true, and do not branch on the Accept header either (no request earns a stream, and the conformance check asks both ways; Conduck itself always sends "stream": false, but never rely on that); never return an empty "content" string (error instead); finish within 285 seconds or cancel the work — terminating the whole child process tree — and return an error.
-    4. Images: on the current turn (the final messages element), forward images if my agent accepts them, and never silently drop one — if my agent can't take images, reject with 400 and code "image_unsupported". For EARLIER messages, never reject a request because an earlier message contains an image — forward it, or replace it in-position with exactly this text: "An image was attached in this earlier message, but this adapter cannot inspect it. Do not infer its contents."
+    4. Images: on the current turn (the final messages element), forward images if my agent accepts them, and never silently drop one — if my agent can't take images, reject with 400 and code "image_unsupported". An agent whose only image input is a file-reading tool or an attachment argument still counts as accepting images: write the decoded image to a per-turn temp file it can read and hand it the path (delete the file when the turn ends) — only the image's position among the text parts is lost, never the image. For EARLIER messages, never reject a request because an earlier message contains an image — forward it, or replace it in-position with exactly this text: "An image was attached in this earlier message, but this adapter cannot inspect it. Do not infer its contents."
     5. Errors are {"error":{"message":"...","type":"...","code":"..."}} with a non-2xx status. Use these codes where they fit: image_unsupported, model_not_found (400 — a "model" value matching nothing you advertise), context_too_long, image_too_large, overloaded, upstream_timeout, upstream_failure. Be lenient otherwise: tolerate a present OR absent "model" field and ignore unknown extra fields (never reject on them). Always respond with Content-Type: application/json and STRICT standard JSON — never NaN or Infinity anywhere in the body (Python's json.dumps allows them by default; the app rejects the whole response).
     6. Require "Authorization: Bearer <token>" on every request, including /v1/models (long random token, stored outside the code), and check it before any other work. Bind to 127.0.0.1 only. Accept request bodies of at least 50 MiB — an image turn legitimately arrives that big.
     7. If you answer a request before reading its body to the end (a 401, a 413), either drain the remainder or close the connection — never leave it and read the next request off the same one. Loopback curl cannot catch this; behind a pooling HTTPS front it corrupts later requests that are themselves fine.
     8. Install it under a supervisor (launchd, systemd, or equivalent) so it survives restarts and logouts, then re-run both checks against the SUPERVISED instance — a supervisor changes the environment, working directory and user, so a green foreground run proves nothing about it.
-    9. Safety: never pass chat text through a shell; tool approvals fail closed (no auto-approve-everything); never log message content or tokens.
+    9. Safety: never pass chat text through a shell; if the engine expands @path-style file references inside prompt text, disable that (it lets chat content read files with no shell involved); tool approvals fail closed (no auto-approve-everything); never log message content or tokens.
     10. Optional, but do it if you can: alongside "choices", report top-level "model" and "id", a "usage" object with prompt_tokens / completion_tokens / total_tokens, and a "finish_reason" on the single choices entry. All four are optional and omitting them is fully conformant. Report a number only when you actually have it — never a placeholder zero — and make "usage" cover the WHOLE turn (every model call the agent made answering it, tool loops and sub-agents included), since a figure covering one call out of several is worse than no figure. If the engine stopped on an output limit, say so with "finish_reason": "length".
 
     If you can reach GitHub but not conduck.com, you can still run the automated conformance check — download it and pass the URL and token explicitly, never bare (with no URL it waits at an interactive prompt and a non-interactive run dies there):
