@@ -153,7 +153,13 @@ final class PairingImportFlow {
         case destinationChanged
         /// A trust refusal the user dismissed, kept on screen so the reason
         /// survives the alert that carried it.
-        case refused(String)
+        ///
+        /// Carries the DECISION, not the sentence. A rendered string can only be
+        /// read; the typed pair can also be asked which recipe section addresses
+        /// it, so the card's notice offers the same way out the alert could not
+        /// (an alert holds no links). The lane rides along because the first
+        /// sentence names WHICH server was refused, and an import touches two.
+        case refused(lane: PairingTrustLane, block: PairingTrustBlock)
     }
 
     /// The import awaiting consent. Nothing in it has been persisted;
@@ -183,9 +189,25 @@ final class PairingImportFlow {
 
     // MARK: - Observed state
 
+    /// A rejected code, as the input step shows it: the sentence, and the recipe
+    /// section that addresses it when there is one.
+    ///
+    /// ONE value, deliberately, rather than two properties kept in step. The
+    /// message and the link are set on seven different paths; as separate
+    /// properties, any path that updated one and forgot the other would leave a
+    /// link pointing at the wrong problem — a stale "How to fix this" under a
+    /// sentence about something else. Assigning the pair atomically makes that
+    /// state unrepresentable instead of merely untested.
+    struct InlineError: Equatable {
+        let message: String
+        /// nil for the codes the recipe page cannot help with — a damaged code,
+        /// a version bump, a full gateway list.
+        let anchor: RecipeAnchor?
+    }
+
     private(set) var phase: Phase = .input
     var pastedCode: String = ""
-    private(set) var inlineError: String?
+    private(set) var inlineError: InlineError?
     /// An await is in flight on the path to persistence — disables the actions
     /// that would start a second one.
     private(set) var planning: Bool = false
@@ -200,6 +222,17 @@ final class PairingImportFlow {
     private(set) var activeTarget: RemoteAgentRef?
 
     private(set) var stageStatus: [StageID: StageStatus] = [:]
+
+    /// The recipe section for a FAILED gateway stage, derived from the typed
+    /// error at the moment the failure is recorded — the only moment that error
+    /// exists. `StageStatus.failed` keeps the message and the retry verdict, not
+    /// the error itself, so deriving this later would mean storing a raw code
+    /// beside it and hoping the two never disagree.
+    ///
+    /// nil whenever the gateway stage is not in a failed state the page can
+    /// help with — cleared on retry and on a pass, so the recovery section can
+    /// read it without asking a second question first.
+    private(set) var gatewayRecipeAnchor: RecipeAnchor?
 
     /// Bumped whenever a scanned code is REJECTED back to the input phase. The
     /// scanner's one-shot latch + `stopScanning()` would otherwise leave a frozen
@@ -328,7 +361,7 @@ final class PairingImportFlow {
 
         switch PairingPayload.parse(raw) {
         case .failure(let error):
-            inlineError = Self.message(for: error)
+            inlineError = Self.inlineError(for: error)
             restartScanner()
         case .success(let payload):
             // One generation guard covers BOTH awaits below. Planning mints the
@@ -390,14 +423,22 @@ final class PairingImportFlow {
     /// A code that cannot land at any target — terminal, back to the input step.
     private func showBlocked(_ block: PairingImportBlock) {
         switch block {
+        // Neither block is a transport problem — the code is fine and the server
+        // was never contacted — so neither carries a recipe link.
         case .customGatewayCapReached:
-            inlineError = String(localized: "settings.pairing.error.capReached",
-                                 defaultValue: "You've reached the custom-gateway limit. Delete one in Settings to import another.")
+            inlineError = InlineError(
+                message: String(localized: "settings.pairing.error.capReached",
+                                defaultValue: "You've reached the custom-gateway limit. Delete one in Settings to import another."),
+                anchor: nil
+            )
         case .kindMismatch(let expectedDisplayName):
-            inlineError = String(
-                format: String(localized: "settings.pairing.error.kindMismatch",
-                               defaultValue: "This setup code is for %@. Import it from the gateway list instead."),
-                expectedDisplayName
+            inlineError = InlineError(
+                message: String(
+                    format: String(localized: "settings.pairing.error.kindMismatch",
+                                   defaultValue: "This setup code is for %@. Import it from the gateway list instead."),
+                    expectedDisplayName
+                ),
+                anchor: nil
             )
         }
         restartScanner()
@@ -640,6 +681,7 @@ final class PairingImportFlow {
         activePayload = payload
         activeTarget = target
         stageStatus = [:]
+        gatewayRecipeAnchor = nil
         // Reset per-attempt outcome so a re-import re-evaluates cleanly and the
         // dismiss hooks fire for the LATEST attempt, not a stale earlier one.
         saveSucceeded = false
@@ -721,6 +763,7 @@ final class PairingImportFlow {
         switch await environment.runGatewayTest(payload, target: target) {
         case .passed:
             gatewayConnected = true
+            gatewayRecipeAnchor = nil
             stageStatus[.gateway] = .passed(caveat: nil)
             fireConnectedHookIfNeeded()
             await runFileStageIfNeeded(payload, target: target)
@@ -730,6 +773,9 @@ final class PairingImportFlow {
             // means no typed error stood behind the message, and unknown is not
             // terminal.
             stageStatus[.gateway] = .failed(message, retryable: error?.isRetryable ?? true)
+            // Derived HERE because this is where the typed error exists. An
+            // untyped failure yields nil, like every other unknown.
+            gatewayRecipeAnchor = error.flatMap { RecipeAnchor(errorCode: $0.errorCode) }
             await runFileStageIfNeeded(payload, target: target)
         }
     }
@@ -761,6 +807,9 @@ final class PairingImportFlow {
     /// already-saved config (Stage 1 save is NOT redone).
     func retryStages() {
         guard let payload = activePayload, let target = activeTarget else { return }
+        // The link belongs to the verdict being discarded — clear it with the
+        // row, so a re-run that ends differently cannot inherit the old answer.
+        gatewayRecipeAnchor = nil
         stageStatus[.gateway] = .pending
         if payload.fileServer != nil { stageStatus[.file] = .pending }
         phase = .running
@@ -839,7 +888,26 @@ final class PairingImportFlow {
     /// Surface a scanner-rejected code with the same typed copy the paste path
     /// uses, while the camera keeps scanning.
     func noteScannerRejection(_ error: PairingParseError) {
-        inlineError = Self.message(for: error)
+        inlineError = Self.inlineError(for: error)
+    }
+
+    /// The message and its recipe section, as one value — see `InlineError`.
+    static func inlineError(for error: PairingParseError) -> InlineError {
+        InlineError(message: message(for: error), anchor: anchor(for: error))
+    }
+
+    /// Which recipe section a parse failure points at.
+    ///
+    /// Only `.insecureURL` has one. It is the same platform refusal code 77
+    /// reports, reached one step earlier — the address never gets as far as a
+    /// connection because Apple rules it out from its STRING. The other three
+    /// are about the CODE (damaged, wrong version, not a Conduck code at all),
+    /// and a certificate page has nothing to say about any of them.
+    static func anchor(for error: PairingParseError) -> RecipeAnchor? {
+        switch error {
+        case .insecureURL: return .plainHTTPBlocked
+        case .notAPairingCode, .unsupportedVersion, .malformed: return nil
+        }
     }
 }
 

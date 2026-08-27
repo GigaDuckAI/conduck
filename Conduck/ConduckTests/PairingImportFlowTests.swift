@@ -374,7 +374,7 @@ final class PairingImportFlowTests: XCTestCase {
 
         flow.connect()
         await settle(until: { flow.showingTrustBlockAlert }, "the block alert should be up")
-        flow.returnToReview(notice: .refused("because reasons"))
+        flow.returnToReview(notice: .refused(lane: .gateway, block: .certificateNotPubliclyTrusted))
 
         // The server has since been fixed; the destination has not.
         env.trustResult = .proceed(gatewayPin: nil, fileServerPin: nil)
@@ -398,9 +398,9 @@ final class PairingImportFlowTests: XCTestCase {
 
         flow.connect()
         await settle(until: { flow.showingTrustBlockAlert }, "the block alert should be up")
-        flow.returnToReview(notice: .refused("because reasons"))
+        flow.returnToReview(notice: .refused(lane: .gateway, block: .certificateNotPubliclyTrusted))
 
-        XCTAssertEqual(flow.reviewContext?.notice, .refused("because reasons"))
+        XCTAssertEqual(flow.reviewContext?.notice, .refused(lane: .gateway, block: .certificateNotPubliclyTrusted))
         XCTAssertEqual(flow.phase, .review)
         XCTAssertFalse(env.didPersist, "A refused import must configure nothing.")
     }
@@ -416,7 +416,7 @@ final class PairingImportFlowTests: XCTestCase {
 
         flow.connect()
         await settle(until: { flow.showingTrustBlockAlert }, "the block alert should be up")
-        flow.returnToReview(notice: .refused("because reasons"))
+        flow.returnToReview(notice: .refused(lane: .gateway, block: .certificateNotPubliclyTrusted))
 
         XCTAssertEqual(flow.phase, .review)
         XCTAssertNotNil(flow.reviewContext, "the card must survive — this is one step back, not out")
@@ -603,5 +603,108 @@ final class PairingImportFlowTests: XCTestCase {
 
         XCTAssertTrue(flow.gatewayFailureIsRetryable,
                       "No taxonomy entry means no terminality claim — the affordance stays.")
+    }
+
+    // MARK: - The recipe link tracks the failure it belongs to
+
+    /// The wizard has no Troubleshoot path, so the link IS the way out. It is
+    /// derived where the typed error exists — at the moment the failure is
+    /// recorded — because `StageStatus.failed` keeps only the message and the
+    /// retry verdict afterwards.
+    func testACertificateRefusalAtTheGatewayStageOffersItsRecipeSection() async throws {
+        env.gatewayTestResult = .failed(message: CertificateTrustCopy.untrustedRefusalWithRemedy,
+                                        error: .remoteAgentCertUntrusted)
+        let flow = makeFlow()
+
+        try await scanIntoReview(flow)
+        flow.connect()
+        await settle(until: { flow.phase == .done }, "the run should have finished")
+
+        XCTAssertEqual(flow.gatewayRecipeAnchor, .certUntrusted)
+    }
+
+    /// A failure with no typed error behind it has no section either. Unknown
+    /// is not a diagnosis, and a link that names one would be a guess.
+    func testAnUntypedGatewayFailureOffersNoRecipeSection() async throws {
+        env.gatewayTestResult = .failed(message: "Unexpected error. Try again.", error: nil)
+        let flow = makeFlow()
+
+        try await scanIntoReview(flow)
+        flow.connect()
+        await settle(until: { flow.phase == .done }, "the run should have finished")
+
+        XCTAssertNil(flow.gatewayRecipeAnchor)
+    }
+
+    /// The link belongs to a verdict, not to the screen. A retry that succeeds
+    /// must take it away with the failure — a "How to fix this" still sitting
+    /// under a passing checklist points at a problem that no longer exists.
+    func testAPassingRetryClearsTheRecipeSection() async throws {
+        env.gatewayTestResult = .failed(message: "couldn't reach it",
+                                        error: .remoteAgentUnreachable)
+        let flow = makeFlow()
+
+        try await scanIntoReview(flow)
+        flow.connect()
+        await settle(until: { flow.phase == .done }, "the run should have finished")
+        XCTAssertEqual(flow.gatewayRecipeAnchor, .unreachable)
+
+        env.gatewayTestResult = .passed
+        flow.retryStages()
+        await settle(until: { flow.phase == .done && !flow.gatewayStageFailed },
+                     "the retry should have passed")
+
+        XCTAssertNil(flow.gatewayRecipeAnchor,
+                     "A gateway that now answers has nothing left to fix.")
+    }
+
+    /// A plain-http address is refused from its STRING, before any connection
+    /// is attempted — so the user has no failure to troubleshoot, only the rule.
+    func testAnInsecureAddressInACodeLinksToThePlainHTTPSection() async throws {
+        let flow = makeFlow()
+        flow.handleCode(try code(url: "http://gw.example.test:18789"))
+        await settle(until: { flow.inlineError != nil }, "should have refused the address")
+
+        XCTAssertEqual(flow.inlineError?.anchor, .plainHTTPBlocked)
+    }
+
+    /// The message and the link are ONE value, so a second, unrelated rejection
+    /// cannot leave the first one's link stranded under it. This is the state
+    /// two separate properties would have made reachable: a sentence about a
+    /// damaged code with a certificate link beneath it.
+    func testADifferentParseFailureReplacesTheWholeInlineErrorLinkIncluded() async throws {
+        let flow = makeFlow()
+        flow.handleCode(try code(url: "http://gw.example.test:18789"))
+        await settle(until: { flow.inlineError?.anchor == .plainHTTPBlocked },
+                     "should have refused the address with a link")
+        let insecureMessage = flow.inlineError?.message
+
+        flow.handleCode("this is not a setup code at all")
+        await settle(until: { flow.inlineError?.message != insecureMessage },
+                     "should have replaced the message")
+
+        XCTAssertNil(flow.inlineError?.anchor,
+                     "A code that isn't a Conduck code has no recipe section — the previous link must not survive the swap.")
+    }
+
+    /// The trust refusal carried onto the review card is typed, so the card can
+    /// offer the section the alert could not: an alert holds no links.
+    func testATypedRefusalOnTheCardCarriesItsCertificateSection() async throws {
+        env.trustResult = .blocked(lane: .gateway, block: .certificateNotPubliclyTrusted)
+        let flow = makeFlow()
+        try await scanIntoReview(flow)
+
+        flow.connect()
+        await settle(until: { flow.showingTrustBlockAlert }, "the block alert should be up")
+        flow.returnToReview(notice: .refused(lane: .gateway, block: .certificateNotPubliclyTrusted))
+
+        guard case .refused(let lane, let block) = flow.reviewContext?.notice else {
+            return XCTFail("the refusal should have landed on the card")
+        }
+        XCTAssertEqual(lane, .gateway,
+                       "The lane rides along because the first sentence names WHICH server was refused.")
+        XCTAssertEqual(block, .certificateNotPubliclyTrusted)
+        XCTAssertEqual(RecipeAnchor.certUntrusted.rawValue, "cert-untrusted",
+                       "The section the card derives from this block.")
     }
 }

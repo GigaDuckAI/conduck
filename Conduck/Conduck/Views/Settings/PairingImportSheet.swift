@@ -152,12 +152,13 @@ struct PairingImportSheet: View {
                     // return the user to a screen that looks exactly as it did
                     // before Connect, with nothing to explain why nothing
                     // happened — and Connect one tap away again.
-                    flow.returnToReview(notice: .refused(blockReason(for: context)))
+                    flow.returnToReview(notice: .refused(lane: context.lane,
+                                                        block: context.block))
                 } label: {
                     Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
                 }
             } message: { context in
-                Text(blockReason(for: context))
+                Text(blockReason(lane: context.lane, block: context.block))
             }
         }
         #if os(macOS)
@@ -294,10 +295,16 @@ struct PairingImportSheet: View {
                 }
 
                 if let inlineError = flow.inlineError {
-                    Text(inlineError)
+                    Text(inlineError.message)
                         .font(.footnote)
                         .foregroundStyle(AppColors.error)
                         .fixedSize(horizontal: false, vertical: true)
+                    // A plain-http address is refused before any connection is
+                    // attempted, so the user has no failure to troubleshoot —
+                    // only the rule, which is what the page explains.
+                    if let anchor = inlineError.anchor {
+                        recipeLink(anchor)
+                    }
                 }
 
                 #if os(iOS)
@@ -696,14 +703,21 @@ struct PairingImportSheet: View {
     @ViewBuilder
     private func noticeSection(_ notice: PairingImportFlow.ReviewNotice) -> some View {
         Section {
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: noticeGlyph(notice))
-                    .foregroundStyle(noticeColor(notice))
-                    .accessibilityHidden(true)
-                Text(noticeText(notice))
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: noticeGlyph(notice))
+                        .foregroundStyle(noticeColor(notice))
+                        .accessibilityHidden(true)
+                    Text(noticeText(notice))
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                // The card is where a refusal can offer a way out at all — the
+                // alert that raised it could hold no link.
+                if let anchor = noticeAnchor(notice) {
+                    recipeLink(anchor)
+                }
             }
             .padding(.vertical, 4)
             .settingsCardPassiveRow()
@@ -715,8 +729,22 @@ struct PairingImportSheet: View {
         case .destinationChanged:
             return String(localized: "settings.pairing.review.notice.changed",
                           defaultValue: "This gateway's settings changed while you were looking at this screen. Nothing was connected — the details above are the current ones. Check them again before you continue.")
-        case .refused(let reason):
-            return reason
+        case .refused(let lane, let block):
+            return blockReason(lane: lane, block: block)
+        }
+    }
+
+    /// The recipe section a notice points at. A refusal names a certificate the
+    /// device would not accept, whose remedy is entirely server-side; a changed
+    /// destination is not a transport problem at all.
+    private func noticeAnchor(_ notice: PairingImportFlow.ReviewNotice) -> RecipeAnchor? {
+        switch notice {
+        case .destinationChanged:
+            return nil
+        case .refused(_, let block):
+            switch block {
+            case .certificateNotPubliclyTrusted: return .certUntrusted
+            }
         }
     }
 
@@ -732,6 +760,29 @@ struct PairingImportSheet: View {
         case .destinationChanged: return AppColors.warning
         case .refused: return AppColors.error
         }
+    }
+
+    /// "How to fix this" → the recipe page section for this failure. Shared by
+    /// every place in this sheet that can name one, so the wizard — which has no
+    /// Troubleshoot path to route through — offers the same one sentence
+    /// everywhere instead of four near-identical ones.
+    ///
+    /// The glyph sits OUTSIDE the localized string; the key is the same one the
+    /// Diagnostics card uses.
+    private func recipeLink(_ anchor: RecipeAnchor) -> some View {
+        Link(destination: anchor.url) {
+            HStack(spacing: 4) {
+                Text(LocalizedStringResource(
+                    "error.recipeLink.howToFix",
+                    defaultValue: "How to fix this"
+                ))
+                Image(systemName: "arrow.up.right")
+                    .font(.caption)
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.tint)
+        }
+        .pointerLink()
     }
 
     private func actionSection(_ model: PairingReviewModel) -> some View {
@@ -843,12 +894,12 @@ struct PairingImportSheet: View {
     /// refused. The remedy comes from `CertificateTrustCopy`, shared with every
     /// other surface that can reach this state — three wordings would drift into
     /// three different remedies for one cause.
-    private func blockReason(for context: PairingImportFlow.TrustBlockContext) -> String {
-        let subject = context.lane == .gateway
+    private func blockReason(lane: PairingTrustLane, block: PairingTrustBlock) -> String {
+        let subject = lane == .gateway
             ? String(localized: "settings.pairing.trust.subject.gateway", defaultValue: "The gateway")
             : String(localized: "settings.pairing.trust.subject.file", defaultValue: "The file server")
 
-        switch context.block {
+        switch block {
         case .certificateNotPubliclyTrusted:
             return String(
                 format: String(
@@ -916,6 +967,14 @@ struct PairingImportSheet: View {
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                // Above the buttons, not among them: this is the same prose-link
+                // treatment every other recipe link wears, and putting it in the
+                // button stack would read as a fourth recovery action and
+                // disturb a hierarchy that is deliberate.
+                if let anchor = flow.gatewayRecipeAnchor {
+                    recipeLink(anchor)
+                }
 
                 if flow.gatewayFailureIsRetryable {
                     Button {
@@ -1005,6 +1064,23 @@ struct PairingImportSheet: View {
                         defaultValue: "Get Tailscale"
                     ))
                         .font(.subheadline.weight(.semibold))
+                }
+                .pointerLink()
+                // Its OWN label, not the shared "How to fix this": nothing has
+                // failed yet here — this callout is a heads-up before the test
+                // runs — so a fix-it link would name a problem the user does not
+                // have.
+                Link(destination: RecipeAnchor.tailscaleServe.url) {
+                    HStack(spacing: 4) {
+                        Text(LocalizedStringResource(
+                            "settings.pairing.tailscale.recipe",
+                            defaultValue: "Tailscale Serve guide"
+                        ))
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.tint)
                 }
                 .pointerLink()
             }

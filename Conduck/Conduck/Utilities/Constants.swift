@@ -369,6 +369,20 @@ enum Constants {
     /// the bring-your-own-server lane).
     static let setupGuideURL = "https://conduck.com/setup/"
 
+    /// The public TLS/certificate recipe page — the one place that explains how
+    /// to give a self-hosted gateway a certificate this device will accept, and
+    /// the destination of every "How to fix this" link a connection failure
+    /// offers. Deep-linked per failure via a `#fragment`; `RecipeAnchor` owns
+    /// the fragment vocabulary.
+    ///
+    /// CROSS-REPO CONTRACT. The trailing slash is part of it. This string and
+    /// the fragment set are mirrored by `website/src/lib/setup-anchors.ts`,
+    /// whose postbuild guard parses `RecipeAnchor.swift` and fails the site
+    /// build if either half drifts. Both are append-only once a version
+    /// carrying these links is public — an installed app keeps emitting what it
+    /// was built with.
+    static let connectRecipesURL = "https://conduck.com/setup/tls/"
+
     /// The normative "Conduck adapter v1" contract page — the durable spec an AI
     /// coding tool follows to put a small OpenAI-compatible front door in front of
     /// a user-built agent (the guided custom-lane adapter escape hatch links here).

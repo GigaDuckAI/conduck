@@ -183,6 +183,18 @@ struct DiagnosticsContent: View {
                 Text(focus.fix)
                     .font(.callout)
                     .foregroundStyle(AppColors.textPrimary)
+                // The recipe page's matching section, when this failure has one.
+                // It rides BESIDE the remedy and never inside it: the remedy
+                // sentence is shared with every other surface that renders this
+                // error, several of which (Watch, CarPlay, a notification body)
+                // cannot open a link at all.
+                //
+                // Derived here rather than in the runner — the runner already
+                // publishes the code, and a second stored copy of the same fact
+                // is one more thing that can go stale against it.
+                if let anchor = runner.focusedErrorCode.flatMap(RecipeAnchor.init(errorCode:)) {
+                    recipeLink(anchor)
+                }
                 // The action this card existed without. A Troubleshoot-landed user
                 // had exactly one route forward — the top "Test everything" button,
                 // which writes into every file lane and runs a billable
@@ -204,6 +216,26 @@ struct DiagnosticsContent: View {
             // withholds the wash that would promise a whole-row click.
             .settingsCardPassiveRow()
         }
+    }
+
+    /// "How to fix this" → the recipe page section for this failure. The glyph
+    /// sits OUTSIDE the localized string, so a translator never has to carry an
+    /// SF Symbol name through a catalog.
+    private func recipeLink(_ anchor: RecipeAnchor) -> some View {
+        Link(destination: anchor.url) {
+            HStack(spacing: 4) {
+                Text(LocalizedStringResource(
+                    "error.recipeLink.howToFix",
+                    defaultValue: "How to fix this"
+                ))
+                Image(systemName: "arrow.up.right")
+                    .font(.caption)
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.tint)
+        }
+        .pointerLink()
+        .padding(.top, 2)
     }
 
     /// Re-probe ONE gateway. Same house-standard bordered action as the file lane's
