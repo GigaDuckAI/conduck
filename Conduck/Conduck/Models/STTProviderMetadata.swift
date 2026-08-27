@@ -120,8 +120,9 @@ enum STTProviderRegistry {
         )
     )
 
-    /// Google Gemini 3.1 Flash-Lite — JSON family, billing-fatal 429,
-    /// supports inline-base64 audio.
+    /// Google Gemini — dedicated speech model on the JSON Interactions
+    /// endpoint, inline-base64 audio. The `id` is a frozen storage key, not a
+    /// model reference (see `STTProvider.gemini`).
     // DO NOT RENAME — Keychain account suffixes depend on this string
     static let gemini = STTProviderMetadata(
         id: "gemini-3-1-flash-lite",
@@ -132,8 +133,8 @@ enum STTProviderRegistry {
             defaultValue: "Paste your Gemini API key"
         ),
         languageNote: LocalizedStringResource(
-            "settings.stt.provider.gemini.language",
-            defaultValue: "100+ languages · transcribes via LLM (not pure ASR)"
+            "settings.stt.provider.gemini.language.v2",
+            defaultValue: "100+ languages · dedicated speech model"
         )
     )
 

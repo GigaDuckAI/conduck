@@ -17,13 +17,14 @@
 // load-bearing:
 //   1. The request is JSON + base64 (`input_audio.data`), NOT multipart
 //      `file=` — so this is the `.json` transport, not `.multipart`.
-//   2. The `model` rides the BODY (not the URL path like Gemini), so the
-//      effective model tag (default / user override) is encoded here.
+//   2. The `model` rides the BODY, so the effective model tag (default /
+//      user override) is encoded here — as it now is for every STT provider.
 //
-// Unlike `GeminiSTT` there is NO defensive transcription prompt: this is a
-// dedicated transcription endpoint that returns `{text}`, not an LLM
-// `generateContent` call with a steerable system prompt — there is no prompt
-// surface to inject into.
+// There is NO defensive transcription prompt: this is a dedicated
+// transcription endpoint that returns `{text}`, not a general-model call with
+// a steerable prompt — there is no prompt surface to inject into. (`GeminiSTT`
+// reaches the same conclusion for its dedicated model, and keeps a prompt only
+// for a general model selected through the Advanced override.)
 //
 // Audio format is SNIFFED from the container magic bytes rather than hardcoded:
 // `AudioCompressor` returns AAC-in-M4A normally but falls back to WAV (or the

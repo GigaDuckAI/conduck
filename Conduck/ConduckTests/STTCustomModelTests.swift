@@ -5,7 +5,7 @@
 //
 // Custom-STT V1.x — Feature 1 (per-provider custom model override). Pure-data
 // coverage of the two declarative resolution helpers on the `STTProvider` value
-// type (`effectiveModel(customModel:)` / `effectiveTranscribeURL(customModel:)`),
+// type (`effectiveModel(customModel:)`),
 // the multipart build path threading the override into the `model` field, and
 // the `SettingsViewModel.sanitizeModelTag` allowlist (URL-path-injection guard).
 //
@@ -68,51 +68,36 @@ final class STTCustomModelTests: XCTestCase {
                        "A custom-endpoint model override must win over the `whisper-1` default.")
     }
 
-    // MARK: - effectiveTranscribeURL(customModel:) — Gemini
+    // MARK: - Transcribe URL is fixed for every provider
 
-    func testEffectiveTranscribeURLGeminiOverrideContainsModelInPath() {
-        let url = STTProvider.geminiFlashLite.effectiveTranscribeURL(customModel: "gemini-3.2-pro")
-        XCTAssertTrue(url.absoluteString.contains("/models/gemini-3.2-pro:generateContent"),
-                      "Gemini override must rebuild the URL to '/models/gemini-3.2-pro:generateContent'. Got: \(url.absoluteString)")
-    }
-
-    func testEffectiveTranscribeURLGeminiEmptyOverrideReturnsDefault() {
-        let url = STTProvider.geminiFlashLite.effectiveTranscribeURL(customModel: "")
-        XCTAssertEqual(url, STTProvider.geminiFlashLite.transcribeURL,
-                       "An empty Gemini override must return the pinned default URL.")
-    }
-
-    func testEffectiveTranscribeURLGeminiNilOverrideReturnsDefault() {
-        let url = STTProvider.geminiFlashLite.effectiveTranscribeURL(customModel: nil)
-        XCTAssertEqual(url, STTProvider.geminiFlashLite.transcribeURL,
-                       "A nil Gemini override must return the pinned default URL.")
-    }
-
-    // MARK: - effectiveTranscribeURL(customModel:) — non-Gemini
-
-    func testEffectiveTranscribeURLNonGeminiOverrideUnchanged() {
-        // Only Gemini's model lives in the URL path. For every other provider a
-        // model override must NOT touch the URL (the override bites the body /
-        // multipart `model` field instead).
-        for provider in [STTProvider.mistralVoxtral,
-                         STTProvider.openAITranscribe,
-                         STTProvider.elevenLabsScribe,
-                         STTProvider.qwenASRFlash,
-                         STTProvider.customOpenAICompat] {
-            let url = provider.effectiveTranscribeURL(customModel: "some-override")
-            XCTAssertEqual(url, provider.transcribeURL,
-                           "\(provider.id): a model override must NOT change the transcribe URL — only Gemini's model lives in the URL path.")
+    /// No STT provider carries its model in the URL path any more — Gemini was
+    /// the last, and its Interactions endpoint is one URL for every model. A
+    /// model override must therefore reach the request BODY and leave the
+    /// endpoint alone, for EVERY provider without exception.
+    func testTranscribeURLIsModelIndependentForAllProviders() {
+        for provider in STTProvider.allRegistered {
+            XCTAssertFalse(provider.transcribeURL.absoluteString.contains(provider.model),
+                           "\(provider.id): the pinned model must not appear in the transcribe URL — a model override would then silently change the endpoint.")
         }
     }
 
-    // MARK: - geminiEndpoint(model:) single source of truth
+    func testGeminiTranscribeURLIsTheFixedInteractionsEndpoint() {
+        XCTAssertEqual(STTProvider.gemini.transcribeURL.absoluteString,
+                       "https://generativelanguage.googleapis.com/v1beta/interactions",
+                       "Gemini STT must target the Interactions endpoint. `:generateContent` returns HTTP 200 with EMPTY output for the dedicated transcribe model — a silent, always-empty transcriber.")
+    }
 
-    func testGeminiEndpointMatchesDefaultRegistryURL() {
-        // The registry default URL is built via the SAME static helper the
-        // override resolver uses — proving default + override can never drift.
-        XCTAssertEqual(STTProvider.geminiEndpoint(model: "gemini-3.1-flash-lite"),
-                       STTProvider.geminiFlashLite.transcribeURL,
-                       "geminiEndpoint(model:) must reproduce the pinned default registry URL exactly (single source of truth).")
+    func testGeminiPinnedModelIsTheDedicatedTranscribeModel() {
+        XCTAssertEqual(STTProvider.gemini.model, "gemini-3.5-transcribe")
+    }
+
+    /// The preset ID is a FROZEN STORAGE KEY (Keychain account suffix +
+    /// `stt.customModel.<id>`), deliberately out of step with the pinned model.
+    /// If this ever "gets fixed" to match the model, every existing user's saved
+    /// Gemini API key and model override is orphaned.
+    func testGeminiPresetIDStaysFrozenDespiteModelChange() {
+        XCTAssertEqual(STTProvider.gemini.id, "gemini-3-1-flash-lite",
+                       "FROZEN storage key — must NOT track the pinned model.")
     }
 
     // MARK: - Multipart build carries the effective model
@@ -152,6 +137,27 @@ final class STTCustomModelTests: XCTestCase {
         let text = String(data: body, encoding: .utf8) ?? ""
         XCTAssertTrue(text.contains("voxtral-mini-2602"),
                       "With no override, the pinned default model tag must appear in the multipart body.")
+    }
+
+    // MARK: - STT model-tag policy (slash-bearing IDs must survive)
+
+    /// Pins the POLICY, not the primitive. Every STT provider carries its model
+    /// in the request body, so a slash is an ordinary character there — and
+    /// OpenRouter IDs REQUIRE it. Reverting `saveCustomModel` to the
+    /// slash-stripping default would silently rewrite
+    /// `openai/whisper-large-v3` into `openaiwhisper-large-v3` and 404 every
+    /// request; asserting the primitive directly could not catch that.
+    func testSTTModelPolicyPreservesSlashBearingIDs() {
+        XCTAssertEqual(SettingsViewModel.sanitizedSTTModel("openai/whisper-large-v3"),
+                       "openai/whisper-large-v3",
+                       "An OpenRouter model ID must survive the STT save path intact.")
+    }
+
+    /// The policy is hygiene, not a URL guard — but it must still strip
+    /// control characters and whitespace.
+    func testSTTModelPolicyStillStripsHostileCharacters() {
+        XCTAssertEqual(SettingsViewModel.sanitizedSTTModel("  gemini-3.5-transcribe?key=leak  "),
+                       "gemini-3.5-transcribekeyleak")
     }
 
     // MARK: - sanitizeModelTag (^[A-Za-z0-9._-]+$ allowlist)

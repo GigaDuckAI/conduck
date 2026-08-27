@@ -169,8 +169,9 @@ actor STTClient {
     ///   - provider: the STT provider record (wire format, auth, caps, decoder).
     ///   - customModel: optional per-preset model override (Feature 1). Nil →
     ///     the provider's pinned default. Resolved by the caller from
-    ///     `activeSTTSnapshot()`; threaded into the multipart / JSON model field
-    ///     and (for Gemini) the URL path via `provider.effective*`.
+    ///     `activeSTTSnapshot()`; threaded into the multipart / JSON model
+    ///     field via `provider.effectiveModel(customModel:)`. It never reaches
+    ///     the URL — no STT provider carries its model there.
     ///   - customConfig: fully-resolved BYO-endpoint config — non-nil ONLY for
     ///     the custom provider (`provider.dynamicEndpointKey != nil`). Carries
     ///     the resolved transcribe URL, effective auth scheme, and optional
@@ -248,10 +249,10 @@ actor STTClient {
         // Resolve the effective transcribe URL. For the BYO custom provider the
         // target is the user's stored base URL with `/v1/audio/transcriptions`
         // appended (carried in `customConfig.url`) — NOT the sentinel
-        // `provider.transcribeURL`. For Gemini the model lives in the URL path
-        // so an override rebuilds the endpoint (`effectiveTranscribeURL`). Every
-        // other provider returns its fixed `transcribeURL`. Declarative dispatch
-        // off `dynamicEndpointKey` — no scattered `if id == "custom-openai"`.
+        // `provider.transcribeURL`. Every other provider uses its fixed
+        // `transcribeURL` — a model override rides the request body, never the
+        // URL. Declarative dispatch off `dynamicEndpointKey` — no scattered
+        // `if id == "custom-openai"`.
         let effURL: URL
         if provider.dynamicEndpointKey != nil {
             guard let resolved = customConfig?.url else {
@@ -262,7 +263,7 @@ actor STTClient {
             }
             effURL = resolved
         } else {
-            effURL = provider.effectiveTranscribeURL(customModel: customModel)
+            effURL = provider.transcribeURL
         }
 
         // Build the request — branch on transport.
@@ -497,7 +498,7 @@ actor STTClient {
             throw AppError.invalidResponse
         }
 
-        if let mapped = provider.statusMap.map(http.statusCode) {
+        if let mapped = provider.statusMap.map(http.statusCode, data) {
             throw mapped
         }
 

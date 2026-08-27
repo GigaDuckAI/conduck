@@ -343,7 +343,8 @@ struct TTSProvider: Sendable {
     /// definition and by `effectiveSpeechURL(voice:customModel:)`, so the pinned
     /// default URL and a user model override can never drift in path shape.
     /// Gemini is the one TTS provider whose model lives in the URL path, not the
-    /// request body (mirrors `STTProvider.geminiEndpoint(model:)`).
+    /// request body. TTS is now the ONLY model-in-URL surface; STT moved to the
+    /// fixed Interactions endpoint.
     static func geminiSpeechEndpoint(model: String) -> URL {
         URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")!
     }
@@ -392,7 +393,7 @@ struct TTSProvider: Sendable {
     ///   - Gemini (`.generateContent`) embeds the MODEL in the URL PATH
     ///     (`/models/<model>:generateContent`) — a model override must rebuild
     ///     the endpoint there. Built from the shared `geminiSpeechEndpoint(model:)`
-    ///     so default + override can't drift (mirrors STT's `geminiEndpoint`).
+    ///     so default + override can't drift.
     /// OpenAI / Mistral / the custom endpoint return `speechURL` unchanged
     /// (voice + model ride the body). Pair with `effectiveVoice(override:)` +
     /// `effectiveModel(customModel:)`.
@@ -574,7 +575,7 @@ struct TTSProvider: Sendable {
         id: "gemini-tts",
         // Built via the SHARED `geminiSpeechEndpoint(model:)` so the pinned
         // default URL and a user model override (which rebuilds the same path)
-        // can never drift (mirrors STT's `geminiEndpoint`).
+        // can never drift.
         speechURL: TTSProvider.geminiSpeechEndpoint(model: "gemini-3.1-flash-tts-preview"),
         model: "gemini-3.1-flash-tts-preview",
         auth: .headerName("x-goog-api-key"),
@@ -678,7 +679,7 @@ struct TTSProvider: Sendable {
     /// (path-injection guard); a body model (OpenRouter, OpenAI/Mistral
     /// `.openAISpeech`, custom endpoints) may KEEP `/` — OpenRouter model IDs
     /// like `x-ai/grok-voice-tts-1.0` REQUIRE the slash. Mirrors
-    /// `STTProvider.modelInURL`.
+    /// `SettingsViewModel.sanitizeModelTag(_:allowsSlash:)`.
     var modelInURL: Bool { transport == .generateContent }
 
     // MARK: - Multiple named custom endpoints (Phase B)

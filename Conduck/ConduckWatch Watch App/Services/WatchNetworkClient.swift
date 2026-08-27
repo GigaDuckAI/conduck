@@ -97,14 +97,15 @@ enum WatchNetworkClient {
             throw AppError.audioMissingData
         }
 
-        // Effective transcribe URL — only Gemini's model lives in the URL path,
-        // so a per-preset custom override (Feature 1) rewrites the endpoint
-        // here; every other provider returns its fixed `transcribeURL`. The
+        // Effective transcribe URL — fixed per provider. No STT provider puts
+        // its model in the URL path any more (Gemini was the last; its
+        // Interactions endpoint is one URL for every model), so a per-preset
+        // custom override (Feature 1) changes the BODY, never this URL. The
         // Watch never reaches the BYO `customOpenAICompat` provider (its
         // `dynamicEndpointKey != nil` audio is relayed to iPhone before this
         // path), so the dynamic-base-URL resolution that lives in iPhone's
         // `STTClient` is intentionally absent here.
-        var urlRequest = URLRequest(url: provider.effectiveTranscribeURL(customModel: request.customModel))
+        var urlRequest = URLRequest(url: provider.transcribeURL)
         urlRequest.httpMethod = "POST"
         urlRequest.timeoutInterval = 60
         urlRequest.networkServiceType = .responsiveData
@@ -125,9 +126,10 @@ enum WatchNetworkClient {
                 throw AppError.sttDecodingFailure
             }
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            // Thread the effective model (custom override → pinned default) into
-            // the JSON body. Qwen consumes it; Gemini ignores it (its model lives
-            // in the URL, already rewritten above via `effectiveTranscribeURL`).
+            // Thread the effective model (custom override → pinned default)
+            // into the JSON body. Both JSON providers consume it: Qwen as a
+            // body tag, and Gemini likewise since its model moved out of the
+            // URL path with the Interactions endpoint.
             body = try factory.buildRequestBody(
                 audioData: request.audioData,
                 language: request.language,
@@ -171,7 +173,7 @@ enum WatchNetworkClient {
         // throw the mapped AppError. Critical 429 differentiation
         // (billing-fatal Mistral/Gemini vs transient OpenAI/ElevenLabs/Qwen)
         // lives in the provider's `statusMap`.
-        if let mapped = provider.statusMap.map(http.statusCode) {
+        if let mapped = provider.statusMap.map(http.statusCode, data) {
             throw mapped
         }
 

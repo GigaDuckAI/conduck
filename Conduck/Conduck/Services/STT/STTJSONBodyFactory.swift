@@ -21,9 +21,9 @@ protocol STTJSONBodyFactory {
     /// per provider convention (Gemini: inline base64; Qwen: base64 in
     /// `audio` field of a chat-style message). `model` is the effective
     /// model tag (default or per-provider custom override, already resolved
-    /// via `STTProvider.effectiveModel(customModel:)`): Qwen places it in the
-    /// request body; Gemini ignores it (its model lives in the URL path, so
-    /// the param is accepted only for signature parity).
+    /// via `STTProvider.effectiveModel(customModel:)`). EVERY conforming
+    /// provider places it in the request body — Gemini used to ignore this
+    /// parameter while its model rode the URL path, and no longer does.
     static func buildRequestBody(audioData: Data, language: String?, model: String) throws -> Data
 
     /// Decode the provider-specific JSON response into the uniform

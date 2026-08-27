@@ -140,10 +140,10 @@ final class STTBackgroundMetadataAndAuthTests: XCTestCase {
         // transient rate-limit (`.sttTooManyRequests`) — distinct from the
         // billing-fatal `.sttQuotaExceeded` that Mistral/Gemini map 429 to. This
         // catches a status-map swap that an identity check could not.
-        guard case .sttTooManyRequests = synth.statusMap.map(429) else {
+        guard case .sttTooManyRequests = synth.statusMap.map(429, nil) else {
             return XCTFail("Synthesized provider must carry the openAICompat status map (429 → sttTooManyRequests).")
         }
-        XCTAssertNil(synth.statusMap.map(200), "2xx must map to no error.")
+        XCTAssertNil(synth.statusMap.map(200, nil), "2xx must map to no error.")
     }
 
     /// `customEndpointID(for:)` builds `custom-openai_<uuid-lowercased>`. Pins

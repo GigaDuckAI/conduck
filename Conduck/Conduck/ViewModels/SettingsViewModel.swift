@@ -962,18 +962,32 @@ final class SettingsViewModel {
     }
 
     /// Persist a per-preset custom model override (Feature 1). Sanitizes the
-    /// candidate to `^[A-Za-z0-9._-]+$` BEFORE storage — this prevents Gemini
-    /// URL-path injection (the model lives in the URL path there) and is
-    /// applied uniformly for symmetry. An empty / fully-stripped candidate
+    /// candidate to `^[A-Za-z0-9._/-]+$` BEFORE storage — hygiene against
+    /// whitespace and control characters. An empty / fully-stripped candidate
     /// clears the override (the provider's pinned default applies). Refreshes
     /// `customModels` so the row re-renders without a Keychain/KVS round-trip.
+    ///
+    /// NOTE this is hygiene, NOT a security boundary, and must never be
+    /// mistaken for one: it runs only on this save path, while
+    /// `SettingsManager.getCustomModel` reads straight out of defaults —
+    /// hydrated by the iCloud KVS observer — so a value arriving from another
+    /// device is never re-sanitized here. Any real constraint on a model tag
+    /// belongs at the sink that consumes it.
     func saveCustomModel(_ model: String, for presetID: String) async {
-        // Body-model providers (OpenRouter et al.) keep `/`; URL-path models
-        // (Gemini) strip it — see `sanitizeModelTag` / `STTProvider.modelInURL`.
-        let sanitized = Self.sanitizeModelTag(model, allowsSlash: !STTProvider.lookup(id: presetID).modelInURL)
+        let sanitized = Self.sanitizedSTTModel(model)
         await SettingsManager.shared.setCustomModel(sanitized.isEmpty ? nil : sanitized,
                                                     forPresetID: presetID)
         await refreshCustomModels()
+    }
+
+    /// The STT model-tag policy, named so a test can pin it. Every STT
+    /// provider carries its model in the request BODY, so a slash is an
+    /// ordinary string character there — and OpenRouter IDs like
+    /// `openai/whisper-large-v3` REQUIRE it. Reverting this to slash-stripping
+    /// silently breaks every slashed model tag, so it is asserted directly
+    /// rather than left implicit at the call site.
+    static func sanitizedSTTModel(_ raw: String) -> String {
+        sanitizeModelTag(raw, allowsSlash: true)
     }
 
     /// Strip everything outside `^[A-Za-z0-9._-]+$` (plus `/` when `allowsSlash`)
@@ -982,12 +996,11 @@ final class SettingsViewModel {
     /// the override). Pure + static so the test suite can drive it without an
     /// actor hop.
     ///
-    /// `allowsSlash` is load-bearing: a model that rides the URL PATH (Gemini's
-    /// `…/models/<model>:generateContent`) MUST strip `/` (default — the
-    /// path-injection guard); a model that rides the request BODY (OpenRouter,
-    /// the OpenAI/Mistral families, custom endpoints) may KEEP it — OpenRouter
-    /// IDs like `openai/whisper-large-v3` REQUIRE the slash. Callers pass
-    /// `allowsSlash: !provider.modelInURL`.
+    /// `allowsSlash` exists for the one consumer that still puts a model in a
+    /// URL path: Gemini TTS (`…/models/<model>:generateContent`), which passes
+    /// `false`. Every STT provider passes `true` — the model is a request-body
+    /// value there, and OpenRouter IDs like `openai/whisper-large-v3` REQUIRE
+    /// the slash.
     static func sanitizeModelTag(_ raw: String, allowsSlash: Bool = false) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowed = CharacterSet(charactersIn:

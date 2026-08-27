@@ -6,7 +6,7 @@
 // Covers the OpenRouter voice provider added on the openrouter-voice branch:
 //   - `OpenRouterSTT` JSON body factory (container sniff, body shape, decode).
 //   - The STT + TTS registry entries (locked ids, transport, shared key slot).
-//   - `modelInURL` + the slash-aware `sanitizeModelTag` (Blocker 1: OpenRouter
+//   - `TTSProvider.modelInURL` + the slash-aware `sanitizeModelTag` (Blocker 1: OpenRouter
 //     model IDs like `openai/whisper-large-v3` must keep their `/`).
 //   - The cross-reuse preset-id constant (wired to the registry id).
 //
@@ -108,7 +108,6 @@ final class OpenRouterSTTTests: XCTestCase {
         XCTAssertNotNil(p.jsonBodyFactory, "OpenRouter STT uses the JSON body-factory path.")
         XCTAssertEqual(p.model, "openai/whisper-large-v3")
         XCTAssertNil(p.dynamicEndpointKey, "A frozen cloud provider must keep dynamicEndpointKey == nil (no cert-pin path).")
-        XCTAssertFalse(p.modelInURL, "OpenRouter's model rides the body — slash-bearing IDs must survive sanitization.")
         XCTAssertEqual(p.probeURL?.absoluteString, "https://openrouter.ai/api/v1/key",
                        "Key validation reuses GET /v1/key (OpenRouter's /v1/models is public).")
         XCTAssertEqual(p.transcribeURL.absoluteString, "https://openrouter.ai/api/v1/audio/transcriptions")
@@ -140,9 +139,9 @@ final class OpenRouterSTTTests: XCTestCase {
     // MARK: - modelInURL (drives slash-aware sanitization)
 
     func testModelInURLOnlyForGemini() {
-        XCTAssertTrue(STTProvider.geminiFlashLite.modelInURL, "Gemini STT model lives in the URL path.")
-        XCTAssertFalse(STTProvider.openRouter.modelInURL)
-        XCTAssertFalse(STTProvider.openAITranscribe.modelInURL)
+        // STT has no model-in-URL provider left — Gemini moved to the fixed
+        // Interactions endpoint, so every STT override rides the body and may
+        // keep its slashes. TTS is now the ONLY model-in-URL surface.
         XCTAssertTrue(TTSProvider.geminiTTS.modelInURL, "Gemini TTS (.generateContent) model lives in the URL path.")
         XCTAssertFalse(TTSProvider.openRouterTTS.modelInURL)
     }

@@ -274,11 +274,15 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
     /// `STTBackgroundTaskMetadata` so the delegate can route decode dispatch
     /// even after the app process is recycled.
     ///
-    /// NOTE on RAM: JSON-family providers base64-encode audio inline
-    /// (~33% inflation). With the 10 MB cap on Qwen and 15 MB on Gemini,
-    /// peak working set during body construction is ~20–25 MB. The body
-    /// is written straight to disk via `try data.write(...)`, so the
-    /// background daemon streams it from disk during upload.
+    /// NOTE on RAM — the tightest memory path on the wrist. JSON-family
+    /// providers base64-encode audio inline (~33% inflation), and four copies
+    /// are briefly live at once: the audio `Data`, the base64 `String`, the
+    /// encoded JSON `Data`, and then the body file. With the 10 MB cap on Qwen
+    /// and 14 MB on Gemini, peak working set during body construction is
+    /// ~45–50 MB. The body is written straight to disk via
+    /// `try data.write(...)`, so the daemon streams it from disk during the
+    /// upload itself — only construction is expensive. Re-measure on device
+    /// before raising either cap.
     ///
     /// - Parameters:
     ///   - request: provider-shaped payload (audio + language).
@@ -317,12 +321,13 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             throw AppError.sttKeyUnreadable
         }
 
-        // Effective transcribe URL — a Gemini per-preset custom override
-        // (Feature 1) rewrites the URL-path model here; every other provider
-        // returns its fixed `transcribeURL`. The Watch never reaches the BYO
+        // Effective transcribe URL — fixed per provider. No STT provider
+        // carries its model in the URL path any more, so a per-preset override
+        // (Feature 1) changes the request BODY and this URL is simply the
+        // provider's `transcribeURL`. The Watch never reaches the BYO
         // `customOpenAICompat` provider on this path (its audio is relayed to
         // iPhone), so the dynamic-base-URL resolution stays iPhone-only.
-        var urlRequest = URLRequest(url: provider.effectiveTranscribeURL(customModel: request.customModel))
+        var urlRequest = URLRequest(url: provider.transcribeURL)
         urlRequest.httpMethod = "POST"
         provider.auth.apply(to: &urlRequest, apiKey: apiKey)
 
@@ -971,23 +976,29 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             return
         }
 
-        // Parse server response — dispatch by provider transport.
-        guard let data = responseData[key] else {
+        // Status map FIRST, with whatever body arrived (possibly none). An
+        // HTTP error can carry an empty body — a bare 429 is the common case —
+        // and `responseData[key]` only exists once a data chunk lands. Gating
+        // the map behind a body-present check would report "No response
+        // received" for a rate limit the map classifies deliberately, and the
+        // map is written to degrade to its status-only verdict on a nil body.
+        let body = responseData[key]
+        if let http = task.response as? HTTPURLResponse,
+           let mapped = provider.statusMap.map(http.statusCode, body) {
+            WatchLog.error(.stt, "stt.bg.http", ["provider": provider.id, "status": http.statusCode, "code": mapped.errorCode])
             // xcstrings
             surfaceTurnFailure(
-                message: String(localized: "No response received from server."),
+                message: String(localized: "Recording could not be sent. Please try again."),
                 conversationID: nil
             )
             return
         }
 
-        // Apply provider's status map if we can read the HTTP status code.
-        if let http = task.response as? HTTPURLResponse,
-           let mapped = provider.statusMap.map(http.statusCode) {
-            WatchLog.error(.stt, "stt.bg.http", ["provider": provider.id, "status": http.statusCode, "code": mapped.errorCode])
+        // 2xx from here — decoding genuinely needs a body.
+        guard let data = body else {
             // xcstrings
             surfaceTurnFailure(
-                message: String(localized: "Recording could not be sent. Please try again."),
+                message: String(localized: "No response received from server."),
                 conversationID: nil
             )
             return

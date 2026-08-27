@@ -42,7 +42,7 @@ final class STTProviderTests: XCTestCase {
     }
 
     func testGeminiAuthIsCustomHeader() {
-        XCTAssertEqual(STTProvider.geminiFlashLite.auth, .headerName("x-goog-api-key"))
+        XCTAssertEqual(STTProvider.gemini.auth, .headerName("x-goog-api-key"))
     }
 
     // MARK: - Auth scheme apply
@@ -180,7 +180,7 @@ final class STTProviderTests: XCTestCase {
     // MARK: - Status map (LOAD-BEARING)
 
     func testStatusMapMistral429IsQuotaExceededNonRetryable() {
-        guard let err = STTStatusMap.mistral.map(429) else {
+        guard let err = STTStatusMap.mistral.map(429, nil) else {
             XCTFail("Mistral 429 must produce an error")
             return
         }
@@ -193,7 +193,7 @@ final class STTProviderTests: XCTestCase {
     }
 
     func testStatusMapOpenAI429IsTooManyRequestsRetryable() {
-        guard let err = STTStatusMap.openAICompat.map(429) else {
+        guard let err = STTStatusMap.openAICompat.map(429, nil) else {
             XCTFail("OpenAI 429 must produce an error")
             return
         }
@@ -210,7 +210,7 @@ final class STTProviderTests: XCTestCase {
         let codes = [200, 201, 204]
         for m in maps {
             for c in codes {
-                XCTAssertNil(m.map(c), "2xx status \(c) must map to nil (caller decodes body)")
+                XCTAssertNil(m.map(c, nil), "2xx status \(c) must map to nil (caller decodes body)")
             }
         }
     }

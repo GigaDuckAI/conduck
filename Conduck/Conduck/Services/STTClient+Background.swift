@@ -234,8 +234,8 @@ extension STTClient {
         // dedicated config field (`customConfig.model`); the 6 frozen providers
         // use the generic per-preset override → default. Declarative dispatch
         // off `dynamicEndpointKey`: the custom provider targets the user's
-        // stored base URL (carried in `customConfig.url`); Gemini rebuilds the
-        // URL for a model override; every other provider keeps `transcribeURL`.
+        // stored base URL (carried in `customConfig.url`); every other provider
+        // keeps its fixed `transcribeURL` (overrides ride the body).
         let effModel = customConfig?.model ?? provider.effectiveModel(customModel: customModel)
         let effURL: URL
         if provider.dynamicEndpointKey != nil {
@@ -245,7 +245,7 @@ extension STTClient {
             }
             effURL = resolved
         } else {
-            effURL = provider.effectiveTranscribeURL(customModel: customModel)
+            effURL = provider.transcribeURL
         }
 
         // Build the request body file on disk — background uploads must use
@@ -293,6 +293,14 @@ extension STTClient {
                     model: effModel,
                     factory: factory
                 )
+            } catch let appError as AppError {
+                // A typed refusal from the body factory is a VERDICT, not an
+                // I/O failure — e.g. Gemini's encoded-body preflight throwing
+                // `audioTooLarge`. Collapsing it into `audioMissingData` tells
+                // the user their recording went missing when it was simply too
+                // big, and hides a size limit they could act on.
+                try? FileManager.default.removeItem(at: audioFileURL)
+                throw appError
             } catch {
                 try? FileManager.default.removeItem(at: audioFileURL)
                 throw AppError.audioMissingData
@@ -606,7 +614,7 @@ extension BackgroundSTT: URLSessionDataDelegate {
                 return
             }
 
-            if let mapped = provider.statusMap.map(http.statusCode) {
+            if let mapped = provider.statusMap.map(http.statusCode, buffered) {
                 continuation.resume(throwing: mapped)
                 return
             }

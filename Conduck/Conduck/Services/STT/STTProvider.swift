@@ -117,16 +117,6 @@ struct STTProvider: Sendable {
 
     // MARK: - Endpoint helpers
 
-    /// Build the Gemini `generateContent` endpoint for a given model tag.
-    /// Single source of truth used BOTH by the `geminiFlashLite` registry
-    /// definition and by `effectiveTranscribeURL(customModel:)`, so the
-    /// pinned-default URL and a user model override can never drift in path
-    /// shape. Gemini is the one provider whose model lives in the URL path,
-    /// not the request body.
-    static func geminiEndpoint(model: String) -> URL {
-        URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")!
-    }
-
     /// Resolve the effective model tag for a transcription. Returns the
     /// trimmed non-empty `customModel` override when present, else the
     /// pinned default `model`. `.inProcess` providers (Apple on-device)
@@ -141,30 +131,16 @@ struct STTProvider: Sendable {
         return model
     }
 
-    /// Resolve the effective transcribe URL for a transcription. Only the
-    /// Gemini provider's model lives in the URL path, so a model override
-    /// must rebuild the endpoint there; every other provider (including
-    /// `customOpenAICompat`, whose dynamic base URL is resolved upstream via
-    /// `SettingsManager.customSTTTranscribeURL()` — NOT here) returns
-    /// `transcribeURL` unchanged. Pair with `effectiveModel(customModel:)`
-    /// for the body/field model tag.
-    func effectiveTranscribeURL(customModel: String?) -> URL {
-        guard id == STTProvider.geminiFlashLite.id else { return transcribeURL }
-        if let override = customModel?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !override.isEmpty {
-            return STTProvider.geminiEndpoint(model: override)
-        }
-        return transcribeURL
-    }
-
-    /// Whether this provider's model lives in the URL PATH (Gemini's
-    /// `…/models/<model>:generateContent`) rather than the request body. Drives
-    /// model-override sanitization (`SettingsViewModel.sanitizeModelTag`): a
-    /// URL-path model MUST strip `/` (path-injection guard), while a body model
-    /// (OpenRouter, the OpenAI/Mistral multipart family, Qwen, custom endpoints)
-    /// may KEEP `/` — OpenRouter model IDs like `openai/whisper-large-v3`
-    /// REQUIRE the slash. Gemini is the only model-in-URL STT provider today.
-    var modelInURL: Bool { id == STTProvider.geminiFlashLite.id }
+    // NOTE — there is deliberately no `effectiveTranscribeURL(customModel:)`
+    // here. No STT provider puts its model in the URL path any more: Gemini was
+    // the last, and its Interactions endpoint is one fixed URL for every model
+    // (see `GeminiSTTProvider.swift`). A model override is therefore always a
+    // JSON string VALUE, which cannot reach the host, route, headers, or
+    // document structure — which is also why `sanitizeModelTag` no longer needs
+    // a per-provider slash rule for STT. Callers use `transcribeURL` directly,
+    // except the BYO custom endpoint, whose base URL is resolved upstream from
+    // `SettingsManager.customSTTTranscribeURL()` and dispatched off
+    // `dynamicEndpointKey`.
 
     // MARK: - Registered providers
 
@@ -238,21 +214,34 @@ struct STTProvider: Sendable {
         dynamicEndpointKey: nil
     )
 
-    /// Google Gemini 3.1 Flash-Lite — JSON `generateContent` endpoint, base64
-    /// inline audio, defensive verbatim-transcription prompt. Per-provider
-    /// body factory in `Providers/GeminiSTTProvider.swift`.
+    /// Google Gemini — dedicated speech model on the JSON Interactions
+    /// endpoint, base64 inline audio. The endpoint is FIXED: the model rides
+    /// the request body, so an override never rebuilds the URL. Per-provider
+    /// body factory (and the reason this is not `:generateContent`) in
+    /// `Providers/GeminiSTTProvider.swift`.
+    ///
+    /// The `id` names a model this provider no longer pins. DO NOT "fix" it:
+    /// it is a FROZEN STORAGE KEY, not a model reference — the Keychain
+    /// account suffix (`stt.apiKey.gemini-3-1-flash-lite`) and the
+    /// `stt.customModel.<id>` override key both derive from it, so renaming it
+    /// orphans the user's saved API key and their model override.
     // DO NOT RENAME — Keychain account suffixes depend on this string
-    static let geminiFlashLite = STTProvider(
+    static let gemini = STTProvider(
         id: "gemini-3-1-flash-lite",
-        transcribeURL: STTProvider.geminiEndpoint(model: "gemini-3.1-flash-lite"),
+        transcribeURL: URL(string: "https://generativelanguage.googleapis.com/v1beta/interactions")!,
+        // Key-liveness only. This is the Generative Language API's model
+        // listing, NOT an Interactions capability check — it proves Google
+        // accepted the key, not that transcription will produce text. The
+        // end-to-end check is `CloudSTTTester`.
         probeURL: URL(string: "https://generativelanguage.googleapis.com/v1beta/models"),
-        model: "gemini-3.1-flash-lite",
+        model: "gemini-3.5-transcribe",
         auth: .headerName("x-goog-api-key"),
         transport: .json,
-        // 20 MB JSON cap on the generativelanguage endpoint. Binary capped
-        // at 14 MB so base64 (~19 MB) plus the JSON envelope (prompt + part
-        // wrappers) stays comfortably under the request limit — a 15 MB
-        // binary would leave zero headroom for the envelope.
+        // 20 MB total-request cap on the generativelanguage endpoint. This
+        // binary cap is TIGHT, not comfortable: base64 of 14 MiB is ~19.57 MB,
+        // leaving only ~430 KB for the JSON envelope. It is a proxy, not a
+        // guarantee — `STTClient` preflights the ENCODED body length, which is
+        // the number the endpoint actually measures.
         maxAudioBytes: 14 * 1024 * 1024,
         maxAudioSeconds: 300,
         multipartFieldNames: nil,
@@ -297,7 +286,8 @@ struct STTProvider: Sendable {
     /// already pays OpenRouter for chat can use one account for voice too (the
     /// key may be cross-reused between the two — see SettingsViewModel). Default
     /// model `openai/whisper-large-v3` (undated, OpenRouter's own example);
-    /// user-overridable (slash-bearing IDs preserved, see `modelInURL`).
+    /// user-overridable; slash-bearing IDs like `openai/whisper-large-v3` are
+    /// preserved, since the model is a body VALUE and never a URL path segment.
     /// Key-validation probe is `GET /v1/key` (OpenRouter's `/v1/models` is PUBLIC
     /// — same reason the gateway probes `/v1/key`). 14 MB binary cap so base64
     /// (~19 MB) plus the JSON envelope stays under request limits (mirrors
@@ -435,7 +425,7 @@ struct STTProvider: Sendable {
         .mistralVoxtral,
         .openAITranscribe,
         .elevenLabsScribe,
-        .geminiFlashLite,
+        .gemini,
         .openRouter,
         // Qwen (`.qwenASRFlash`) deliberately UNLISTED — pulled from the
         // user-facing supported list pending a live wire-shape verification

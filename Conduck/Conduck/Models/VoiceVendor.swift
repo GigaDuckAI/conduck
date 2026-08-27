@@ -144,7 +144,8 @@ enum VoiceVendorRegistry {
         isOnDevice: false
     )
 
-    /// Gemini — STT + TTS both shipped on one key. TTS via
+    /// Gemini — STT + TTS both shipped on one key. STT runs the dedicated
+    /// speech model on the Interactions endpoint; TTS via
     /// `gemini-3.1-flash-tts-preview` (`gemini-tts`): the user pastes one Gemini
     /// key for speech-to-text and gets text-to-speech from the same vendor, zero
     /// extra setup. Renders the active voice-field + "Speak a sample" TTS UI.

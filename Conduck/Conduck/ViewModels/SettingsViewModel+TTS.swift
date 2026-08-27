@@ -317,7 +317,8 @@ extension SettingsViewModel {
     /// re-renders without a KVS round-trip. Mirrors `saveCustomModel(_:for:)`.
     func saveTTSCustomModel(_ model: String, for providerID: String) async {
         // Body-model providers (OpenRouter et al.) keep `/`; URL-path models
-        // (Gemini `.generateContent`) strip it — see `TTSProvider.modelInURL`.
+        // (Gemini TTS `.generateContent`) strip it — the last model-in-URL
+        // surface in the app. See `TTSProvider.modelInURL`.
         let sanitized = Self.sanitizeModelTag(model, allowsSlash: !TTSProvider.lookup(id: providerID).modelInURL)
         await SettingsManager.shared.setTTSCustomModel(sanitized.isEmpty ? nil : sanitized,
                                                        forProviderID: providerID)

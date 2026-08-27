@@ -10,7 +10,7 @@
 //
 //  Multipart-family providers (Mistral Voxtral V2, OpenAI gpt-4o-transcribe,
 //  ElevenLabs Scribe v2) use `buildMultipartData` / `writeToFile`. JSON-
-//  family providers (Gemini 3.1 Flash-Lite, Qwen3-ASR-Flash) do NOT go
+//  family providers (Gemini, Qwen3-ASR-Flash) do NOT go
 //  through this type's body methods — `WatchNetworkClient` / `WatchAudioUploader`
 //  call into `provider.jsonBodyFactory!` directly. This struct still carries
 //  the audio + language + provider record across the two paths.
@@ -39,8 +39,8 @@ struct WatchSTTRequest {
 
     /// Wire-level model tag for the active provider, honoring a per-preset
     /// custom override when present (Feature 1). For the multipart family this
-    /// drives the `model` form field; for Gemini the override instead rewrites
-    /// the URL path at the upload sites (`provider.effectiveTranscribeURL`).
+    /// drives the `model` form field; for the JSON family (Gemini, Qwen) it
+    /// drives the body's model tag. No provider carries it in the URL any more.
     var model: String { provider.effectiveModel(customModel: customModel) }
 
     /// Explicit memberwise init with `customModel` defaulting to nil — keeps the

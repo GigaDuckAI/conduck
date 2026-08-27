@@ -14087,13 +14087,13 @@
         }
       }
     },
-    "settings.stt.provider.gemini.language" : {
+    "settings.stt.provider.gemini.language.v2" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "100+ languages · transcribes via LLM (not pure ASR)"
+            "value" : "100+ languages · dedicated speech model"
           }
         }
       }
@@ -19188,6 +19188,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Should be back in a minute or two."
+          }
+        }
+      }
+    },
+    "stt.error.gemini.badRequest" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That request was rejected. Check the model name in Advanced settings."
+          }
+        }
+      }
+    },
+    "stt.error.gemini.modelNotFound" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That model is not available. Check the model name in Advanced settings."
           }
         }
       }

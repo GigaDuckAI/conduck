@@ -8,14 +8,14 @@
 // already covered (`OpenRouterSTTTests`), these two had ZERO tests.
 //
 // What this file pins (and why it must fail if any drifts):
-//   - Gemini request: the LOCKED snake_case keys (contents/parts/inline_data/
-//     mime_type), the verbatim defensive `basePrompt` text part, and the
-//     inline_data part (mime_type=="audio/mp4" + base64 audio). The prompt is
-//     the prompt-injection mitigation posture (GeminiSTTProvider.swift §13-22),
-//     so a silent reword is a security regression we want caught.
-//   - Gemini decode branches: candidates→joined+trimmed text; empty+blockReason
-//     → `.audioProcessingFailed` (locked safety-block mapping); empty+no
-//     blockReason → `.sttDecodingFailure`; malformed → `.sttDecodingFailure`.
+//   - Gemini request: the LOCKED Interactions keys (model/store/input/
+//     mime_type/generation_config/transcription_config) and the base64 audio
+//     part. `store:false` is pinned here because it is a PRIVACY posture, not a
+//     tuning knob — the endpoint retains requests by default, so a silent drop
+//     of that flag starts logging users' audio.
+//   - Gemini DECODE branches live in `Providers/GeminiSTTProviderTests.swift`,
+//     which owns the structural-absence vs explicit-empty distinction in full.
+//     Not duplicated here.
 //   - Qwen request: model present, the data-URI audio wrapper
 //     (`data:audio/mp4;base64,…`), and `parameters.asr_options` snake_case keys
 //     (language == "auto" when nil / the hint when set, enable_itn == false).
@@ -57,118 +57,74 @@ final class GeminiQwenSTTWireTests: XCTestCase {
                        "Expected \(expected), got \(appErr)", file: file, line: line)
     }
 
-    // MARK: - Gemini request body
+    // MARK: - Gemini request body (Interactions wire lock)
 
-    func testGeminiBuildRequestBodyLockedSnakeCaseKeysAndPromptAndAudio() throws {
-        let audio = Data([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11])
-        // model is intentionally ignored by Gemini (lives in the URL path).
-        let body = try GeminiSTT.buildRequestBody(audioData: audio, language: nil, model: "ignored-model")
+    func testGeminiBuildRequestBodyLockedInteractionsKeys() throws {
+        let body = try GeminiSTT.buildRequestBody(audioData: Data([0x01, 0x02, 0x03]),
+                                                  language: nil,
+                                                  model: STTProvider.gemini.model)
         let json = try decodeBody(body)
 
-        // Top-level locked key: `contents` (array).
-        let contents = try XCTUnwrap(json["contents"] as? [[String: Any]],
-                                     "Gemini body must carry a top-level `contents` array.")
-        XCTAssertEqual(contents.count, 1)
+        // Model rides the BODY (it rode the URL path before the migration).
+        XCTAssertEqual(json["model"] as? String, "gemini-3.5-transcribe")
 
-        // `parts` array under the single content.
-        let parts = try XCTUnwrap(contents[0]["parts"] as? [[String: Any]],
-                                  "Content must carry a `parts` array.")
-        XCTAssertEqual(parts.count, 2, "Exactly a text part + an inline_data part.")
+        // PRIVACY posture, not a tuning knob — see the file header.
+        XCTAssertEqual(json["store"] as? Bool, false,
+                       "store:false must be pinned: the Interactions API retains requests by default.")
 
-        // Part 0 = text part starting with the verbatim base prompt.
-        let textPart = try XCTUnwrap(parts[0]["text"] as? String,
-                                     "First part must be the text prompt.")
-        XCTAssertTrue(textPart.hasPrefix(Self.geminiBasePrompt),
-                      "Text part must start with the verbatim locked defensive prompt.")
-        // With nil language, the prompt is EXACTLY the base prompt (no suffix).
-        XCTAssertEqual(textPart, Self.geminiBasePrompt,
-                       "With no language hint the prompt must be the base prompt unmodified.")
+        let input = try XCTUnwrap(json["input"] as? [[String: Any]])
+        XCTAssertEqual(input.count, 1, "The dedicated model takes audio only — no prompt part.")
+        XCTAssertEqual(input[0]["type"] as? String, "audio")
+        XCTAssertEqual(input[0]["mime_type"] as? String, "audio/mp4", "snake_case key, locked")
+        XCTAssertEqual(input[0]["data"] as? String, "AQID", "base64 of 0x010203")
 
-        // Part 1 = inline_data with locked snake_case keys.
-        let inlineData = try XCTUnwrap(parts[1]["inline_data"] as? [String: Any],
-                                       "Second part must use the LOCKED snake_case key `inline_data`.")
-        XCTAssertEqual(inlineData["mime_type"] as? String, "audio/mp4",
-                       "inline_data must use snake_case `mime_type` == audio/mp4 (AAC-in-MP4 pipeline output).")
-        XCTAssertEqual(inlineData["data"] as? String, audio.base64EncodedString(),
-                       "Audio must be sent as base64 in inline_data.data.")
+        let genConfig = try XCTUnwrap(json["generation_config"] as? [String: Any],
+                                      "snake_case `generation_config`, locked")
+        let transcription = try XCTUnwrap(genConfig["transcription_config"] as? [String: Any],
+                                          "snake_case `transcription_config`, locked")
+        XCTAssertEqual((transcription["mode"] as? [String: Any])?["type"] as? String, "verbatim")
+
+        // The OLD endpoint's keys must be entirely absent.
+        XCTAssertNil(json["contents"], "`contents` belongs to the retired :generateContent shape.")
+        XCTAssertFalse(String(data: body, encoding: .utf8)!.contains("inline_data"),
+                       "`inline_data` belongs to the retired :generateContent shape.")
     }
 
-    func testGeminiAppendsLanguageHintToPrompt() throws {
-        let audio = Data([0x01, 0x02])
-        let body = try GeminiSTT.buildRequestBody(audioData: audio, language: "zh", model: "m")
-        let json = try decodeBody(body)
-        let contents = try XCTUnwrap(json["contents"] as? [[String: Any]])
-        let parts = try XCTUnwrap(contents[0]["parts"] as? [[String: Any]])
-        let textPart = try XCTUnwrap(parts[0]["text"] as? String)
-
-        XCTAssertEqual(textPart, Self.geminiBasePrompt + " Language: zh.",
-                       "A non-empty language hint must be appended verbatim as ' Language: <lang>.'")
+    func testGeminiLanguageHintRidesTranscriptionConfig() throws {
+        let body = try GeminiSTT.buildRequestBody(audioData: Data([0x01]),
+                                                  language: "pt",
+                                                  model: STTProvider.gemini.model)
+        let transcription = try XCTUnwrap(
+            (try decodeBody(body)["generation_config"] as? [String: Any])?["transcription_config"]
+            as? [String: Any])
+        XCTAssertEqual(transcription["language_codes"] as? [String], ["pt"],
+                       "Bare BCP-47 tags are accepted as-is — no region/script mapping.")
     }
 
-    func testGeminiEmptyLanguageOmitsHint() throws {
-        let audio = Data([0x01])
-        let body = try GeminiSTT.buildRequestBody(audioData: audio, language: "", model: "m")
-        let json = try decodeBody(body)
-        let contents = try XCTUnwrap(json["contents"] as? [[String: Any]])
-        let parts = try XCTUnwrap(contents[0]["parts"] as? [[String: Any]])
-        let textPart = try XCTUnwrap(parts[0]["text"] as? String)
-
-        XCTAssertEqual(textPart, Self.geminiBasePrompt,
-                       "An empty-string language hint must be treated as no hint (base prompt only).")
-    }
-
-    // MARK: - Gemini decode
-
-    func testGeminiDecodeJoinsAndTrimsCandidateTextParts() throws {
-        // Two text parts in the first candidate → concatenated then trimmed.
-        let payload = #"""
-        {"candidates":[{"content":{"parts":[{"text":"  Hello "},{"text":"world  "}]}}]}
-        """#
-        let response = try GeminiSTT.decodeResponse(Data(payload.utf8))
-        XCTAssertEqual(response.text, "Hello world",
-                       "Gemini decode must concat all text parts of candidate 0, then trim outer whitespace.")
-        XCTAssertNil(response.language, "Gemini does not echo a detected language.")
-    }
-
-    func testGeminiDecodeEmptyCandidatesWithBlockReasonIsAudioProcessingFailed() {
-        // Safety-block path: candidates empty AND a non-empty blockReason.
-        let payload = #"{"candidates":[],"promptFeedback":{"blockReason":"SAFETY"}}"#
-        XCTAssertThrowsError(try GeminiSTT.decodeResponse(Data(payload.utf8))) { error in
-            assertAppError(error, is: .audioProcessingFailed)
+    func testGeminiEmptyLanguageOmitsLanguageCodes() throws {
+        for hint in [nil, ""] as [String?] {
+            let body = try GeminiSTT.buildRequestBody(audioData: Data([0x01]),
+                                                      language: hint,
+                                                      model: STTProvider.gemini.model)
+            let transcription = try XCTUnwrap(
+                (try decodeBody(body)["generation_config"] as? [String: Any])?["transcription_config"]
+                as? [String: Any])
+            XCTAssertNil(transcription["language_codes"],
+                         "No hint must OMIT the key (auto-detect), never send an empty array.")
         }
     }
 
-    func testGeminiDecodeEmptyCandidatesNoBlockReasonIsDecodingFailure() {
-        // No candidates and no blockReason → generic shape failure.
-        let payload = #"{"candidates":[]}"#
-        XCTAssertThrowsError(try GeminiSTT.decodeResponse(Data(payload.utf8))) { error in
-            assertAppError(error, is: .sttDecodingFailure)
-        }
-    }
-
-    func testGeminiDecodeEmptyBlockReasonStringIsDecodingFailure() {
-        // An empty-string blockReason must NOT trigger the safety path (the
-        // guard requires `!block.isEmpty`).
-        let payload = #"{"candidates":[],"promptFeedback":{"blockReason":""}}"#
-        XCTAssertThrowsError(try GeminiSTT.decodeResponse(Data(payload.utf8))) { error in
-            assertAppError(error, is: .sttDecodingFailure)
-        }
-    }
-
-    func testGeminiDecodeWhitespaceOnlyTextIsNoSpeech() {
-        // A candidate whose joined text trims to empty is "no speech" (a valid
-        // 2xx with no usable transcript), NOT a shape failure — surfaced
-        // uniformly across providers.
-        let payload = #"{"candidates":[{"content":{"parts":[{"text":"   "}]}}]}"#
-        XCTAssertThrowsError(try GeminiSTT.decodeResponse(Data(payload.utf8))) { error in
-            assertAppError(error, is: .noSpeechDetected)
-        }
-    }
-
-    func testGeminiDecodeMalformedJSONIsDecodingFailure() {
-        XCTAssertThrowsError(try GeminiSTT.decodeResponse(Data("not json".utf8))) { error in
-            assertAppError(error, is: .sttDecodingFailure)
-        }
+    /// The defensive prompt survives only for a general model reached through
+    /// the Advanced override — the dedicated model ignores it, and a silent
+    /// reword there is still a posture change worth catching.
+    func testGeminiOverrideModelKeepsVerbatimDefensivePrompt() throws {
+        let body = try GeminiSTT.buildRequestBody(audioData: Data([0x01]),
+                                                  language: nil,
+                                                  model: "gemini-3.1-flash-lite")
+        let input = try XCTUnwrap(try decodeBody(body)["input"] as? [[String: Any]])
+        let textPart = try XCTUnwrap(input.first { $0["type"] as? String == "text" })
+        XCTAssertEqual(textPart["text"] as? String, Self.geminiBasePrompt,
+                       "The locked defensive prompt must reach a general override model verbatim.")
     }
 
     // MARK: - Qwen request body
