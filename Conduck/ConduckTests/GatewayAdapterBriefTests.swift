@@ -77,13 +77,26 @@ final class GatewayAdapterBriefTests: XCTestCase {
             "never reject a request because an earlier message contains an image",
             "An image was attached in this earlier message, but this adapter cannot inspect it. Do not infer its contents.",
 
-            // Error-code vocabulary (all seven frozen codes)
+            // Error-code vocabulary (all eight frozen codes; image_unsupported is
+            // asserted under Images above)
             "model_not_found",
             "context_too_long",
             "image_too_large",
+            "body_too_large",
             "overloaded",
             "upstream_timeout",
             "upstream_failure",
+
+            // Revision 1.10 clauses (one distinctive substring per moved clause,
+            // so the pin cannot read 1.10 while the string quietly loses one)
+            "outside any queue you serialize chat through",   // item 2: models route
+            "never write the answer yourself",                 // item 3: answers-by-doing
+            "not an inline data: URI",                         // item 4: no remote fetch
+            "The user sent an image with no accompanying text.", // item 4: verbatim carrier
+            "Accepting that much is not forwarding it",        // item 6: floor ≠ forward
+            "Connection: close on every response",             // item 7: simplest reuse policy
+            "confine the engine",                              // item 9: @path conservative end
+            "stopped at its own step cap",                     // item 10: length semantics
         ]
         for needle in required {
             XCTAssertTrue(

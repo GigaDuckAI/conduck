@@ -249,7 +249,7 @@ struct GatewayAdapterBriefView: View {
     /// source, never stales on a contract revision) — deliberately NARROWED to
     /// stop before that brief's exposure and pairing, because this guided flow
     /// owns those via `conduck-connect` — with a self-contained fallback list for
-    /// tools without web access, aligned to contract revision 1.9. The full
+    /// tools without web access, aligned to contract revision 1.10. The full
     /// contract is at `Constants.adapterContractURL`; both raw `.md` URLs are
     /// hardcoded inline below. `internal` so a content-lock test can read it via
     /// `@testable import`.
@@ -299,6 +299,43 @@ struct GatewayAdapterBriefView: View {
     /// `429`/`503` and `401`-before-`404` harmonizations (items 5 and 6 never
     /// pinned those statuses).
     ///
+    /// Revision 1.10 is clarifications plus one additive error code, and it
+    /// moves small clauses in EIGHT items, all additive: item 2 (the models
+    /// route stays answerable while a chat turn runs), item 3 (turns that
+    /// answer by DOING — a no-words turn is the empty-content error, rendered
+    /// tool calls get stripped, and a framework "success" whose text is an
+    /// error message becomes an error response — both named as a 502), item 4
+    /// (an `image_url` that is not an inline data: URI is malformed — 400,
+    /// never fetched; and the verbatim neutral-carrier sentence for an
+    /// image-only message when the engine refuses an empty prompt), item 5
+    /// (`body_too_large` joins the vocabulary; parse strictly inbound too),
+    /// item 6 (accepting the 50 MiB floor does not oblige forwarding it to an
+    /// engine that measurably dies on it), item 7 (the simplest conforming
+    /// reuse policy — `Connection: close` on every response — stated
+    /// outright), item 9 (the `@path` rule, taken to its conservative end —
+    /// where disabling fails, confine and disclose; the contract's middle
+    /// branch, an escaping the model never sees, is deliberately not carried
+    /// into this list, because an offline builder cannot test that the
+    /// escaping is invisible), item 10 (an agent loop stopped at its step cap
+    /// reports "length" when the cap is what ended the answer). The rest of
+    /// 1.10 moves nothing here: the pairing-payload spec and `--emit-code`
+    /// (this guided flow owns pairing — naming a minting command in an
+    /// autonomous agent's brief would cross the same boundary the absent
+    /// `--setup` guards), the file-lane username/permissions/cwd rules plus
+    /// the adapter-supplied/mode-gated file-tool patterns and the
+    /// escalation-argument trap (out of scope by the 1.7 boundary above), the
+    /// self-test `PORT` variable (this string pins `8480` deliberately — the
+    /// operator chose the port in this flow), the chunked-body/`411`
+    /// resolution (Conduck's own chat POSTs always carry `Content-Length`, so
+    /// a builder of this string never meets the case), the few-seconds bound
+    /// on an early `429`/`503` (items 5 and 6 never pinned queueing behavior
+    /// — the 1.9 entry records the same reason), the earlier-image-disclosure
+    /// legitimacy note (item 4 already states forward-or-disclose for earlier
+    /// messages unconditionally, vision or not), and the checker
+    /// `revision=`-comparison explanation (this guided flow runs the check
+    /// itself; the string already tells the agent to record the revision it
+    /// builds against).
+    ///
     /// **Workflow-ownership boundary — the load-bearing rule of this string.**
     /// This text is pasted into an AUTONOMOUS coding agent, so what it can act on
     /// is exactly what it is handed. It therefore carries the adapter-check
@@ -328,15 +365,15 @@ struct GatewayAdapterBriefView: View {
 
     If you can't fetch those URLs, these core requirements are enough:
     1. Keep my agent exactly as it is. Add a separate, small HTTP service in front of it.
-    2. GET /v1/models -> 200 with {"data":[{"id":"<agent-name>"}]} within 15 seconds, no cold starts on this route. Auth-protected like everything else.
-    3. POST /v1/chat/completions (OpenAI chat format; the final messages element is always the current turn and always role "user"; consecutive messages MAY share a role — two "user" messages in a row is a real shape, so accept it and, if your engine needs strict alternation, combine each run of same-role messages in order rather than dropping or reordering any; the body carries the complete current message window on every request — it is bounded and may slide, so run each request as a fresh, self-contained conversation and never de-duplicate by message content; "content" may be a string or an array of text and image_url parts) -> run ONE complete agent turn — including any tools — and return 200 with {"choices":[{"message":{"role":"assistant","content":"<final answer text>"}}]}. Never return tool_calls; never stream — answer with ONE synchronous JSON body however the request asks: do not branch on "stream": true, and do not branch on the Accept header either (no request earns a stream, and the conformance check asks both ways; Conduck itself always sends "stream": false, but never rely on that); never return an empty "content" string (error instead); finish within 285 seconds or cancel the work — terminating the whole child process tree — and return an error.
-    4. Images: on the current turn (the final messages element), forward images if my agent accepts them, and never silently drop one — if my agent can't take images, reject with 400 and code "image_unsupported". An agent whose only image input is a file-reading tool or an attachment argument still counts as accepting images: write the decoded image to a per-turn temp file it can read and hand it the path (delete the file when the turn ends) — only the image's position among the text parts is lost, never the image. For EARLIER messages, never reject a request because an earlier message contains an image — forward it, or replace it in-position with exactly this text: "An image was attached in this earlier message, but this adapter cannot inspect it. Do not infer its contents."
-    5. Errors are {"error":{"message":"...","type":"...","code":"..."}} with a non-2xx status. Use these codes where they fit: image_unsupported, model_not_found (400 — a "model" value matching nothing you advertise), context_too_long, image_too_large, overloaded, upstream_timeout, upstream_failure. Be lenient otherwise: tolerate a present OR absent "model" field and ignore unknown extra fields (never reject on them). Always respond with Content-Type: application/json and STRICT standard JSON — never NaN or Infinity anywhere in the body (Python's json.dumps allows them by default; the app rejects the whole response).
-    6. Require "Authorization: Bearer <token>" on every request, including /v1/models (long random token, stored outside the code), and check it before any other work. Bind to 127.0.0.1 only. Accept request bodies of at least 50 MiB — an image turn legitimately arrives that big.
-    7. If you answer a request before reading its body to the end (a 401, a 413), either drain the remainder or close the connection — never leave it and read the next request off the same one. Loopback curl cannot catch this; behind a pooling HTTPS front it corrupts later requests that are themselves fine.
+    2. GET /v1/models -> 200 with {"data":[{"id":"<agent-name>"}]} within 15 seconds, no cold starts on this route and no waiting behind a chat turn (answer it outside any queue you serialize chat through). Auth-protected like everything else.
+    3. POST /v1/chat/completions (OpenAI chat format; the final messages element is always the current turn and always role "user"; consecutive messages MAY share a role — two "user" messages in a row is a real shape, so accept it and, if your engine needs strict alternation, combine each run of same-role messages in order rather than dropping or reordering any; the body carries the complete current message window on every request — it is bounded and may slide, so run each request as a fresh, self-contained conversation and never de-duplicate by message content; "content" may be a string or an array of text and image_url parts) -> run ONE complete agent turn — including any tools — and return 200 with {"choices":[{"message":{"role":"assistant","content":"<final answer text>"}}]}. Never return tool_calls; never stream — answer with ONE synchronous JSON body however the request asks: do not branch on "stream": true, and do not branch on the Accept header either (no request earns a stream, and the conformance check asks both ways; Conduck itself always sends "stream": false, but never rely on that); never return an empty "content" string (error instead) — and an engine that did the work but produced no words is that same error (a 502): never write the answer yourself. If the engine renders tool calls or reasoning into its message text, strip that machinery and return the last message that still contains an actual answer. Check the engine's own success signal too: a framework "success" whose text is an error message must become an error response (a 502), never a confident 200. Finish within 285 seconds or cancel the work — terminating the whole child process tree — and return an error.
+    4. Images: on the current turn (the final messages element), forward images if my agent accepts them, and never silently drop one — if my agent can't take images, reject with 400 and code "image_unsupported". An image_url that is not an inline data: URI is malformed: reject with 400 and never fetch it. An image-only message is valid — its text part arrives empty; if my agent refuses an empty prompt, put exactly this sentence in the empty text's place and nothing more: "The user sent an image with no accompanying text." An agent whose only image input is a file-reading tool or an attachment argument still counts as accepting images: write the decoded image to a per-turn temp file it can read and hand it the path (delete the file when the turn ends) — only the image's position among the text parts is lost, never the image. For EARLIER messages, never reject a request because an earlier message contains an image — forward it, or replace it in-position with exactly this text: "An image was attached in this earlier message, but this adapter cannot inspect it. Do not infer its contents."
+    5. Errors are {"error":{"message":"...","type":"...","code":"..."}} with a non-2xx status. Use these codes where they fit: image_unsupported, model_not_found (400 — a "model" value matching nothing you advertise), context_too_long, image_too_large, body_too_large (413 refused from Content-Length alone, where you can't know an image is to blame), overloaded, upstream_timeout, upstream_failure. Be lenient otherwise: tolerate a present OR absent "model" field and ignore unknown extra fields (never reject on them). Always respond with Content-Type: application/json and STRICT standard JSON — never NaN or Infinity anywhere in the body (Python's json.dumps allows them by default; the app rejects the whole response), and parse strictly on the way in too (json.loads accepts NaN by default).
+    6. Require "Authorization: Bearer <token>" on every request, including /v1/models (long random token, stored outside the code), and check it before any other work. Bind to 127.0.0.1 only. Accept request bodies of at least 50 MiB — an image turn legitimately arrives that big. Accepting that much is not forwarding it: if my engine demonstrably dies on a near-cap request, decline with 400 and code "context_too_long" instead of passing it on.
+    7. If you answer a request before reading its body to the end (a 401, a 413), either drain the remainder or close the connection — never leave it and read the next request off the same one. Loopback curl cannot catch this; behind a pooling HTTPS front it corrupts later requests that are themselves fine. Simplest conforming policy: send Connection: close on every response — nothing here needs keep-alive.
     8. Install it under a supervisor (launchd, systemd, or equivalent) so it survives restarts and logouts, then re-run both checks against the SUPERVISED instance — a supervisor changes the environment, working directory and user, so a green foreground run proves nothing about it.
-    9. Safety: never pass chat text through a shell; if the engine expands @path-style file references inside prompt text, disable that (it lets chat content read files with no shell involved); tool approvals fail closed (no auto-approve-everything); never log message content or tokens.
-    10. Optional, but do it if you can: alongside "choices", report top-level "model" and "id", a "usage" object with prompt_tokens / completion_tokens / total_tokens, and a "finish_reason" on the single choices entry. All four are optional and omitting them is fully conformant. Report a number only when you actually have it — never a placeholder zero — and make "usage" cover the WHOLE turn (every model call the agent made answering it, tool loops and sub-agents included), since a figure covering one call out of several is worse than no figure. If the engine stopped on an output limit, say so with "finish_reason": "length".
+    9. Safety: never pass chat text through a shell; if the engine expands @path-style file references inside prompt text, disable that (it lets chat content read files with no shell involved), and if it cannot be disabled, confine the engine so chat can only reach files you would hand it anyway — and say so when you hand back; tool approvals fail closed (no auto-approve-everything); never log message content or tokens.
+    10. Optional, but do it if you can: alongside "choices", report top-level "model" and "id", a "usage" object with prompt_tokens / completion_tokens / total_tokens, and a "finish_reason" on the single choices entry. All four are optional and omitting them is fully conformant. Report a number only when you actually have it — never a placeholder zero — and make "usage" cover the WHOLE turn (every model call the agent made answering it, tool loops and sub-agents included), since a figure covering one call out of several is worse than no figure. If the engine stopped on an output limit, say so with "finish_reason": "length" — an agent loop that stopped at its own step cap counts too, but only when the cap is what cut the answer short, not when it merely closed the loop after a complete answer.
 
     If you can reach GitHub but not conduck.com, you can still run the automated conformance check — download it and pass the URL and token explicitly, never bare (with no URL it waits at an interactive prompt and a non-interactive run dies there):
     curl -fsSLO https://github.com/gigaduckai/conduck-connect/releases/latest/download/conduck-connect.sh
