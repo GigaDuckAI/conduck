@@ -3622,6 +3622,17 @@
         }
       }
     },
+    "error.recipeLink.howToFix" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How to fix this"
+          }
+        }
+      }
+    },
     "error.unreachable.retry" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11003,6 +11014,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Already signed in and it still fails? Turn off iCloud Private Relay — Settings › your name › iCloud › Private Relay. It can take over name lookups even while Tailscale says it is connected, so this gateway's address is looked up on the public internet instead of inside your tailnet."
+          }
+        }
+      }
+    },
+    "settings.pairing.tailscale.recipe" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tailscale Serve guide"
           }
         }
       }
