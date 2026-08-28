@@ -249,7 +249,19 @@ struct ContentView: View {
             }
             .task { await initialLoad() }
             .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .active { Task { await refreshOnForeground() } }
+                if newPhase == .active {
+                    Task { await refreshOnForeground() }
+                    // Foreground is one of the moments the toolbar should
+                    // re-state what it is showing (see the phone twin below). The `.task(id:)`
+                    // that covers "surface appears / ref changed" for this branch
+                    // lives in `ConversationLibraryView`, which owns the iPad
+                    // title control — but the scene belongs to this host, so the
+                    // foreground arm stays here. The monitor answers from the
+                    // verdict it already has when that verdict is fresh AND was
+                    // built from the same gateway config; a real absence, or a
+                    // gateway the user edited, re-probes.
+                    if let ref = presenceRef { GatewayPresenceMonitor.shared.observe(ref) }
+                }
             }
             .onChange(of: currentConversationID) { _, newID in
                 composerDraft = ""   // don't carry a half-typed draft into another thread
@@ -372,13 +384,25 @@ struct ContentView: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
-                Text(RemoteAgentRefMetadata.displayName(for: pickerSelectedRef, customs: customGateways))
-                    .font(.headline)
-                    .foregroundStyle(AppColors.textPrimary)
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(AppColors.textSecondary)
+            // Presence dot LEADING of the name — here and in both branches of
+            // `gatewayTitleControl`, so the mark keeps its position as the title
+            // control changes shape. Nested stacks on purpose: 6pt separates the
+            // dot (a statement about the gateway) from the name, while the inner
+            // 4pt stays the existing name-to-chevron affordance gap.
+            HStack(spacing: 6) {
+                // MUTE inside the control, spoken as the Menu's a11y VALUE
+                // below. SwiftUI folds a Menu's label subtree into ONE element
+                // and the explicit `.accessibilityLabel` overwrites it, so a dot
+                // that declared its own element here would simply never be heard.
+                GatewayPresenceDot(ref: presenceRef, standaloneAccessibility: false)
+                HStack(spacing: 4) {
+                    Text(RemoteAgentRefMetadata.displayName(for: pickerSelectedRef, customs: customGateways))
+                        .font(.headline)
+                        .foregroundStyle(AppColors.textPrimary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textSecondary)
+                }
             }
         }
 .accessibilityLabel(Text(LocalizedStringResource(
@@ -386,6 +410,9 @@ struct ContentView: View {
             defaultValue: "Choose AI"
         )))  // VoiceOver reads the taxonomy no visual review ever sees.
         .accessibilityIdentifier("toolbar.gatewayPicker")  // stable QA target (non-localized)
+        // …and the state the muted dot draws, as this element's VALUE:
+        // "Choose AI, Connected". No-op when there is no verdict to report.
+        .gatewayPresenceAccessibilityValue(for: presenceRef)
     }
 
     /// The nav-title display name, derived — never snapshotted. Inside a thread:
@@ -413,6 +440,30 @@ struct ContentView: View {
         ))
     }
 
+    /// The ref whose presence the toolbar dot reports: inside a thread the bound
+    /// gateway (ONLY while this device can still send on it), on the empty/new
+    /// state the picker selection (ONLY while it is configured here). Everything
+    /// else answers nil — and nil is what makes the dot DISAPPEAR rather than go
+    /// red. That is the spec rule "a conversation window says nothing about a
+    /// gateway you have not connected": red may only ever mean "configured, and
+    /// the probe failed", never "not set up". A thread bound to a forgotten
+    /// gateway therefore shows no dot at all; its recovery banner is the surface
+    /// that speaks about it.
+    ///
+    /// Same `conversationID` guard as `backendTitle`, for the same two reasons: a
+    /// thread switch must not briefly report the OUTGOING VM's gateway, and
+    /// during a first-turn mint the picked ref is the right answer for the window.
+    ///
+    /// TWIN of `ConversationLibraryView.presenceRef` and
+    /// `MainWindowView.presenceRef`. The three must not drift, the same way
+    /// `refreshGatewayRoster()` and `refreshConfiguredBackends()` must not.
+    private var presenceRef: RemoteAgentRef? {
+        if let vm = detailVM, vm.conversationID == currentConversationID {
+            return vm.boundGatewayAvailable ? vm.boundRef : nil
+        }
+        return configuredRefs.contains(pickerSelectedRef) ? pickerSelectedRef : nil
+    }
+
     /// The centered principal-toolbar control. Three-way: the gateway picker
     /// when a new/empty chat with ≥2 backends can pick; else a tappable title
     /// that folds in "Clone & continue" when the bound thread is clone-eligible
@@ -428,21 +479,33 @@ struct ContentView: View {
             gatewayPickerMenu
         } else if let vm = detailVM, vm.canSwitchGateway, vm.hasTurns, vm.boundGatewayAvailable {
             Button { vm.showingGatewaySheet = true } label: {
-                HStack(spacing: 4) {
-                    Text(backendTitle)
-                        .font(.headline)
-                        .foregroundStyle(AppColors.textPrimary)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(AppColors.textSecondary)
+                HStack(spacing: 6) {
+                    // Muted here for the same reason as the picker Menu above —
+                    // the Button's own label would discard it.
+                    GatewayPresenceDot(ref: presenceRef, standaloneAccessibility: false)
+                    HStack(spacing: 4) {
+                        Text(backendTitle)
+                            .font(.headline)
+                            .foregroundStyle(AppColors.textPrimary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(AppColors.textSecondary)
+                    }
                 }
             }
             .accessibilityLabel(Text(LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway")))
             .accessibilityIdentifier("toolbar.cloneGateway")
+            .gatewayPresenceAccessibilityValue(for: presenceRef)   // the muted dot's state, as this element's value
         } else {
-            Text(backendTitle)
-                .font(.headline)
-                .foregroundStyle(AppColors.textPrimary)
+            // Wrapped so the static branch carries the dot too: the read-only
+            // title is where a bound thread spends most of its life, and it is
+            // the branch a single-gateway setup never leaves.
+            HStack(spacing: 6) {
+                GatewayPresenceDot(ref: presenceRef)
+                Text(backendTitle)
+                    .font(.headline)
+                    .foregroundStyle(AppColors.textPrimary)
+            }
         }
     }
 
@@ -634,8 +697,28 @@ struct ContentView: View {
             }
             #endif
             .task { await initialLoad() }
+            // Presence dot lifecycle. On the host body, NOT inside the
+            // `ToolbarItem` — a `.task` attached to toolbar content is not
+            // reliably run. `id:` re-fires whenever the reported ref changes
+            // (thread switch, picker move); the monitor's own reuse rule — a
+            // verdict that is still fresh AND was built from the same gateway
+            // config — is what keeps rapid switching from hammering the user's
+            // server, so this side stays a plain "tell it what is on screen".
+            .task(id: presenceRef) {
+                if let ref = presenceRef { GatewayPresenceMonitor.shared.observe(ref) }
+            }
             .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .active { Task { await refreshOnForeground() } }
+                if newPhase == .active {
+                    Task { await refreshOnForeground() }
+                    // Returning to the foreground is worth ASKING again: the
+                    // Mac or the network may have moved while we were suspended.
+                    // Asking is not probing — the monitor reuses the verdict it
+                    // has when that verdict is fresh AND the gateway's config is
+                    // unchanged, so a quick app-switch back does not flicker the
+                    // dot. A real absence, or a gateway the user edited, does
+                    // re-probe.
+                    if let ref = presenceRef { GatewayPresenceMonitor.shared.observe(ref) }
+                }
             }
             .onChange(of: currentConversationID) { oldID, newID in
                 #if os(iOS)
@@ -1122,6 +1205,22 @@ struct ContentView: View {
         // would reopen it.
         let snapshot = await SettingsManager.shared.newChatPickerSnapshot()
         let refs = snapshot.configuredRefs
+
+        // A roster refresh re-seeds the picker, so the ref the toolbar is
+        // reporting on may have just changed underneath it — re-stating what is
+        // on screen is this host's entire contribution. Whether that ref needs a
+        // PROBE is the monitor's call, not ours: it reuses a verdict that is
+        // still fresh and was built from the same URL / token / auth scheme /
+        // pin, and re-probes when any of those moved. So a settings-close that
+        // touched nothing costs no request, while an edited gateway cannot keep
+        // greening on a verdict about its old config.
+        //
+        // `defer`, not a line before each `return`: this function has two exits and
+        // both have to re-state, and it must run AFTER the re-seed below or it would
+        // observe the OUTGOING pick. Twin of `MainWindowView.refreshConfiguredBackends()`.
+        defer {
+            if let ref = presenceRef { GatewayPresenceMonitor.shared.observe(ref) }
+        }
 
         configuredRefs = refs
         customGateways = snapshot.badgeRoster

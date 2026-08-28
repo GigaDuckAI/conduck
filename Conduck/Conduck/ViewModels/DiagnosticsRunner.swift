@@ -1897,12 +1897,15 @@ final class DiagnosticsRunner {
         await reprobeConnectivity()
     }
 
-    /// Build ONE gateway's probe input from live local reads. The SINGLE
-    /// construction site, shared by the sweep and by `recheckGateway(for:)` —
-    /// `Why:` the two paths must not drift on `probePath` / `bodyShape` (the pair
-    /// that decides which envelope a 2xx body is validated against) or on the
-    /// locality bool that gates the Local-Network hint. Nil when the ref has no
-    /// snapshot (removed, or not send-able on this device).
+    /// Build ONE gateway's probe input from live local reads — the SWEEP's entry
+    /// to `makeGatewayProbeContext` below, dropping the signature a sweep row has
+    /// no use for. That context is the SINGLE construction site, shared with
+    /// `recheckGateway(for:)` and with `GatewayPresenceMonitor`, both of which
+    /// call it directly because they also need the signature — `Why:` the paths
+    /// must not drift on `probePath` / `bodyShape` (the pair that decides which
+    /// envelope a 2xx body is validated against) or on the locality bool that
+    /// gates the Local-Network hint. Nil when the ref has no snapshot (removed,
+    /// or not send-able on this device).
     ///
     /// The url/token/fingerprint flow ONLY onto the probe request — never into a
     /// check detail or the copy block.
@@ -1923,7 +1926,11 @@ final class DiagnosticsRunner {
     /// them both equal to B while the probe actually ran against A — and A's
     /// verdict would green B's configuration, which is precisely the false green
     /// the gate is there to stop.
-    private static func makeGatewayProbeContext(
+    ///
+    /// Internal, not private: `GatewayPresenceMonitor` builds its toolbar-dot
+    /// probe from this exact pair. Copying it there is what the "single
+    /// construction site" note above exists to prevent.
+    static func makeGatewayProbeContext(
         for ref: RemoteAgentRef,
         manager: SettingsManager
     ) async -> (input: GatewayProbeInput, signature: String)? {
@@ -2028,7 +2035,10 @@ final class DiagnosticsRunner {
     /// The live per-ref gateway signature, read fresh from persisted config.
     /// `Hasher` is fine here (dispatch and apply happen in ONE process, one run);
     /// it would NOT be fine for anything durable across launches.
-    private static func liveGatewaySignature(
+    ///
+    /// Internal, not private: `GatewayPresenceMonitor` runs the same
+    /// moved-mid-flight guard over its own probe.
+    static func liveGatewaySignature(
         for ref: RemoteAgentRef,
         manager: SettingsManager
     ) async -> String? {
@@ -3174,7 +3184,7 @@ final class DiagnosticsRunner {
 
     // MARK: - Off-actor probe workers (run on the global executor)
 
-    private struct GatewayProbeInput: Sendable {
+    struct GatewayProbeInput: Sendable {
         let checkID: String
         /// The REAL ref this row is about — the only field a failure's copy may
         /// be resolved from. `backend` below is a CARRIER (`.openclaw` stands in

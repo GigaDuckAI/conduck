@@ -1640,6 +1640,18 @@ enum Constants {
     /// where the LLM may take real time to compute the reply.
     static let remoteAgentTestConnectionTimeout: TimeInterval = 15
 
+    /// How long the chat toolbar's gateway presence dot reuses a verdict before
+    /// `GatewayPresenceMonitor` will probe again. NOT a poll interval — nothing
+    /// fires on a timer; this only decides whether an EVENT (chat surface
+    /// appears, displayed gateway changes, app returns to foreground) is
+    /// answered from the last verdict or costs the user's server another
+    /// request. 30 s is long enough that rapid thread switching and scene flaps
+    /// collapse into one probe, and short enough that returning to the app after
+    /// a real absence re-checks. A gateway that dies mid-session is reported by
+    /// the send itself, so a shorter window would buy nothing and cost the
+    /// user's server traffic they never asked for.
+    static let gatewayPresenceFreshness: TimeInterval = 30
+
     // MARK: - Agent File Transfer (user-run file-server)
     //
     // Network-layer + storage-key constants for the OWN-INFRA file-server

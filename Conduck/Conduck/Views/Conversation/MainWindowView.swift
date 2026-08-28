@@ -98,6 +98,12 @@ struct MainWindowView: View {
     /// `.onAppear`, which SwiftUI re-fires) so it stays stable across re-render.
     @State private var hostMascot = MascotShuffleBag.next()
 
+    /// Whether this window is the active one. macOS has no `scenePhase`
+    /// transition for "the window came forward", so this is what the presence
+    /// dot's foreground arm rides — the Mac twin of the iOS
+    /// `.onChange(of: scenePhase)` observe in `ContentView`.
+    @Environment(\.appearsActive) private var appearsActive
+
     /// Sidebar search text. Owned here (NOT by `ConversationListView`'s native
     /// `.searchable`, which iOS forces into the nav-bar area rather than inline
     /// in the column) and passed down via `externalSearchText` so the custom
@@ -521,6 +527,27 @@ struct MainWindowView: View {
         .onChange(of: currentMountIdentity) { _, _ in
             cancelDropWork()
         }
+        // Presence dot lifecycle. On the host body, NOT inside the `ToolbarItem`
+        // — a `.task` attached to toolbar content is not reliably run. `id:`
+        // re-fires whenever the reported ref changes (sidebar switch, picker
+        // move); the monitor's own reuse rule — a verdict that is still fresh
+        // AND was built from the same gateway config — is what keeps rapid
+        // switching from hammering the user's server, so this side stays a plain
+        // "tell it what is on screen". Twin of `ContentView`'s `.task(id: presenceRef)`.
+        .task(id: presenceRef) {
+            if let ref = presenceRef { GatewayPresenceMonitor.shared.observe(ref) }
+        }
+        // The Mac's foreground arm. There is no `scenePhase` transition for a
+        // window coming forward, so activation is the signal: the gateway or the
+        // network may have moved while the window sat behind something else.
+        // Asking is not probing — the monitor reuses the verdict it has when that
+        // verdict is fresh AND the gateway's config is unchanged, so clicking
+        // back into a window you left a moment ago does not flicker the dot. A
+        // real absence, or a gateway the user edited, does re-probe.
+        .onChange(of: appearsActive) { _, isActive in
+            guard isActive, let ref = presenceRef else { return }
+            GatewayPresenceMonitor.shared.observe(ref)
+        }
         .onAppear { onAppear() }
         // The coordinator's seed can land AFTER this view appears — its first
         // refresh is an actor hop, and nothing orders it against window mount. The
@@ -682,17 +709,53 @@ struct MainWindowView: View {
                 }
             }
         } label: {
-            // No explicit chevron here: AppKit already draws the Menu's own
-            // disclosure indicator, so a drawn one would render a second arrow.
+            // Chevron drawn HERE, and the pill chrome with it. macOS's DEFAULT
+            // menu style hands this to an AppKit popup button that keeps only
+            // the label's TEXT — every custom thing inside is dropped and the
+            // system draws its own tighter capsule instead (measured: ~5pt of
+            // horizontal inset, against the 14pt the sibling pills carry, plus
+            // a disclosure arrow of its own). `.menuStyle(.button)` below is
+            // what makes this label a real SwiftUI view, the same recipe
+            // `AttachmentMenu` uses for its paperclip, so the picker, the clone
+            // pill and the read-only label are finally ONE shape at ONE size.
             gatewayPillBackground(
-                Text(RemoteAgentRefMetadata.displayName(for: selectedRef, customs: customGateways))
-                    .foregroundStyle(AppColors.textSecondary)
+                HStack(spacing: 4) {
+                    Text(RemoteAgentRefMetadata.displayName(for: selectedRef, customs: customGateways))
+                        .font(.subheadline.weight(.semibold))
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                }
+                .foregroundStyle(AppColors.textSecondary)
             )
         }
+        .menuStyle(.button)
+        // Sets the button style `.menuStyle(.button)` renders with: no bezel of
+        // its own (the pill IS the chrome) plus the hover wash the clone pill
+        // gets, so the two interactive title-bar states behave identically.
+        .pointerIconButton(shape: .capsule)
         .help(String(localized: LocalizedStringResource(
             "chat.chooseAI.label",
             defaultValue: "Choose AI"
         )))
+    }
+
+    /// The ref whose presence the title-bar dot reports: inside a thread the
+    /// bound gateway (ONLY while this Mac can still send on it), on the new/empty
+    /// state the picker selection (ONLY while it is configured here). Everything
+    /// else answers nil — and nil makes the dot DISAPPEAR rather than go red.
+    /// That is the spec rule "a conversation window says nothing about a gateway
+    /// you have not connected": red may only ever mean "configured, and the probe
+    /// failed", never "not set up". A thread bound to a forgotten gateway shows
+    /// no dot at all; its recovery banner is the surface that speaks about it.
+    ///
+    /// TWIN of `ContentView.presenceRef` and `ConversationLibraryView.presenceRef`.
+    /// The three must not drift, the same way `refreshConfiguredBackends()` and
+    /// `ContentView.refreshGatewayRoster()` must not.
+    private var presenceRef: RemoteAgentRef? {
+        if let vm = coordinator.windowViewModel {
+            return vm.boundGatewayAvailable ? vm.boundRef : nil
+        }
+        return configuredRefs.contains(selectedRef) ? selectedRef : nil
     }
 
     /// Centered principal-toolbar content showing the gateway identity. Always
@@ -704,9 +767,33 @@ struct MainWindowView: View {
     /// `hasAnyConfiguredGateway`, never the quick lane's default-scoped flag: the
     /// picker below seeds itself to a gateway that can actually send, so the
     /// stored default not being one of them is no reason to blank the title bar.
+    ///
+    /// The presence dot sits BESIDE the control, not inside its label — the
+    /// opposite of the iPhone/iPad hosts. `Why:` there are three controls here
+    /// (picker / clone pill / read-only label) and only one of them is a pill
+    /// the dot could live inside on every path; parked outside, it holds the
+    /// SAME position no matter which branch renders, so switching threads never
+    /// makes it hop. It also keeps the dot out of a control's label, where
+    /// SwiftUI would fold it into that one element and the control's own
+    /// `.accessibilityLabel` would silently replace what it said. So the dot is
+    /// its own accessibility element here (standalone mode) and no control
+    /// carries a `gatewayPresenceAccessibilityValue` — one speaker, no
+    /// double-speak.
     @ViewBuilder
     private var gatewayToolbarContent: some View {
         if coordinator.hasAnyConfiguredGateway {
+            HStack(spacing: 6) {
+                GatewayPresenceDot(ref: presenceRef, diameter: 6)
+                gatewayControl
+            }
+        }
+    }
+
+    /// The three-way control itself (picker / clone pill / read-only label),
+    /// dot-free — see `gatewayToolbarContent` for why the dot is not in here.
+    @ViewBuilder
+    private var gatewayControl: some View {
+        Group {
             if let vm = coordinator.windowViewModel {
                 // Clone is now FOLDED into the centered gateway pill: when the
                 // thread is clone-eligible (bound, has turns, gateway available,
@@ -732,7 +819,7 @@ struct MainWindowView: View {
                     // title bar and looks identical to the read-only label next to
                     // it — so it needs the hover wash to tell them apart. Capsule,
                     // because `gatewayPillBackground` draws one; no
-                    // `horizontalPadding`, its 10pt inset is inside that pill.
+                    // `horizontalPadding`, its 14pt inset is inside that pill.
                     .pointerIconButton(shape: .capsule)
                     .help(String(localized: LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway")))
                     .accessibilityIdentifier("toolbar.cloneGateway")
@@ -742,7 +829,6 @@ struct MainWindowView: View {
                 }
             } else if configuredRefs.count >= 2 && !gatewaySelectionLocked {
                 gatewayPickerMenu
-                    .font(.subheadline.weight(.semibold))
                     .fixedSize()
             } else {
                 gatewayReadOnlyLabel(
@@ -754,17 +840,27 @@ struct MainWindowView: View {
 
     /// Shared pill chrome for the title-bar gateway controls (read-only label +
     /// interactive picker) so padding + shape match across both states.
+    ///
+    /// Sized to the title bar's other controls, not to its own text: 7pt of
+    /// vertical inset puts a `.subheadline` line in a ~30pt capsule, which is
+    /// the height of the leading New/Sidebar buttons — a name pill several
+    /// points shorter than the buttons beside it reads as an accident. 14pt
+    /// horizontally, because a capsule needs more side inset than a rounded
+    /// rect to look evenly padded at the same optical distance. Both clear
+    /// `MacPointer.minTarget` (28), so the hover wash lands ON the pill rather
+    /// than spilling past it.
     private func gatewayPillBackground(_ content: some View) -> some View {
         content
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
             .background(AppColors.cardBackgroundElevated, in: Capsule())
             .contentShape(Capsule())
     }
 
     /// Read-only gateway indicator (existing chat / single gateway): the backend
     /// name in a pill, no chevron, no tap — so the title bar natively reads
-    /// "info" here vs the interactive picker on a new chat.
+    /// "info" here vs the interactive picker on a new chat. Dot-free: the
+    /// presence dot sits beside every control in `gatewayToolbarContent`.
     private func gatewayReadOnlyLabel(_ name: String) -> some View {
         gatewayPillBackground(
             Text(name)
@@ -895,6 +991,22 @@ struct MainWindowView: View {
         // bug the hand-pick flag exists to close.
         let snapshot = await SettingsManager.shared.newChatPickerSnapshot()
         let refs = snapshot.configuredRefs
+
+        // A roster refresh re-seeds the picker, so the ref the title bar is
+        // reporting on may have just changed underneath it — re-stating what is
+        // on screen is this host's entire contribution. Whether that ref needs a
+        // PROBE is the monitor's call, not ours: it reuses a verdict that is
+        // still fresh and was built from the same URL / token / auth scheme /
+        // pin, and re-probes when any of those moved. So a settings-close that
+        // touched nothing costs no request, while an edited gateway cannot keep
+        // greening on a verdict about its old config.
+        //
+        // `defer`, not a line before each `return`: this function has two exits and
+        // both have to re-state, and it must run AFTER the re-seed below or it would
+        // observe the OUTGOING pick. Twin of `ContentView.refreshGatewayRoster()`.
+        defer {
+            if let ref = presenceRef { GatewayPresenceMonitor.shared.observe(ref) }
+        }
 
         configuredRefs = refs
         customGateways = snapshot.badgeRoster

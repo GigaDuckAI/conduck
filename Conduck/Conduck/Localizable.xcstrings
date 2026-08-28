@@ -947,6 +947,39 @@
         }
       }
     },
+    "chat.presence.checking" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checking connection"
+          }
+        }
+      }
+    },
+    "chat.presence.reachable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Connected"
+          }
+        }
+      }
+    },
+    "chat.presence.unreachable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not reachable"
+          }
+        }
+      }
+    },
     "chat.title.unconfigured" : {
       "localizations" : {
         "en" : {

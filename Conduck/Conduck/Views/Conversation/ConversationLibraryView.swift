@@ -354,6 +354,18 @@ struct ConversationLibraryView: View {
         .onChange(of: detailVM?.isAwaitingReply) { old, new in
             handleInFlightHaptic(from: old, to: new)
         }
+        // Presence dot lifecycle. On this body, NOT inside the `ToolbarItem` —
+        // a `.task` attached to toolbar content is not reliably run. `id:`
+        // re-fires whenever the reported ref changes (sidebar switch, picker
+        // move); the monitor's own reuse rule — a verdict that is still fresh AND
+        // was built from the same gateway config — absorbs rapid switching, so
+        // this side stays a plain "tell it what is on screen".
+        //
+        // The iPad's foreground arm is NOT here: the scene belongs to the host
+        // (`ContentView`, iPad branch), which observes on its own `scenePhase`.
+        .task(id: presenceRef) {
+            if let ref = presenceRef { GatewayPresenceMonitor.shared.observe(ref) }
+        }
         .onAppear { syncDetailVM() }
     }
 
@@ -526,19 +538,57 @@ struct ConversationLibraryView: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
-                Text(RemoteAgentRefMetadata.displayName(for: selectedRef, customs: customGateways))
-                    .font(.headline)
-                    .foregroundStyle(AppColors.textPrimary)
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(AppColors.textSecondary)
+            // Presence dot LEADING of the name — here and in both branches of
+            // `gatewayTitleControl`, so the mark keeps its position as the title
+            // control changes shape. Nested stacks on purpose: 6pt separates the
+            // dot (a statement about the gateway) from the name, while the inner
+            // 4pt stays the existing name-to-chevron affordance gap. Mirrors the
+            // iPhone twin in `ContentView`.
+            HStack(spacing: 6) {
+                // MUTE inside the control, spoken as the Menu's a11y VALUE
+                // below. SwiftUI folds a Menu's label subtree into ONE element
+                // and the explicit `.accessibilityLabel` overwrites it, so a dot
+                // that declared its own element here would simply never be heard.
+                GatewayPresenceDot(ref: presenceRef, standaloneAccessibility: false)
+                HStack(spacing: 4) {
+                    Text(RemoteAgentRefMetadata.displayName(for: selectedRef, customs: customGateways))
+                        .font(.headline)
+                        .foregroundStyle(AppColors.textPrimary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textSecondary)
+                }
             }
         }
 .accessibilityLabel(Text(LocalizedStringResource(
             "chat.chooseAI.label",
             defaultValue: "Choose AI"
         )))  // VoiceOver reads the taxonomy no visual review ever sees.
+        // …and the state the muted dot draws, as this element's VALUE:
+        // "Choose AI, Connected". No-op when there is no verdict to report.
+        .gatewayPresenceAccessibilityValue(for: presenceRef)
+    }
+
+    /// The ref whose presence the toolbar dot reports: inside a thread the bound
+    /// gateway (ONLY while this device can still send on it), on the empty/new
+    /// state the picker selection (ONLY while it is configured here). Everything
+    /// else answers nil — and nil makes the dot DISAPPEAR rather than go red.
+    /// That is the spec rule "a conversation window says nothing about a gateway
+    /// you have not connected": red may only ever mean "configured, and the probe
+    /// failed", never "not set up". A thread bound to a forgotten gateway shows
+    /// no dot at all; its recovery banner is the surface that speaks about it.
+    ///
+    /// Computed locally rather than threaded from the host: the memo-seeded
+    /// `boundRef` is already right on frame one, so a second host-owned input
+    /// would only add a way for the two to disagree.
+    ///
+    /// TWIN of `ContentView.presenceRef` and `MainWindowView.presenceRef` — the
+    /// three must not drift.
+    private var presenceRef: RemoteAgentRef? {
+        if let vm = detailVM, vm.conversationID == selectedConversationID {
+            return vm.boundGatewayAvailable ? vm.boundRef : nil
+        }
+        return configuredRefs.contains(selectedRef) ? selectedRef : nil
     }
 
     /// The centered principal-toolbar control. Three-way: the gateway picker
@@ -552,21 +602,33 @@ struct ConversationLibraryView: View {
             gatewayPickerMenu
         } else if let vm = detailVM, vm.canSwitchGateway, vm.hasTurns, vm.boundGatewayAvailable {
             Button { vm.showingGatewaySheet = true } label: {
-                HStack(spacing: 4) {
-                    Text(backendTitle)
-                        .font(.headline)
-                        .foregroundStyle(AppColors.textPrimary)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(AppColors.textSecondary)
+                HStack(spacing: 6) {
+                    // Muted here for the same reason as the picker Menu above —
+                    // the Button's own label would discard it.
+                    GatewayPresenceDot(ref: presenceRef, standaloneAccessibility: false)
+                    HStack(spacing: 4) {
+                        Text(backendTitle)
+                            .font(.headline)
+                            .foregroundStyle(AppColors.textPrimary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(AppColors.textSecondary)
+                    }
                 }
             }
             .accessibilityLabel(Text(LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway")))
             .accessibilityIdentifier("toolbar.cloneGateway")
+            .gatewayPresenceAccessibilityValue(for: presenceRef)   // the muted dot's state, as this element's value
         } else {
-            Text(backendTitle)
-                .font(.headline)
-                .foregroundStyle(AppColors.textPrimary)
+            // Wrapped so the static branch carries the dot too: the read-only
+            // title is where a bound thread spends most of its life, and it is
+            // the branch a single-gateway setup never leaves.
+            HStack(spacing: 6) {
+                GatewayPresenceDot(ref: presenceRef)
+                Text(backendTitle)
+                    .font(.headline)
+                    .foregroundStyle(AppColors.textPrimary)
+            }
         }
     }
 
