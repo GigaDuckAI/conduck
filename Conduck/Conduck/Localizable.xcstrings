@@ -958,6 +958,17 @@
         }
       }
     },
+    "chat.presence.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Connection check failed"
+          }
+        }
+      }
+    },
     "chat.presence.reachable" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -965,17 +976,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Connected"
-          }
-        }
-      }
-    },
-    "chat.presence.unreachable" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not reachable"
           }
         }
       }

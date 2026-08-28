@@ -25,9 +25,19 @@
 // an iOS concern.
 //
 // RED NEVER MEANS "NOT SET UP". The hosts pass `nil` for a gateway that is not
-// configured on this device, and nil renders NOTHING — which is what keeps the
-// spec rule "a conversation window says nothing about an unconnected gateway"
-// true. Red is only ever "configured, and the probe failed".
+// configured on this device, and nil renders NOTHING — which is what keeps a
+// gateway the user has not connected an OFFER rather than an unfinished task
+// nagging from a chat window (`docs/ai-context/spec.md`). Red is only ever
+// "configured, and the check did not pass".
+//
+// NOTHING IS ALSO WHAT AN EXPIRED CLAIM LOOKS LIKE, and the three meanings of
+// "no dot" — not configured, never checked, checked too long ago to still say
+// so — look identical on purpose. Each is a state where the honest thing to
+// draw is nothing; the monitor decides when a verdict has stopped being a
+// present-tense fact (`visiblePresence(for:)`) and this view simply stops
+// drawing. They differ in LAYOUT alone: a configured gateway keeps its slot
+// reserved so an expiring claim cannot drag the title sideways, while an
+// unconfigured one occupies no space at all.
 //
 // SHAPE, NOT COLOUR — the convention `ConversationActivityMark.swift` sets for
 // the conversation list. A colour dot cannot honour it by itself, so the
@@ -68,9 +78,9 @@
 
 import SwiftUI
 
-/// The gateway presence indicator for `ref`. `nil` ref (a gateway this device
-/// cannot send on, or nothing on screen) renders nothing at all, as does a ref
-/// the monitor holds no verdict for yet.
+/// The gateway presence indicator for `ref`. A `nil` ref — a gateway this
+/// device cannot send on, or nothing on screen — takes no space at all. A real
+/// ref with nothing currently worth saying draws nothing but holds its slot.
 struct GatewayPresenceDot: View {
     let ref: RemoteAgentRef?
 
@@ -78,7 +88,7 @@ struct GatewayPresenceDot: View {
     /// header. `flatMap` collapses "no ref" and "no verdict yet" into the same
     /// nothing.
     private var presence: GatewayPresence? {
-        ref.flatMap { GatewayPresenceMonitor.shared.presence[$0] }
+        ref.flatMap { GatewayPresenceMonitor.shared.visiblePresence(for: $0) }
     }
 
     /// The drawn diameter, Dynamic-Type scaled from the caller's value. The
@@ -114,6 +124,26 @@ struct GatewayPresenceDot: View {
     }
 
     var body: some View {
+        if ref != nil {
+            marked
+        }
+    }
+
+    /// The two shapes a CONFIGURED gateway's slot can take: the mark, or an
+    /// invisible box the same size.
+    ///
+    /// THE BOX IS WHY VERDICTS DO NOT MOVE THE TITLE. A dot that collapses to
+    /// zero width every time a claim expires drags the centered title control
+    /// sideways and back — on the Mac, roughly every five minutes, unprompted.
+    /// Holding the space costs nothing (the slot is 7pt of nothing beside a
+    /// title that was already inset) and buys a title bar that sits still.
+    ///
+    /// A `nil` ref reserves NOTHING, and that asymmetry is the point: no ref
+    /// means no gateway configured here, and the title must then sit exactly
+    /// where it sat before this feature existed rather than beside a permanent
+    /// gap held for a mark that can never appear.
+    @ViewBuilder
+    private var marked: some View {
         if let presence {
             if standaloneAccessibility {
                 drawn(presence)
@@ -131,6 +161,13 @@ struct GatewayPresenceDot: View {
                 drawn(presence)
                     .accessibilityHidden(true)
             }
+        } else {
+            // Configured, nothing to say yet (or not any more). Hidden from
+            // VoiceOver in BOTH modes — an element that announces nothing is
+            // worse than no element.
+            Color.clear
+                .frame(width: markSize, height: markSize)
+                .accessibilityHidden(true)
         }
     }
 
@@ -186,7 +223,7 @@ struct GatewayPresenceDot: View {
         switch presence {
         case .checking: return AppColors.success.opacity(0.35)
         case .reachable: return AppColors.success
-        case .unreachable: return AppColors.error
+        case .failed: return AppColors.error
         }
     }
 
@@ -194,12 +231,16 @@ struct GatewayPresenceDot: View {
         switch presence {
         case .checking: return "circle.dotted"
         case .reachable: return "checkmark.circle.fill"
-        case .unreachable: return "xmark.circle.fill"
+        case .failed: return "xmark.circle.fill"
         }
     }
 
-    /// "Not reachable", never "offline" or "down": the claim this probe can
-    /// honestly make is about THIS device's reach, not the server's health.
+    /// "Connection check failed" — never "offline", "down", or "not reachable".
+    /// The probe collapses a refused certificate, a rejected token, a server
+    /// error, a malformed answer and a real timeout into one bit, and only the
+    /// last of those is the gateway being out of reach. A rejected key is a
+    /// machine this device reached perfectly well; telling the user it is
+    /// unreachable sends them to look at the wrong thing.
     ///
     /// Not private — `gatewayPresenceAccessibilityValue(_:)` speaks for the dot
     /// when it is hidden inside a control, and the two must never drift into
@@ -210,8 +251,8 @@ struct GatewayPresenceDot: View {
             return LocalizedStringResource("chat.presence.checking", defaultValue: "Checking connection")
         case .reachable:
             return LocalizedStringResource("chat.presence.reachable", defaultValue: "Connected")
-        case .unreachable:
-            return LocalizedStringResource("chat.presence.unreachable", defaultValue: "Not reachable")
+        case .failed:
+            return LocalizedStringResource("chat.presence.failed", defaultValue: "Connection check failed")
         }
     }
 
@@ -219,7 +260,7 @@ struct GatewayPresenceDot: View {
         switch presence {
         case .checking: return "checking"
         case .reachable: return "reachable"
-        case .unreachable: return "unreachable"
+        case .failed: return "failed"
         }
     }
 }
@@ -251,11 +292,17 @@ extension View {
 private struct GatewayPresenceAccessibilityValue: ViewModifier {
     let ref: RemoteAgentRef?
 
+    /// ONE BRANCH, ALWAYS. An `if`/`else` here would resolve to
+    /// `_ConditionalContent`, and SwiftUI treats the two arms as different
+    /// structural identities — so the `Menu` or `Button` this wraps would be
+    /// torn down and rebuilt every time a verdict lands or expires, which on
+    /// iPhone can happen with the gateway picker OPEN. The empty value is inert:
+    /// these controls carry a label and no value of their own, so writing "" is
+    /// the same silence as not writing one.
     func body(content: Content) -> some View {
-        if let ref, let presence = GatewayPresenceMonitor.shared.presence[ref] {
-            content.accessibilityValue(Text(GatewayPresenceDot.label(for: presence)))
-        } else {
-            content
-        }
+        let presence = ref.flatMap { GatewayPresenceMonitor.shared.visiblePresence(for: $0) }
+        content.accessibilityValue(
+            presence.map { Text(GatewayPresenceDot.label(for: $0)) } ?? Text(verbatim: "")
+        )
     }
 }

@@ -743,10 +743,10 @@ struct MainWindowView: View {
     /// bound gateway (ONLY while this Mac can still send on it), on the new/empty
     /// state the picker selection (ONLY while it is configured here). Everything
     /// else answers nil — and nil makes the dot DISAPPEAR rather than go red.
-    /// That is the spec rule "a conversation window says nothing about a gateway
-    /// you have not connected": red may only ever mean "configured, and the probe
-    /// failed", never "not set up". A thread bound to a forgotten gateway shows
-    /// no dot at all; its recovery banner is the surface that speaks about it.
+    /// A gateway the user has not connected is an offer, not an unfinished task
+    /// (`docs/ai-context/spec.md`), so red may only ever mean "configured, and
+    /// the probe failed" — never "not set up". A thread bound to a forgotten
+    /// gateway shows no dot at all; its recovery banner speaks about it instead.
     ///
     /// TWIN of `ContentView.presenceRef` and `ConversationLibraryView.presenceRef`.
     /// The three must not drift, the same way `refreshConfiguredBackends()` and
@@ -1514,7 +1514,15 @@ struct MainWindowView: View {
                 pendingDropBatch: $pendingDropBatch,
                 dispatchingIdentity: $composerDispatching,
                 isDropResolving: isDropResolving,
-                resolvingDropCount: resolvingDropCount
+                resolvingDropCount: resolvingDropCount,
+                onComposerEngaged: {
+                    // Resolve the ref WHEN IT RUNS, never captured: this mount
+                    // is keyed per conversation, but the window's bound gateway
+                    // can still change under it (a clone landing, a forget), and
+                    // a captured ref would re-check the wrong machine.
+                    guard let ref = presenceRef else { return }
+                    GatewayPresenceMonitor.shared.observe(ref)
+                }
             )
             // Attachment staging is view-local @State. Give each active
             // conversation its own mount so A → B runs A's onDisappear/deferred
@@ -1556,7 +1564,14 @@ struct MainWindowView: View {
                             pendingDropBatch: $pendingDropBatch,
                             dispatchingIdentity: $composerDispatching,
                             isDropResolving: isDropResolving,
-                            resolvingDropCount: resolvingDropCount
+                            resolvingDropCount: resolvingDropCount,
+                            onComposerEngaged: {
+                                // The new-chat mount: `presenceRef` follows the
+                                // picker here, so typing re-checks whichever
+                                // gateway the next turn would bind to.
+                                guard let ref = presenceRef else { return }
+                                GatewayPresenceMonitor.shared.observe(ref)
+                            }
                         )
                         // Keep the VM-less minting composer explicitly distinct
                         // from every established-conversation mount.

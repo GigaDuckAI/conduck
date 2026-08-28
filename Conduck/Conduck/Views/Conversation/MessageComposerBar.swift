@@ -185,6 +185,14 @@ struct MessageComposerBar: View {
     /// `.loading` tiles so the disabled Send has something on screen accounting
     /// for it while a slow item resolves.
     var resolvingDropCount: Int = 0
+    /// The user has turned toward this composer with something in mind. The host
+    /// re-checks the gateway presence dot on it, so the title bar's claim is
+    /// measured when the user is deciding rather than whenever the window last
+    /// became active.
+    ///
+    /// Fires the INTENT, never a ref — see the iOS composer's twin. Default
+    /// no-op so existing call sites compile.
+    var onComposerEngaged: () -> Void = {}
 
     @FocusState private var fieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -375,6 +383,14 @@ struct MessageComposerBar: View {
         .onAppear {
             fieldFocused = true
             newChatGatewaySelectionLocked?.wrappedValue = shouldLockNewChatGateway
+        }
+        // The FIRST thing worth sending is this composer's engagement signal —
+        // deliberately NOT `fieldFocused`, which the line above raises on appear:
+        // a window opening is not the user deciding anything, and treating it as
+        // intent would make every window activation buy the user's server a
+        // request. The false→true edge only, so the rest of a sentence is silent.
+        .onChange(of: hasSendableContent) { was, now in
+            if !was, now { onComposerEngaged() }
         }
         // "Type Instead" bridge: drain a screenshot parked by the host into the
         // composer's staging (process + stage + eager-upload, for REVIEW — nothing

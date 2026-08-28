@@ -83,6 +83,16 @@ struct iOSMessageComposerBar: View {
     /// button). Default routes to `onSetUpFileTransfer` semantics; host wires it to
     /// the same setup sheet. Default no-op so existing call sites compile.
     var onSetUpAttachment: (UUID) -> Void = { _ in }
+    /// The user has turned toward this composer with something in mind — focus,
+    /// or the first thing worth sending. The host re-checks the gateway presence
+    /// dot on it, so the toolbar's claim is measured at the moment the user is
+    /// actually deciding rather than whenever the screen last appeared.
+    ///
+    /// Fires the INTENT, never a ref: the three hosts each own the authoritative
+    /// `presenceRef` (a deliberately triplicated invariant), and a composer that
+    /// resolved one itself would be a fourth copy of it. Default no-op so
+    /// existing call sites compile.
+    var onComposerEngaged: () -> Void = {}
 
     @FocusState private var fieldFocused: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -262,6 +272,22 @@ struct iOSMessageComposerBar: View {
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: attachments)
         // The composer never grabs focus on appear: the keyboard opens only when
         // the user taps the field (`.onTapGesture` below) — no auto-open on launch.
+        //
+        // Which is exactly why focus is a legitimate engagement signal HERE and
+        // not on the Mac, whose composer focuses itself in `.onAppear`. Focus
+        // covers the field tap and the card-wide tap assist (which sets this
+        // flag) in one place, with no gesture competing for the caret.
+        .onChange(of: fieldFocused) { _, focused in
+            if focused { onComposerEngaged() }
+        }
+        // Content arriving without focus is engagement too: a landed transcript
+        // populates the draft, and the attach menu stages a file, neither of
+        // which touches the keyboard. Only the false→true edge, so every further
+        // keystroke is silent — and the monitor's freshness window makes a
+        // repeat within 30 s cost nothing anyway.
+        .onChange(of: hasSendableContent) { was, now in
+            if !was, now { onComposerEngaged() }
+        }
     }
 
     // MARK: - Capture status banner (recording ↔ transcribing crossfade, Part 2b)

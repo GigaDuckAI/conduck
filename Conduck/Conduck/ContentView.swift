@@ -444,9 +444,9 @@ struct ContentView: View {
     /// gateway (ONLY while this device can still send on it), on the empty/new
     /// state the picker selection (ONLY while it is configured here). Everything
     /// else answers nil — and nil is what makes the dot DISAPPEAR rather than go
-    /// red. That is the spec rule "a conversation window says nothing about a
-    /// gateway you have not connected": red may only ever mean "configured, and
-    /// the probe failed", never "not set up". A thread bound to a forgotten
+    /// red. A gateway the user has not connected is an offer, not an unfinished
+    /// task (`docs/ai-context/spec.md`), so red may only ever mean "configured,
+    /// and the probe failed" — never "not set up". A thread bound to a forgotten
     /// gateway therefore shows no dot at all; its recovery banner is the surface
     /// that speaks about it.
     ///
@@ -596,7 +596,15 @@ struct ContentView: View {
                             },
                             onVoiceResult: handleTranscriptionResult,
                             settingsVM: settingsVM,
-                            pendingNewConversationRef: pickerSelectedRef
+                            pendingNewConversationRef: pickerSelectedRef,
+                            onComposerEngaged: {
+                                // Resolve the ref WHEN IT RUNS, never captured:
+                                // the composer outlives thread switches, and a
+                                // captured ref would re-check the gateway of the
+                                // conversation the user just left.
+                                guard let ref = presenceRef else { return }
+                                GatewayPresenceMonitor.shared.observe(ref)
+                            }
                         )
                     }
                 }

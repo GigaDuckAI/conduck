@@ -1652,6 +1652,28 @@ enum Constants {
     /// user's server traffic they never asked for.
     static let gatewayPresenceFreshness: TimeInterval = 30
 
+    /// How long the dot may keep ASSERTING a failed check before it goes silent.
+    /// A separate clock from `gatewayPresenceFreshness`, which decides only
+    /// whether a trigger costs the user's server a request: this decides how
+    /// long a verdict is allowed to be stated in the present tense with nothing
+    /// re-measuring it.
+    ///
+    /// 30 s, the shortest of the three numbers here, because a stale RED is the
+    /// one claim this feature can invent that actively misleads: it says "don't
+    /// bother" about a gateway the user may have repaired thirty seconds ago on
+    /// the machine next to them, and it heals invisibly — nothing polls, so
+    /// nothing would ever take the word back. Expiring renders NO dot, which
+    /// means "no current claim", not "reachable".
+    static let gatewayPresenceFailedDisplayLifetime: TimeInterval = 30
+
+    /// How long the dot may keep asserting a SUCCESSFUL check. Ten times the
+    /// failed lifetime, and deliberately asymmetric: a stale green costs nothing
+    /// the app did not already cost before this dot existed — the user assumes
+    /// the gateway works, sends, and lands in the failure path that has always
+    /// been there — while a stale red sends them to fix something that may not
+    /// be broken. The cost of being wrong is what sets these, not symmetry.
+    static let gatewayPresenceReachableDisplayLifetime: TimeInterval = 5 * 60
+
     // MARK: - Agent File Transfer (user-run file-server)
     //
     // Network-layer + storage-key constants for the OWN-INFRA file-server

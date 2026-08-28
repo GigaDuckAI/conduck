@@ -64,8 +64,29 @@
 // carried across launches would be a claim nobody checked), and a verdict
 // younger than `Constants.gatewayPresenceFreshness` whose signature still
 // matches is reused rather than re-probed, so thread switching and scene flaps
-// cannot hammer the user's server. A gateway that dies mid-session is reported
-// by the send itself.
+// cannot hammer the user's server.
+//
+// A VERDICT STOPS BEING SAID OUT LOUD LONG BEFORE ANYTHING RE-MEASURES IT.
+// Freshness above governs REQUESTS; the display lifetimes govern CLAIMS, and
+// they are not the same number or even the same idea. A window left frontmost
+// for hours fires no trigger, so without a second clock the dot would still be
+// asserting an hours-old check in the present tense — and the failure mode is
+// not symmetric. A stale green costs nothing this app did not already cost
+// before the dot existed; a stale red says "do not bother" about a gateway the
+// user may have repaired a minute ago, and nothing polls, so nothing would ever
+// take it back. Hence `gatewayPresenceFailedDisplayLifetime` (30 s) against
+// `gatewayPresenceReachableDisplayLifetime` (5 min), enforced by a per-ref
+// countdown that forgets the verdict — the only way a claim can leave a screen
+// nobody is touching, since time passing re-renders nothing.
+//
+// THE CLAIM IS REFRESHED WHERE THE DECISION IS MADE. Expiry alone would turn a
+// status light into a status flash, so the hosts add one trigger to the
+// lifecycle ones: engaging the composer (a real tap, focus on iOS, or the first
+// sendable content) calls `observe`. That is the instant the answer matters, it
+// is intent rather than ambience, and the freshness window makes a fast typist
+// free. It is deliberately NOT a timer — see the rejected designs above.
+//
+// A gateway that dies mid-session is still reported by the send itself.
 //
 // ISOLATED FROM THE DIAGNOSTICS SURFACE. This writes no `DiagnosticsRunner`
 // row, moves no "last checked" stamp and clears no file-lane backoff — those
@@ -86,9 +107,15 @@ enum GatewayPresence: Equatable, Sendable {
     case checking
     /// The probe proved a usable route (`.ok` or `.okNoModels`).
     case reachable
-    /// The probe failed: a refused certificate, or any thrown `AppError`
-    /// (bad token, timeout, server error, device offline).
-    case unreachable
+    /// The check did not come back a pass: a refused certificate, or any thrown
+    /// `AppError` (rejected token, timeout, server error, device offline).
+    ///
+    /// NAMED FOR THE MEASUREMENT, not for a diagnosis. The probe collapses every
+    /// one of those to "did not pass", and most of them are not the server being
+    /// unreachable — a rejected key is a machine answering promptly and refusing.
+    /// The word the user reads is "Connection check failed" for the same reason:
+    /// it is the only sentence this evidence supports.
+    case failed
 }
 
 @MainActor
@@ -97,9 +124,14 @@ final class GatewayPresenceMonitor {
 
     static let shared = GatewayPresenceMonitor()
 
-    /// The injected probe: input in, "is it reachable" out. Swapping this is
+    /// The injected probe: input in, "did the check pass" out. Swapping this is
     /// what makes the state machine testable without a live GET.
     typealias Probe = @MainActor @Sendable (DiagnosticsRunner.GatewayProbeInput) async -> Bool
+
+    /// The injected wait behind display expiry — the same seam, spelled the same
+    /// way, as `KeyArrivalMonitor`'s. Swapping it lets a test drive a five-minute
+    /// lifetime in microseconds instead of parking a suite for five minutes.
+    typealias Sleeper = @Sendable (Duration) async throws -> Void
 
     /// Read by the dot. An ABSENT key means "no verdict, and none coming" and
     /// renders nothing — the unconfigured case and the fresh-launch case share
@@ -109,6 +141,7 @@ final class GatewayPresenceMonitor {
     private let manager: SettingsManager
     private let probe: Probe
     private let now: @MainActor () -> Date
+    private let sleeper: Sleeper
 
     /// When each surviving verdict landed — the freshness clock. Written and
     /// cleared in lockstep with `presence`, and never surfaced: the dot states a
@@ -129,14 +162,28 @@ final class GatewayPresenceMonitor {
     /// no-op without waiting for an actor hop to tell it so.
     private var inFlight: [RemoteAgentRef: Task<Void, Never>] = [:]
 
+    /// The countdown that takes a verdict off screen, per ref. This is what
+    /// actually makes expiry visible: a view body re-runs when something it read
+    /// changes, and time passing is not a change — so nothing but a write to
+    /// `presence` can retire a claim from a window nobody is touching.
+    private var displayExpiry: [RemoteAgentRef: Task<Void, Never>] = [:]
+
+    /// Which scheduled expiry is still the live one, per ref. A generation token
+    /// rather than a re-read of `checkedAt`, because two verdicts can land at the
+    /// same instant on an injected clock — comparing stamps would let a
+    /// superseded countdown clear the verdict that replaced it.
+    private var displayExpiryToken: [RemoteAgentRef: UUID] = [:]
+
     init(
         manager: SettingsManager = .shared,
         probe: @escaping Probe = { await GatewayPresenceMonitor.liveProbe($0) },
-        now: @escaping @MainActor () -> Date = Date.init
+        now: @escaping @MainActor () -> Date = Date.init,
+        sleeper: @escaping Sleeper = { try await Task.sleep(for: $0) }
     ) {
         self.manager = manager
         self.probe = probe
         self.now = now
+        self.sleeper = sleeper
     }
 
     // MARK: - API
@@ -152,6 +199,13 @@ final class GatewayPresenceMonitor {
     /// Cheap to call on every trigger: a reused verdict costs one actor hop and
     /// touches nothing.
     func observe(_ ref: RemoteAgentRef) {
+        // BEFORE the latch and before the actor hop: a trigger that arrives on a
+        // process which was suspended past a deadline must not render one more
+        // frame of the overdue claim while the settings read is in flight.
+        // `Task.sleep` does not advance while iOS holds the process, so the
+        // countdown below cannot be the only thing that retires a verdict.
+        pruneExpiredVisibleAssertion(ref)
+
         guard inFlight[ref] == nil else { return }
 
         inFlight[ref] = Task { [weak self] in
@@ -163,6 +217,39 @@ final class GatewayPresenceMonitor {
             if outcome == .droppedConfigMoved {
                 self.observe(ref)
             }
+        }
+    }
+
+    /// What a surface may render for `ref` RIGHT NOW — the read every view uses,
+    /// never `presence` directly.
+    ///
+    /// A settled verdict is an assertion in the present tense, and this is where
+    /// it stops being one: past its lifetime it answers nil, which renders
+    /// nothing. Nothing is the app declining to make a claim — NOT "reachable",
+    /// and not "not configured" either, though those three share a spelling.
+    /// That collision is accepted: every one of them is a state in which the
+    /// honest thing to draw is nothing at all.
+    ///
+    /// `.checking` never expires; the probe behind it is already bounded by
+    /// `Constants.remoteAgentTestConnectionTimeout`. A settled verdict with no
+    /// stamp cannot be dated, so it is withheld rather than trusted — the pair is
+    /// written in lockstep, so this is a guard against a future edit, not a state
+    /// that occurs today.
+    func visiblePresence(for ref: RemoteAgentRef) -> GatewayPresence? {
+        guard let verdict = presence[ref] else { return nil }
+        guard let lifetime = Self.displayLifetime(for: verdict) else { return verdict }
+        guard let stamp = checkedAt[ref] else { return nil }
+        return now().timeIntervalSince(stamp) < lifetime ? verdict : nil
+    }
+
+    /// How long each settled verdict may be asserted; nil for `.checking`, which
+    /// is not a claim about the gateway at all. The asymmetry is the point — see
+    /// `Constants.gatewayPresenceFailedDisplayLifetime`.
+    private static func displayLifetime(for presence: GatewayPresence) -> TimeInterval? {
+        switch presence {
+        case .checking: return nil
+        case .reachable: return Constants.gatewayPresenceReachableDisplayLifetime
+        case .failed: return Constants.gatewayPresenceFailedDisplayLifetime
         }
     }
 
@@ -210,7 +297,7 @@ final class GatewayPresenceMonitor {
         // has since gone down. Returning here writes nothing at all — no
         // `.checking`, so re-entering a chat inside the window cannot flicker.
         if let verdict = presence[ref],
-           verdict == .reachable || verdict == .unreachable,
+           verdict == .reachable || verdict == .failed,
            verdictSignature[ref] == context.signature,
            let stamp = checkedAt[ref],
            now().timeIntervalSince(stamp) < Constants.gatewayPresenceFreshness {
@@ -222,6 +309,7 @@ final class GatewayPresenceMonitor {
         presence[ref] = .checking
         checkedAt.removeValue(forKey: ref)
         verdictSignature.removeValue(forKey: ref)
+        cancelDisplayExpiry(ref)
 
         let reachable = await probe(context.input)
 
@@ -237,9 +325,11 @@ final class GatewayPresenceMonitor {
             return .droppedConfigMoved
         }
 
-        presence[ref] = reachable ? .reachable : .unreachable
+        let verdict: GatewayPresence = reachable ? .reachable : .failed
+        presence[ref] = verdict
         checkedAt[ref] = now()
         verdictSignature[ref] = context.signature
+        scheduleDisplayExpiry(ref, for: verdict)
         return .settled
     }
 
@@ -250,6 +340,52 @@ final class GatewayPresenceMonitor {
         presence.removeValue(forKey: ref)
         checkedAt.removeValue(forKey: ref)
         verdictSignature.removeValue(forKey: ref)
+        cancelDisplayExpiry(ref)
+    }
+
+    // MARK: - Display expiry
+
+    /// Arm the countdown that will retire `verdict` from every surface reading
+    /// this monitor.
+    ///
+    /// ONE TASK PER REF, and it does no network work — it sleeps and then
+    /// forgets, so the "no polling" rule is untouched: this costs the user's
+    /// server nothing and buys back the ability to stop talking. Retiring the
+    /// verdict WHOLE (`forget`) rather than blanking only the visible half is
+    /// deliberate while nothing reads a history: an unread stamp on an
+    /// `@Observable` object is dead state, and dropping the bookkeeping changes
+    /// no reuse decision — the failed lifetime IS the reuse window, and the
+    /// reachable one is ten times past it.
+    private func scheduleDisplayExpiry(_ ref: RemoteAgentRef, for verdict: GatewayPresence) {
+        guard let lifetime = Self.displayLifetime(for: verdict) else { return }
+        let token = UUID()
+        displayExpiryToken[ref] = token
+        displayExpiry.removeValue(forKey: ref)?.cancel()
+        displayExpiry[ref] = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.sleeper(.seconds(lifetime))
+            } catch {
+                return  // cancelled by a newer verdict, or by `forget`
+            }
+            // BOTH guards: cancellation is not guaranteed to have been observed
+            // by a sleeper a test releases by hand, and the token is what proves
+            // this countdown still belongs to the verdict on screen.
+            guard !Task.isCancelled, self.displayExpiryToken[ref] == token else { return }
+            self.forget(ref)
+        }
+    }
+
+    /// Drop `ref`'s verdict if it has outlived what it may assert. Silent when
+    /// there is nothing to retire, so every trigger can call it unconditionally.
+    private func pruneExpiredVisibleAssertion(_ ref: RemoteAgentRef) {
+        guard presence[ref] != nil, visiblePresence(for: ref) == nil else { return }
+        forget(ref)
+    }
+
+    private func cancelDisplayExpiry(_ ref: RemoteAgentRef) {
+        displayExpiry.removeValue(forKey: ref)?.cancel()
+        displayExpiryToken.removeValue(forKey: ref)
     }
 
     // MARK: - Live probe
@@ -258,8 +394,9 @@ final class GatewayPresenceMonitor {
     /// established" is the whole claim the dot makes, and a gateway advertising
     /// zero models is a Settings/Diagnostics concern, not a broken route.
     /// `.untrustedCert` and every throw (auth, timeout, server error, offline)
-    /// are unreachable: "this device cannot reach it right now" is true in all
-    /// of them.
+    /// are `.failed` — the honest common denominator, and the reason the state
+    /// is not called "unreachable": a rejected token is a gateway this device
+    /// reached perfectly well.
     static func liveProbe(_ input: DiagnosticsRunner.GatewayProbeInput) async -> Bool {
         do {
             let outcome = try await RemoteAgentClient.shared.testConnection(
@@ -292,6 +429,19 @@ final class GatewayPresenceMonitor {
             if running.isEmpty { return }
             for task in running { await task.value }
         }
+    }
+
+    /// Await armed display countdowns — one ref's, or every one. Separate from
+    /// `drainForTesting` on purpose: that one waits for NETWORK work to settle,
+    /// this one waits for a deadline the test itself fired, and a suite that
+    /// conflated them would park for a real five minutes.
+    ///
+    /// TAKE THE REF whenever the test deliberately leaves another countdown
+    /// parked — awaiting one that has not been released simply hangs, which is a
+    /// test timeout rather than a failure and reads as a crash in the log.
+    func drainDisplayExpiryForTesting(_ ref: RemoteAgentRef? = nil) async {
+        let tasks = ref.map { displayExpiry[$0].map { [$0] } ?? [] } ?? Array(displayExpiry.values)
+        for task in tasks { await task.value }
     }
     #endif
 }

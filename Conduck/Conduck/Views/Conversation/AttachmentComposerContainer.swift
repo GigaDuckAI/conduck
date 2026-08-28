@@ -40,6 +40,12 @@ struct AttachmentComposerContainer: View {
     /// sheet for a brand-new (VM-less) conversation to the RIGHT gateway, not the
     /// compile-time default.
     let pendingNewConversationRef: RemoteAgentRef
+    /// Forwarded straight to the composer: the user has turned toward it with
+    /// something in mind, and the host re-checks the gateway presence dot on it.
+    /// This container adds nothing to the signal; it is here only because the
+    /// composer is mounted through it. Default no-op so existing call sites
+    /// compile.
+    var onComposerEngaged: () -> Void = {}
 
     /// Resolved file-transfer state for the composer's bound gateway. `available`
     /// drives the "Set Up File Transfer…" discovery item; `ref` is the
@@ -96,7 +102,8 @@ struct AttachmentComposerContainer: View {
             onRetryUpload: { id in
                 coordinator.retryServerUpload(id: id, vm: viewModel)
             },
-            onSetUpAttachment: { _ in showingSetupGuide = true }
+            onSetUpAttachment: { _ in showingSetupGuide = true },
+            onComposerEngaged: onComposerEngaged
         )
         // Photo library — NO maxSelectionCount (no cap, locked).
         .photosPicker(

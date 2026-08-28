@@ -25,6 +25,15 @@
 //     is reused only while it is both young and still about the same URL / token
 //     / scheme / pin. Both halves are tested, in both directions — a stale-by-age
 //     verdict re-probes, and so does a young verdict whose gateway was edited.
+//   * A verdict STOPS being asserted long before anything re-measures it, and
+//     the two lifetimes are deliberately unequal: a stale green costs nothing
+//     this app did not cost before the dot existed, while a stale red tells the
+//     user not to bother with a gateway they may have just repaired — and since
+//     nothing polls, nothing would ever take it back. The countdown is tested
+//     from both ends: that it fires and withdraws the claim, that a superseded
+//     one cannot retire its successor, and that the read a view uses withholds
+//     an overdue verdict even when the countdown never fired at all (the iOS
+//     suspension case, where `Task.sleep` does not advance).
 //   * Reuse and in-flight coalescing are load-bearing, not tuning: the probe hits
 //     the USER'S server, and thread switching / scene flaps must not turn into
 //     traffic they never asked for. Reuse must also be INVISIBLE — a `.checking`
@@ -122,6 +131,84 @@ final class GatewayPresenceMonitorTests: XCTestCase {
         }
     }
 
+    /// Injected wait behind display expiry, with a valve. Every countdown parks
+    /// here instead of sleeping, so a five-minute lifetime is asserted in
+    /// microseconds and "the deadline arrived" is an event the test fires rather
+    /// than a duration it waits out.
+    ///
+    /// `fireOldest()` exists because the token guard cannot be tested any other
+    /// way: a superseded countdown is CANCELLED but still parked (cancellation
+    /// resumes nothing here), so the only way to prove it cannot clear the
+    /// verdict that replaced it is to release exactly that one and leave its
+    /// successor parked.
+    @MainActor
+    private final class SleeperGate {
+        /// Every lifetime the monitor asked to wait out, in order.
+        private(set) var durations: [Duration] = []
+
+        var callCount: Int { durations.count }
+        var parkedCount: Int { parked.count }
+
+        private var parked: [CheckedContinuation<Void, Never>] = []
+        /// Releases banked because nothing was parked yet — keeps `fire*` and
+        /// `awaitPark()` order-independent.
+        private var pendingReleases = 0
+        private var parkSignals = 0
+        private var parkWaiter: CheckedContinuation<Void, Never>?
+
+        func makeSleeper() -> GatewayPresenceMonitor.Sleeper {
+            { [self] duration in await park(duration) }
+        }
+
+        /// Suspend until a countdown has entered the stub (consumes one signal).
+        func awaitPark() async {
+            if parkSignals > 0 {
+                parkSignals -= 1
+                return
+            }
+            await withCheckedContinuation { parkWaiter = $0 }
+        }
+
+        /// Fire every parked countdown's deadline.
+        func fireAll() {
+            let waiting = parked
+            parked = []
+            if waiting.isEmpty {
+                pendingReleases += 1
+                return
+            }
+            for waiter in waiting { waiter.resume() }
+        }
+
+        /// Fire ONLY the countdown that parked first.
+        func fireOldest() {
+            guard !parked.isEmpty else {
+                pendingReleases += 1
+                return
+            }
+            parked.removeFirst().resume()
+        }
+
+        private func park(_ duration: Duration) async {
+            durations.append(duration)
+            signalPark()
+            if pendingReleases > 0 {
+                pendingReleases -= 1
+                return
+            }
+            await withCheckedContinuation { parked.append($0) }
+        }
+
+        private func signalPark() {
+            if let waiter = parkWaiter {
+                parkWaiter = nil
+                waiter.resume()
+            } else {
+                parkSignals += 1
+            }
+        }
+    }
+
     /// Injectable clock. A box rather than a captured local so a test can move
     /// time forward after the monitor has already taken the closure.
     @MainActor
@@ -147,6 +234,7 @@ final class GatewayPresenceMonitorTests: XCTestCase {
         let monitor: GatewayPresenceMonitor
         let manager: SettingsManager
         let gate: ProbeGate
+        let sleeper: SleeperGate
         let clock: Clock
     }
 
@@ -159,13 +247,15 @@ final class GatewayPresenceMonitorTests: XCTestCase {
     private func makeRig() -> Rig {
         let manager = SettingsManager(dependencies: .inMemory())
         let gate = ProbeGate()
+        let sleeper = SleeperGate()
         let clock = Clock()
         let monitor = GatewayPresenceMonitor(
             manager: manager,
             probe: gate.makeProbe(),
-            now: { clock.now }
+            now: { clock.now },
+            sleeper: sleeper.makeSleeper()
         )
-        return Rig(monitor: monitor, manager: manager, gate: gate, clock: clock)
+        return Rig(monitor: monitor, manager: manager, gate: gate, sleeper: sleeper, clock: clock)
     }
 
     /// Seed a send-able gateway. Only the URL is required for a snapshot to
@@ -223,7 +313,7 @@ final class GatewayPresenceMonitorTests: XCTestCase {
     /// Every failure shape the live probe collapses into `false` — refused
     /// certificate, bad token, timeout, offline — lands as one honest claim:
     /// this device cannot reach it right now.
-    func testFailedProbeReportsUnreachable() async {
+    func testFailedProbeReportsFailed() async {
         let rig = makeRig()
         let ref = RemoteAgentRef.builtin(.openclaw)
         await seedGateway(rig, ref: ref)
@@ -231,14 +321,14 @@ final class GatewayPresenceMonitorTests: XCTestCase {
 
         rig.monitor.observe(ref)
         await rig.monitor.drainForTesting()
-        XCTAssertEqual(rig.monitor.presence[ref], .unreachable)
+        XCTAssertEqual(rig.monitor.presence[ref], .failed)
     }
 
     // MARK: - 3. Unconfigured ref — the spec rule
 
     /// A gateway that is not configured on this device is an OFFER, not an
     /// unfinished task: the chat window must say nothing about it. No key is
-    /// written at any point in the dispatch — not `.unreachable`, and not even a
+    /// written at any point in the dispatch — not `.failed`, and not even a
     /// transient `.checking` — and the probe is never fired.
     func testUnconfiguredRefNeverGetsAKey() async {
         let rig = makeRig()
@@ -465,7 +555,7 @@ final class GatewayPresenceMonitorTests: XCTestCase {
                        "the dropped verdict must re-arm exactly once — no dark dot, and no spin")
         XCTAssertEqual(rig.gate.inputs.last?.url, movedURL,
                        "the re-probe must use the edited URL, not the one the dropped verdict was about")
-        XCTAssertEqual(rig.monitor.presence[ref], .unreachable,
+        XCTAssertEqual(rig.monitor.presence[ref], .failed,
                        "the surviving verdict is the NEW configuration's, so the old green was truly discarded")
     }
 
@@ -497,5 +587,215 @@ final class GatewayPresenceMonitorTests: XCTestCase {
             XCTAssertFalse(rendered.contains(needle),
                            "the presence surface leaked '\(needle)': \(rendered)")
         }
+    }
+
+    // MARK: - 8. Display expiry — a verdict stops being said out loud
+
+    /// A failed check may be asserted for 30 s and then goes silent. This is the
+    /// state whose staleness actually costs the user something: red says "do not
+    /// bother" about a gateway they may have repaired a minute ago, and nothing
+    /// polls, so without this countdown nothing would ever take the word back.
+    func testFailedVerdictExpiresAndTheDotGoesSilent() async {
+        let rig = makeRig()
+        let ref = RemoteAgentRef.builtin(.openclaw)
+        await seedGateway(rig, ref: ref)
+        rig.gate.result = false
+
+        rig.monitor.observe(ref)
+        await rig.monitor.drainForTesting()
+        XCTAssertEqual(rig.monitor.presence[ref], .failed)
+
+        await rig.sleeper.awaitPark()
+        XCTAssertEqual(rig.sleeper.durations.last,
+                       .seconds(Constants.gatewayPresenceFailedDisplayLifetime),
+                       "red must be armed with the FAILED lifetime, not the reachable one")
+
+        rig.sleeper.fireAll()
+        await rig.monitor.drainDisplayExpiryForTesting()
+        XCTAssertNil(rig.monitor.presence[ref],
+                     "past its lifetime the verdict is withdrawn — no dot means no claim, not 'reachable'")
+        XCTAssertEqual(rig.gate.callCount, 1,
+                       "expiry is a local retraction: it may not cost the user's server a request")
+    }
+
+    /// A successful check is asserted for ten times as long. The asymmetry is the
+    /// design: a stale green costs nothing this app did not cost before the dot
+    /// existed, so expiring it as fast as red would trade a real status light for
+    /// a flash and buy nothing.
+    func testReachableVerdictIsArmedWithTheLongerLifetime() async {
+        let rig = makeRig()
+        let ref = RemoteAgentRef.builtin(.openclaw)
+        await seedGateway(rig, ref: ref)
+
+        rig.monitor.observe(ref)
+        await rig.monitor.drainForTesting()
+        XCTAssertEqual(rig.monitor.presence[ref], .reachable)
+
+        await rig.sleeper.awaitPark()
+        XCTAssertEqual(rig.sleeper.durations.last,
+                       .seconds(Constants.gatewayPresenceReachableDisplayLifetime))
+        XCTAssertGreaterThan(Constants.gatewayPresenceReachableDisplayLifetime,
+                             Constants.gatewayPresenceFailedDisplayLifetime,
+                             "if these ever equalise, the asymmetry this suite is pinning is gone")
+
+        rig.sleeper.fireAll()
+        await rig.monitor.drainDisplayExpiryForTesting()
+        XCTAssertNil(rig.monitor.presence[ref])
+    }
+
+    /// A SUPERSEDED countdown may not clear the verdict that replaced it. Both
+    /// verdicts land at the same injected instant, which is exactly the case a
+    /// timestamp comparison would get wrong — hence the generation token.
+    func testSupersededCountdownCannotClearTheNewerVerdict() async {
+        let rig = makeRig()
+        let ref = RemoteAgentRef.builtin(.openclaw)
+        await seedGateway(rig, ref: ref)
+        // Verdict per configuration, so which one survives is provable from the
+        // enum rather than inferred.
+        let originalURL = seededURL
+        rig.gate.resultForInput = { $0.url != originalURL }
+
+        rig.monitor.observe(ref)
+        await rig.monitor.drainForTesting()
+        await rig.sleeper.awaitPark()
+        XCTAssertEqual(rig.monitor.presence[ref], .failed)
+
+        // No clock movement: the second verdict is written at the same instant.
+        await seedGateway(rig, ref: ref, url: movedURL)
+        rig.monitor.observe(ref)
+        await rig.monitor.drainForTesting()
+        await rig.sleeper.awaitPark()
+        XCTAssertEqual(rig.monitor.presence[ref], .reachable)
+
+        // Release ONLY the first, cancelled countdown.
+        rig.sleeper.fireOldest()
+        await Task.yield()
+        XCTAssertEqual(rig.monitor.presence[ref], .reachable,
+                       "the first countdown belongs to a verdict that is gone; it may not retire its successor")
+
+        rig.sleeper.fireAll()
+    }
+
+    /// Countdowns are per ref. One gateway going silent says nothing about
+    /// another, which shares nothing with it but this monitor.
+    func testExpiryIsIndependentPerRef() async {
+        let rig = makeRig()
+        let first = RemoteAgentRef.builtin(.openclaw)
+        let second = RemoteAgentRef.builtin(.hermes)
+        await seedGateway(rig, ref: first)
+        await seedGateway(rig, ref: second, url: movedURL)
+
+        rig.monitor.observe(first)
+        await rig.monitor.drainForTesting()
+        await rig.sleeper.awaitPark()
+        rig.monitor.observe(second)
+        await rig.monitor.drainForTesting()
+        await rig.sleeper.awaitPark()
+        XCTAssertEqual(rig.monitor.presence[first], .reachable)
+        XCTAssertEqual(rig.monitor.presence[second], .reachable)
+
+        // Scoped drain: the second ref's countdown is still parked on purpose,
+        // and awaiting it would hang the suite rather than fail it.
+        rig.sleeper.fireOldest()   // the first ref's countdown parked first
+        await rig.monitor.drainDisplayExpiryForTesting(first)
+        XCTAssertNil(rig.monitor.presence[first])
+        XCTAssertEqual(rig.monitor.presence[second], .reachable,
+                       "the second gateway's claim is its own and nothing has retired it")
+
+        rig.sleeper.fireAll()   // release the survivor so no countdown outlives the test
+    }
+
+    /// THE SUSPENSION CASE. `Task.sleep` does not advance while iOS holds the
+    /// process, so a countdown armed before a long background can be hours
+    /// overdue when the app comes back with the verdict still in the dictionary.
+    /// The read every view uses must not repeat it.
+    func testVisiblePresenceWithholdsAnOverdueVerdictTheCountdownNeverFired() async {
+        let rig = makeRig()
+        let ref = RemoteAgentRef.builtin(.openclaw)
+        await seedGateway(rig, ref: ref)
+        rig.gate.result = false
+
+        rig.monitor.observe(ref)
+        await rig.monitor.drainForTesting()
+        await rig.sleeper.awaitPark()
+
+        // Time passes with the process suspended: the clock moves, the countdown
+        // does not fire.
+        rig.clock.advance(Constants.gatewayPresenceFailedDisplayLifetime + 1)
+        XCTAssertEqual(rig.monitor.presence[ref], .failed,
+                       "the stored verdict is untouched — this test is about what may be RENDERED")
+        XCTAssertNil(rig.monitor.visiblePresence(for: ref),
+                     "an overdue verdict may not reach a surface even when its countdown is still parked")
+
+        rig.sleeper.fireAll()
+    }
+
+    /// The same read, in the direction that proves it is not simply always nil:
+    /// a green verdict is still visible well past the FAILED lifetime, because
+    /// the two clocks are genuinely different.
+    func testVisiblePresenceKeepsGreenPastTheFailedLifetime() async {
+        let rig = makeRig()
+        let ref = RemoteAgentRef.builtin(.openclaw)
+        await seedGateway(rig, ref: ref)
+
+        rig.monitor.observe(ref)
+        await rig.monitor.drainForTesting()
+
+        rig.clock.advance(Constants.gatewayPresenceFailedDisplayLifetime + 1)
+        XCTAssertEqual(rig.monitor.visiblePresence(for: ref), .reachable)
+
+        rig.clock.advance(Constants.gatewayPresenceReachableDisplayLifetime)
+        XCTAssertNil(rig.monitor.visiblePresence(for: ref))
+
+        rig.sleeper.fireAll()
+    }
+
+    /// `observe` retires an overdue claim SYNCHRONOUSLY, before it decides
+    /// anything else. A foreground trigger arrives on a process that may have
+    /// been suspended for hours; making the user watch one more frame of a stale
+    /// red while an actor read completes is the exact failure this guards.
+    func testObserveSynchronouslyPrunesAnOverdueClaim() async {
+        let rig = makeRig()
+        let ref = RemoteAgentRef.builtin(.openclaw)
+        await seedGateway(rig, ref: ref)
+        rig.gate.result = false
+
+        rig.monitor.observe(ref)
+        await rig.monitor.drainForTesting()
+        await rig.sleeper.awaitPark()
+        rig.clock.advance(Constants.gatewayPresenceFailedDisplayLifetime + 1)
+
+        rig.monitor.observe(ref)
+        XCTAssertNil(rig.monitor.presence[ref],
+                     "the prune must happen before the first await, not after the probe returns")
+
+        await rig.monitor.drainForTesting()
+        XCTAssertEqual(rig.monitor.presence[ref], .failed,
+                       "and the re-probe still answers — pruning is not a refusal to look again")
+
+        rig.sleeper.fireAll()
+    }
+
+    /// Forgetting a gateway takes its countdown with it: no orphan task, and
+    /// releasing one afterwards changes nothing.
+    func testForgettingAGatewayCancelsItsCountdown() async {
+        let rig = makeRig()
+        let ref = RemoteAgentRef.builtin(.openclaw)
+        await seedGateway(rig, ref: ref)
+
+        rig.monitor.observe(ref)
+        await rig.monitor.drainForTesting()
+        await rig.sleeper.awaitPark()
+        XCTAssertEqual(rig.monitor.presence[ref], .reachable)
+
+        await rig.manager.setRemoteAgentURL(nil, for: ref)
+        rig.monitor.observe(ref)
+        await rig.monitor.drainForTesting()
+        XCTAssertNil(rig.monitor.presence[ref])
+
+        rig.sleeper.fireAll()
+        await rig.monitor.drainDisplayExpiryForTesting()
+        XCTAssertNil(rig.monitor.presence[ref],
+                     "a released orphan countdown must not resurrect or disturb anything")
     }
 }
