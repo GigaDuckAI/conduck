@@ -792,6 +792,54 @@ final class FileServerClientTests: XCTestCase {
             "a pin that caught a different key is the interception shape, even mid-Stop")
     }
 
+    /// The LISTING half of the same rule, sited here so the two lanes read side
+    /// by side: a cancel is silent only when it was ours.
+    func testAListingCancelIsOnlySilentWhenItWasOurs() {
+        XCTAssertEqual(
+            BackgroundFileTransfer.listingTransportVerdict(
+                URLError(.cancelled), evaluator: nil, isTaskCancelled: true),
+            .noObservation,
+            "the user's Stop must not charge the lane's health on the listing either")
+        XCTAssertEqual(
+            BackgroundFileTransfer.listingTransportVerdict(
+                URLError(.cancelled), evaluator: nil, isTaskCancelled: false),
+            .unusable(.transport),
+            "a peer reset wears the same code and is the lane's doing")
+    }
+
+    /// A task torn down before its request left carries no `URLError` at all.
+    func testACancellationErrorOnAListingIsNoObservation() {
+        XCTAssertEqual(
+            BackgroundFileTransfer.listingTransportVerdict(
+                CancellationError(), evaluator: nil, isTaskCancelled: true),
+            .noObservation)
+    }
+
+    /// THE DRIFT GUARD, and the most valuable test in this pair. The witness and
+    /// the listing are two request paths to ONE server, and a user reads their
+    /// two rows a few points apart on the same screen. So for every transport
+    /// failure, the two must agree about whether this DEVICE failed to ask —
+    /// which makes an edit to one lane fail here rather than ship a pair of
+    /// surfaces telling one user two stories about one file server.
+    func testTheTwoLanesReadOneTransportFailureTheSameWay() {
+        let codes: [URLError.Code] = [
+            .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive,
+            .timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
+            .appTransportSecurityRequiresSecureConnection, .secureConnectionFailed, .cancelled
+        ]
+        for code in codes {
+            for ours in [true, false] {
+                let witness = BackgroundFileTransfer.witnessTransportVerdict(
+                    code: code, signals: .empty, isTaskCancelled: ours)
+                let listing = BackgroundFileTransfer.listingTransportVerdict(
+                    URLError(code), evaluator: nil, isTaskCancelled: ours)
+                XCTAssertEqual(
+                    witness == .noObservation, listing == .noObservation,
+                    "\(code) (ourCancel=\(ours)) is read differently by the two lanes")
+            }
+        }
+    }
+
     /// The full request path agrees: a bare `-999` from the wire with no task
     /// cancellation and no refusal on record is the peer-reset shape.
     func testABareUncancelledCancelThroughTheSeamStaysUnreachable() async {

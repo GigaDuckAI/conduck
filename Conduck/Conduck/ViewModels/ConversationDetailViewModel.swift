@@ -182,11 +182,18 @@ nonisolated final class OutputScanClaimRegistry: @unchecked Sendable {
 ///
 /// IT MEASURES; IT DOES NOT INFER, and the listing is what supplies the
 /// measurement. A stall no longer has to be diagnosed: `FileServerListingVerdict`
-/// separates "the folder is there and holds nothing", "the folder is not there"
-/// and "nothing was learned" at the source, so the breaker is consulted ONLY on
-/// the third. Counting stalls would silence a healthy lane on the strength of a
-/// young turn whose folder is legitimately still empty; reading the verdict
-/// cannot.
+/// separates "the folder is there and holds nothing", "the folder is not there",
+/// "a server was asked and could not be read" and "this device never asked" at
+/// the source, so the breaker is consulted ONLY on the third. Counting stalls
+/// would silence a healthy lane on the strength of a young turn whose folder is
+/// legitimately still empty; reading the verdict cannot.
+///
+/// THE FOURTH IS FREE, and keeping it free is the point of its existing. A phone
+/// with no network path, or a pass the app's own task cancelled, produced no
+/// evidence about the user's server — charging it would open a backoff on a lane
+/// that is answering perfectly, and paint a fault row under replies to prove it.
+/// `discoveryReading(of:)` is where that distinction is made, once, for both the
+/// automatic pass and the tap.
 ///
 /// WHAT A MEASUREMENT COSTS: nothing. The listing that stalled IS the question a
 /// synthetic control used to ask, and a stronger version of it — a `207` is
@@ -1562,9 +1569,9 @@ final class ConversationDetailViewModel {
             // Output discovery (non-awaited): THE automatic lane. Every dispatch
             // that persisted an explicit pending marker, an exact durable lane
             // AND the folder it named is listed once here. Rows with no folder —
-            // a wrist-originated turn, a lane that cannot hold a nested
-            // collection, a dispatch whose freshness was never witnessed, or a
-            // row that synced before its attribute did — are selected OUT rather
+            // a wrist turn whose lane was never couriered, a lane that cannot
+            // hold a nested collection, a dispatch whose freshness was never
+            // witnessed, or a row that synced before its attribute did — are selected OUT rather
             // than closed: missing metadata means UNKNOWN, never EMPTY. Guarded
             // to a single in-flight pass; the per-instance attempted-set + the
             // durable `outputScanDone` marker stop re-listing on reload echoes.
@@ -1583,6 +1590,12 @@ final class ConversationDetailViewModel {
             // `.conversationsDidChange` drives a reload the moment a reply
             // lands, whichever process landed it.
             refreshUnnamedFolderRows()
+            // The fifth fact arrives a beat later, off the main actor, and
+            // refreshes the rows again when it does. Deliberately AFTER the
+            // synchronous pass above rather than in place of it: everything the
+            // record alone decides is on screen immediately, and the reply-text
+            // reading can only ADD rows to that — never take one away mid-glance.
+            Task { [weak self] in await self?.refreshSearchableReplyNames() }
             // Same pruning for the transient manual-look captions, plus the one
             // thing a live-id filter cannot see: a row that has GAINED a chip
             // since it was told "nothing found" now contradicts its own caption.
@@ -1605,9 +1618,11 @@ final class ConversationDetailViewModel {
     ///
     /// `outputBoxKey != nil` IS THE LOAD-BEARING CLAUSE, and its job is to select
     /// rows OUT rather than close them. A reply with a lane but no folder can
-    /// arrive four ways — a wrist-originated turn (the Watch holds no
-    /// file-server credential and names no box), a lane that cannot hold a nested
-    /// collection, a dispatch whose pre-flight freshness assertion did not come
+    /// arrive four ways — a wrist turn the phone has not couriered a lane id to
+    /// (a ready lane WITH one does mint a box on the wrist, uncorroborated,
+    /// because the Watch holds no credential to assert absence with; without one
+    /// the store drops the folder rather than name a path nothing can list), a
+    /// lane that cannot hold a nested collection, a dispatch whose pre-flight freshness assertion did not come
     /// back a definite miss, and a row a device synced from CloudKit before the
     /// attribute landed. Every one of them means UNKNOWN. Marking such a turn
     /// scanned would make "we have not been told yet" permanently indistinguish-
@@ -2157,7 +2172,16 @@ final class ConversationDetailViewModel {
             laneSuppression = FileLaneScanBreaker.shared.suppressionInterval(lane: laneKey)
         }
 
-        for candidate in candidates where laneSuppression == nil {
+        // Set to the INDEX of the candidate whose listing this device never made
+        // (no network path, or our own cancel). Ends the fan-out for the same
+        // reason `laneSuppression` does — nineteen more requests from a phone
+        // with no radio learn nothing nineteen more times — but charges the lane
+        // NOTHING, because none of it is evidence about the lane. The index is
+        // what makes the park set exact: see the parking block below.
+        var deviceDidNotAskAt: Int?
+
+        for (index, candidate) in candidates.enumerated()
+        where laneSuppression == nil && deviceDidNotAskAt == nil {
             let execution = await Self.executeRetroOutputScanCandidate(
                 candidate,
                 currentLaneID: currentLaneID,
@@ -2178,14 +2202,23 @@ final class ConversationDetailViewModel {
                 },
                 list: { outboxKey, excluded in
                     guard let snapshot else {
-                        // NO LANE, SO NOTHING WAS LISTED — and `.unusable` is
+                        // NO LANE, SO NOTHING WAS ASKED — `.noObservation` is
                         // the honest encoding of that, which is why the census
                         // fields are left at their empty defaults rather than
                         // stated. A zero census here would claim a folder was
                         // read and found clean by a pass that never opened a
                         // socket, and that claim would overwrite a real one.
+                        //
+                        // A TOTAL VALUE, NOT A LIVE BRANCH: the caller returns
+                        // `.deferred` when `snapshotAvailable` is false, and a
+                        // nil snapshot also leaves `currentLaneID` nil, which
+                        // routes to `.deferUntilMatchingLane`. Chosen to FAIL
+                        // TOWARD SILENCE anyway — were that guard ever to
+                        // regress, `.unusable` here would charge a breaker and
+                        // accuse a file server on behalf of a user who has not
+                        // configured one.
                         return .init(drafts: [], conclusive: false,
-                                     verdict: .unusable(.transport))
+                                     verdict: .noObservation)
                     }
                     return await FileTransferOutputDetector.reconcileOutbox(
                         outboxKey: outboxKey,
@@ -2199,10 +2232,10 @@ final class ConversationDetailViewModel {
 
             switch execution {
             case .listed(let result, let verdict):
-                listedResults.append(result)
-                listedMessageIDs.append(candidate.id)
-                switch verdict {
-                case .entries, .absent:
+                switch Self.discoveryReading(of: verdict) {
+                case .answered:
+                    listedResults.append(result)
+                    listedMessageIDs.append(candidate.id)
                     // The server answered a real question about a real path with
                     // a definite yes or no — which is precisely what the breaker's
                     // synthetic control was ever asked to establish. So the
@@ -2214,10 +2247,12 @@ final class ConversationDetailViewModel {
                     if let laneKey {
                         FileLaneScanBreaker.shared.noteHealthyEvidence(lane: laneKey)
                     }
-                case .unusable:
+                case .unreadable:
+                    listedResults.append(result)
+                    listedMessageIDs.append(candidate.id)
                     // The ONE discovery outcome the user is told about, because
-                    // it is the only one where the app learned nothing and the
-                    // remedy is theirs.
+                    // it is the only one where a server was ASKED, the app
+                    // learned nothing, and the remedy is theirs.
                     faultedMessageIDs.insert(candidate.id)
                     guard let laneKey else { continue }
                     // Nothing in this pass has shown the lane can answer. Settle
@@ -2242,6 +2277,14 @@ final class ConversationDetailViewModel {
                             ticket: ticket
                         )
                     }
+                case .notAsked:
+                    // NOTHING to charge and NOTHING to say. No breaker verdict,
+                    // no fault id, and no cleared fault either — an all-clear is
+                    // an answer, and no answer arrived. Nothing joins
+                    // `listedResults` either: an empty, unclosed, censusless
+                    // result would spin up a Core Data write to persist a pass
+                    // that did not happen.
+                    deviceDidNotAskAt = index
                 }
             case .deferred, .claimUnavailable:
                 continue
@@ -2263,6 +2306,29 @@ final class ConversationDetailViewModel {
                 listedResults: listedResults
             )
             parkRetroScanCandidates(parked, for: interval)
+        } else if let index = deviceDidNotAskAt {
+            // A NARROWER SET THAN THE LANE CASE, and the difference is the whole
+            // point. `retroScanParkSet` parks every candidate that did not
+            // already settle, which is right when the LANE is what failed —
+            // every turn in the pass is waiting on that one server. Here the
+            // failure is this device's, and it began at exactly one candidate:
+            // everything BEFORE it got a real answer, or deferred, or was
+            // claimed by another operation, and each of those already owns its
+            // own hold policy. Sweeping them in would replace a definite
+            // result's normal age/stall handling with an unrelated five-minute
+            // device hold, and could hand a five-minute hold to a turn a
+            // concurrent manual scan is in the middle of.
+            //
+            // From the index onward is exactly "this one, plus the ones the
+            // `where` clause then skipped" — the unvisited tail.
+            parked = Set(candidates[index...].map(\.id))
+            // The DEVICE, not the lane, is what could not ask, so the interval
+            // comes from the clock rather than from either breaker's ladder:
+            // `retroStalledRetryInterval` is the rate these turns were already
+            // being retried at, and it never widens. A device that was offline
+            // for an hour must not meet its own recovery with the slowest
+            // cadence a walled server earned.
+            parkRetroScanCandidates(parked, for: Self.retroStalledRetryInterval)
         }
 
         // A lane drift after the listings drops every network-derived result:
@@ -2413,6 +2479,12 @@ final class ConversationDetailViewModel {
         // exactly the change this row is about, and gating it on `laneMoved`
         // would leave the row waiting for a settings edit to appear.
         refreshUnnamedFolderRows()
+        // And the fifth fact, which the line above can only READ. This path
+        // exists precisely because the breaker can fault with no reply landing,
+        // and until it does no turn on this lane is a scan candidate at all — so
+        // the set above would still be the empty one from while the lane was
+        // healthy, and every row would wait for an unrelated reload to appear.
+        await refreshSearchableReplyNames()
         let laneMoved = fileLaneIdentityMoved
         fileLaneIdentityMoved = false
         guard laneMoved else { return }
@@ -2458,22 +2530,65 @@ final class ConversationDetailViewModel {
     ///
     /// The lane clause is `==`, not `!= nil`: a turn dispatched to a DIFFERENT
     /// server than the one currently failing is not evidence about that server.
+    ///
+    /// `repliesWithSomethingToSearchFor` IS THE FIFTH FACT, and it is what keeps
+    /// this row off a conversation nobody was moving files through. A greeting
+    /// answered with a greeting, under a file server that has genuinely stopped,
+    /// used to carry a paragraph about files neither side mentioned — and the
+    /// row's own per-turn remedy, a search of the reply for the names it
+    /// mentions, would have answered that tap with nothing. So the row waits for
+    /// a turn where that search HAS a name it would go and ask about: computed
+    /// off the main actor from the shipped extractor's post-exclusion window
+    /// (see `FileTransferOutputDetector.actionableCandidateWindow`), and passed
+    /// in rather than derived here so this rule stays pure and synchronous.
+    ///
+    /// What that buys is precision, and what it costs is stated rather than
+    /// hidden: a reply naming a type the extractor does not recognise draws no
+    /// row, and the surface that still answers for the SERVER rather than for
+    /// any one turn is the per-lane connection test in Diagnostics.
+    ///
+    /// An id absent from the set because the scan has not run yet makes the row
+    /// appear a frame LATE, never vanish — the direction that matters, since a
+    /// row disappearing under the user's finger is the regression this surface
+    /// has a hold mechanism for.
     static func unnamedFolderRowIDs(
         in messages: [MessageRecord],
         currentLaneID: String?,
-        faultedSince: Date?
+        faultedSince: Date?,
+        repliesWithSomethingToSearchFor: Set<UUID>
     ) -> Set<UUID> {
-        guard let currentLaneID, let faultedSince else { return [] }
-        return Set(
-            messages
-                .filter { message in
-                    message.role == "agent"
-                        && message.outputScanLaneID == currentLaneID
-                        && message.outputBoxKey == nil
-                        && message.createdAt >= faultedSince
-                }
-                .map(\.id)
+        Set(
+            unnamedFolderStructuralCandidates(
+                in: messages, currentLaneID: currentLaneID, faultedSince: faultedSince
+            )
+            .lazy
+            .filter { repliesWithSomethingToSearchFor.contains($0.id) }
+            .map(\.id)
         )
+    }
+
+    /// The turns a live failure streak COULD cover — the four facts that are
+    /// decided by the record alone, with the reply text never read.
+    ///
+    /// SPLIT OUT BECAUSE THE FIFTH FACT IS EXPENSIVE. Whether the reply names a
+    /// file the search could actually go and ask about costs a regex over the
+    /// reply, and `FileTransferOutputDetector` requires that off the main actor.
+    /// This is the bounded set worth spending it on — turns since the streak
+    /// began, on this lane, that never got a folder — rather than every message
+    /// in the thread. It is also what the scan iterates, so the two can never
+    /// disagree about which turns are in question.
+    static func unnamedFolderStructuralCandidates(
+        in messages: [MessageRecord],
+        currentLaneID: String?,
+        faultedSince: Date?
+    ) -> [MessageRecord] {
+        guard let currentLaneID, let faultedSince else { return [] }
+        return messages.filter { message in
+            message.role == "agent"
+                && message.outputScanLaneID == currentLaneID
+                && message.outputBoxKey == nil
+                && message.createdAt >= faultedSince
+        }
     }
 
     /// Whether a hold has been EARNED AWAY by evidence rather than by time.
@@ -2518,10 +2633,14 @@ final class ConversationDetailViewModel {
         in messages: [MessageRecord],
         currentLaneID: String?,
         faultedSince: Date?,
-        hold: UnnamedFolderHold?
+        hold: UnnamedFolderHold?,
+        repliesWithSomethingToSearchFor: Set<UUID>
     ) -> (ids: Set<UUID>, hold: UnnamedFolderHold?) {
         let derived = unnamedFolderRowIDs(
-            in: messages, currentLaneID: currentLaneID, faultedSince: faultedSince)
+            in: messages,
+            currentLaneID: currentLaneID,
+            faultedSince: faultedSince,
+            repliesWithSomethingToSearchFor: repliesWithSomethingToSearchFor)
         guard let hold,
               !unnamedFolderHoldIsSpent(hold, in: messages, currentLaneID: currentLaneID) else {
             return (derived, nil)
@@ -2543,13 +2662,123 @@ final class ConversationDetailViewModel {
             faultedSince: currentFileLaneWitnessKey.flatMap {
                 BackgroundFileTransfer.FileLaneWitnessBreaker.shared.faultedSince(lane: $0)
             },
-            hold: unnamedFolderHold
+            hold: unnamedFolderHold,
+            repliesWithSomethingToSearchFor: repliesWithSomethingToSearchFor
         )
         unnamedFolderHold = state.hold
         // Compared before assigning so an unchanged set repaints nothing.
         if state.ids != outputFolderUnnamedIDs {
             outputFolderUnnamedIDs = state.ids
         }
+    }
+
+    /// Reply ids whose filename search would have a name to ask the server
+    /// about. The fifth fact behind the folder-less row, kept here rather than
+    /// derived in the rule because reading it costs a regex over reply text and
+    /// `FileTransferOutputDetector` requires that off the main actor.
+    ///
+    /// `@ObservationIgnored` on purpose: it is an INPUT to
+    /// `refreshUnnamedFolderRows`, which writes the observable set once the scan
+    /// lands. Observing it too would repaint the thread twice for one change.
+    @ObservationIgnored private var repliesWithSomethingToSearchFor: Set<UUID> = []
+
+    /// What was scanned, per reply: `searchableScanFingerprint` of the state the
+    /// answer was read from. A reload re-runs the regex only where that moved.
+    ///
+    /// A FINGERPRINT, NOT A BARE ID, because both halves of the question move
+    /// after a first scan — an agent turn's text GROWS while it arrives, and a
+    /// chip landing on the turn can exclude the candidate that drew the row.
+    /// Cheap, and wrong only in the direction of scanning once more than needed.
+    @ObservationIgnored private var scannedForSearchableNames: [UUID: Int] = [:]
+
+    /// The conversation-wide exclusion set the cache above was built against.
+    /// A change here invalidates every entry, because those tokens are not part
+    /// of any one message's fingerprint.
+    @ObservationIgnored private var inboundTokensBehindSearchableNames: Set<String> = []
+
+    /// Work out which of the CURRENTLY qualifying turns name something the
+    /// search could probe, off the main actor, then refresh the rows.
+    ///
+    /// SCOPED TO THE STRUCTURAL CANDIDATES, never the whole thread: while the
+    /// lane is healthy this is the empty set and the whole thing costs one
+    /// `guard`. It only has work to do during an outage, over the turns sent
+    /// into it.
+    ///
+    /// The exclusion set is the one `searchMentionedFiles` itself applies, so the
+    /// row appears exactly where that button would issue a request — a reply
+    /// that merely echoes a file the USER uploaded names a candidate and probes
+    /// none, and this is where that is noticed.
+    ///
+    /// SYNCHRONOUS REFRESH AT THE END, and nothing awaited in the middle of the
+    /// hold's read-modify-write: `refreshUnnamedFolderRows` mutates
+    /// `unnamedFolderHold` and then compares-and-assigns, so an `await` inside it
+    /// would let two recomputes interleave on the hold.
+    func refreshSearchableReplyNames() async {
+        let candidates = Self.unnamedFolderStructuralCandidates(
+            in: messages,
+            currentLaneID: currentFileLaneID,
+            faultedSince: currentFileLaneWitnessKey.flatMap {
+                BackgroundFileTransfer.FileLaneWitnessBreaker.shared.faultedSince(lane: $0)
+            }
+        )
+        guard !candidates.isEmpty else { return }
+        let inbound = inboundStoredKeyTokens()
+        // The exclusion set is CONVERSATION-WIDE, so a new upload can retire a
+        // candidate on a reply whose own text never changed. Dropping the whole
+        // cache is both cheaper and more obviously right than reasoning about
+        // which entries one new token invalidates.
+        if inbound != inboundTokensBehindSearchableNames {
+            inboundTokensBehindSearchableNames = inbound
+            scannedForSearchableNames = [:]
+        }
+        var membershipMoved = false
+        for message in candidates {
+            let fingerprint = Self.searchableScanFingerprint(of: message)
+            guard scannedForSearchableNames[message.id] != fingerprint else { continue }
+            let extracted = await FileTransferOutputDetector
+                .extractCandidatesOffMainActor(from: message.text)
+            let window = FileTransferOutputDetector.actionableCandidateWindow(
+                candidates: extracted,
+                excludedKeys: Set(message.attachments.compactMap(\.storedKey)).union(inbound)
+            )
+            // WRITTEN LIVE, NEVER BACK FROM A SNAPSHOT TAKEN BEFORE THE AWAIT.
+            // This method is `@MainActor` but it suspends, so two reloads in
+            // quick succession interleave here — and a copy captured before the
+            // first suspension is stale by the time it lands. Writing a whole
+            // stale set back would retract rows a later pass had already put on
+            // screen, which is precisely the disappearing-row failure this
+            // surface must not have. Per-key writes cannot: whichever pass runs
+            // last simply re-states the same answer for the same fingerprint.
+            scannedForSearchableNames[message.id] = fingerprint
+            if window.isEmpty {
+                membershipMoved = repliesWithSomethingToSearchFor
+                    .remove(message.id) != nil || membershipMoved
+            } else {
+                membershipMoved = repliesWithSomethingToSearchFor
+                    .insert(message.id).inserted || membershipMoved
+            }
+        }
+        guard membershipMoved else { return }
+        refreshUnnamedFolderRows()
+    }
+
+    /// What a scan's answer depends on, in one comparable value: the reply text
+    /// AND the keys that would be excluded from its window.
+    ///
+    /// THE ATTACHMENT HALF IS NOT DECORATION. A chip landing on this turn — the
+    /// name search finding the file, say — adds a storedKey that excludes the
+    /// very candidate the row was drawn for, with the reply text untouched. A
+    /// cache keyed on text alone would keep offering a search that would now
+    /// probe nothing. Length rather than the text itself because an agent turn
+    /// GROWS while it arrives and the cheap comparison is the point; a rewrite
+    /// that preserved length exactly is not a shape this text takes.
+    nonisolated static func searchableScanFingerprint(of message: MessageRecord) -> Int {
+        var hasher = Hasher()
+        hasher.combine(message.text.count)
+        for key in message.attachments.compactMap(\.storedKey).sorted() {
+            hasher.combine(key)
+        }
+        return hasher.finalize()
     }
 
     /// Re-enable pre-dispatch probing on `snapshot`'s lane, WITHOUT retracting
@@ -2604,9 +2833,9 @@ final class ConversationDetailViewModel {
     }
 
     /// Whether this turn has an output folder a user tap could re-read. False for
-    /// a wrist-originated turn, a lane that cannot hold a nested collection, a
-    /// dispatch whose freshness was never witnessed, and a row that synced ahead
-    /// of its attribute — every one of which the manual name search still serves.
+    /// a wrist turn whose lane was never couriered, a lane that cannot hold a
+    /// nested collection, a dispatch whose freshness was never witnessed, and a
+    /// row that synced ahead of its attribute — every one of which the manual name search still serves.
     static func canRecheckOutputs(_ message: MessageRecord) -> Bool {
         message.role == "agent"
             && message.outputScanLaneID != nil
@@ -2625,7 +2854,7 @@ final class ConversationDetailViewModel {
     /// so does every row that predates the attribute.
     ///
     /// Weaker than `canRecheckOutputs` by exactly one clause, deliberately: a
-    /// turn with a lane but no FOLDER — a wrist-originated turn, a lane that
+    /// turn with a lane but no FOLDER — an uncouriered wrist turn, a lane that
     /// cannot hold a nested collection, a dispatch whose freshness was never
     /// witnessed — is precisely the population the automatic lane never serves,
     /// so the name search is the only recovery it has.
@@ -2910,7 +3139,41 @@ final class ConversationDetailViewModel {
     ) -> Bool {
         switch reconciliation.verdict {
         case .entries, .absent: return true
-        case .unusable: return false
+        case .unusable, .noObservation: return false
+        }
+    }
+
+    /// What ONE listing verdict tells the LANE and the ROW. Three readings, and
+    /// the third is why this is not a Bool.
+    enum DiscoveryReading: Equatable, Sendable {
+        /// The server answered about the folder. Clear any standing row, and let
+        /// the breaker note the lane healthy.
+        case answered
+        /// A server that was asked could not be read. Paint the row, charge the
+        /// breaker — the one discovery outcome the user is told about, because it
+        /// is the only one where the remedy is theirs.
+        case unreadable
+        /// This device never asked. Say nothing, charge nothing, and — the part
+        /// that is easy to get wrong — clear nothing either: an all-clear issued
+        /// by a request that never happened is a claim with no observation behind
+        /// it, so a fault already on the row is still the last thing anyone
+        /// learned.
+        case notAsked
+    }
+
+    /// The charge/paint decision for one listing verdict, in one place.
+    ///
+    /// PURE, and shared by both lanes deliberately. The automatic pass and
+    /// `applyDiscoveryVerdict` (the tap lane) each used to spell this rule out
+    /// themselves, and the pass is `private` — so the rule that decides whether a
+    /// user's server gets blamed was not reachable from a test at all. One
+    /// function, two callers, and the drift between the tap and the automatic
+    /// pass becomes impossible rather than merely unlikely.
+    static func discoveryReading(of verdict: FileServerListingVerdict) -> DiscoveryReading {
+        switch verdict {
+        case .entries, .absent: return .answered
+        case .unusable: return .unreadable
+        case .noObservation: return .notAsked
         }
     }
 
@@ -3072,7 +3335,7 @@ final class ConversationDetailViewModel {
     /// cannot act on it.
     ///
     /// Available on every agent turn that HAS A FILE LANE — including one with no
-    /// folder at all (a wrist-originated turn, a flat lane), which is exactly the
+    /// folder at all (an uncouriered wrist turn, a flat lane), which is exactly the
     /// population that gets no automatic delivery. A turn with no lane has no
     /// server to search and is gated out of the menu entirely
     /// (`canSearchMentionedFiles`), because the guard below can only return.
@@ -3380,15 +3643,21 @@ final class ConversationDetailViewModel {
     /// Fold one listing verdict into the observable fault set. Compared before
     /// assigning so a repeat verdict repaints nothing.
     private func applyDiscoveryVerdict(_ verdict: FileServerListingVerdict, to messageID: UUID) {
-        switch verdict {
-        case .entries, .absent:
+        switch Self.discoveryReading(of: verdict) {
+        case .answered:
             if outputDiscoveryFaultIDs.contains(messageID) {
                 outputDiscoveryFaultIDs.remove(messageID)
             }
-        case .unusable:
+        case .unreadable:
             if !outputDiscoveryFaultIDs.contains(messageID) {
                 outputDiscoveryFaultIDs.insert(messageID)
             }
+        case .notAsked:
+            // NEITHER INSERT NOR REMOVE. Nothing was learned, so there is no
+            // fault to state and no all-clear to give: removing here would
+            // retire a standing row on the strength of a request this device
+            // never made.
+            break
         }
     }
 

@@ -1131,12 +1131,15 @@ final class BackgroundFileTransfer: NSObject {
     /// a live file-server, the same seam shape as `probeExistsWithLength`.
     ///
     /// `evaluator` is nil for an injected session: a mock raises no server-trust
-    /// challenge, so there are no verdicts to read and a transport failure can
-    /// only be `.transport`. Production always passes the evaluator that
-    /// answered this attempt, because a certificate refusal and a benign
-    /// cancellation are both a bare `-999` and only the evaluator can tell them
-    /// apart — without it a refused certificate would reach the user as "your
-    /// file server is unreachable".
+    /// challenge, so there are no verdicts to read and no transport failure can
+    /// be named a CERTIFICATE one. It can still be named a device-side one —
+    /// `listingTransportVerdict` classifies the error code whether or not an
+    /// evaluator answered, which is what lets a stubbed session drive the
+    /// offline case. Production always passes the evaluator that answered this
+    /// attempt, because a certificate refusal and a benign cancellation are both
+    /// a bare `-999` and only the evaluator can tell them apart — without it a
+    /// refused certificate would reach the user as "your file server is
+    /// unreachable".
     static func listCollection(
         snapshot: SettingsManager.FileTransferSnapshot,
         collectionKey: String,
@@ -1155,7 +1158,8 @@ final class BackgroundFileTransfer: NSObject {
             verdict = FileServerClient.parseListing(
                 status: answer.status, body: answer.body, requestedURL: requestedURL)
         } catch {
-            return .unusable(Self.listingTransportRefusal(error, evaluator: evaluator))
+            return Self.listingTransportVerdict(
+                error, evaluator: evaluator, isTaskCancelled: Task.isCancelled)
         }
 
         // Only a POSITIVE reading needs corroborating. `.absent` and every
@@ -1192,7 +1196,18 @@ final class BackgroundFileTransfer: NSObject {
                 return .unusable(.namespaceAnswersEverything)
             }
         } catch {
-            return .unusable(Self.listingTransportRefusal(error, evaluator: evaluator))
+            // A CONTROL THAT NEVER LEFT THE DEVICE proved nothing about the lane,
+            // so it charges nothing — even though the listing above just answered
+            // `207`. The listing stays unbelieved either way (the control is
+            // required, and this one did not run), and the pass treats the turn
+            // as "not asked": no health note from the `207`, and the unvisited
+            // tail parked on the clock. ACCEPTED rather than given a fifth
+            // verdict: the device that could not send the control is the same
+            // device that would send the rest of the fan-out, so stopping is
+            // right, and the cost of being wrong is one five-minute wait that
+            // heals itself.
+            return Self.listingTransportVerdict(
+                error, evaluator: evaluator, isTaskCancelled: Task.isCancelled)
         }
         return verdict
     }
@@ -1280,6 +1295,59 @@ final class BackgroundFileTransfer: NSObject {
             return .transport
         }
         return .certificateRefused(refusal)
+    }
+
+    /// What a listing transport failure establishes: a fault of the LANE, or
+    /// nothing at all because this DEVICE never asked. The twin of
+    /// `witnessTransportVerdict`, sited beside the refusal it wraps, and it must
+    /// stay in step with it — one server, two request paths, and a user who
+    /// reads the two rows a few points apart on the same screen.
+    ///
+    /// A THIN LAYER ABOVE `listingTransportRefusal`, never a replacement for it.
+    /// That function is the CERTIFICATE story and stays the sole author of
+    /// `.certificateRefused`; this one only decides whether the failure belongs
+    /// to the lane at all before handing over.
+    ///
+    /// IT CONSULTS THE CLASSIFIER UNCONDITIONALLY, which is the fix. The refusal
+    /// path returns early when there is no evaluator or no recorded trust
+    /// signals — correct for a certificate claim, because no signals means no
+    /// certificate to name — but as a gate on the WHOLE classification it is
+    /// what hid this bug: a `-1009` from a phone in a lift raises no trust
+    /// challenge, so it never reached the `.offline` arm and was charged to a
+    /// file server that was answering fine.
+    ///
+    /// `isTaskCancelled` is read INSIDE the catch, after the await failed, for
+    /// the reason the witness states: a bare `-999` is a cancel, and only
+    /// Conduck knows whether Conduck cancelled. A peer-side reset keeps the
+    /// lane's patience; our own stop charges nothing. `CancellationError` is
+    /// handled first because a task torn down before the request left has no
+    /// `URLError` to classify at all.
+    ///
+    /// Everything else stays chargeable, including `.blockedByATS`: a refusal
+    /// decided before TCP is still a statement about the address the lane is
+    /// configured with, not about this device's radio.
+    static func listingTransportVerdict(
+        _ error: Error,
+        evaluator: RemoteAgentTrustEvaluator?,
+        isTaskCancelled: Bool
+    ) -> FileServerListingVerdict {
+        if error is CancellationError { return .noObservation }
+        guard let urlError = error as? URLError else {
+            return .unusable(listingTransportRefusal(error, evaluator: evaluator))
+        }
+        switch RemoteAgentTrustEvaluator.classifyTransportError(
+            urlError.code, signals: evaluator?.attemptSignals ?? .empty
+        ) {
+        case .offline:
+            return .noObservation
+        case .cancelled:
+            return isTaskCancelled
+                ? .noObservation
+                : .unusable(listingTransportRefusal(error, evaluator: evaluator))
+        case .timeout, .unreachable, .notEstablished, .blockedByATS,
+             .untrustedCert, .certMismatch, .certKeyUnpinnable:
+            return .unusable(listingTransportRefusal(error, evaluator: evaluator))
+        }
     }
 
     /// Best-effort delete of an orphaned `storedKey` (e.g. user cancelled a send
