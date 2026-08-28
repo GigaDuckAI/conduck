@@ -457,15 +457,26 @@ nonisolated enum OutboxEntryVerdict: Equatable, Sendable {
 
 /// Why a directory listing could not be believed. EVERY case means the same
 /// thing to the caller — the app learned nothing about what the agent produced,
-/// so the turn stays open — and they are kept apart because they name different
-/// server faults and a test that cannot tell them apart cannot prove the parser
-/// fails closed for the RIGHT reason.
+/// so the turn stays open, AND THE LANE IS CHARGED FOR IT — and they are kept
+/// apart because they name different server faults and a test that cannot tell
+/// them apart cannot prove the parser fails closed for the RIGHT reason.
+///
+/// A DEVICE THAT NEVER ASKED IS DELIBERATELY NOT IN THIS TYPE. An offline phone
+/// and a cancellation of our own author no server fault, so they have no honest
+/// spelling among these cases — and a case added here would inherit the "charge
+/// the lane" half of the contract above from every existing `.unusable` arm
+/// without one of them failing to compile. They live one level up, as
+/// `FileServerListingVerdict.noObservation`, exactly so that the difference has
+/// to be stated at each site that decides it.
 ///
 /// No case carries a filename, a key, a URL, or a body: a refusal is a taxonomy
 /// value, and the privacy invariants at the top of this file apply to it.
 enum FileTransferListingRefusal: Equatable, Sendable {
-    /// The request never produced an HTTP response (DNS, timeout, refused,
-    /// cancelled). Nothing about the folder was learned.
+    /// The request produced no HTTP response from a server that was reached for
+    /// (DNS, timeout, refused, a peer-side reset). Nothing about the folder was
+    /// learned, and the lane is charged: contrast
+    /// `FileServerListingVerdict.noObservation`, which is this device failing to
+    /// ask at all.
     case transport
     /// This device refused the server's certificate. Split from `.transport`
     /// for the reason `FileProbeOutcome.certRefused` is split from `.unknown`:
@@ -505,7 +516,7 @@ enum FileTransferListingRefusal: Equatable, Sendable {
     case namespaceAnswersEverything
 }
 
-/// What ONE PROPFIND of ONE collection established. THE THREE CASES ARE NEVER
+/// What ONE PROPFIND of ONE collection established. THE FOUR CASES ARE NEVER
 /// CONFLATED, and that is the whole contract:
 ///
 ///   - `.entries` — the folder was READ. An empty array is a positive fact
@@ -514,15 +525,29 @@ enum FileTransferListingRefusal: Equatable, Sendable {
 ///     children, on a lane that demonstrated it can say no.
 ///   - `.absent` — the folder is NOT THERE (`404`). Says nothing about the
 ///     server's health; says everything about the folder Conduck minted.
-///   - `.unusable` — nothing was learned. The caller must not close the turn.
+///   - `.unusable` — nothing was learned ABOUT A SERVER THAT WAS ASKED. The
+///     caller must not close the turn, and the lane is charged for it.
+///   - `.noObservation` — the request never really asked: the DEVICE had no
+///     network path, or our own task cancelled it. Split from `.unusable` for
+///     the reason `FileServerAbsenceWitness.noObservation` is split from
+///     `.unreachable` — it is evidence about this device, not about the lane,
+///     so it charges the breaker NOTHING and draws no row. Folding it into
+///     `.unusable` is the bug this case exists to make impossible: every
+///     existing `case .unusable` arm would absorb it silently, and a phone with
+///     no radio would go on accusing a file server that is answering fine.
 ///
 /// Collapsing any two of them is the failure this type exists to prevent: an
 /// unreadable server reading as "the agent produced nothing" closes a turn on
-/// evidence nobody has.
+/// evidence nobody has, and a device that never asked reading as an unreadable
+/// server backs off a lane that was never at fault.
+///
+/// `.noObservation` is the one case `parseListing` can never return — a status
+/// line proves a request was made and answered.
 enum FileServerListingVerdict: Equatable, Sendable {
     case entries([FileServerEntry])
     case absent
     case unusable(FileTransferListingRefusal)
+    case noObservation
 }
 
 /// What ONE `PROPFIND Depth: 0` of the folder a dispatch is about to name
@@ -3241,8 +3266,10 @@ enum FileServerClient {
     /// during a Test Connection stamp a healthy WebDAV server permanently unable
     /// to return files.
     ///
-    /// Same three-way shape `FileServerListingVerdict` already uses for the
-    /// listing itself (entries / absent / unusable), and for the same reason: a
+    /// The same shape `FileServerListingVerdict` uses for the listing itself
+    /// (entries / absent / unusable, plus the device-side `noObservation` this
+    /// staged probe has no equivalent of — a Test Connection the user asked for
+    /// is not a request that never happened), and for the same reason: a
     /// question with a "don't know" answer needs a value to put it in, or the
     /// don't-know silently borrows the meaning of whichever neighbour it is
     /// folded into.

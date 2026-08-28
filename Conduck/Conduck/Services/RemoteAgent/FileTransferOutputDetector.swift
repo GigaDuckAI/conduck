@@ -18,7 +18,17 @@ import Foundation
 /// names a fresh per-turn box (`OutboxKey.mint`) on the wire and persists that
 /// path with the reply, and discovery is a single `PROPFIND Depth: 1` of exactly
 /// that box (`reconcileOutbox`). Nothing in the reply's prose can schedule a
-/// request: a filename in the text is inert until the user asks for it.
+/// request: a filename in the text NEVER REACHES THE NETWORK until the user asks
+/// for it, and that is the invariant — not that the text is never read.
+///
+/// ONE READ HAPPENS WITHOUT A TAP, AND IT SPENDS NOTHING. The thread's
+/// folder-less row is shown only where this reply gives the manual search a name
+/// it would actually ask about, so the row's visibility consults
+/// `extractCandidates` + `actionableCandidateWindow` locally, off the main actor,
+/// and reaches no server. Without it, a file server that stopped answering put a
+/// paragraph about lost files under a greeting answered with a greeting — a
+/// notice whose own remedy would have issued no request. The line this file
+/// holds is between READING prose and SPENDING the user's server on it.
 ///
 /// WHY PROSE IS NOT A FILE-READ PRIMITIVE. The candidate regex cannot cross a
 /// `/`, so a file delivered into `<conversationID>/out-<nonce>/` yields only its
@@ -800,11 +810,16 @@ enum FileTransferOutputDetector {
     }
 
     /// Whether a LISTING pass may permanently stamp `outputScanDone`, per the
-    /// three-way verdict. Pure + content-free; `nonisolated` so the test target
+    /// four-way verdict. Pure + content-free; `nonisolated` so the test target
     /// can call it off the main actor.
     ///
     /// `.unusable` never closes a turn — the app learned nothing, and a turn
-    /// closed on no evidence is closed forever. `.absent` and `.entries` are both
+    /// closed on no evidence is closed forever. `.noObservation` never closes one
+    /// either, and gets its OWN arm rather than joining `.unusable`: the two
+    /// refuse for different reasons — a server that was asked and could not be
+    /// read, against a request this device never made — and only the first is a
+    /// fault the lane may be charged for. Grouping them here would put the two
+    /// one keystroke apart everywhere else. `.absent` and `.entries` are both
     /// real answers about the folder, so they close on the age ladder exactly
     /// alike: a `404` is what an ordinary no-output turn looks like now that
     /// nothing creates the folder in advance, and treating it as a fault would
@@ -817,6 +832,8 @@ enum FileTransferOutputDetector {
     ) -> Bool {
         switch verdict {
         case .unusable:
+            return false
+        case .noObservation:
             return false
         case .absent, .entries:
             return scanMayClose(
@@ -856,6 +873,29 @@ enum FileTransferOutputDetector {
 
     // MARK: - The manual lane: names the reply mentioned, behind a tap
 
+    /// The names this search would ACTUALLY go and ask about: extracted
+    /// candidates, less the ones the caller already knows about, capped at what
+    /// one pass will spend. Pure and content-free — it returns names the caller
+    /// already handed in and reaches no network.
+    ///
+    /// EXTRACTED SO THE FOLDER-LESS ROW CAN ASK THE SAME QUESTION. That row is
+    /// shown only where this window is non-empty, because a warning whose only
+    /// per-turn remedy would issue no request is a warning with nothing behind
+    /// it. Two spellings of "what would the search do" is exactly the drift that
+    /// would put the row back under replies the button cannot help — a reply
+    /// echoing a file the USER uploaded extracts a candidate and probes none,
+    /// and only this filter knows that.
+    nonisolated static func actionableCandidateWindow(
+        candidates: [String],
+        excludedKeys: Set<String>
+    ) -> [String] {
+        Array(
+            candidates
+                .filter { !excludedKeys.contains($0) }
+                .prefix(maxCandidates)
+        )
+    }
+
     /// Probe the filenames a reply MENTIONED, at the served root, on demand.
     ///
     /// TAP-GATED, AND THAT IS THE WHOLE DIFFERENCE. The same work ran
@@ -890,11 +930,8 @@ enum FileTransferOutputDetector {
         snapshot: SettingsManager.FileTransferSnapshot,
         excludedKeys: Set<String>
     ) async -> (drafts: [AttachmentDraft], conclusive: Bool) {
-        let window = Array(
-            candidates
-                .filter { !excludedKeys.contains($0) }
-                .prefix(maxCandidates)
-        )
+        let window = actionableCandidateWindow(
+            candidates: candidates, excludedKeys: excludedKeys)
         guard !window.isEmpty else { return ([], true) }
 
         var drafts: [AttachmentDraft] = []
@@ -980,8 +1017,13 @@ enum FileTransferOutputDetector {
     /// the window. Pure + content-free (never logged). Internal (not private) for
     /// the test target.
     ///
-    /// REACHED ONLY FROM A USER TAP. It is still bounded as if it were not,
-    /// because a tap is not consent to burn a phone's CPU.
+    /// TWO CALLERS, AND ONLY ONE OF THEM IS A TAP. The manual search runs this
+    /// to decide what to ASK the server about; the thread's folder-less row runs
+    /// it to decide whether it has anything worth saying, and that one happens on
+    /// every reload during a lane outage with nobody asking. So the bound below
+    /// is not a courtesy — it is what the second caller stands on. Both go
+    /// through `extractCandidatesOffMainActor`; neither may call this
+    /// synchronously from a render path.
     ///
     /// COST — LOAD-BEARING (untrusted input): the pattern's `[A-Za-z0-9._-]+` is
     /// followed by a required `\.` that the class itself can match, so ICU
