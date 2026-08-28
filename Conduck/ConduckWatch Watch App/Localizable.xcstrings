@@ -2384,6 +2384,28 @@
         }
       }
     },
+    "stt.error.gemini.badRequest" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That request was rejected. Check the model name in Advanced settings."
+          }
+        }
+      }
+    },
+    "stt.error.gemini.modelNotFound" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That model is not available. Check the model name in Advanced settings."
+          }
+        }
+      }
+    },
     "stt.error.keyUnreadable" : {
       "extractionState" : "manual",
       "localizations" : {
