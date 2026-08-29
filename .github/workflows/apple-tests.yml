@@ -230,7 +230,10 @@ jobs:
             -project Conduck/Conduck.xcodeproj \
             -scheme Conduck \
             -destination 'platform=iOS Simulator,id=${{ steps.simulators.outputs.iphone_udid }}' \
-            -derivedDataPath "$RUNNER_TEMP/conduck-ios-derived-data"
+            -derivedDataPath "$RUNNER_TEMP/conduck-ios-derived-data" \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 \
+            -maximum-test-execution-time-allowance 120
 
       - name: Run full ConduckWatchTests suite
         shell: bash
@@ -240,7 +243,10 @@ jobs:
             -project Conduck/Conduck.xcodeproj \
             -scheme ConduckWatchTests \
             -destination 'platform=watchOS Simulator,id=${{ steps.simulators.outputs.watch_udid }}' \
-            -derivedDataPath "$RUNNER_TEMP/conduck-watch-derived-data"
+            -derivedDataPath "$RUNNER_TEMP/conduck-watch-derived-data" \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 \
+            -maximum-test-execution-time-allowance 120
 
   # `RemoteAgentLiveTLSTrustTests` is `#if os(macOS)`. With only the two
   # simulator destinations above, that whole file was COMPILED OUT of every CI

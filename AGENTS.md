@@ -60,14 +60,33 @@ Take an iPhone UDID and an Apple Watch UDID out of that listing, then:
 xcodebuild test \
   -project Conduck/Conduck.xcodeproj \
   -scheme Conduck \
-  -destination 'platform=iOS Simulator,id=<iphone-simulator-udid>'
+  -destination 'platform=iOS Simulator,id=<iphone-simulator-udid>' \
+  -test-timeouts-enabled YES \
+  -default-test-execution-time-allowance 120 \
+  -maximum-test-execution-time-allowance 120
 ```
+
+The timeout flags cover ONE failure mode: a single test that runs long gets
+killed and named, instead of stalling the run. `-default-…` is the load-bearing
+half — `-maximum-…` only clamps a test's OWN preferred allowance, and no test
+here declares one, so passing the maximum alone bounds nothing and every test
+keeps the 600 s default.
+
+They do NOT catch every hang. A host that wedges before a test starts, or one
+whose dispatch pool is exhausted (the in-process timeout machinery cannot be
+scheduled either), still goes silent — `xcodebuild` waits on it indefinitely and
+a hang is indistinguishable from a long run. The wall-clock guard that actually
+catches those is the CI job's own `timeout-minutes`. Locally, the tell is a log
+that stops growing while the process stays alive: `sample <pid>` settles it.
 
 ```bash
 xcodebuild test \
   -project Conduck/Conduck.xcodeproj \
   -scheme ConduckWatchTests \
-  -destination 'platform=watchOS Simulator,id=<watch-simulator-udid>'
+  -destination 'platform=watchOS Simulator,id=<watch-simulator-udid>' \
+  -test-timeouts-enabled YES \
+  -default-test-execution-time-allowance 120 \
+  -maximum-test-execution-time-allowance 120
 ```
 
 The main suite belongs on an iOS Simulator and nowhere else; `spec.md` explains

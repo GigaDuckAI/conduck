@@ -974,13 +974,7 @@ final class MenuBarCoordinator {
                 if previous == .text, self.menuBarInputMode == .voice {
                     self.clearPendingCaptureImage()
                 }
-            }
-            Task { [weak self] in
-                await self?.refreshConfiguredFlag()
-                // A default-gateway change (or custom-roster edit) re-aims the
-                // automatic destination; re-resolve so the popover label and
-                // the next capture agree. No-op while latched/explicit.
-                await self?.refreshQuickDestination()
+                self.scheduleRemoteSettingsRefresh()
             }
         })
 
@@ -1001,12 +995,12 @@ final class MenuBarCoordinator {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { [weak self] in
-                await self?.refreshQuickDestination()
-                // Fill header-memo entries for rows this churn introduced
-                // (fresh mint / CloudKit import) — misses only; visited
-                // entries stay owned by their VM's resolve.
-                await ConversationDetailViewModel.warmHeaderMemo()
+            // `queue: .main` guarantees main-thread delivery, but the closure is
+            // nonisolated — a bare `Task { }` would read and mutate the latch off
+            // the main actor and could admit two runners, un-bounding the very
+            // fan-out this exists to stop.
+            MainActor.assumeIsolated {
+                self?.scheduleConversationChurnRefresh()
             }
         })
 
@@ -1290,6 +1284,84 @@ final class MenuBarCoordinator {
     /// that is the whole multi-minute agent wait: a reply landing in another
     /// thread, or a read arriving from the iPad, would not reach the status item
     /// until the current turn finished.
+    /// Coalescing guards for the two NOTIFICATION-driven refreshes below. Both
+    /// paths reach `refreshQuickCaches()` → `ConversationStore.fetchRecentForPicker`,
+    /// and both suspend on `SettingsManager` before they get there — so a burst
+    /// of posts used to overlap without bound, one live fetch per post. Each
+    /// fetch opens a fresh background context and parks a dispatch worker on a
+    /// synchronous Core Data coordinator hop; at libdispatch's 512-thread
+    /// ceiling nothing can be scheduled again and the process wedges. Same
+    /// shape, same reason, as `ConversationDetailViewModel.scheduleReload()`.
+    ///
+    /// ONE runner for BOTH notifications, with a pending bit per reason. Two
+    /// independent latches would each be locally correct and still race: both
+    /// reach `refreshQuickCaches()`, which writes `quickCustomGateways`,
+    /// `quickDefaultGatewayName` and `quickRecents` with no generation guard of
+    /// its own (`resolveAutomaticDestinationNow` guards only against a newer
+    /// ARM, not a sibling refresh). Interleaved at their `await`s, the older
+    /// pass can commit after the newer one and settle the dots on stale rows.
+    /// Single-flighting the shared state — not each caller — is the fix.
+    /// `@ObservationIgnored` — pure bookkeeping, never drives a view.
+    @ObservationIgnored private var quickRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var quickRefreshSettingsPending = false
+    @ObservationIgnored private var quickRefreshChurnPending = false
+
+    /// `.conversationsDidChange` → destination re-resolve + header-memo warm.
+    private func scheduleConversationChurnRefresh() {
+        quickRefreshChurnPending = true
+        startQuickRefreshIfIdle()
+    }
+
+    /// `.settingsDidChangeRemotely` → configured flag + destination re-aim.
+    private func scheduleRemoteSettingsRefresh() {
+        quickRefreshSettingsPending = true
+        startQuickRefreshIfIdle()
+    }
+
+    /// Drain both pending bits on one serialized runner: at most one pass in
+    /// flight, plus one trailing pass for whatever arrived during it. A CloudKit
+    /// import storm or a KVS sync burst therefore costs a BOUNDED number of
+    /// `fetchRecentForPicker` calls instead of one per post — each of which
+    /// takes a fresh background context and parks a dispatch worker on a
+    /// synchronous Core Data coordinator hop, and at libdispatch's 512-thread
+    /// ceiling nothing can be scheduled again and the process wedges.
+    ///
+    /// Order is load-bearing and matches what the two handlers did separately:
+    /// `refreshConfiguredFlag` (roster truth) → `refreshQuickDestination`
+    /// (re-aim from it) → `warmHeaderMemo` (label rows the churn introduced).
+    /// Each half still runs only for the reason that asked for it, so a settings
+    /// post never pays for the memo warm and churn never re-reads the flag.
+    ///
+    /// Nothing suspends between the final pending read and clearing the task —
+    /// that gap is exactly where reentrancy would slip a second runner in.
+    private func startQuickRefreshIfIdle() {
+        guard quickRefreshTask == nil else { return }
+        quickRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while self.quickRefreshSettingsPending || self.quickRefreshChurnPending {
+                let settings = self.quickRefreshSettingsPending
+                let churn = self.quickRefreshChurnPending
+                self.quickRefreshSettingsPending = false
+                self.quickRefreshChurnPending = false
+                if settings {
+                    await self.refreshConfiguredFlag()
+                }
+                // A default-gateway change (or custom-roster edit) re-aims the
+                // automatic destination; conversation churn shifts the rows
+                // behind it. Both reasons need this, so it is unconditional.
+                // No-op on the DESTINATION while latched/explicit.
+                await self.refreshQuickDestination()
+                if churn {
+                    // Fill header-memo entries for rows this churn introduced
+                    // (fresh mint / CloudKit import) — misses only; visited
+                    // entries stay owned by their VM's resolve.
+                    await ConversationDetailViewModel.warmHeaderMemo()
+                }
+            }
+            self.quickRefreshTask = nil
+        }
+    }
+
     func refreshQuickDestination() async {
         var destinationIsExplicit = false
         switch quickDestination?.destination {

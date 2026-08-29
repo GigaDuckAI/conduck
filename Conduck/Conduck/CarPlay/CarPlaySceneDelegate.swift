@@ -224,6 +224,12 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         self.listTemplate = nil
         self.isVoicePresented = false
         self.oneShotStartFailureHint = false
+        // Per-connection like the flags above. UIKit can reuse this delegate
+        // across disconnect/reconnect: a refresh still in flight at disconnect
+        // would otherwise have its `defer` clear the flag out from under the
+        // reconnect's own refresh, permitting the overlap the latch prevents.
+        self.pickerRefreshInFlight = false
+        self.pickerRefreshPending = false
         // Session-local override dies with the connection — the next drive
         // starts from the iPhone's device-local default again.
         self.sessionDefaultRefOverride = nil
@@ -541,8 +547,31 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
 
     // MARK: - Picker construction + refresh
 
+    /// Single-flight state for `refreshPicker()`. The picker's async half reads
+    /// the store (`fetchRecentForPicker`) after suspending on `SettingsManager`,
+    /// and `.conversationsDidChange` drives it — so an unlatched burst overlapped
+    /// without bound, one live fetch per post. Each opens a fresh background
+    /// context and parks a dispatch worker on a synchronous Core Data
+    /// coordinator hop; at libdispatch's 512-thread ceiling the process wedges.
+    /// Same bound, same reason, as `ConversationDetailViewModel.scheduleReload()`.
+    private var pickerRefreshInFlight = false
+    private var pickerRefreshPending = false
+
     /// Rebuild the picker sections in place. Off the main actor for the store
     /// read, then mutate the template on the main actor.
+    ///
+    /// COALESCED: at most one refresh in flight plus one trailing refresh for
+    /// anything that arrived during it. Only the ASYNC half is latched — the
+    /// synchronous prologue below always runs, because it paints permission
+    /// state, and deferring that would leave a revoked microphone showing a
+    /// fully-functional-looking picker whose rows cannot start a session.
+    ///
+    /// The trailing pass RE-ENTERS this function rather than looping the async
+    /// body, so the prologue (permission state, the one-shot hint, the row
+    /// budget) is recomputed from current state — a trailing pass that reused
+    /// the first pass's captured `cap`/`service` could paint a stale template.
+    /// Re-entry is safe: the in-flight flag is already cleared, and it schedules
+    /// a fresh task rather than nesting, so depth cannot accumulate.
     private func refreshPicker() {
         guard let service = recordingService, let template = listTemplate else { return }
 
@@ -566,7 +595,33 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             maximumItemCount: CPListTemplate.maximumItemCount - (oneShotStartFailureHint ? 1 : 0)
         )
 
+        // A refresh is already running: record the ask and let its trailing pass
+        // pick it up. Placed AFTER the synchronous prologue (so permission state
+        // still paints immediately) and BEFORE the first suspension below — the
+        // only placement that both bounds the fan-out and keeps the picker
+        // honest about a revoked microphone.
+        if pickerRefreshInFlight {
+            pickerRefreshPending = true
+            return
+        }
+        pickerRefreshInFlight = true
+
         Task { @MainActor in
+            defer {
+                self.pickerRefreshInFlight = false
+                if self.pickerRefreshPending {
+                    self.pickerRefreshPending = false
+                    // Re-apply the gate the notification path applies before it
+                    // ever calls here: a session may have STARTED while this
+                    // pass was in flight, and repainting the picker root under a
+                    // presented voice modal is a known CarPlay assertion source.
+                    // The deferred ask is dropped, not queued — the session's
+                    // own teardown refreshes the list on the way out.
+                    if self.recordingService?.sessionActive != true {
+                        self.refreshPicker()
+                    }
+                }
+            }
             // No-gateway → a single setup-hint row (no New voice chat: there's
             // nothing to talk to yet). Multi-gateway: the gate is "is ANY
             // gateway configured?" so CarPlay offers a new chat as soon as ≥1
