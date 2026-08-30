@@ -482,13 +482,13 @@ struct ConversationThreadView: View {
     }
 
     private func dismissTransientChatUI() {
-        viewModel.showingGatewaySheet = false
-        showingCloneTargets = false
-        pendingCloneTarget = nil
-        showingFileSetup = false
-        reviewingRefusals = nil
-        voiceRefusal = nil
-        workCaptureNotice = nil
+        if viewModel.showingGatewaySheet { viewModel.showingGatewaySheet = false }
+        if showingCloneTargets { showingCloneTargets = false }
+        if pendingCloneTarget != nil { pendingCloneTarget = nil }
+        if showingFileSetup { showingFileSetup = false }
+        if reviewingRefusals != nil { reviewingRefusals = nil }
+        if voiceRefusal != nil { voiceRefusal = nil }
+        if workCaptureNotice != nil { workCaptureNotice = nil }
         // Invalidate not only the preview already on screen but every async
         // download/adoption that still owns a future presentation claim. A
         // hidden Chat must never reopen Quick Look or a Save panel over Work.
@@ -3673,8 +3673,8 @@ final class FilePreviewCoordinator {
     /// check `isCurrent` before Quick Look or NSSavePanel hand-off.
     func cancelPendingPresentation() {
         latestToken &+= 1
-        previewURL = nil
-        handleDismiss()
+        if previewURL != nil { previewURL = nil }
+        if currentItem != nil { handleDismiss() }
     }
 }
 

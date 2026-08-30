@@ -211,20 +211,21 @@ struct ConversationListView: View {
     }
 
     var body: some View {
+        let groups = filteredTimeGroups
         Group {
             if viewModel.isLoading && viewModel.conversations.isEmpty {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = viewModel.loadError, viewModel.conversations.isEmpty {
                 errorView(error)
-            } else if !trimmedSearchQuery.isEmpty && filteredTimeGroups.isEmpty && !isSearchingContent {
+            } else if !trimmedSearchQuery.isEmpty && groups.isEmpty && !isSearchingContent {
                 noSearchResultsView
             } else if viewModel.conversations.isEmpty {
                 emptyStateView
-            } else if filteredTimeGroups.isEmpty && !isSearchingContent {
+            } else if groups.isEmpty && !isSearchingContent {
                 noSearchResultsView
             } else {
-                conversationsList
+                conversationsList(groups: groups)
             }
         }
         #if os(iOS)
@@ -513,14 +514,14 @@ struct ConversationListView: View {
 
     // MARK: - List
 
-    private var conversationsList: some View {
+    private func conversationsList(groups: [TimeGroup]) -> some View {
         // Resolved ONCE per list build, not once per row: the rule scans the
         // whole conversation array, and a single-gateway list is exactly the
         // case where it can't bail early — evaluating it per row would make
         // that scan quadratic in the number of conversations.
         let showsBadge = showsGatewayBadge
         return List {
-            ForEach(filteredTimeGroups) { group in
+            ForEach(groups) { group in
                 Section {
                     ForEach(group.conversations) { convo in
                         Button {
@@ -918,6 +919,7 @@ struct SidebarSearchField: View {
     @Binding var text: String
     let prompt: LocalizedStringResource
     let accessibilityLabel: LocalizedStringResource
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     init(
         text: Binding<String>,
@@ -981,6 +983,10 @@ struct SidebarSearchField: View {
                 .accessibilityHidden(true)
         )
         #endif
+        .disabled(!workbenchDestinationIsActive)
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            if !isActive { fieldFocused = false }
+        }
         .accessibilityIdentifier("sidebar.search")
     }
 

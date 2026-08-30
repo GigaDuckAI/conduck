@@ -89,6 +89,7 @@ struct WorkboardCaptureCanvas: View {
     }
 
     @State private var photoSelection: [PhotosPickerItem] = []
+    @State private var showsPhotoPicker = false
     @State private var showsFileImporter = false
     @State private var materialPendingReattachment: WorkboardMaterialSnapshot?
     @State private var showsVoiceCapture = false
@@ -98,6 +99,10 @@ struct WorkboardCaptureCanvas: View {
     @State private var isReviewing = false
     @State private var reviewTask: Task<Void, Never>?
     @FocusState private var composerFocused: Bool
+    #if os(iOS)
+    @State private var showsCamera = false
+    @State private var showsCameraDeniedAlert = false
+    #endif
 
     private var isImporting: Bool {
         viewModel.isImportingIntoWorkspace(item.id)
@@ -130,8 +135,18 @@ struct WorkboardCaptureCanvas: View {
             allowsMultipleSelection: materialPendingReattachment == nil,
             onCompletion: handleFileImport
         )
+        .photosPicker(
+            isPresented: activePhotoPickerIsPresented,
+            selection: $photoSelection,
+            maxSelectionCount: 12,
+            matching: .images
+        )
         .onChange(of: photoSelection) { _, selection in
             guard !selection.isEmpty else { return }
+            guard workbenchDestinationIsActive else {
+                photoSelection.removeAll()
+                return
+            }
             Task { await importPhotos(selection) }
         }
         .sheet(item: activeMaterialComposer) { kind in
@@ -155,6 +170,28 @@ struct WorkboardCaptureCanvas: View {
                 onCancel: { showsVoiceCapture = false }
             )
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: activeCameraIsPresented) {
+            CameraPicker(
+                onCapture: importCameraPhoto,
+                onDismiss: { showsCamera = false }
+            )
+        }
+        .alert(
+            LocalizedStringResource("composer.camera.deniedTitle", defaultValue: "Camera access is off"),
+            isPresented: activeCameraDeniedIsPresented
+        ) {
+            Button(LocalizedStringResource("composer.camera.openSettings", defaultValue: "Open Settings")) {
+                CameraPermission.openSettings()
+            }
+            Button(LocalizedStringResource("composer.camera.cancel", defaultValue: "Cancel"), role: .cancel) { }
+        } message: {
+            Text(LocalizedStringResource(
+                "composer.camera.deniedMessage",
+                defaultValue: "Allow camera access in Settings to take a photo."
+            ))
+        }
+        #endif
         .alert(item: activeLargeImportConfirmation) { confirmation in
             Alert(
                 title: Text(LocalizedStringResource(
@@ -187,6 +224,10 @@ struct WorkboardCaptureCanvas: View {
         activePresentation($showsFileImporter)
     }
 
+    private var activePhotoPickerIsPresented: Binding<Bool> {
+        activePresentation($showsPhotoPicker)
+    }
+
     private var activeVoiceCaptureIsPresented: Binding<Bool> {
         activePresentation($showsVoiceCapture)
     }
@@ -198,6 +239,16 @@ struct WorkboardCaptureCanvas: View {
     private var activeLargeImportConfirmation: Binding<WorkboardWorkspaceLargeImportConfirmation?> {
         activePresentation($largeImportConfirmation)
     }
+
+    #if os(iOS)
+    private var activeCameraIsPresented: Binding<Bool> {
+        activePresentation($showsCamera)
+    }
+
+    private var activeCameraDeniedIsPresented: Binding<Bool> {
+        activePresentation($showsCameraDeniedAlert)
+    }
+    #endif
 
     private func activePresentation(_ binding: Binding<Bool>) -> Binding<Bool> {
         Binding(
@@ -222,18 +273,26 @@ struct WorkboardCaptureCanvas: View {
     }
 
     private func dismissTransientCaptureUI() {
-        showsFileImporter = false
-        materialPendingReattachment = nil
-        showsVoiceCapture = false
-        materialComposer = nil
+        if showsPhotoPicker { showsPhotoPicker = false }
+        if !photoSelection.isEmpty { photoSelection.removeAll() }
+        if showsFileImporter { showsFileImporter = false }
+        if materialPendingReattachment != nil { materialPendingReattachment = nil }
+        if showsVoiceCapture { showsVoiceCapture = false }
+        if materialComposer != nil { materialComposer = nil }
+        #if os(iOS)
+        if showsCamera { showsCamera = false }
+        if showsCameraDeniedAlert { showsCameraDeniedAlert = false }
+        #endif
         if let confirmation = largeImportConfirmation {
             reclaim(confirmation.batch)
             largeImportConfirmation = nil
         }
-        reviewTask?.cancel()
-        reviewTask = nil
-        isReviewing = false
-        composerFocused = false
+        if reviewTask != nil {
+            reviewTask?.cancel()
+            reviewTask = nil
+        }
+        if isReviewing { isReviewing = false }
+        if composerFocused { composerFocused = false }
     }
 
     private var canvasHeader: some View {
@@ -425,55 +484,11 @@ struct WorkboardCaptureCanvas: View {
     /// full source canvas already exposes Review & Send, and the detail toolbar
     /// owns that deliberate boundary, so it is not repeated below the keyboard.
     private var compactComposer: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if case .newWork = destination {
-                Label(
-                    LocalizedStringResource(
-                        "workboard.workspace.composer.newDestination",
-                        defaultValue: "New Work · saved privately, never sent automatically"
-                    ),
-                    systemImage: "plus.square"
-                )
-                .font(.caption.weight(.medium))
-                .foregroundStyle(AppColors.textTertiary)
-                .padding(.horizontal, 4)
-            }
-
-            HStack(alignment: .bottom, spacing: 7) {
-                attachmentMenu
-                photoPicker
-                composerField(lineLimit: 1...4)
-                voiceButton
-                Button(action: addThought) {
-                    HStack(spacing: 6) {
-                        if isAddingThought {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "tray.and.arrow.down.fill")
-                        }
-                        Text(LocalizedStringResource(
-                            "workboard.workspace.add.short",
-                            defaultValue: "Add"
-                        ))
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppColors.background)
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: WorkboardMetrics.touchTarget)
-                    .background(AppColors.brandAmber, in: Capsule())
-                }
-                .primaryCTAButton()
-                .disabled(cleanComposerText.isEmpty || isImporting || isAddingThought || isReviewing)
-                .keyboardShortcut(.return, modifiers: .command)
-                .accessibilityLabel(Text(LocalizedStringResource(
-                    "workboard.workspace.add",
-                    defaultValue: "Add to Work"
-                )))
-                .accessibilityHint(Text(LocalizedStringResource(
-                    "workboard.workspace.add.hint",
-                    defaultValue: "Saves this thought privately. Nothing is sent to an AI."
-                )))
-            }
+        HStack(alignment: .bottom, spacing: 7) {
+            attachmentMenu
+            composerField(lineLimit: 1...4)
+            voiceButton
+            addThoughtButton
         }
     }
 
@@ -489,63 +504,41 @@ struct WorkboardCaptureCanvas: View {
 
             HStack(alignment: .bottom, spacing: 8) {
                 attachmentMenu
-                photoPicker
                 composerField(lineLimit: 1...7)
                 voiceButton
+                addThoughtButton
             }
 
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { composerActions }
-                VStack(spacing: 10) { composerActions }
+                HStack(spacing: 10) { reviewAndSendButton }
+                VStack(spacing: 10) { reviewAndSendButton }
             }
         }
     }
 
     private var attachmentMenu: some View {
-        Menu {
-            Button {
+        AttachmentMenu(
+            onPickLibrary: {
+                guard workbenchDestinationIsActive else { return }
+                showsPhotoPicker = true
+            },
+            onTakePhoto: takePhoto,
+            onPickFiles: {
+                guard workbenchDestinationIsActive else { return }
                 showsFileImporter = true
-            } label: {
-                Label(
-                    LocalizedStringResource("workboard.material.addFiles", defaultValue: "Files"),
-                    systemImage: "doc.badge.plus"
-                )
-            }
-            Button {
+            },
+            purpose: .work,
+            onAddLink: {
+                guard workbenchDestinationIsActive else { return }
                 materialComposer = .link
-            } label: {
-                Label(
-                    LocalizedStringResource("workboard.material.addLink", defaultValue: "Add Link"),
-                    systemImage: "link.badge.plus"
-                )
-            }
-        } label: {
-            Image(systemName: "plus")
-                .font(.headline)
-        }
-        .pointerIconButton(size: WorkboardMetrics.touchTarget, shape: .circle)
-        .disabled(isImporting)
+            },
+            iconPointSize: attachmentIconPointSize,
+            iconFrame: composerControlDiameter
+        )
+        .disabled(!workbenchDestinationIsActive || isImporting)
         .accessibilityLabel(Text(LocalizedStringResource(
             "workboard.workspace.attach",
             defaultValue: "Attach to Work"
-        )))
-    }
-
-    private var photoPicker: some View {
-        PhotosPicker(
-            selection: $photoSelection,
-            maxSelectionCount: 12,
-            matching: .images,
-            photoLibrary: .shared()
-        ) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.headline)
-        }
-        .pointerIconButton(size: WorkboardMetrics.touchTarget, shape: .circle)
-        .disabled(isImporting)
-        .accessibilityLabel(Text(LocalizedStringResource(
-            "workboard.material.addPhotos",
-            defaultValue: "Photos"
         )))
     }
 
@@ -582,48 +575,49 @@ struct WorkboardCaptureCanvas: View {
     }
 
     private var voiceButton: some View {
-        Button {
-            showsVoiceCapture = true
-        } label: {
-            Image(systemName: "mic.fill")
-                .font(.headline)
-        }
-        .pointerIconButton(size: WorkboardMetrics.touchTarget, shape: .circle)
-        .disabled(isImporting || isAddingThought || isReviewing)
-        .accessibilityLabel(Text(LocalizedStringResource(
-            "workboard.voice.capture",
-            defaultValue: "Add by voice"
-        )))
+        CaptureCircleButton(
+            symbol: "mic.fill",
+            fillColor: AppColors.brandAmber,
+            diameter: composerControlDiameter,
+            glyphSize: composerGlyphSize,
+            isDisabled: !workbenchDestinationIsActive || isImporting || isAddingThought || isReviewing,
+            accessibilityLabel: String(localized: LocalizedStringResource(
+                "workboard.voice.capture",
+                defaultValue: "Add by voice"
+            )),
+            action: {
+                guard workbenchDestinationIsActive else { return }
+                showsVoiceCapture = true
+            }
+        )
     }
 
-    @ViewBuilder
-    private var composerActions: some View {
-        Button(action: addThought) {
-            HStack(spacing: 8) {
-                if isAddingThought {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "tray.and.arrow.down.fill")
-                }
-                Text(LocalizedStringResource(
-                    "workboard.workspace.add",
-                    defaultValue: "Add to Work"
-                ))
-            }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(AppColors.background)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: WorkboardMetrics.touchTarget)
-            .background(AppColors.brandAmber, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .primaryCTAButton()
-        .disabled(cleanComposerText.isEmpty || isImporting || isAddingThought || isReviewing)
+    private var addThoughtButton: some View {
+        let isDisabled = !workbenchDestinationIsActive
+            || cleanComposerText.isEmpty
+            || isImporting
+            || isAddingThought
+            || isReviewing
+        return CaptureCircleButton(
+            symbol: isAddingThought ? "ellipsis" : "arrow.up",
+            fillColor: isDisabled ? AppColors.disabled : AppColors.brandAmber,
+            diameter: composerControlDiameter,
+            glyphSize: composerGlyphSize,
+            isDisabled: isDisabled,
+            accessibilityLabel: String(localized: LocalizedStringResource(
+                "workboard.workspace.add",
+                defaultValue: "Add to Work"
+            )),
+            action: addThought
+        )
         .keyboardShortcut(.return, modifiers: .command)
         .accessibilityHint(Text(LocalizedStringResource(
             "workboard.workspace.add.hint",
             defaultValue: "Saves this thought privately. Nothing is sent to an AI."
         )))
+    }
 
+    private var reviewAndSendButton: some View {
         Button(action: reviewAndSend) {
             HStack(spacing: 8) {
                 if isReviewing {
@@ -647,12 +641,47 @@ struct WorkboardCaptureCanvas: View {
             }
         }
         .choiceCardButton(cornerRadius: 12)
-        .disabled((!item.isReadyToSend && cleanComposerText.isEmpty)
+        .disabled(!workbenchDestinationIsActive
+            || (!item.isReadyToSend && cleanComposerText.isEmpty)
             || isImporting || isAddingThought || isReviewing)
         .accessibilityHint(Text(LocalizedStringResource(
             "workboard.editor.reviewAndSend.hint",
             defaultValue: "Opens a final preview. Nothing is sent yet."
         )))
+    }
+
+    private var composerControlDiameter: CGFloat {
+        #if os(macOS)
+        32
+        #else
+        WorkboardMetrics.touchTarget
+        #endif
+    }
+
+    private var composerGlyphSize: CGFloat {
+        #if os(macOS)
+        14
+        #else
+        18
+        #endif
+    }
+
+    private var attachmentIconPointSize: CGFloat {
+        #if os(macOS)
+        20
+        #else
+        22
+        #endif
+    }
+
+    private func takePhoto() {
+        #if os(iOS)
+        guard workbenchDestinationIsActive else { return }
+        switch CameraPermission.current {
+        case .proceed: showsCamera = true
+        case .denied: showsCameraDeniedAlert = true
+        }
+        #endif
     }
 
     private var privacyStatus: some View {
@@ -687,7 +716,10 @@ struct WorkboardCaptureCanvas: View {
 
     private func addThought() {
         let thought = cleanComposerText
-        guard !thought.isEmpty, !isAddingThought, !isReviewing else { return }
+        guard workbenchDestinationIsActive,
+              !thought.isEmpty,
+              !isAddingThought,
+              !isReviewing else { return }
         isAddingThought = true
         Task {
             let added = await viewModel.addWorkspaceThought(thought, to: item.id)
@@ -701,12 +733,12 @@ struct WorkboardCaptureCanvas: View {
                 AccessibilityAnnouncer.announce(message)
             }
             isAddingThought = false
-            composerFocused = !added
+            composerFocused = workbenchDestinationIsActive && !added
         }
     }
 
     private func reviewAndSend() {
-        guard !isAddingThought, !isReviewing else { return }
+        guard workbenchDestinationIsActive, !isAddingThought, !isReviewing else { return }
         isReviewing = true
         let targetItemID = item.id
         reviewTask?.cancel()
@@ -722,6 +754,25 @@ struct WorkboardCaptureCanvas: View {
     }
 
     // MARK: - Picker imports
+
+    #if os(iOS)
+    private func importCameraPhoto(_ data: Data) {
+        showsCamera = false
+        guard workbenchDestinationIsActive, !data.isEmpty else { return }
+        let name = String.localizedStringWithFormat(
+            String(localized: LocalizedStringResource(
+                "workboard.material.photo.defaultName",
+                defaultValue: "Photo %lld"
+            )),
+            Int64(item.materials.count + 1)
+        )
+        let batch = WorkboardResolvedImportBatch(
+            items: [.image(data: data, displayName: name)],
+            failedCount: 0
+        )
+        Task { await importResolvedBatch(batch) }
+    }
+    #endif
 
     private func importPhotos(_ selection: [PhotosPickerItem]) async {
         defer { photoSelection = [] }
@@ -1380,11 +1431,15 @@ private struct WorkboardSourceCard: View {
     @ViewBuilder
     private var sourceArtwork: some View {
         if material.kind == .image,
-           let data = material.thumbnailData,
-           let image = Image.platformImage(from: data) {
-            image
-                .resizable()
-                .scaledToFill()
+           let data = material.thumbnailData {
+            StagedImageTile(
+                id: material.id,
+                data: data,
+                maxPixel: ImageProcessor.thumbnailMaxPixel,
+                cacheVersion: material.revision
+            ) {
+                sourceArtworkPlaceholder
+            }
                 .frame(width: 54, height: 54)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay {
@@ -1393,13 +1448,17 @@ private struct WorkboardSourceCard: View {
                 }
                 .accessibilityHidden(true)
         } else {
-            Image(systemName: material.kind.systemImage)
-                .font(.title3)
-                .foregroundStyle(material.kind == .link ? AppColors.guidedSetupBlue : AppColors.brandAmber)
-                .frame(width: 38, height: 38)
-                .background(AppColors.backgroundSecondary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .accessibilityHidden(true)
+            sourceArtworkPlaceholder
         }
+    }
+
+    private var sourceArtworkPlaceholder: some View {
+        Image(systemName: material.kind.systemImage)
+            .font(.title3)
+            .foregroundStyle(material.kind == .link ? AppColors.guidedSetupBlue : AppColors.brandAmber)
+            .frame(width: 38, height: 38)
+            .background(AppColors.backgroundSecondary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .accessibilityHidden(true)
     }
 
     private var previewText: String? {

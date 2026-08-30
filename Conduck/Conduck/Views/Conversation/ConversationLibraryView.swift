@@ -584,6 +584,7 @@ struct ConversationLibraryView: View {
             sendCurrentDraft()
         } label: { EmptyView() }
         .keyboardShortcut(.return, modifiers: .command)
+        .disabled(!workbenchDestinationIsActive)
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
@@ -592,6 +593,7 @@ struct ConversationLibraryView: View {
             startNewConversation()
         } label: { EmptyView() }
         .keyboardShortcut("n", modifiers: .command)
+        .disabled(!workbenchDestinationIsActive)
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
@@ -601,6 +603,7 @@ struct ConversationLibraryView: View {
             pasteFromClipboard()
         } label: { EmptyView() }
         .keyboardShortcut("v", modifiers: .command)
+        .disabled(!workbenchDestinationIsActive)
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
@@ -619,7 +622,7 @@ struct ConversationLibraryView: View {
     private func pasteFromClipboard() {
         // No gateway → the composer is the locked CTA, not a live field. Don't let
         // a hardware ⌘V stage attachments into a composer the user can't send from.
-        guard isRemoteAgentConfigured else { return }
+        guard workbenchDestinationIsActive, isRemoteAgentConfigured else { return }
         #if canImport(UIKit)
         let pb = UIPasteboard.general
         if pb.hasImages, let image = pb.image, let data = image.jpegData(compressionQuality: 0.95) {
@@ -646,7 +649,7 @@ struct ConversationLibraryView: View {
         // No gateway → the composer is the locked CTA, not a live field. A
         // hardware ⌘Return must NOT hit the `remoteAgentNotConfigured` send path;
         // the user reaches setup via the locked bar / empty-state CTA instead.
-        guard isRemoteAgentConfigured else { return }
+        guard workbenchDestinationIsActive, isRemoteAgentConfigured else { return }
         let text = composerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         // An attachment-only turn is valid; block only when nothing is staged
         // and there's no text, or a turn/load is in flight. Also block while a
@@ -728,6 +731,7 @@ struct ConversationLibraryView: View {
     /// uses on first send). Reuses the existing minting flow rather than adding
     /// a new store call.
     private func startNewConversation() {
+        guard workbenchDestinationIsActive else { return }
         // Stop any in-flight capture FIRST, mirroring the macOS window's
         // `cancelWindowCapture()`. Without this a mic held in the outgoing
         // thread keeps running, and `handleVoiceResult` lands the OLD thread's

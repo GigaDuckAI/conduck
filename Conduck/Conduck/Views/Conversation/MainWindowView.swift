@@ -429,6 +429,9 @@ struct MainWindowView: View {
                 ToolbarItem(placement: .primaryAction) {
                     workbenchSectionPicker(for: personalWorkbenchModel)
                 }
+                // The control draws one continuous filled container itself.
+                // Suppress AppKit's extra glass capsule around that container.
+                .sharedBackgroundVisibility(.hidden)
             }
         }
     }
@@ -436,23 +439,12 @@ struct MainWindowView: View {
     private func workbenchSectionPicker(
         for model: PersonalWorkbenchModel
     ) -> some View {
-        Picker(
-            LocalizedStringResource("workbench.section", defaultValue: "Section"),
+        WorkbenchSectionControl(
             selection: Binding(
                 get: { model.router.destination },
                 set: { model.router.destination = $0 }
             )
-        ) {
-            Text(LocalizedStringResource("workbench.work", defaultValue: "Work"))
-                .tag(PersonalWorkbenchRouter.Destination.work)
-            Text(LocalizedStringResource("workbench.chats", defaultValue: "Chats"))
-                .tag(PersonalWorkbenchRouter.Destination.chats)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(width: 160)
-        .accessibilityIdentifier("workbench.section")
+        )
     }
 
     private var workDestinationIsActive: Bool {

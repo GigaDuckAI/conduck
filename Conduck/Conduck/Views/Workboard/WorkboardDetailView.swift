@@ -454,7 +454,7 @@ struct WorkboardDetailView: View {
             ) {
                 Task { await viewModel.reviewWorkspaceAndSend(itemID: item.id) }
             }
-            .disabled(!canReviewAndSend(item))
+            .disabled(!workbenchDestinationIsActive || !canReviewAndSend(item))
             .keyboardShortcut(.return, modifiers: [.command, .shift])
             detailAction(
                 LocalizedStringResource("common.edit", defaultValue: "Edit"),
@@ -462,6 +462,7 @@ struct WorkboardDetailView: View {
             ) {
                 viewModel.showEditor(for: item)
             }
+            .disabled(!workbenchDestinationIsActive)
             .keyboardShortcut("e", modifiers: .command)
 
         case .waiting:

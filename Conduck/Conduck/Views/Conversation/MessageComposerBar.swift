@@ -344,7 +344,8 @@ struct MessageComposerBar: View {
     /// indicator covers turns this instance did not dispatch (the share drainer,
     /// a sibling VM), which would otherwise leave Send live beside a running turn.
     private var isSendDisabled: Bool {
-        (viewModel?.isAwaitingReply ?? false)
+        !workbenchDestinationIsActive
+            || (viewModel?.isAwaitingReply ?? false)
             || (viewModel?.showsGatewayWaitIndicator ?? false)
             || attachments.hasLoadingItem
             || attachments.hasUploadingItem   // strict send-gating: a server-file PUT
@@ -372,6 +373,9 @@ struct MessageComposerBar: View {
         composerStack
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        // Keep the mounted hidden Chat composer out of keyboard/menu routing
+        // without invalidating the entire conversation and sidebar trees.
+        .disabled(!workbenchDestinationIsActive)
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: attachments)
         .onAppear {
             fieldFocused = true
@@ -712,16 +716,19 @@ struct MessageComposerBar: View {
         HStack(spacing: 10) {
             AttachmentMenu(
                 onPickLibrary: {
-                    guard !attachmentDispatchInProgress else { return }
+                    guard workbenchDestinationIsActive,
+                          !attachmentDispatchInProgress else { return }
                     showingPhotosPicker = true
                 },
                 onTakePhoto: { },   // no camera on macOS — item is hidden
                 onPickFiles: {
-                    guard !attachmentDispatchInProgress else { return }
+                    guard workbenchDestinationIsActive,
+                          !attachmentDispatchInProgress else { return }
                     showingFileImporter = true
                 },
                 onSetUpFileTransfer: {
-                    guard !attachmentDispatchInProgress else { return }
+                    guard workbenchDestinationIsActive,
+                          !attachmentDispatchInProgress else { return }
                     showingSetupGuide = true
                 },
                 fileTransferAvailable: fileTransferAvailable,
@@ -731,7 +738,7 @@ struct MessageComposerBar: View {
                 iconPointSize: 20,
                 iconFrame: 32
             )
-            .disabled(attachmentDispatchInProgress)
+            .disabled(!workbenchDestinationIsActive || attachmentDispatchInProgress)
 
             Spacer(minLength: 8)
 
@@ -938,7 +945,10 @@ struct MessageComposerBar: View {
             animatesSymbol: isRecording,
             diameter: 32,
             glyphSize: 14,
-            isDisabled: isProcessing || isPreparingVoice || (viewModel?.isAwaitingReply ?? false),
+            isDisabled: !workbenchDestinationIsActive
+                || isProcessing
+                || isPreparingVoice
+                || (viewModel?.isAwaitingReply ?? false),
             accessibilityLabel: isRecording
                 ? String(localized: LocalizedStringResource("composer.mic.stop", defaultValue: "Stop recording"))
                 : String(localized: LocalizedStringResource("composer.mic.start", defaultValue: "Start recording")),
@@ -961,6 +971,7 @@ struct MessageComposerBar: View {
         // error + start; recording → stop, then hand the STT Result to the host
         // (`onVoiceResult`), which appends the transcript into the shared draft.
         // Processing is a no-op (the stall-Cancel lives elsewhere).
+        guard workbenchDestinationIsActive else { return }
         switch recorder.state {
         case .idle, .error:
             recorder.dismissError()
@@ -1058,7 +1069,8 @@ struct MessageComposerBar: View {
         let text = trimmedDraft
         let submittedDraft = draft
         let dispatchRef = viewModel == nil ? selectedRef : effectiveRef
-        guard hasSendableContent,
+        guard workbenchDestinationIsActive,
+              hasSendableContent,
               !isSendDisabled,
               attachments.serverOwnershipMatches(dispatchRef) else { return }
         attachmentDispatchInProgress = true

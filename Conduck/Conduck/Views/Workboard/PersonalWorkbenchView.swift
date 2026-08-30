@@ -51,12 +51,18 @@ private struct WorkbenchNavigationTitleModifier: ViewModifier {
     let title: Text
     let isActive: Bool
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if isActive {
-            content.navigationTitle(title)
-        } else {
-            content
+        content.background(alignment: .topLeading) {
+            // Keep the substantial destination OUTSIDE the active/inactive
+            // branch. Branching between `content.navigationTitle` and `content`
+            // changes structural identity and can remount an entire conversation
+            // list (including its reload task) during a simple mode switch.
+            if isActive {
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .navigationTitle(title)
+                    .accessibilityHidden(true)
+            }
         }
     }
 }
@@ -78,13 +84,12 @@ struct WorkbenchDestinationLayerModifier: ViewModifier {
     let reduceMotion: Bool
 
     private var animation: Animation {
-        if reduceMotion { return .linear(duration: 0.09) }
-        // Let the incoming layer settle just ahead of the outgoing fade. That
-        // keeps enough opaque content behind the dissolve to avoid a dim flash,
-        // while both curves remain short and reverse cleanly mid-transition.
+        if reduceMotion { return .linear(duration: 0.06) }
+        // A short asymmetric dissolve keeps the handoff legible without making
+        // two full workspace surfaces blend for longer than necessary.
         return isActive
-            ? .smooth(duration: 0.18, extraBounce: 0)
-            : .smooth(duration: 0.22, extraBounce: 0)
+            ? .smooth(duration: 0.14, extraBounce: 0)
+            : .linear(duration: 0.10)
     }
 
     func body(content: Content) -> some View {
@@ -95,7 +100,6 @@ struct WorkbenchDestinationLayerModifier: ViewModifier {
             // These semantics switch immediately. Only pixels dissolve.
             .zIndex(isActive ? 1 : 0)
             .allowsHitTesting(isActive)
-            .disabled(!isActive)
             .accessibilityHidden(!isActive)
     }
 }
@@ -109,6 +113,161 @@ extension View {
             isActive: isActive,
             reduceMotion: reduceMotion
         ))
+    }
+}
+
+/// One stable, continuous Work / Chats control shared by Mac and wide iPad.
+/// Its outer geometry and centre rule never animate, so the toolbar cannot
+/// remeasure or wobble while only the two inexpensive fill colours change.
+struct WorkbenchSectionControl: View {
+    @Binding var selection: PersonalWorkbenchRouter.Destination
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 0) {
+            segment(
+                .work,
+                title: LocalizedStringResource("workbench.work", defaultValue: "Work")
+            )
+            segment(
+                .chats,
+                title: LocalizedStringResource("workbench.chats", defaultValue: "Chats")
+            )
+        }
+        .frame(width: 160, height: controlHeight)
+        .background(AppColors.cardBackgroundElevated)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(AppColors.border, lineWidth: 1)
+                // Overlay the touching button halves so the hard rule never
+                // becomes a dead click strip between them.
+                Rectangle()
+                    .fill(AppColors.border)
+                    .frame(width: 1, height: dividerHeight)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(LocalizedStringResource(
+            "workbench.section",
+            defaultValue: "Section"
+        )))
+        .accessibilityIdentifier("workbench.section")
+    }
+
+    private var controlHeight: CGFloat {
+        #if os(macOS)
+        30
+        #else
+        WorkboardMetrics.touchTarget
+        #endif
+    }
+
+    private var dividerHeight: CGFloat {
+        #if os(macOS)
+        18
+        #else
+        26
+        #endif
+    }
+
+    private func segment(
+        _ destination: PersonalWorkbenchRouter.Destination,
+        title: LocalizedStringResource
+    ) -> some View {
+        WorkbenchSectionSegment(
+            title: title,
+            isSelected: selection == destination,
+            reduceMotion: reduceMotion
+        ) {
+            guard selection != destination else { return }
+            selection = destination
+        }
+        .accessibilityIdentifier(
+            destination == .work ? "workbench.section.work" : "workbench.section.chats"
+        )
+    }
+}
+
+private struct WorkbenchSectionSegment: View {
+    let title: LocalizedStringResource
+    let isSelected: Bool
+    let reduceMotion: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isSelected ? AppColors.background : AppColors.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(WorkbenchSectionSegmentButtonStyle(
+            isSelected: isSelected,
+            reduceMotion: reduceMotion
+        ))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// Full-frame hit, hover and pressed feedback for the custom section control.
+/// This mirrors the app-wide MacPointerTargets contract while keeping the two
+/// segment fills square so the shared outer clip owns every visible corner.
+private struct WorkbenchSectionSegmentButtonStyle: ButtonStyle {
+    let isSelected: Bool
+    let reduceMotion: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        SegmentBody(
+            configuration: configuration,
+            isSelected: isSelected,
+            reduceMotion: reduceMotion
+        )
+    }
+
+    private struct SegmentBody: View {
+        let configuration: Configuration
+        let isSelected: Bool
+        let reduceMotion: Bool
+
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var isHovering = false
+
+        var body: some View {
+            configuration.label
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(isSelected ? AppColors.brandAmber : .clear)
+                .overlay {
+                    Rectangle()
+                        .fill(washFill)
+                        .allowsHitTesting(false)
+                }
+                .brightness(brightness)
+                .contentShape(Rectangle())
+                #if os(macOS)
+                .onHover { isHovering = $0 }
+                #endif
+                .opacity(isEnabled ? 1 : 0.5)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isSelected)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: isHovering)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.06), value: configuration.isPressed)
+        }
+
+        private var washFill: Color {
+            guard isEnabled, !isSelected else { return .clear }
+            if configuration.isPressed { return AppColors.pointerPressedFill }
+            return isHovering ? AppColors.pointerHoverFill : .clear
+        }
+
+        private var brightness: Double {
+            guard isEnabled, isSelected else { return 0 }
+            if configuration.isPressed { return -0.07 }
+            return isHovering ? 0.10 : 0
+        }
     }
 }
 
@@ -162,7 +321,7 @@ final class PersonalWorkbenchRouter {
             // disposable preview copy so it cannot surface over the other app
             // section or reopen when the person returns.
             closeMaterial()
-            previewNotice = nil
+            if previewNotice != nil { previewNotice = nil }
         }
     }
     var materialPresentation: MaterialPresentation?
@@ -291,7 +450,7 @@ final class PersonalWorkbenchRouter {
 
     func closeMaterial() {
         materialRequestID = nil
-        materialPresentation = nil
+        if materialPresentation != nil { materialPresentation = nil }
         if let previewFileURL {
             Self.removePreviewCopy(at: previewFileURL)
             self.previewFileURL = nil
@@ -779,20 +938,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
     }
 
     private var sectionPicker: some View {
-        Picker(
-            LocalizedStringResource("workbench.section", defaultValue: "Section"),
-            selection: $model.router.destination
-        ) {
-            Text(LocalizedStringResource("workbench.work", defaultValue: "Work"))
-            .tag(PersonalWorkbenchRouter.Destination.work)
-            Text(LocalizedStringResource("workbench.chats", defaultValue: "Chats"))
-            .tag(PersonalWorkbenchRouter.Destination.chats)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(width: 160)
-        .accessibilityIdentifier("workbench.section")
+        WorkbenchSectionControl(selection: $model.router.destination)
     }
 
     #if !os(macOS)

@@ -194,7 +194,9 @@ struct WorkboardExperience: View {
     }
 
     var sidebarContent: some View {
-        VStack(spacing: 0) {
+        let visibleItems = viewModel.visibleItems
+        let activeItemCount = viewModel.items.lazy.filter { $0.state != .done }.count
+        return VStack(spacing: 0) {
             SidebarSearchField(
                 text: $viewModel.searchText,
                 prompt: LocalizedStringResource(
@@ -224,7 +226,7 @@ struct WorkboardExperience: View {
                             defaultValue: "All Work"
                         ))
                         Spacer(minLength: 6)
-                        Text(viewModel.items.filter { $0.state != .done }.count, format: .number)
+                        Text(activeItemCount, format: .number)
                             .font(.caption.weight(.bold))
                             .foregroundStyle(AppColors.textTertiary)
                     }
@@ -250,7 +252,7 @@ struct WorkboardExperience: View {
             ForEach(sidebarStates, id: \.self) { state in
                 let stateItems = WorkboardPresentationLogic.items(
                     in: state,
-                    from: viewModel.visibleItems
+                    from: visibleItems
                 )
                 if !stateItems.isEmpty {
                     Section {
@@ -290,7 +292,7 @@ struct WorkboardExperience: View {
                 }
             }
 
-            if !viewModel.items.isEmpty, viewModel.visibleItems.isEmpty {
+            if !viewModel.items.isEmpty, visibleItems.isEmpty {
                 ContentUnavailableView(
                     LocalizedStringResource(
                         "workboard.empty.filtered.title",
@@ -527,6 +529,7 @@ struct WorkboardExperience: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .settingsRowButton()
+            .disabled(!isActive)
             .keyboardShortcut("b", modifiers: [.command, .shift])
 
             Button {
@@ -698,15 +701,15 @@ struct WorkboardExperience: View {
 
     @MainActor
     private func dismissTransientPresentations() async {
-        viewModel.confirmation = nil
-        viewModel.briefing = nil
+        if viewModel.confirmation != nil { viewModel.confirmation = nil }
+        if viewModel.briefing != nil { viewModel.briefing = nil }
         // Clear an older notice before saving, but never clear a failure raised
         // by this final flush: if a route hides Work while the editor is dirty,
         // the editor and its error must both be waiting when the person returns.
-        viewModel.notice = nil
-        viewModel.preflightItemID = nil
-        viewModel.selectedGatewayID = nil
-        viewModel.excludedMaterialIDs = []
+        if viewModel.notice != nil { viewModel.notice = nil }
+        if viewModel.preflightItemID != nil { viewModel.preflightItemID = nil }
+        if viewModel.selectedGatewayID != nil { viewModel.selectedGatewayID = nil }
+        if !viewModel.excludedMaterialIDs.isEmpty { viewModel.excludedMaterialIDs = [] }
 
         guard viewModel.editorPresented else { return }
         // The editor is durable context, unlike the confirmations and dispatch
@@ -828,16 +831,11 @@ private struct WorkboardProjectCanvas: View {
     let onOpen: (WorkboardItemSnapshot) -> Void
     let onNew: () -> Void
 
-    private var pinnedItems: [WorkboardItemSnapshot] {
-        viewModel.projectStripItems.filter(\.isPinned)
-    }
-
-    private var projectItems: [WorkboardItemSnapshot] {
-        viewModel.projectStripItems.filter { !$0.isPinned }
-    }
-
     var body: some View {
-        ScrollView {
+        let stripItems = viewModel.projectStripItems
+        let pinnedItems = stripItems.filter(\.isPinned)
+        let projectItems = stripItems.filter { !$0.isPinned }
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 26) {
                 if !pinnedItems.isEmpty {
                     projectShelf(

@@ -87,6 +87,7 @@ struct iOSMessageComposerBar: View {
     @FocusState private var fieldFocused: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     /// One-shot amber border flash on the composer field when a transcript lands
     /// (Part 2d). Set true on a successful recording→processing→idle landing,
@@ -260,6 +261,25 @@ struct iOSMessageComposerBar: View {
         // the arrangement inside it can never disagree.
         .background(usesRegularLayout ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.ultraThinMaterial))
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: attachments)
+        // Disable only the capture surface—not the entire mounted Chat tree—so
+        // an iPad keyboard cannot keep typing or dispatching into hidden Chats.
+        .disabled(!workbenchDestinationIsActive)
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            guard !isActive else { return }
+            fieldFocused = false
+            // Wide iPad keeps Chat mounted behind Work. End capture work that
+            // would otherwise keep the microphone, timer and pulse alive in the
+            // invisible tree; the draft and staged attachments remain intact.
+            switch recorder.state {
+            case .recording:
+                recorder.cancelRecording()
+            case .processing, .preparingVoice:
+                recorder.cancelProcessing()
+            case .idle, .error:
+                break
+            }
+            recorder.dismissError()
+        }
         // The composer never grabs focus on appear: the keyboard opens only when
         // the user taps the field (`.onTapGesture` below) — no auto-open on launch.
     }
@@ -736,7 +756,9 @@ struct iOSMessageComposerBar: View {
         // An attachment-only turn (empty caption) is valid; only block when
         // there is nothing to send or a turn/load is in flight. The host reads
         // the staged `attachments` binding itself and clears it after send.
-        guard hasSendableContent, !isSendDisabled else { return }
+        guard workbenchDestinationIsActive,
+              hasSendableContent,
+              !isSendDisabled else { return }
         sendSubmissionInProgress = true
         Task {
             let accepted = await onSendText(text)
@@ -766,6 +788,7 @@ struct iOSMessageComposerBar: View {
     }
 
     private func micButtonTapped() {
+        guard workbenchDestinationIsActive else { return }
         switch recorder.state {
         case .idle, .error:
             // Part 2c: LIGHT impact on START (begin capture).

@@ -35,6 +35,14 @@ import SwiftUI
 import UIKit
 #endif
 
+enum AttachmentMenuPurpose: Equatable, Sendable {
+    /// Conversation attachments may need gateway file-transfer setup.
+    case chat
+    /// Work materials are persisted locally and never touch gateway upload
+    /// configuration from this menu.
+    case work
+}
+
 struct AttachmentMenu: View {
     /// Open the system photo library picker (`PhotosPicker` host-side).
     let onPickLibrary: () -> Void
@@ -56,6 +64,13 @@ struct AttachmentMenu: View {
     /// configured). Default false so the discovery item shows until a host wires
     /// file-transfer state in.
     var fileTransferAvailable: Bool = false
+    /// Work reuses the exact attachment affordance and picker ordering, but its
+    /// files are inert local material. This explicit purpose prevents a fake
+    /// "file transfer available" value from being used merely to hide setup UI.
+    var purpose: AttachmentMenuPurpose = .chat
+    /// Work's additional local-material action. Nil for Chat so its menu remains
+    /// byte-for-byte the same interaction model.
+    var onAddLink: (() -> Void)? = nil
     /// Paperclip glyph point size. Default preserves the iOS look; the macOS
     /// composer passes a smaller value to match its in-box control row.
     var iconPointSize: CGFloat = 22
@@ -115,7 +130,11 @@ struct AttachmentMenu: View {
         // dedicated "Set Up File Transfer…" item in its own section (divider). It
         // disappears once a server is configured (a binary then routes straight to
         // the server upload, no setup prompt needed).
-        if !fileTransferAvailable {
+        if let onAddLink, purpose == .work {
+            addLinkButton(action: onAddLink)
+        }
+
+        if purpose == .chat, !fileTransferAvailable {
             Section { setUpFileTransferButton }
         }
     }
@@ -164,6 +183,19 @@ struct AttachmentMenu: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.chooseFiles.a11y",
             defaultValue: "Choose files"
+        )))
+    }
+
+    private func addLinkButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(
+                LocalizedStringResource("workboard.material.addLink", defaultValue: "Add Link"),
+                systemImage: "link.badge.plus"
+            )
+        }
+        .accessibilityLabel(Text(LocalizedStringResource(
+            "workboard.material.addLink",
+            defaultValue: "Add Link"
         )))
     }
 

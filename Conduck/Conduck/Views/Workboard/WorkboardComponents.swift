@@ -11,11 +11,6 @@
 import SwiftUI
 import CoreTransferable
 import UniformTypeIdentifiers
-#if canImport(UIKit)
-import UIKit
-#elseif canImport(AppKit)
-import AppKit
-#endif
 
 enum WorkboardMetrics {
     static let contentMaxWidth: CGFloat = 920
@@ -481,17 +476,26 @@ struct WorkboardMaterialTile: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        if material.kind == .image, let data = material.thumbnailData, let image = platformImage(data: data) {
-            image
-                .resizable()
-                .scaledToFill()
-                .accessibilityHidden(true)
+        if material.kind == .image, let data = material.thumbnailData {
+            StagedImageTile(
+                id: material.id,
+                data: data,
+                maxPixel: ImageProcessor.thumbnailMaxPixel,
+                cacheVersion: material.revision
+            ) {
+                thumbnailPlaceholder
+            }
+            .accessibilityHidden(true)
         } else {
-            Image(systemName: material.kind.systemImage)
-                .font(.title2)
-                .foregroundStyle(material.kind == .link ? AppColors.guidedSetupBlue : AppColors.brandAmber)
-                .accessibilityHidden(true)
+            thumbnailPlaceholder
         }
+    }
+
+    private var thumbnailPlaceholder: some View {
+        Image(systemName: material.kind.systemImage)
+            .font(.title2)
+            .foregroundStyle(material.kind == .link ? AppColors.guidedSetupBlue : AppColors.brandAmber)
+            .accessibilityHidden(true)
     }
 
     private var accessibilityLabel: Text {
@@ -524,18 +528,6 @@ struct WorkboardMaterialTile: View {
             material.name,
             status
         ))
-    }
-
-    private func platformImage(data: Data) -> Image? {
-        #if canImport(UIKit)
-        guard let image = UIImage(data: data) else { return nil }
-        return Image(uiImage: image)
-        #elseif canImport(AppKit)
-        guard let image = NSImage(data: data) else { return nil }
-        return Image(nsImage: image)
-        #else
-        return nil
-        #endif
     }
 }
 

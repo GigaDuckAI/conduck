@@ -25738,17 +25738,6 @@
         }
       }
     },
-    "workboard.workspace.composer.newDestination" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "New Work · saved privately, never sent automatically"
-          }
-        }
-      }
-    },
     "workboard.workspace.composer.prompt.existing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
