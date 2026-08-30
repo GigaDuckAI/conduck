@@ -454,9 +454,11 @@ struct DictationPopoverView: View {
 
     /// Visible in the settled/idle states of TEXT mode only. Hidden while a
     /// turn is in flight (`isWorking` — the chrome-free working HUD), while a
-    /// shared-service capture runs (window-composer mic edge), during an
+    /// shared-service capture runs (window-composer mic edge), and during an
     /// unresolved agent `sendError` (its footer owns the surface: Retry /
-    /// Dismiss first), and when no gateway is configured. SHOWN over a
+    /// Dismiss first). It deliberately remains available without a configured
+    /// gateway because "Add to Work" is a private, local-only capture path;
+    /// only the sibling Ask action is gated on gateway readiness. SHOWN over a
     /// handoff `.error` — typing anew is the natural recovery
     /// (`sendQuickTypedDraft` discards the stash + clears the error, the
     /// fresh-press parallel).
@@ -467,11 +469,7 @@ struct DictationPopoverView: View {
         // different thread, so typing here would send to the wrong conversation.
         // Continue the shown thread via "Read full reply in window".
         guard coordinator.popoverOverrideViewModel == nil else { return false }
-        // `isQuickCaptureReady`, not "any gateway works": this box sends into the
-        // quick lane, which mints on the default. Mounting it because SOME other
-        // gateway is configured would invite a message that cannot be delivered.
         guard coordinator.menuBarInputMode == .text,
-              coordinator.isQuickCaptureReady,
               !isWorking else { return false }
         switch service.state {
         case .recording, .processing: return false
@@ -488,11 +486,9 @@ struct DictationPopoverView: View {
             composeThumbnail
 
             TextField(
-                // Same key + defaultValue as the window composer — one
-                // catalog entry, one voice.
                 String(localized: LocalizedStringResource(
-                    "composer.placeholder.v2",
-                    defaultValue: "Message your AI"
+                    "workboard.menuBar.compose.placeholder",
+                    defaultValue: "Write a note or message"
                 )),
                 text: $coordinator.quickDraft,
                 axis: .vertical
@@ -502,7 +498,10 @@ struct DictationPopoverView: View {
             .foregroundStyle(AppColors.textPrimary)
             .lineLimit(1...6)
             .focused($composeFocused)
-            .onSubmit { coordinator.sendQuickTypedDraft() }
+            .onSubmit {
+                guard coordinator.isQuickCaptureReady else { return }
+                coordinator.sendQuickTypedDraft()
+            }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(
@@ -525,6 +524,93 @@ struct DictationPopoverView: View {
                     .onTapGesture { composeFocused = true }
                     .accessibilityHidden(true)
             )
+
+            if let feedback = coordinator.quickWorkCaptureFeedback {
+                Label(
+                    feedback.message,
+                    systemImage: feedback.kind == .saved
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(
+                    feedback.kind == .saved
+                        ? AppColors.success
+                        : AppColors.error
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    coordinator.saveQuickDraftToWork()
+                } label: {
+                    HStack(spacing: 7) {
+                        if coordinator.isSavingQuickDraftToWork {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "tray.and.arrow.down")
+                        }
+                        Text(String(localized: LocalizedStringResource(
+                            "workboard.menuBar.addToWork",
+                            defaultValue: "Add to Work"
+                        )))
+                    }
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(AppColors.textPrimary)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(AppColors.cardBackgroundElevated)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(AppColors.border, lineWidth: 1)
+                            )
+                    )
+                }
+                .choiceCardButton(cornerRadius: 10)
+                .disabled(!coordinator.hasComposeState || coordinator.isSavingQuickDraftToWork)
+                .help(String(localized: LocalizedStringResource(
+                    "workboard.menuBar.addToWork.help",
+                    defaultValue: "Save this as private work without contacting your AI"
+                )))
+
+                Spacer(minLength: 0)
+
+                Button {
+                    coordinator.sendQuickTypedDraft()
+                } label: {
+                    Label(
+                        String(localized: LocalizedStringResource(
+                            "workboard.menuBar.ask",
+                            defaultValue: "Ask"
+                        )),
+                        systemImage: "arrow.up"
+                    )
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.black)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 36)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(AppColors.brandAmber)
+                    )
+                }
+                .primaryCTAButton()
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(
+                    !coordinator.hasComposeState
+                        || !coordinator.isQuickCaptureReady
+                        || coordinator.isSavingQuickDraftToWork
+                )
+                .help(String(localized: LocalizedStringResource(
+                    "workboard.menuBar.ask.help",
+                    defaultValue: "Send this to your default AI gateway"
+                )))
+            }
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
@@ -533,6 +619,14 @@ struct DictationPopoverView: View {
         // every hidden→shown re-mount (turn settled) — exactly the moments
         // the field should reclaim focus.
         .onAppear { focusComposeField() }
+        .onChange(of: coordinator.quickDraft) { _, newValue in
+            if !newValue.isEmpty {
+                coordinator.quickWorkCaptureFeedback = nil
+            }
+        }
+        .onChange(of: coordinator.quickWorkCaptureFeedback) { _, feedback in
+            if let feedback { AccessibilityAnnouncer.announce(feedback.message) }
+        }
     }
 
     /// Claim keyboard focus for the compose field — now, and again a tick

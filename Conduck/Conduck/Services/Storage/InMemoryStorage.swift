@@ -87,6 +87,9 @@ final class InMemoryDefaultsStore: DefaultsStore, @unchecked Sendable {
         storage.removeValue(forKey: key)
     }
 
+    @discardableResult
+    func synchronize() -> Bool { true }
+
     func dictionaryRepresentation() -> [String: Any] {
         lock.lock()
         defer { lock.unlock() }

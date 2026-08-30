@@ -82,6 +82,14 @@ struct QuickDestinationSnapshot: Equatable {
     }
 }
 
+struct MenuBarWorkCaptureFeedback: Identifiable, Equatable {
+    enum Kind { case saved, failed }
+
+    let id = UUID()
+    let kind: Kind
+    let message: String
+}
+
 // MARK: - Menu-bar attention (derived, never accumulated)
 
 /// What the status item's two dots are showing, as ONE value derived from the
@@ -743,6 +751,8 @@ final class MenuBarCoordinator {
     /// clears it atomically with `turnStarting` in one MainActor turn (the
     /// no-stale-frame contract). The popover binds it via `@Bindable`.
     var quickDraft = ""
+    private(set) var isSavingQuickDraftToWork = false
+    var quickWorkCaptureFeedback: MenuBarWorkCaptureFeedback?
 
     /// TEXT-mode compose state that must survive a dismissal: a staged ⌘⇧2
     /// screenshot, or (text mode only) a non-empty draft. Gates the explicit-
@@ -1677,6 +1687,51 @@ final class MenuBarCoordinator {
         armQuickCapture()
         Task { [weak self] in
             await self?.handleQuickSend(trimmed, modality: .text)
+        }
+    }
+
+    /// Explicitly move the popover composition into inert Work. This is a
+    /// sibling action to Ask, never a hidden destination mode: established
+    /// Return/hotkey behavior still sends to Chat, while this labeled action
+    /// creates a private Work item and cannot contact a gateway.
+    func saveQuickDraftToWork() {
+        let draftAtCommit = quickDraft
+        let thought = WorkboardWorkspaceCaptureLogic.normalizedThought(draftAtCommit)
+        let screenshotAtCommit = pendingCaptureImage
+        guard !isSavingQuickDraftToWork, !thought.isEmpty || screenshotAtCommit != nil else { return }
+
+        isSavingQuickDraftToWork = true
+        quickWorkCaptureFeedback = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await WorkCaptureInbox.shared.publishAppCapture(
+                    note: thought,
+                    screenshotPNG: screenshotAtCommit
+                )
+
+                // The popover stays interactive while disk I/O runs. Consume only
+                // the exact values that were published; text or a screenshot added
+                // during the await belongs to the next capture and must survive.
+                if quickDraft == draftAtCommit { quickDraft = "" }
+                if pendingCaptureImage == screenshotAtCommit { clearPendingCaptureImage() }
+                if quickDraft.isEmpty, pendingCaptureImage == nil {
+                    resetQuickDestinationAfterTurn()
+                }
+                quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
+                    kind: .saved,
+                    message: String(localized: LocalizedStringResource(
+                        "workboard.menuBar.saved",
+                        defaultValue: "Added to Work. Nothing was sent."
+                    ))
+                )
+            } catch {
+                quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
+                    kind: .failed,
+                    message: error.localizedDescription
+                )
+            }
+            isSavingQuickDraftToWork = false
         }
     }
 

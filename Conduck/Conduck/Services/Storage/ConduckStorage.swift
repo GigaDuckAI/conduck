@@ -42,6 +42,11 @@ protocol DefaultsStore: Sendable {
     func set(_ value: Int, forKey key: String)
     func removeObject(forKey key: String)
 
+    /// Forces an App-Group domain refresh/flush at the rare cross-process
+    /// transaction boundaries that require immediate visibility.
+    @discardableResult
+    func synchronize() -> Bool
+
     /// Every key currently present. Used by the prefix sweeps (orphan
     /// reconciliation, per-ref key enumeration).
     func dictionaryRepresentation() -> [String: Any]

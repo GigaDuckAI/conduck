@@ -188,6 +188,7 @@ struct MessageComposerBar: View {
 
     @FocusState private var fieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     // MARK: - Attachment staging (local — macOS composer owns it directly)
 
@@ -386,11 +387,15 @@ struct MessageComposerBar: View {
         }
         // Photo library — NO maxSelectionCount.
         .photosPicker(
-            isPresented: $showingPhotosPicker,
+            isPresented: activePhotosPickerPresentation,
             selection: $pickerSelection,
             matching: .images
         )
         .onChange(of: pickerSelection) { _, items in
+            guard workbenchDestinationIsActive else {
+                pickerSelection.removeAll()
+                return
+            }
             stagePickerSelection(items)
         }
         // UNIFIED "Choose Files…" importer — accepts ANY file (broad type set so
@@ -398,15 +403,16 @@ struct MessageComposerBar: View {
         // the classifier (image → inline; text → inline/dual; binary → server or
         // a `.needsSetup` tile, with the >100 MB soft-confirm).
         .fileImporter(
-            isPresented: $showingFileImporter,
+            isPresented: activeFileImporterPresentation,
             allowedContentTypes: unifiedContentTypes,
             allowsMultipleSelection: true
         ) { result in
+            guard workbenchDestinationIsActive else { return }
             if case .success(let urls) = result { stageServerFiles(urls) }
         }
         // File-transfer setup guide (sheet) scoped to the bound gateway. On
         // dismiss: refresh + promote any `.needsSetup` tiles to uploads.
-        .sheet(isPresented: $showingSetupGuide, onDismiss: {
+        .sheet(isPresented: activeSetupGuidePresentation, onDismiss: {
             Task {
                 await refreshFileTransfer()
                 await promoteNeedsSetupTiles()
@@ -432,7 +438,9 @@ struct MessageComposerBar: View {
         .alert(
             LocalizedStringResource("fileTransfer.softConfirm.title", defaultValue: "Attach large file?"),
             isPresented: Binding(
-                get: { pendingLargeFiles.first != nil },
+                get: {
+                    workbenchDestinationIsActive && pendingLargeFiles.first != nil
+                },
                 set: { _ in }
             ),
             presenting: pendingLargeFiles.first
@@ -492,6 +500,18 @@ struct MessageComposerBar: View {
         .onChange(of: shouldLockNewChatGateway) { _, locked in
             newChatGatewaySelectionLocked?.wrappedValue = locked
         }
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            guard !isActive else { return }
+            // These are transient system presentations, not the user's staged
+            // chat work. Close them when Chats becomes hidden so they cannot
+            // float over Work or reopen unexpectedly; keep the draft, staged
+            // attachments, and any deliberate large-file decision intact.
+            showingPhotosPicker = false
+            pickerSelection.removeAll()
+            showingFileImporter = false
+            showingSetupGuide = false
+            fieldFocused = false
+        }
         // Teardown: this bar's mount can be SWAPPED OUT wholesale (the VM-less
         // new-chat placeholder ↔ the conversation-bound mount in
         // `MainWindowView`, or the window closing). `@State` dies with the view,
@@ -509,6 +529,39 @@ struct MessageComposerBar: View {
             }
             newChatGatewaySelectionLocked?.wrappedValue = false
         }
+    }
+
+    private var activePhotosPickerPresentation: Binding<Bool> {
+        activePresentationBinding(
+            get: { showingPhotosPicker },
+            set: { showingPhotosPicker = $0 }
+        )
+    }
+
+    private var activeFileImporterPresentation: Binding<Bool> {
+        activePresentationBinding(
+            get: { showingFileImporter },
+            set: { showingFileImporter = $0 }
+        )
+    }
+
+    private var activeSetupGuidePresentation: Binding<Bool> {
+        activePresentationBinding(
+            get: { showingSetupGuide },
+            set: { showingSetupGuide = $0 }
+        )
+    }
+
+    private func activePresentationBinding(
+        get: @escaping () -> Bool,
+        set: @escaping (Bool) -> Void
+    ) -> Binding<Bool> {
+        Binding(
+            get: { workbenchDestinationIsActive && get() },
+            set: { value in
+                if !value || workbenchDestinationIsActive { set(value) }
+            }
+        )
     }
 
     // MARK: - Composer box (extracted to keep `body` type-checkable)

@@ -272,6 +272,9 @@ nonisolated enum TempScratchSweeper {
         "conduck-share-upload-",            // share-extension file, same path
         "diagnostics-stt-probe-",           // copy of a bundled probe clip (not user audio)
         "conduck-ftupload-",                // throwaway copy staged for the background driver
+        "conduck-workboard-",               // immutable per-dispatch file snapshots
+        "Conduck-Workboard-Preview",        // Quick Look material preview directory
+        "conduck-workasset-tests-",         // isolated Debug-Testing vault root
     ]
 
     /// Launch entry point — the only one callers should use.

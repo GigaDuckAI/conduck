@@ -49,12 +49,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // WHAT THIS GUARD CHECKS (on comment-stripped source)
 //
-//   Rule 1 — `perform()` never disarms unconditionally. It holds exactly TWO:
+//   Rule 1 — `perform()` never disarms before a durable terminal boundary. It
+//     holds exactly THREE:
 //     the provable-absence refusal's own, taken inline in that arm because code
 //     23 preserves nothing and the store's single slot is better spent on a
 //     capture that can succeed; and the catch chain's, gated on the words NOT
-//     yet existing as text. The blackout arm sitting beside the first one
-//     disarms nothing — an unlock makes those exact bytes send.
+//     yet existing as text. The third is Work's successful deterministic inbox
+//     publication, where the transcript has become durable without any gateway.
+//     The blackout arm sitting beside the first one disarms nothing — an unlock
+//     makes those exact bytes recover.
 //
 //   Rule 2 — the disarm that does run sits BELOW the destination resolve and
 //     BELOW the store append, so every refusal on the way is still armed.
@@ -85,7 +88,7 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
     /// it has to be the gate on the catch chain's disarm rather than a comment
     /// about one.
     ///
-    /// `perform()` holds exactly TWO disarms, and they are not interchangeable:
+    /// `perform()` holds exactly THREE disarms, and they are not interchangeable:
     ///
     ///   1. the PROVABLE-ABSENCE refusal (code 23), taken INLINE in its own arm
     ///      above the `do`. Code-specific and deliberate:
@@ -95,19 +98,21 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
     ///      that can. Its twin, the blackout arm, must NOT disarm — those bytes
     ///      succeed the moment the device is unlocked.
     ///
-    ///   2. the CATCH CHAIN's, gated on the words not yet existing as text.
+    ///   2. the WORK publication boundary, after deterministic inert capture.
     ///
-    /// A THIRD is how the unconditional post-STT disarm arrived, and it deleted
-    /// the user's recording on every destination refusal.
+    ///   3. the CATCH CHAIN's, gated on the words not yet existing as text.
+    ///
+    /// An extra disarm outside these three boundaries is how the unconditional
+    /// post-STT cleanup arrived, deleting the recording on destination refusal.
     func testPerformDisarmsOnProvableAbsenceAndOtherwiseOnlyBeforeTheWordsExist() throws {
         let source = try RefusalLaneSource.source(at: Self.intentPath)
         let body = try RefusalLaneSource.body(ofFunction: "perform", in: source, path: Self.intentPath)
 
         let disarms = body.components(separatedBy: "PendingRetryGuard.disarm").count - 1
-        XCTAssertEqual(disarms, 2,
-                       "`perform()` must hold exactly TWO disarms — the provable-absence refusal's and "
-                       + "the catch chain's. A third is how the unconditional post-STT disarm arrived, "
-                       + "and it deleted the user's recording on every destination refusal.")
+        XCTAssertEqual(disarms, 3,
+                       "`perform()` must hold exactly THREE disarms — provable absence, the durable "
+                       + "Work publication boundary, and the gated catch chain. Any other placement can "
+                       + "delete audio before either terminal destination owns the words.")
 
         XCTAssertEqual(
             Self.armSpendsTheGuard(arm: "case .notConfigured:",
@@ -134,14 +139,26 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
             + "spoken words are gone (I6)."
         )
         let firstDisarm = try XCTUnwrap(body.range(of: "PendingRetryGuard.disarm"))
-        let secondDisarm = try XCTUnwrap(
+        let workDisarm = try XCTUnwrap(
             body.range(of: "PendingRetryGuard.disarm", range: firstDisarm.upperBound..<body.endIndex),
-            "Only one disarm found where the count above says two; the matcher and the count disagree."
+            "The Work publication boundary no longer clears its completed retry."
         )
+        let catchDisarm = try XCTUnwrap(
+            body.range(of: "PendingRetryGuard.disarm", range: workDisarm.upperBound..<body.endIndex),
+            "The catch-chain disarm is missing."
+        )
+        let workPublish = try XCTUnwrap(body.range(of: "WorkCaptureRetryCoordinator.publish")?.lowerBound)
+        let transcriptRaised = try XCTUnwrap(body.range(of: "transcriptCaptured = true")?.lowerBound)
         XCTAssertLessThan(firstDisarm.lowerBound, gateAt,
                           "The absence arm's disarm belongs ABOVE the `do`, in the refusal it is about — "
                           + "below the gate it would be the catch chain's, which cannot tell 23 from 75.")
-        XCTAssertLessThan(gateAt, secondDisarm.lowerBound,
+        XCTAssertLessThan(transcriptRaised, workPublish,
+                          "Work may publish only after STT produced a non-empty transcript.")
+        XCTAssertLessThan(workPublish, workDisarm.lowerBound,
+                          "The Work retry may clear only after deterministic publication succeeds.")
+        XCTAssertLessThan(workDisarm.lowerBound, gateAt,
+                          "The Work terminal boundary should remain inside the successful `do`, not in the catch.")
+        XCTAssertLessThan(gateAt, catchDisarm.lowerBound,
                           "The gate has to precede the catch chain's disarm, or it gates nothing.")
 
         // …and the flag must actually be raised, or the gate is always open.

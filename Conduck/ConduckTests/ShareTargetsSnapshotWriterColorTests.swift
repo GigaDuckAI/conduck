@@ -70,6 +70,53 @@ final class ShareTargetsSnapshotWriterColorTests: XCTestCase {
         }
     }
 
+    func testRecentWorkProjectionDropsDoneSortsByModifiedDateAndBoundsPayload() {
+        let oldest = workItem(title: "Old", modifiedAt: Date(timeIntervalSince1970: 10))
+        let newest = workItem(title: "  Newest  ", modifiedAt: Date(timeIntervalSince1970: 30))
+        let middle = workItem(title: "Middle", modifiedAt: Date(timeIntervalSince1970: 20))
+        let done = workItem(
+            title: "Already done",
+            modifiedAt: Date(timeIntervalSince1970: 40),
+            state: .done
+        )
+
+        let projected = ShareTargetsSnapshotWriter.makeRecentWorkItems(
+            [oldest, newest, done, middle],
+            limit: 2
+        )
+
+        XCTAssertEqual(projected.map(\.id), [newest.id, middle.id])
+        XCTAssertEqual(projected.map(\.title), ["Newest", "Middle"])
+        XCTAssertFalse(projected.contains { $0.id == done.id })
+    }
+
+    func testRecentWorkProjectionWithNonPositiveLimitIsEmpty() {
+        XCTAssertTrue(ShareTargetsSnapshotWriter.makeRecentWorkItems(
+            [workItem(title: "Open", modifiedAt: Date())],
+            limit: 0
+        ).isEmpty)
+    }
+
+    private func workItem(
+        title: String,
+        modifiedAt: Date,
+        state: WorkItemState = .draft
+    ) -> WorkItemRecord {
+        WorkItemRecord(
+            id: UUID(),
+            content: WorkItemContent(title: title),
+            createdAt: modifiedAt.addingTimeInterval(-10),
+            updatedAt: modifiedAt,
+            boardOrder: nil,
+            completedAt: state == .done ? modifiedAt : nil,
+            captureEnvelopeID: nil,
+            currentDispatchID: nil,
+            materials: [],
+            dispatches: [],
+            state: state
+        )
+    }
+
     // MARK: - Dead-gateway recents filter (iOS-only — RecentConversation is iOS)
 
     #if os(iOS)

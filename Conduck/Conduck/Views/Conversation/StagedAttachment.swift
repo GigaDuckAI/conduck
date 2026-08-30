@@ -429,14 +429,14 @@ enum ComposerMintFolder {
     /// The conversation identifier this composer's keys belong to: the bound
     /// conversation when one exists, else the identifier the composer already
     /// committed to for the chat it is about to mint.
-    static func conversationID(bound: UUID?, pending: UUID) -> UUID {
+    nonisolated static func conversationID(bound: UUID?, pending: UUID) -> UUID {
         bound ?? pending
     }
 
     /// The `folder` argument for `FileServerClient.makeStoredKey`. Nil only when
     /// the gateway's nested-PUT probe failed, which is the one case where a key
     /// must stay flat at the served root.
-    static func storedKeyFolder(bound: UUID?, pending: UUID, folderCapable: Bool) -> String? {
+    nonisolated static func storedKeyFolder(bound: UUID?, pending: UUID, folderCapable: Bool) -> String? {
         guard folderCapable else { return nil }
         return conversationID(bound: bound, pending: pending).uuidString
     }

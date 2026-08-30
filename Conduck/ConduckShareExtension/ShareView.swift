@@ -19,32 +19,29 @@
 //   │ RECENT CHATS                            │  │   region. Section headers pin.
 //   │  ● Trip planning · 2h            ◯/◉    │  ⎭
 //   ├───────────────────────────────────────┤
-//   │ ▢ Add a message…                  (⬆)   │  ← bottomComposer (.safeAreaInset)
+//   │ ▢ Add a message…                        │  ← bottomComposer (.safeAreaInset)
+//   │ [ Add to Work ] / [ Send now ]           │  ← selected mode's primary action
 //   └───────────────────────────────────────┘
 //
 // Unlike macOS (whose share host renders NO `.toolbar`, forcing a manual pinned
 // VStack floor for Send), iOS keeps its native nav bar (`Cancel` + "Send to"
-// title) and moves Send into a bottom composer + amber send-circle via
-// `.safeAreaInset(edge: .bottom)` — exactly Apple's Messages-share idiom, and the
-// same composer pattern as the main-app `iOSMessageComposerBar`. `.safeAreaInset`
-// gives native software-keyboard avoidance (the composer lifts with the keyboard).
+// title) and moves both actions into a bottom composer via `.safeAreaInset(edge:
+// .bottom)`. That gives native software-keyboard avoidance while keeping the
+// inert and dispatch paths visually distinct.
 //
 // Dark-mode only (the host sets `overrideUserInterfaceStyle = .dark`). Colors are
 // LOCAL literals matching the app palette — the appex does NOT share the main-app
 // `AppColors` source membership, so we can't reference it. Same reason the strings
 // use inline `defaultValue:` (the appex carries its OWN strings; no shared catalog).
 //
-// ── Send / UX decision (the picker is the surface) ─────────────────────────────
-// Sharing ALWAYS sends on the chosen target (share-and-go): the host stamps the
-// manifest's frozen `shouldAutosend` field `true` and the drainer dispatches the
-// turn immediately. The picker is the surface so the user can choose a target
-// (the founder's WhatsApp/Telegram-inspired ask). We deliberately do NOT
-// auto-commit on appear, and do NOT auto-focus the caption: that would rob the
-// user of the chance to pick a non-default target. Send always has a target — the
-// default selection is the first configured gateway (or the first recent, or the
-// legacy fallback), so a single tap on Send is never a dead-end.
+// ── Capture / send boundary ────────────────────────────────────────────────────
+// Add to Work is visually primary and writes only to WorkCaptureInbox. Send
+// now preserves the shipped share-and-go path: it stamps `shouldAutosend = true`,
+// uses the visible target picker, and dispatches through the main app. Neither
+// action fires on appear, and Send now always has a default target.
 
 import SwiftUI
+import Combine
 import UIKit
 import UniformTypeIdentifiers
 
@@ -63,6 +60,16 @@ enum ShareTarget: Equatable {
     case existing(conversationID: UUID, backendRef: String)
 }
 
+private enum ShareDisposition: String, CaseIterable, Hashable {
+    case work
+    case send
+}
+
+private enum WorkDestination: Hashable {
+    case new
+    case existing(UUID)
+}
+
 /// The rich, async-resolved descriptor for the shared item's HEADER row — name +
 /// type + (image-only) a memory-bounded thumbnail. Resolved off the LEAD provider
 /// by the host's `resolveLeadHeader` closure WITHOUT reading the full bytes (an
@@ -77,6 +84,46 @@ struct ResolvedHeader {
     let typeDescription: String?
     /// A memory-bounded image thumbnail; `nil` → keep the typed glyph (documents).
     let icon: UIImage?
+}
+
+enum WorkboardCommitFailure: Hashable, Identifiable, Sendable {
+    case unavailable
+    case tooLarge
+    case empty
+
+    var id: Self { self }
+
+    /// Only a transient filesystem failure can improve when replayed unchanged.
+    /// Size and empty-input failures require the person to change the share.
+    var allowsRetry: Bool {
+        if case .unavailable = self { return true }
+        return false
+    }
+}
+
+@MainActor
+final class ShareSubmissionState: ObservableObject {
+    enum Phase: Equatable {
+        case addingToWorkboard
+        case sending
+    }
+
+    @Published private(set) var phase: Phase?
+    @Published var workboardFailure: WorkboardCommitFailure?
+
+    var isCommitting: Bool { phase != nil }
+
+    func begin(_ phase: Phase) -> Bool {
+        guard self.phase == nil else { return false }
+        workboardFailure = nil
+        self.phase = phase
+        return true
+    }
+
+    func failWorkboardCommit(_ failure: WorkboardCommitFailure) {
+        phase = nil
+        workboardFailure = failure
+    }
 }
 
 struct ShareView: View {
@@ -102,10 +149,18 @@ struct ShareView: View {
     /// captured page text should be included (the toggle). Owned by the host VC,
     /// which resolves `target` into the manifest's routing fields.
     let onSend: (String, ShareTarget, Bool) -> Void
+    /// Save the shared material as an inert Work capture. `UUID?` is an optional
+    /// existing Work destination; nil creates a new draft. This closure has no
+    /// gateway/send parameter and therefore cannot dispatch.
+    let onAddToWorkboard: (String, Bool, UUID?) -> Void
     /// Dismiss without queuing anything. Owned by the host VC.
     let onCancel: () -> Void
 
+    @ObservedObject var submissionState: ShareSubmissionState
+
     @State private var caption: String = ""
+    @State private var disposition: ShareDisposition = .work
+    @State private var workSelection: WorkDestination = .new
     @State private var selection: ShareTarget?
     @State private var query: String = ""
     /// Rich header (async); `nil` until `resolveLeadHeader` returns — until then the
@@ -148,6 +203,18 @@ struct ShareView: View {
     private var recents: [ShareTargetsSnapshot.RecentConversation] {
         (snapshot?.recentConversations ?? [])
             .sorted { $0.lastActivityAt > $1.lastActivityAt }
+    }
+
+    /// Open Work items are pre-filtered and bounded by the main app. Sort again
+    /// defensively so a partially upgraded snapshot still renders predictably.
+    private var recentWorkItems: [ShareTargetsSnapshot.RecentWorkItem] {
+        (snapshot?.recentWorkItems ?? [])
+            .sorted { $0.modifiedAt > $1.modifiedAt }
+    }
+
+    private var selectedWorkItemID: UUID? {
+        guard case .existing(let id) = workSelection else { return nil }
+        return id
     }
 
     /// True when there is nothing to pick → render the single legacy fallback row
@@ -203,16 +270,23 @@ struct ShareView: View {
                 Palette.background.ignoresSafeArea()
                 VStack(spacing: 0) {
                     sharedItemHeader               // PINNED
+                    dispositionPicker              // PINNED, makes save vs dispatch explicit
                     if let payload = capturePayload {
                         capturePageTextRow(payload)  // PINNED, Safari-capture only
                     }
-                    if showSearch { searchField }  // PINNED, conditional
+                    if disposition == .send, showSearch { searchField }
                     Divider().overlay(Palette.border)
-                    pickerScroll                   // the ONLY scrolling region
+                    Group {
+                        if disposition == .work {
+                            workDestination
+                        } else {
+                            pickerScroll
+                        }
+                    }
                         .frame(maxHeight: .infinity)
                 }
             }
-            .navigationTitle(Text(Strings.title))
+            .navigationTitle(Text(disposition == .work ? Strings.addToWorkTitle : Strings.title))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -220,6 +294,7 @@ struct ShareView: View {
                         Text(Strings.cancel)
                     }
                     .tint(Palette.textSecondary)
+                    .disabled(submissionState.isCommitting)
                 }
             }
             .safeAreaInset(edge: .bottom) { bottomComposer }
@@ -244,6 +319,97 @@ struct ShareView: View {
             // thumbnail never delays the toggle (both run concurrently).
             capturePayload = await resolveCapture()
         }
+        .alert(item: $submissionState.workboardFailure) { failure in
+            if failure.allowsRetry {
+                Alert(
+                    title: Text(Strings.workboardErrorTitle),
+                    message: Text(workboardFailureMessage(failure)),
+                    primaryButton: .default(Text(Strings.retry)) {
+                        addToWorkboard()
+                    },
+                    secondaryButton: .cancel(Text(Strings.cancel)) {
+                        onCancel()
+                    }
+                )
+            } else {
+                Alert(
+                    title: Text(Strings.workboardErrorTitle),
+                    message: Text(workboardFailureMessage(failure)),
+                    dismissButton: .default(Text(Strings.cancel)) { onCancel() }
+                )
+            }
+        }
+    }
+
+    private var dispositionPicker: some View {
+        Picker("", selection: $disposition) {
+            Label(Strings.workMode, systemImage: "rectangle.stack.badge.plus")
+                .tag(ShareDisposition.work)
+            Label(Strings.sendMode, systemImage: "paperplane")
+                .tag(ShareDisposition.send)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .disabled(submissionState.isCommitting)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+        .accessibilityLabel(Text(Strings.destinationMode))
+    }
+
+    private var workDestination: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        let target = WorkDestination.new
+                        targetRow(
+                            badge: badge(monogram: "+", fill: Palette.amber),
+                            title: Strings.newWork,
+                            subtitle: Strings.newWorkDetail,
+                            selectable: true,
+                            isSelected: workSelection == target,
+                            action: { workSelection = target }
+                        )
+                    } header: {
+                        sectionHeader(Strings.sectionDestination)
+                    }
+
+                    if !recentWorkItems.isEmpty {
+                        Section {
+                            ForEach(recentWorkItems, id: \.id) { item in
+                                let target = WorkDestination.existing(item.id)
+                                let displayTitle = item.title.isEmpty ? Strings.untitledWork : item.title
+                                targetRow(
+                                    badge: badge(
+                                        monogram: monogram(for: displayTitle),
+                                        fill: Palette.teal
+                                    ),
+                                    title: displayTitle,
+                                    subtitle: Self.relativeFormatter.localizedString(
+                                        for: item.modifiedAt,
+                                        relativeTo: Date()
+                                    ),
+                                    selectable: true,
+                                    isSelected: workSelection == target,
+                                    action: { workSelection = target }
+                                )
+                            }
+                        } header: {
+                            sectionHeader(Strings.sectionRecentWork)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .scrollDismissesKeyboard(.interactively)
+
+            Divider().overlay(Palette.border)
+            Label(Strings.nothingSent, systemImage: "lock.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Palette.teal)
+                .padding(.vertical, 10)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Header (shared-item, PINNED)
@@ -431,6 +597,7 @@ struct ShareView: View {
             }
             .padding(.vertical, 4)
         }
+        .scrollDismissesKeyboard(.interactively)
     }
 
     /// "New conversation" section (gateway rows). Header pins; only mounted when
@@ -549,6 +716,7 @@ struct ShareView: View {
             .padding(.top, 10)
             .padding(.bottom, 4)
             .background(Palette.background)   // opaque so pinned headers don't bleed
+            .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
@@ -564,7 +732,7 @@ struct ShareView: View {
             action?()
         } label: {
             HStack(spacing: 12) {
-                badge
+                badge.accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.callout)
@@ -579,7 +747,10 @@ struct ShareView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if selectable { selectionRing(isSelected: isSelected) }
+                if selectable {
+                    selectionRing(isSelected: isSelected)
+                        .accessibilityHidden(true)
+                }
             }
             .contentShape(Rectangle())
             .padding(.horizontal, 16)
@@ -588,6 +759,11 @@ struct ShareView: View {
         }
         .buttonStyle(.plain)
         .disabled(!selectable)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(
+            subtitle.map { "\(title), \($0)" } ?? title
+        ))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     /// Trailing selection ring (~22pt): amber filled circle + white checkmark when
@@ -624,32 +800,60 @@ struct ShareView: View {
 
     // MARK: - Bottom composer (.safeAreaInset floor)
 
-    /// PINNED floor: a rounded message field + an amber send-circle, lifted by the
-    /// software keyboard via `.safeAreaInset(edge: .bottom)`. Send fires on a tap
-    /// (or ⌘-Return with a hardware keyboard); soft Return inserts a newline. Send
-    /// is never disabled — the default target always exists.
+    /// PINNED floor: message field, a primary inert-capture action, and a clearly
+    /// separate Send now action. Save is primary because a share is most safely
+    /// prepared in the Workboard; the existing one-tap dispatch route stays fully
+    /// visible and keeps ⌘-Return.
     private var bottomComposer: some View {
         VStack(spacing: 0) {
             Divider().overlay(Palette.border)
-            HStack(alignment: .bottom, spacing: 10) {
-                HStack {
-                    TextField(Strings.captionPlaceholder, text: $caption, axis: .vertical)
-                        .lineLimit(1...5)
-                        .textFieldStyle(.plain)
-                        .foregroundStyle(Palette.textPrimary)
-                        .focused($captionFocused)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.elevated)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Palette.border, lineWidth: 1)
-                )
+            VStack(spacing: 10) {
+                TextField(Strings.captionPlaceholder, text: $caption, axis: .vertical)
+                    .lineLimit(1...5)
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(Palette.textPrimary)
+                    .focused($captionFocused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.elevated)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Palette.border, lineWidth: 1)
+                    )
 
-                sendCircle
+                Button(action: disposition == .work ? addToWorkboard : send) {
+                    Group {
+                        if submissionState.phase == .addingToWorkboard {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small).tint(Palette.background)
+                                Text(Strings.addingToWorkboard)
+                            }
+                        } else if submissionState.phase == .sending {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small).tint(Palette.background)
+                                Text(Strings.sending)
+                            }
+                        } else if disposition == .work {
+                            Label(Strings.addToWorkboard, systemImage: "rectangle.stack.badge.plus")
+                        } else {
+                            Label(Strings.sendNow, systemImage: "paperplane.fill")
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Palette.background)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .frame(minHeight: 42)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Palette.amber)
+                    )
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(submissionState.isCommitting)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -679,7 +883,24 @@ struct ShareView: View {
     // MARK: - Send
 
     private func send() {
+        guard submissionState.begin(.sending) else { return }
         onSend(caption, selection ?? defaultSelection, includePageText)
+    }
+
+    private func addToWorkboard() {
+        guard submissionState.begin(.addingToWorkboard) else { return }
+        onAddToWorkboard(caption, includePageText, selectedWorkItemID)
+    }
+
+    private func workboardFailureMessage(_ failure: WorkboardCommitFailure) -> String {
+        switch failure {
+        case .unavailable:
+            return Strings.workboardErrorUnavailable
+        case .tooLarge:
+            return Strings.workboardErrorTooLarge
+        case .empty:
+            return Strings.workboardErrorEmpty
+        }
     }
 
     // MARK: - Color + monogram helpers
@@ -725,12 +946,69 @@ struct ShareView: View {
         static let title = String(localized: "share.title",
             defaultValue: "Send to",
             comment: "Share Extension navigation title")
+        static let addToWorkTitle = String(localized: "share.work.title",
+            defaultValue: "Add to Work",
+            comment: "Share Extension title while saving an inert Work draft")
+        static let workMode = String(localized: "share.mode.work",
+            defaultValue: "Work",
+            comment: "Segment that saves shared material without sending it")
+        static let sendMode = String(localized: "share.mode.send",
+            defaultValue: "Send now",
+            comment: "Segment that immediately sends shared material")
+        static let destinationMode = String(localized: "share.mode.accessibility",
+            defaultValue: "Choose whether to save or send",
+            comment: "Accessibility label for the Work versus Send mode picker")
+        static let sectionDestination = String(localized: "share.work.section.destination",
+            defaultValue: "Destination",
+            comment: "Section title above the New Work destination")
+        static let sectionRecentWork = String(localized: "share.work.section.recent",
+            defaultValue: "Recent Work",
+            comment: "Section title above recent open Work destinations")
+        static let newWork = String(localized: "share.work.new",
+            defaultValue: "New Work",
+            comment: "Destination that creates a new inert Work draft")
+        static let newWorkDetail = String(localized: "share.work.new.detail",
+            defaultValue: "Start a new draft",
+            comment: "Subtitle for the New Work destination")
+        static let untitledWork = String(localized: "share.work.untitled",
+            defaultValue: "Untitled Work",
+            comment: "Fallback title for an open Work destination without a title")
+        static let nothingSent = String(localized: "share.work.inert",
+            defaultValue: "Nothing is sent to AI",
+            comment: "Privacy reassurance for an inert Work capture")
         static let cancel = String(localized: "share.cancel",
             defaultValue: "Cancel",
             comment: "Cancel button in the Share Extension")
         static let send = String(localized: "share.send",
             defaultValue: "Send",
             comment: "Send button in the Share Extension")
+        static let sendNow = String(localized: "share.sendNow",
+            defaultValue: "Send now",
+            comment: "Immediate dispatch button in the Share Extension")
+        static let addToWorkboard = String(localized: "share.addToWork",
+            defaultValue: "Add to Work",
+            comment: "Primary button that saves shared material as inert Work")
+        static let addingToWorkboard = String(localized: "share.addToWork.progress",
+            defaultValue: "Adding to Work…",
+            comment: "Progress label while the Share Extension saves inert Work")
+        static let sending = String(localized: "share.send.progress",
+            defaultValue: "Sending…",
+            comment: "Progress label while the Share Extension queues a conversation send")
+        static let workboardErrorTitle = String(localized: "share.work.error.title",
+            defaultValue: "Couldn’t Add to Work",
+            comment: "Title shown when the Share Extension cannot persist a Work capture")
+        static let workboardErrorUnavailable = String(localized: "share.work.error.unavailable",
+            defaultValue: "Nothing was saved. Check that your device has free storage, then try again.",
+            comment: "Actionable generic Workboard persistence failure message in the Share Extension")
+        static let workboardErrorTooLarge = String(localized: "share.work.error.tooLarge",
+            defaultValue: "This share is too large for Work. Share fewer files or smaller files, then try again.",
+            comment: "Actionable size-limit failure message for a Workboard capture")
+        static let workboardErrorEmpty = String(localized: "share.work.error.empty",
+            defaultValue: "There’s nothing to add yet. Add a message or include at least one shared item, then try again.",
+            comment: "Actionable empty Workboard capture failure message")
+        static let retry = String(localized: "share.retry",
+            defaultValue: "Try Again",
+            comment: "Retry button after a Share Extension persistence failure")
         static let captionPlaceholder = String(localized: "share.caption.placeholder",
             defaultValue: "Add a message…",
             comment: "Placeholder for the caption field in the Share Extension")

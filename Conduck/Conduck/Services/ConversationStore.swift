@@ -1077,6 +1077,28 @@ actor ConversationStore {
     /// headless intent process and the foreground app share one sqlite.
     static let shared = ConversationStore()
 
+    #if !os(watchOS)
+    /// Device-local Workboard payload storage paired with this store instance.
+    /// Production uses the App Group vault; every test store gets a unique
+    /// temporary vault so an in-memory Core Data test can never read, reclaim,
+    /// or remove the person's real Workboard files. Internal only because the
+    /// sibling `+Workboard` extension owns all operations on it.
+    let workAssetVault: WorkAssetVault
+
+    /// Message ids currently being copied into Work. Core Data's CloudKit-
+    /// compatible model cannot use a unique constraint, and actor methods can
+    /// re-enter while awaiting background contexts. This claim closes that
+    /// same-process window so two windows cannot create duplicate Work cards
+    /// for one chat turn.
+    var workMessageCaptureClaims: Set<UUID> = []
+
+    /// Work item ids whose first material is currently being staged. The actor
+    /// can re-enter while the vault or Core Data context is awaited, so this
+    /// closes the same-process window in which two panes could both conclude
+    /// that one provisional Work id has no durable owner yet.
+    var workInitialMaterialClaims: Set<UUID> = []
+    #endif
+
     /// In-process retry claims close the actor-reentrancy window around
     /// `context.perform`. An actor method can accept another call while awaiting
     /// Core Data, so the persistent failed→sending predicate alone is not a
@@ -1227,6 +1249,9 @@ actor ConversationStore {
 
     /// Production init — App Group on-disk store.
     private init() {
+        #if !os(watchOS)
+        self.workAssetVault = .shared
+        #endif
         #if DEBUG && !os(watchOS)
         // Screenshot mode (`-ConduckQAScreenshotMode`) must NEVER open the real
         // App Group store. On a signed real machine (the founder's Mac) that
@@ -1319,6 +1344,14 @@ actor ConversationStore {
     /// on-disk variant. The store is driven only through base-class API, so no
     /// CloudKit method is lost; tests are local-only by definition.
     init(inMemory: Bool = false, storeURL: URL? = nil) {
+        #if !os(watchOS)
+        self.workAssetVault = WorkAssetVault(
+            baseURL: FileManager.default.temporaryDirectory.appendingPathComponent(
+                "conduck-workasset-tests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        )
+        #endif
         let container = NSPersistentContainer(name: "Conversations")
 
         if let description = container.persistentStoreDescriptions.first {
@@ -1499,7 +1532,7 @@ actor ConversationStore {
         do { try await ensureLoaded() } catch { return [] }
         guard container is NSPersistentCloudKitContainer else { return [] }
         let context = container.newBackgroundContext()
-        return await context.perform { [context] in
+        return try await context.perform { [context] in
             let request = NSPersistentCloudKitContainerEventRequest.fetchEvents(after: .distantPast)
             request.resultType = .events
             guard
@@ -2206,6 +2239,14 @@ actor ConversationStore {
         try await ensureLoaded()
         let context = newWriteContext()
         try await context.perform { [context] in
+            let removedAt = Date()
+            let dispatchRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkDispatch")
+            dispatchRequest.predicate = NSPredicate(format: "conversationID == %@", id as CVarArg)
+            for dispatch in try context.fetch(dispatchRequest) {
+                if dispatch.value(forKey: "conversationRemovedAt") as? Date == nil {
+                    dispatch.setValue(removedAt, forKey: "conversationRemovedAt")
+                }
+            }
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
             let matches = try context.fetch(request)
@@ -2225,9 +2266,12 @@ actor ConversationStore {
         #endif
     }
 
-    /// Delete every conversation (and, via cascade, every message), and every
-    /// gateway-attempt row with them. The one place the ledger is erased without
-    /// the user naming it separately — erase-everything means everything.
+    /// Delete every conversation (and, via cascade, every message) and every
+    /// gateway-attempt row with them. Workboard briefs and their private materials
+    /// are deliberately preserved: the user invoked "Delete all conversations",
+    /// not a separate Workboard erase. Their run records receive the same
+    /// conversation-removed tombstone as an individual chat deletion so no card
+    /// can remain stuck in Waiting forever.
     ///
     /// THE SYNCED CLEAR CUTOFF IS ADVANCED FIRST, before anything is deleted.
     /// Deletion alone is not enough: a device that was offline through the wipe
@@ -2253,6 +2297,11 @@ actor ConversationStore {
         #endif
         let context = newWriteContext()
         try await context.perform { [context] in
+            let dispatchRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkDispatch")
+            dispatchRequest.predicate = NSPredicate(format: "conversationID != nil")
+            for dispatch in try context.fetch(dispatchRequest) {
+                dispatch.setValue(cutoff, forKey: "conversationRemovedAt")
+            }
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             let matches = try context.fetch(request)
             for object in matches {
@@ -3122,7 +3171,9 @@ actor ConversationStore {
     /// entirely on the row that is already corrupt: its future-dated message
     /// keeps sorting after the new one, which is an inconsistency that row
     /// already carries and this cannot repair.
-    private static func appendStamp(
+    /// Internal so the Workboard's sibling-file atomic prepare transaction can
+    /// stamp its initial turn with the exact same ordering invariant.
+    static func appendStamp(
         proposed: Date,
         appendingTo conversation: NSManagedObject
     ) -> Date {
@@ -3152,7 +3203,9 @@ actor ConversationStore {
     /// Insert one `Attachment` row for `draft`, linked to `message`, into
     /// `context`. Shared by every write path (`appendMessage` /
     /// `completeAgentTurn`) so the blob-write mapping lives in one place.
-    private static func insertAttachment(
+    /// Internal so the Workboard's sibling-file atomic prepare transaction uses
+    /// the one canonical AttachmentDraft-to-row mapping.
+    static func insertAttachment(
         _ draft: AttachmentDraft,
         on message: NSManagedObject,
         into context: NSManagedObjectContext,
@@ -4770,6 +4823,56 @@ actor ConversationStore {
         }
     }
 
+    /// Full local attachment bytes keyed by persisted attachment identity. Unlike
+    /// `loadAttachmentData`, this includes inline text/code files as well as
+    /// images, while still excluding server references whose bytes live only on
+    /// the user's gateway. Work capture uses this to preserve every local source
+    /// without guessing that a thumbnail or extracted preview is the real file.
+    func loadLocalAttachmentPayloads(for messageID: UUID) async throws -> [UUID: Data] {
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Attachment")
+            request.predicate = NSPredicate(format: "message.id == %@", messageID as CVarArg)
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "sequence", ascending: true),
+                NSSortDescriptor(key: "createdAt", ascending: true)
+            ]
+            let objects = try context.fetch(request)
+            var payloads: [UUID: Data] = [:]
+            for object in objects {
+                guard (object.value(forKey: "isServerReference") as? NSNumber)?.boolValue != true,
+                      let id = object.value(forKey: "id") as? UUID,
+                      payloads[id] == nil,
+                      let data = object.value(forKey: "data") as? Data else { continue }
+                let mimeType = object.value(forKey: "mimeType") as? String ?? ""
+                // Empty image bytes cannot render or dispatch. An empty local
+                // text/binary file is still a valid source and must not become
+                // a misleading "reattach" note when captured into Work.
+                guard !data.isEmpty || !mimeType.hasPrefix("image/") else { continue }
+                payloads[id] = data
+            }
+            return payloads
+        }
+    }
+
+    /// Return candidate file-lane keys referenced by any persisted attachment.
+    /// Cleanup consults this before DELETE so even an astronomically unlikely
+    /// client-minted key collision cannot erase a file an older conversation
+    /// still owns.
+    func referencedStoredKeys(_ candidates: Set<String>) async throws -> Set<String> {
+        guard !candidates.isEmpty else { return [] }
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Attachment")
+            request.predicate = NSPredicate(format: "storedKey IN %@", Array(candidates))
+            return Set(try context.fetch(request).compactMap {
+                $0.value(forKey: "storedKey") as? String
+            })
+        }
+    }
+
     // MARK: - Test Support
 
     /// Insert bare (attribute-less) `Conversation` + `Message` managed objects
@@ -4903,6 +5006,25 @@ actor ConversationStore {
         }
         Self.logFetchIfSlow("fetch.messages", start: start, rows: records.count)
         return records
+    }
+
+    /// Fetch one authoritative persisted turn and prove it belongs to the
+    /// conversation the caller named. Attachment row UUIDs are assigned by the
+    /// store, so a consumer preserving source identity must read them back
+    /// rather than trust the lightweight snapshot returned by an append.
+    func fetchMessage(id: UUID, in conversationID: UUID) async throws -> MessageRecord? {
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(
+                format: "id == %@ AND conversation.id == %@",
+                id as CVarArg,
+                conversationID as CVarArg
+            )
+            request.fetchLimit = 1
+            return try context.fetch(request).first.map { MessageRecord(managedObject: $0) }
+        }
     }
 
     /// The newest message of one conversation, reduced to what a LIST row needs.

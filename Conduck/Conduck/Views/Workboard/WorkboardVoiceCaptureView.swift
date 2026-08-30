@@ -1,0 +1,301 @@
+// SPDX-License-Identifier: Apache-2.0
+
+// Conduck
+// WorkboardVoiceCaptureView.swift
+//
+// Explicit, interactive voice-to-brief capture. It reuses Conduck's existing
+// mic/STT state machine (including permission, on-device model self-heal,
+// selected-provider routing, retry preservation and duration cap), but only
+// returns editable text to the draft. It can never dispatch a Workboard item.
+
+#if !os(watchOS)
+
+import SwiftUI
+
+struct WorkboardVoiceCaptureView: View {
+    let target: WorkboardVoiceTarget
+    let onTranscript: @MainActor (String) -> Void
+    let onCancel: @MainActor () -> Void
+
+    // A transcription retry must return to inert Work capture. The recorder's
+    // default remains Chat for the established conversation composers.
+    @State private var recorder = InAppAudioRecorder(retryDestination: .work)
+    @State private var didStart = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 22) {
+                    statusGlyph
+                    statusCopy
+                    controls
+                    privacyCopy
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .frame(maxWidth: 560)
+                .frame(maxWidth: .infinity)
+            }
+            .background(AppColors.background.ignoresSafeArea())
+            .navigationTitle(target.title)
+            .workboardInlineNavigationTitle()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) {
+                        cancel()
+                    }
+                }
+            }
+        }
+        .interactiveDismissDisabled(isBusy)
+        .onChange(of: accessibilityStatusID) { _, _ in
+            AccessibilityAnnouncer.announce(accessibilityStatusMessage)
+        }
+        .task {
+            guard !didStart else { return }
+            didStart = true
+            recorder.onAutoStopResult = { result in
+                handle(result)
+            }
+            await recorder.startRecording()
+        }
+        .onDisappear {
+            switch recorder.state {
+            case .recording:
+                recorder.cancelRecording()
+            case .processing, .preparingVoice:
+                recorder.cancelProcessing()
+            case .idle, .error:
+                break
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var statusGlyph: some View {
+        ZStack {
+            Circle()
+                .fill(glyphBackground)
+                .frame(width: 112, height: 112)
+            switch recorder.state {
+            case .processing, .preparingVoice:
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(AppColors.background)
+            case .error:
+                Image(systemName: "exclamationmark.waveform.fill")
+                    .font(.system(size: 38, weight: .semibold))
+                    .foregroundStyle(AppColors.background)
+            case .idle, .recording:
+                Image(systemName: "waveform")
+                    .font(.system(size: 40, weight: .semibold))
+                    .foregroundStyle(AppColors.background)
+                    .symbolEffect(.variableColor.iterative, isActive: isRecording && !reduceMotion)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var statusCopy: some View {
+        VStack(spacing: 8) {
+            switch recorder.state {
+            case .idle:
+                Text(LocalizedStringResource(
+                    "workboard.voice.starting",
+                    defaultValue: "Starting the microphone…"
+                ))
+            case .recording(let startedAt):
+                Text(LocalizedStringResource(
+                    "workboard.voice.listening",
+                    defaultValue: "Listening"
+                ))
+                .font(.title2.weight(.semibold))
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    Text(Self.elapsed(from: startedAt, to: context.date))
+                        .font(.system(.title3, design: .monospaced, weight: .medium))
+                        .foregroundStyle(AppColors.textSecondary)
+                        .accessibilityLabel(Text(LocalizedStringResource(
+                            "workboard.voice.elapsed",
+                            defaultValue: "Recording time"
+                        )))
+                        .accessibilityValue(Text(verbatim: Self.elapsed(
+                            from: startedAt,
+                            to: context.date
+                        )))
+                }
+            case .processing:
+                Text(LocalizedStringResource(
+                    "workboard.voice.transcribing",
+                    defaultValue: "Turning speech into text…"
+                ))
+                .font(.title3.weight(.semibold))
+            case .preparingVoice(let progress):
+                Text(LocalizedStringResource(
+                    "workboard.voice.preparing",
+                    defaultValue: "Preparing on-device voice…"
+                ))
+                .font(.title3.weight(.semibold))
+                if let progress {
+                    ProgressView(value: progress)
+                        .frame(maxWidth: 260)
+                        .tint(AppColors.brandAmber)
+                }
+            case .error(let error):
+                Text(LocalizedStringResource(
+                    "workboard.voice.error.title",
+                    defaultValue: "Voice capture stopped"
+                ))
+                .font(.title3.weight(.semibold))
+                Text(verbatim: error.localizedDescription)
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .foregroundStyle(AppColors.textPrimary)
+        .multilineTextAlignment(.center)
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        switch recorder.state {
+        case .recording:
+            Button {
+                Task { handle(await recorder.stopAndUpload()) }
+            } label: {
+                Label(
+                    LocalizedStringResource("workboard.voice.stop", defaultValue: "Stop and Add Text"),
+                    systemImage: "stop.fill"
+                )
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 52)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(AppColors.brandAmber)
+            .foregroundStyle(AppColors.background)
+            .keyboardShortcut(.return, modifiers: .command)
+        case .error(let error):
+            if error.isRetryable {
+                Button {
+                    recorder.dismissError()
+                    Task { await recorder.startRecording() }
+                } label: {
+                    Label(
+                        LocalizedStringResource("workboard.voice.tryAgain", defaultValue: "Try Again"),
+                        systemImage: "arrow.counterclockwise"
+                    )
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppColors.brandAmber)
+            } else {
+                Button(LocalizedStringResource("common.close", defaultValue: "Close")) {
+                    cancel()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppColors.brandAmber)
+            }
+        case .processing, .preparingVoice:
+            Button(LocalizedStringResource(
+                "workboard.voice.cancelTranscription",
+                defaultValue: "Cancel Transcription"
+            )) {
+                recorder.cancelProcessing()
+            }
+            .buttonStyle(.bordered)
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    private var privacyCopy: some View {
+        Label(
+            LocalizedStringResource(
+                "workboard.voice.privacy",
+                defaultValue: "Adds editable text to this private draft. It never sends the brief or chooses a gateway."
+            ),
+            systemImage: "lock.shield"
+        )
+        .font(.caption)
+        .foregroundStyle(AppColors.textTertiary)
+        .multilineTextAlignment(.center)
+        .padding(.bottom, 4)
+    }
+
+    private var isRecording: Bool {
+        if case .recording = recorder.state { return true }
+        return false
+    }
+
+    private var isBusy: Bool {
+        switch recorder.state {
+        case .recording, .processing, .preparingVoice: return true
+        case .idle, .error: return false
+        }
+    }
+
+    private var glyphBackground: Color {
+        if case .error = recorder.state { return AppColors.error }
+        return AppColors.brandAmber
+    }
+
+    private var accessibilityStatusID: String {
+        switch recorder.state {
+        case .idle: return "idle"
+        case .recording: return "recording"
+        case .processing: return "processing"
+        case .preparingVoice: return "preparing"
+        case .error(let error): return "error-\(error.errorCode)"
+        }
+    }
+
+    private var accessibilityStatusMessage: String {
+        switch recorder.state {
+        case .idle:
+            return String(localized: "workboard.voice.starting", defaultValue: "Starting the microphone…")
+        case .recording:
+            return String(localized: "workboard.voice.listening", defaultValue: "Listening")
+        case .processing:
+            return String(localized: "workboard.voice.transcribing", defaultValue: "Turning speech into text…")
+        case .preparingVoice:
+            return String(localized: "workboard.voice.preparing", defaultValue: "Preparing on-device voice…")
+        case .error(let error):
+            return String.localizedStringWithFormat(
+                String(
+                    localized: "workboard.voice.error.accessibility",
+                    defaultValue: "Voice capture stopped. %@"
+                ),
+                error.localizedDescription
+            )
+        }
+    }
+
+    private func handle(_ result: Result<String, AppError>) {
+        switch result {
+        case .success(let transcript):
+            onTranscript(transcript)
+        case .failure:
+            // The recorder already owns the typed error state and retry lane.
+            break
+        }
+    }
+
+    private func cancel() {
+        switch recorder.state {
+        case .recording: recorder.cancelRecording()
+        case .processing, .preparingVoice: recorder.cancelProcessing()
+        case .idle, .error: break
+        }
+        onCancel()
+    }
+
+    private static func elapsed(from start: Date, to now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+#endif

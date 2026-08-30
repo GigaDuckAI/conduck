@@ -1082,7 +1082,7 @@ enum Constants {
     /// together. 128 KB ≈ a very long article's text; anything bigger
     /// truncates at capture time with an honest note in the synthetic
     /// Markdown. FOUNDER-TUNABLE.
-    static let webPageCaptureMaxBytes = 128 * 1024
+    nonisolated static let webPageCaptureMaxBytes = 128 * 1024
 
     /// Max on-disk size (bytes) for the composer's text-vs-binary PROBE
     /// (`TextFileExtractor.extract`, a WHOLE-FILE read into memory) to run at all.

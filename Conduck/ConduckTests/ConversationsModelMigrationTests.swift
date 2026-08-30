@@ -332,7 +332,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     func testV8StoreMigratesToV9WithNilOutputDeliveryCensus() async throws {
         let v8 = try requiredModel(named: "Conversations 8.mom")
         let v9 = try requiredModel(named: "Conversations 9.mom")
-        let current = try requiredModel(named: "Conversations 13.mom")
+        let current = try requiredModel(named: "Conversations 14.mom")
         let conversationID = UUID()
         let messageID = UUID()
         let boxKey = "\(conversationID.uuidString)/out-0123456789abcdef"
@@ -1656,14 +1656,14 @@ final class ConversationsModelMigrationTests: XCTestCase {
         }
     }
 
-    /// The model the APP opens is v13. A pointer left on an older version would
+    /// The model the APP opens is v14. A pointer left on an older version would
     /// ship code that reads columns a store does not have — and, worse, would not
     /// fail loudly at the ledger's edges: KVC on a missing attribute is what the
     /// record's tolerant reads are built to survive, so the dashboard would simply
     /// report an account that measured nothing. A stale pointer would also leave
     /// the cascade in force, quietly deleting usage history the app now promises
     /// to keep.
-    func testTheCurrentModelVersionIsV13() throws {
+    func testTheCurrentModelVersionIsV14() throws {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         let momd = try XCTUnwrap(
             bundles.compactMap { $0.url(forResource: "Conversations", withExtension: "momd") }.first,
@@ -1671,7 +1671,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
         let plist = try XCTUnwrap(
             NSDictionary(contentsOf: momd.appendingPathComponent("VersionInfo.plist")),
             "a compiled momd always carries VersionInfo.plist")
-        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 13")
+        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 14")
     }
 
     /// THE SOURCE MODEL MUST STAY IN THE BUNDLE. Lightweight migration infers a
@@ -1680,7 +1680,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     /// left with a file nothing can open — which on this app is the user's whole
     /// conversation history.
     func testEveryShippedModelVersionIsStillInTheBundle() throws {
-        for version in 2...13 {
+        for version in 2...14 {
             _ = try requiredModel(named: "Conversations \(version).mom")
         }
         _ = try requiredModel(named: "Conversations.mom")

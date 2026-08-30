@@ -22,6 +22,7 @@ import UIKit
 #endif
 
 struct ConversationLibraryView: View {
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @Binding var selectedConversationID: UUID?
     var recorder: InAppAudioRecorder
     /// Forward a user turn (typed or spoken, with optional attachments) to the
@@ -232,7 +233,7 @@ struct ConversationLibraryView: View {
                 // search capsule and the list — shares a different one, measured
                 // on the `.safeAreaInset` below.
                 // (Args in declaration order.)
-                showsToolbarActions: true,
+                showsToolbarActions: workbenchDestinationIsActive,
                 externalSearchText: $sidebarSearch,
                 customGateways: customGateways,
                 configuredRefs: configuredRefs,
@@ -326,7 +327,9 @@ struct ConversationLibraryView: View {
             // both halves, and the lever table recording why the collapsed bar
             // cannot be made to match this order.
             .toolbar {
-                LeadingToolbarChrome(column: .sidebar) { startNewConversation() }
+                if workbenchDestinationIsActive {
+                    LeadingToolbarChrome(column: .sidebar) { startNewConversation() }
+                }
             }
             // The view-tree half of `sidebarBarOnScreen`. Reports what is
             // actually mounted, so a sidebar that leaves the screen by a route
@@ -452,7 +455,10 @@ struct ConversationLibraryView: View {
         // (`gatewayTitleControl`: picker / clone-tappable title / static title),
         // so the nav title stays empty to avoid double-titling. Clone is folded
         // into that control — no separate trailing button.
-        .navigationTitle(Text(""))
+        .workbenchNavigationTitle(
+            Text(""),
+            isActive: workbenchDestinationIsActive
+        )
         .toolbar {
             // Compose, immediately right of the reveal control that iPadOS pins
             // leading-most in this bar. THIS is the copy that survives ambiguity:
@@ -466,11 +472,13 @@ struct ConversationLibraryView: View {
             // bar's: iPadOS pins its reveal control leading-most and nothing this
             // app declares outranks it. `LeadingToolbarChrome`'s header carries
             // the seven levers measured against that, each with its frames.
-            if !sidebarBarOnScreen {
+            if workbenchDestinationIsActive, !sidebarBarOnScreen {
                 LeadingToolbarChrome(column: .detail) { startNewConversation() }
             }
-            ToolbarItem(placement: .principal) {
-                gatewayTitleControl
+            if workbenchDestinationIsActive {
+                ToolbarItem(placement: .principal) {
+                    gatewayTitleControl
+                }
             }
         }
     }

@@ -791,6 +791,17 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         conversationsItem.target = self
         menu.addItem(conversationsItem)
 
+        let workItem = NSMenuItem(
+            title: String(localized: LocalizedStringResource(
+                "menu.openWork",
+                defaultValue: "Open Work…"
+            )),
+            action: #selector(openWorkFromMenu),
+            keyEquivalent: ""
+        )
+        workItem.target = self
+        menu.addItem(workItem)
+
         menu.addItem(.separator())
 
         let loginItem = NSMenuItem(
@@ -881,6 +892,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     @objc private func openConversationsFromMenu() {
         openConversationsWindow()
+    }
+
+    @objc private func openWorkFromMenu() {
+        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .showWorkboard, object: nil)
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {

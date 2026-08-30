@@ -288,6 +288,10 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                 consumeGatewayFixRoute()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openPersonalAISettings)) { _ in
+                guard settingsRoute == nil else { return }
+                settingsRoute = SettingsRoute(category: .personalAI)
+            }
             .onAppear { consumeGatewayFixRoute() }
         } else {
             phoneLayout
@@ -667,6 +671,12 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                 consumeGatewayFixRoute()
             }
+            #if os(iOS)
+            .onReceive(NotificationCenter.default.publisher(for: .openPersonalAISettings)) { _ in
+                guard settingsRoute == nil else { return }
+                settingsRoute = SettingsRoute(category: .personalAI)
+            }
+            #endif
             .onAppear { consumeGatewayFixRoute() }
             #if os(iOS)
             .onChange(of: detailVM?.isAwaitingReply) { old, new in
@@ -1535,21 +1545,56 @@ struct ContentView: View {
                 customConfig: snapshot.customConfig
             )
 
-            guard !response.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            let recoveredTranscript = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !recoveredTranscript.isEmpty else {
                 presentRetryError(String(localized: "Transcription returned empty text. Try again."))  // xcstrings
                 return
             }
 
-            await PendingRetryStore.shared.clear()
-            await PendingRetryGuard.cancelAllDeferredNotifications()
+            if pending.metadata.resolvedDestination == .work {
+                _ = try await WorkCaptureRetryCoordinator.publish(
+                    transcript: recoveredTranscript,
+                    rawImageData: pending.workImageData,
+                    captureID: pending.metadata.id,
+                    createdAt: pending.metadata.createdAt
+                )
+            }
 
-            pendingRetryErrorCode = nil
+            _ = await PendingRetryStore.shared.clear(ifCurrentID: pending.metadata.id)
+            PendingRetryGuard.cancelDeferredNotification(for: pending.metadata.id)
+
+            let newerRetryIsPending = await PendingRetryStore.shared.hasPending()
+            pendingRetryErrorCode = newerRetryIsPending
+                ? await PendingRetryStore.shared.pendingErrorCode()
+                : nil
             pendingRetryIsRetryable = true
-            withAnimation { hasPendingRetry = false }
-            // The recovered transcript continues into the converse path.
-            await sendTurn(response.text)
+            withAnimation { hasPendingRetry = newerRetryIsPending }
+            if pending.metadata.resolvedDestination == .chat {
+                // Legacy and explicit Chat records continue into the established
+                // converse path. Work records have already crossed their inert,
+                // deterministic publication boundary above and never reach a
+                // gateway from this retry surface.
+                _ = await sendTurn(recoveredTranscript)
+            }
 
         } catch let error as AppError {
+            let stillOwnsRetry = await PendingRetryStore.shared.updateAttemptIfCurrent(
+                id: pending.metadata.id,
+                lastErrorCode: error.errorCode
+            )
+            guard stillOwnsRetry else {
+                // A newer capture replaced this one while STT was suspended.
+                // Keep its card authoritative instead of painting A's diagnosis
+                // and Troubleshoot code onto B.
+                let newerRetryIsPending = await PendingRetryStore.shared.hasPending()
+                pendingRetryErrorCode = newerRetryIsPending
+                    ? await PendingRetryStore.shared.pendingErrorCode()
+                    : nil
+                pendingRetryIsRetryable = true
+                retryErrorMessage = nil
+                withAnimation { hasPendingRetry = newerRetryIsPending }
+                return
+            }
             // Re-key the card to the failure the user is looking at NOW, not the
             // one that armed the store: the Troubleshoot chip pointed at the
             // arming code, so a retry that died on a certificate opened
@@ -1564,7 +1609,14 @@ struct ContentView: View {
                 sticky: !error.isRetryable
             )
         } catch {
-            presentRetryError(String(localized: "Couldn't send — try again in a minute."))  // xcstrings
+            if pending.metadata.resolvedDestination == .work {
+                presentRetryError(String(
+                    localized: "workboard.capture.retry.message",
+                    defaultValue: "Couldn't add this recording to Work. Try again."
+                ))
+            } else {
+                presentRetryError(String(localized: "Couldn't send — try again in a minute."))  // xcstrings
+            }
         }
     }
 

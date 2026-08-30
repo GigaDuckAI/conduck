@@ -31,8 +31,8 @@ import Foundation
 /// The flattened "Send to" target list the main app publishes for the appex picker.
 /// Codable + Sendable so it crosses the app → App-Group-disk → appex boundary as
 /// plain JSON.
-struct ShareTargetsSnapshot: Codable, Sendable {
-    /// Schema version (currently 1). Diagnostic + future branch point — readers
+nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
+    /// Schema version (currently 2). Diagnostic + future branch point — readers
     /// tolerate any value (never reject on `schemaVersion` alone; see file header).
     let schemaVersion: Int
     /// When the main app last regenerated the snapshot (diagnostic / staleness).
@@ -43,10 +43,13 @@ struct ShareTargetsSnapshot: Codable, Sendable {
     /// Existing conversations the user can APPEND a share to, most-recent-first.
     /// May be empty (a fresh install with no conversations).
     let recentConversations: [RecentConversation]
+    /// Open Work items the user can append an inert capture to, most-recent-first.
+    /// May be empty; readers of the original schema default this field to `[]`.
+    let recentWorkItems: [RecentWorkItem]
 
     /// One gateway the picker offers for a NEW conversation. Every render value is
     /// pre-resolved main-app-side (the appex can't reach the palette enum).
-    struct Gateway: Codable, Sendable {
+    nonisolated struct Gateway: Codable, Sendable {
         /// `RemoteAgentRef` rawString: `"openclaw"` / `"hermes"` / `"custom_<uuid>"`.
         /// The ref the drainer mints the new conversation against.
         let ref: String
@@ -67,7 +70,7 @@ struct ShareTargetsSnapshot: Codable, Sendable {
             case ref, displayName, colorHex, monogram, configured
         }
 
-        init(
+        nonisolated init(
             ref: String,
             displayName: String,
             colorHex: String,
@@ -84,7 +87,7 @@ struct ShareTargetsSnapshot: Codable, Sendable {
         /// `ref` is the only required field (a gateway without a ref can't be
         /// routed); every render value default-fills so a future schema addition
         /// can't break an old snapshot.
-        init(from decoder: Decoder) throws {
+        nonisolated init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             self.ref = try c.decode(String.self, forKey: .ref)
             self.displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
@@ -95,7 +98,7 @@ struct ShareTargetsSnapshot: Codable, Sendable {
     }
 
     /// One existing conversation the picker offers for APPEND.
-    struct RecentConversation: Codable, Sendable {
+    nonisolated struct RecentConversation: Codable, Sendable {
         /// Conversation identity — the drainer appends the shared turn under it.
         let id: UUID
         /// Derived display label (title ?? first-user-turn snippet ?? "New Conversation").
@@ -112,7 +115,7 @@ struct ShareTargetsSnapshot: Codable, Sendable {
             case id, label, backendRef, lastActivityAt
         }
 
-        init(
+        nonisolated init(
             id: UUID,
             label: String,
             backendRef: String,
@@ -126,7 +129,7 @@ struct ShareTargetsSnapshot: Codable, Sendable {
 
         /// `id` is the only required field (without it the appex can't target the
         /// conversation); everything else default-fills on a decode miss.
-        init(from decoder: Decoder) throws {
+        nonisolated init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             self.id = try c.decode(UUID.self, forKey: .id)
             self.label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
@@ -135,22 +138,54 @@ struct ShareTargetsSnapshot: Codable, Sendable {
         }
     }
 
+    /// One open Work destination offered by the inert-capture picker. The main
+    /// app publishes only bounded, non-Done items; the drainer independently
+    /// revalidates that state because a snapshot can become stale while the
+    /// share sheet is open.
+    nonisolated struct RecentWorkItem: Codable, Sendable {
+        let id: UUID
+        let title: String
+        let modifiedAt: Date
+
+        private enum CodingKeys: String, CodingKey {
+            case id, title, modifiedAt
+        }
+
+        nonisolated init(id: UUID, title: String, modifiedAt: Date) {
+            self.id = id
+            self.title = title
+            self.modifiedAt = modifiedAt
+        }
+
+        /// `id` is the only routing field. Render metadata defaults so a partial
+        /// or newer snapshot cannot make the entire destination picker disappear.
+        nonisolated init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.id = try c.decode(UUID.self, forKey: .id)
+            self.title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+            self.modifiedAt = try c.decodeIfPresent(Date.self, forKey: .modifiedAt)
+                ?? Date(timeIntervalSince1970: 0)
+        }
+    }
+
     // MARK: - Tolerant decode
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, generatedAt, gateways, recentConversations
+        case schemaVersion, generatedAt, gateways, recentConversations, recentWorkItems
     }
 
-    init(
+    nonisolated init(
         schemaVersion: Int,
         generatedAt: Date,
         gateways: [Gateway],
-        recentConversations: [RecentConversation]
+        recentConversations: [RecentConversation],
+        recentWorkItems: [RecentWorkItem] = []
     ) {
         self.schemaVersion = schemaVersion
         self.generatedAt = generatedAt
         self.gateways = gateways
         self.recentConversations = recentConversations
+        self.recentWorkItems = recentWorkItems
     }
 
     /// Nothing is hard-required at the top level — a snapshot with no targets is a
@@ -158,13 +193,14 @@ struct ShareTargetsSnapshot: Codable, Sendable {
     /// newer-schema snapshot still decodes:
     ///   - `schemaVersion` → 1 (assume the original schema)
     ///   - `generatedAt` → epoch (a missing stamp reads as maximally stale)
-    ///   - `gateways`/`recentConversations` → [] (empty picker, not a throw)
-    init(from decoder: Decoder) throws {
+    ///   - target arrays → [] (empty picker, not a throw)
+    nonisolated init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         self.generatedAt = try c.decodeIfPresent(Date.self, forKey: .generatedAt) ?? Date(timeIntervalSince1970: 0)
         self.gateways = try c.decodeIfPresent([Gateway].self, forKey: .gateways) ?? []
         self.recentConversations = try c.decodeIfPresent([RecentConversation].self, forKey: .recentConversations) ?? []
+        self.recentWorkItems = try c.decodeIfPresent([RecentWorkItem].self, forKey: .recentWorkItems) ?? []
     }
 }
 
@@ -180,28 +216,28 @@ extension ShareTargetsSnapshot {
     // route BOTH sides through `encoded()` / `decode(_:)` so they can never drift.
     // Never encode/decode a `ShareTargetsSnapshot` with an ad-hoc coder.
 
-    private static func makeEncoder() -> JSONEncoder {
+    private nonisolated static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         return encoder
     }
 
-    private static func makeDecoder() -> JSONDecoder {
+    private nonisolated static func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }
 
     /// Serialize for the on-disk App-Group snapshot (main-app write side).
-    func encoded() throws -> Data {
+    nonisolated func encoded() throws -> Data {
         try Self.makeEncoder().encode(self)
     }
 
     /// Deserialize the snapshot (appex read side). A malformed payload returns
     /// `nil` (the appex falls back to its default target) instead of throwing.
     /// Tolerant per-field decode still applies (see `init(from:)`).
-    static func decode(_ data: Data) -> ShareTargetsSnapshot? {
+    nonisolated static func decode(_ data: Data) -> ShareTargetsSnapshot? {
         try? makeDecoder().decode(ShareTargetsSnapshot.self, from: data)
     }
 }

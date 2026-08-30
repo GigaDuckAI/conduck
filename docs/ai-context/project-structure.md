@@ -50,13 +50,15 @@ One target covers iPhone, iPad and Mac. The Mac build is a full Dock application
 | `Services/STT/Providers/` | A file here only when a vendor cannot use the shared request and decode machinery — a bespoke probe or body factory for the ones that deviate. Vendors that fit the standard shape have no file at all. Adding a vendor means registering it in `Services/STT/STTProvider.swift` and the metadata lists beside it; a file here is the exception, not the step. |
 | `Services/TTS/` | Read-aloud: sentence segmentation, chunk queueing, playback, exclusivity between surfaces, and the speak engine every spoken reply on this target passes through. The Watch has its own engine behind the same protocol. |
 | `Services/Storage/` | The storage seam. Three shared, syncing stores reach the app only through the protocols here, so tests can substitute in-memory doubles instead of writing to a developer's real iCloud account. `scripts/check-storage-seam.sh` fails the build if anything bypasses it. |
-| `ViewModels/` | The state that sits between views and services — conversation list and detail, settings (split across several files by area), the diagnostics runner, the pairing import flow. |
+| `Services/Workboard/` | The Workboard's private asset vault, capture draining/recovery, immutable prompt and dispatch preparation, on-device brief shaping, reminders, and deterministic briefing. Network dispatch remains in the existing conversation/gateway lane. |
+| `ViewModels/` | The state that sits between views and services — conversation list and detail, the private Workboard presentation boundary, settings (split across several files by area), the diagnostics runner, the pairing import flow. |
 | `Views/` | SwiftUI, split by area below. |
 | `Views/Conversation/` | The message thread, the composer, and attachment handling — staging, previews, full-screen viewing. |
+| `Views/Workboard/` | The private pre-flight workbench — adaptive board/list, document editor, material shelf, exact dispatch preflight, result-first review timeline and deterministic briefing. |
 | `Views/Settings/` | The largest folder in the app. Every settings screen for every platform, plus the guided gateway-setup flow. iPhone/iPad and Mac have deliberately separate screen hierarchies here rather than one adaptive layout. |
 | `Views/Onboarding/` | The first-run flow, including the choice between a self-hosted gateway and a hosted model. |
 | `Views/Components/` | Small pieces shared across more than one screen. |
-| `Intents/` | App Intents: the voice-capture intent behind the Action Button and Shortcuts, the network check, and the shortcut registration that makes both discoverable to Siri and Spotlight. |
+| `Intents/` | App Intents: voice capture, network readiness, inert Workboard capture and briefing, plus shortcut registration. GigaAction has an additive Chat/Work destination; Chat remains the migration-safe default and Work never dispatches. |
 | `MenuBar/` | The Mac menu-bar agent, its popover, and the user-configurable global hotkeys. |
 | `ScreenCapture/` | Mac screenshot-and-ask: the drag-to-select region capture. |
 | `CarPlay/` | The CarPlay scene. It has its own recorder, its own audio session handling and its own end-of-speech detection rather than reusing the phone's, because the car is a hands-free multi-turn surface with different interruption rules. |
@@ -71,7 +73,7 @@ One target covers iPhone, iPad and Mac. The Mac build is a full Dock application
 
 | Path | What it is |
 |---|---|
-| `Conduck/ConduckShareExtension/` | The iOS share-sheet extension. It writes into a shared App-Group inbox; the main app drains it when it next becomes active. |
+| `Conduck/ConduckShareExtension/` | The iOS share-sheet extension. Work can create a new draft or append to a recent open item; Chat keeps the existing send route. Both write into shared App-Group inboxes the app drains when active. |
 | `Conduck/ConduckShareExtensionMac/` | The macOS share extension. Same inbox, same idea. Its files carry the same names as the iOS ones, but only some are copies: the view, the controller, the target filter and the web-page capture genuinely diverge because the two platforms' share hosts behave differently, while the snapshot and manifest types are deliberate verbatim mirrors of the main app's, held byte-identical by a test. |
 | `Conduck/ConduckWatch Watch App/` | The watchOS app. It reuses the phone's models and service layer (see the target table below) but none of its views. |
 | `Conduck/ConduckWatch Watch App/Services/` | The wrist's own recorder, audio session handling, network client, relay coordinator and its pending queue, the holding area for agent-file descriptions the phone couriers ahead of sync, deep-link routing back into the app, and logging with hostname redaction. |
@@ -124,6 +126,7 @@ The same split also runs through the app's entitlements, which are two files rat
 | The conversation database schema | `Conduck/Conduck/Models/Conversations.xcdatamodeld` — add a version rather than editing a shipped one. The mirrored CloudKit schema is additive-only and permanent, so a field cannot be withdrawn once it exists, and every version still on disk somewhere is a migration a real device will run |
 | Anything persisted, synced, or kept secret | `Conduck/Conduck/Services/Storage/` — go through the seam |
 | The message thread or the composer | `Conduck/Conduck/Views/Conversation/` |
+| The private Agent Workboard or dispatch preflight | `Conduck/Conduck/Views/Workboard/` and `Conduck/Conduck/ViewModels/WorkboardViewModel.swift` |
 | A settings screen | `Conduck/Conduck/Views/Settings/` — check whether the Mac hierarchy needs the same change |
 | Watch behaviour | `Conduck/ConduckWatch Watch App/` |
 | CarPlay behaviour | `Conduck/Conduck/CarPlay/` |

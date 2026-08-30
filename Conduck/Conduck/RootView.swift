@@ -55,7 +55,9 @@ struct RootView: View {
                     showOnboarding = false
                 })
             } else {
-                ContentView()
+                PersonalWorkbenchView {
+                    ContentView()
+                }
             }
         }
         // One-time backfill so EXISTING conversations get a denormalized

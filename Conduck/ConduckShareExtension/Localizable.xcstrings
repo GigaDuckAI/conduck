@@ -1,0 +1,537 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "" : {
+
+    },
+    "share.addToWork" : {
+      "comment" : "Primary button that saves shared material as inert Work",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add to Work"
+          }
+        }
+      }
+    },
+    "share.addToWork.progress" : {
+      "comment" : "Progress label while the Share Extension saves inert Work",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Adding to Work…"
+          }
+        }
+      }
+    },
+    "share.cancel" : {
+      "comment" : "Cancel button in the Share Extension",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "share.caption.placeholder" : {
+      "comment" : "Placeholder for the caption field in the Share Extension",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add a message…"
+          }
+        }
+      }
+    },
+    "share.capture.page" : {
+      "comment" : "Title of the Share Extension row that toggles including the captured full-page text",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Page text"
+          }
+        }
+      }
+    },
+    "share.capture.selection" : {
+      "comment" : "Title of the Share Extension capture row when the user had text selected (the selection is captured instead of the whole page)",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Selected text"
+          }
+        }
+      }
+    },
+    "share.capture.toggleA11y" : {
+      "comment" : "Accessibility label for the toggle that includes or excludes the captured page text",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Include page text"
+          }
+        }
+      }
+    },
+    "share.capture.truncated" : {
+      "comment" : "Suffix on the captured-text size when the capture was cut at the size cap",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "truncated"
+          }
+        }
+      }
+    },
+    "share.capture.webpage" : {
+      "comment" : "Type description shown in the Share Extension header for a captured Safari web page",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Web page"
+          }
+        }
+      }
+    },
+    "share.item.fallback" : {
+      "comment" : "Generic fallback label when a shared item has no resolvable name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Shared item"
+          }
+        }
+      }
+    },
+    "share.item.file" : {
+      "comment" : "Label for a shared file with no name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File"
+          }
+        }
+      }
+    },
+    "share.item.image" : {
+      "comment" : "Label for a shared image with no name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Image"
+          }
+        }
+      }
+    },
+    "share.item.link" : {
+      "comment" : "Label for a shared web link\nSubtitle shown for a shared web link",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Link"
+          }
+        }
+      }
+    },
+    "share.item.text" : {
+      "comment" : "Label for shared plain text",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Text"
+          }
+        }
+      }
+    },
+    "share.mode.accessibility" : {
+      "comment" : "Accessibility label for the Work versus Send mode picker",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Choose whether to save or send"
+          }
+        }
+      }
+    },
+    "share.mode.send" : {
+      "comment" : "Segment that immediately sends shared material",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send now"
+          }
+        }
+      }
+    },
+    "share.mode.work" : {
+      "comment" : "Segment that saves shared material without sending it",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Work"
+          }
+        }
+      }
+    },
+    "share.notification.body" : {
+      "comment" : "Body of the local notification posted after a share is queued",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap to open in Conduck."
+          }
+        }
+      }
+    },
+    "share.notification.title" : {
+      "comment" : "Title of the local notification posted after a share is queued",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Shared to Conduck"
+          }
+        }
+      }
+    },
+    "share.retry" : {
+      "comment" : "Retry button after a Share Extension persistence failure",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try Again"
+          }
+        }
+      }
+    },
+    "share.search.clear" : {
+      "comment" : "Accessibility label for the clear-search button in the Share Extension",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Clear search"
+          }
+        }
+      }
+    },
+    "share.search.empty" : {
+      "comment" : "Empty state shown when a Share Extension target search matches nothing",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No matches"
+          }
+        }
+      }
+    },
+    "share.search.placeholder" : {
+      "comment" : "Placeholder for the target-search field in the Share Extension",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Search"
+          }
+        }
+      }
+    },
+    "share.section.new" : {
+      "comment" : "Picker section header above the new-conversation gateway rows",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New conversation"
+          }
+        }
+      }
+    },
+    "share.section.recent" : {
+      "comment" : "Picker section header above the recent-conversation rows",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recent chats"
+          }
+        }
+      }
+    },
+    "share.send" : {
+      "comment" : "Send button in the Share Extension",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send"
+          }
+        }
+      }
+    },
+    "share.send.progress" : {
+      "comment" : "Progress label while the Share Extension queues a conversation send",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sending…"
+          }
+        }
+      }
+    },
+    "share.sendNow" : {
+      "comment" : "Immediate dispatch button in the Share Extension",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send now"
+          }
+        }
+      }
+    },
+    "share.summary.more" : {
+      "comment" : "Suffix on the share header when more than one item is shared (+n more)",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "+%lld more"
+          }
+        }
+      }
+    },
+    "share.target.newConversation" : {
+      "comment" : "Picker row that starts a brand-new conversation",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New conversation"
+          }
+        }
+      }
+    },
+    "share.target.untitled" : {
+      "comment" : "Fallback label for a recent chat with no title",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conversation"
+          }
+        }
+      }
+    },
+    "share.title" : {
+      "comment" : "Share Extension navigation title",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send to"
+          }
+        }
+      }
+    },
+    "share.type.image" : {
+      "comment" : "Type description for a shared image in the Share Extension header",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Image"
+          }
+        }
+      }
+    },
+    "share.work.error.empty" : {
+      "comment" : "Actionable empty Workboard capture failure message",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "There’s nothing to add yet. Add a message or include at least one shared item, then try again."
+          }
+        }
+      }
+    },
+    "share.work.error.title" : {
+      "comment" : "Title shown when the Share Extension cannot persist a Work capture",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn’t Add to Work"
+          }
+        }
+      }
+    },
+    "share.work.error.tooLarge" : {
+      "comment" : "Actionable size-limit failure message for a Workboard capture",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This share is too large for Work. Share fewer files or smaller files, then try again."
+          }
+        }
+      }
+    },
+    "share.work.error.unavailable" : {
+      "comment" : "Actionable generic Workboard persistence failure message in the Share Extension",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing was saved. Check that your device has free storage, then try again."
+          }
+        }
+      }
+    },
+    "share.work.inert" : {
+      "comment" : "Privacy reassurance for an inert Work capture",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing is sent to AI"
+          }
+        }
+      }
+    },
+    "share.work.new" : {
+      "comment" : "Destination that creates a new inert Work draft",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New Work"
+          }
+        }
+      }
+    },
+    "share.work.new.detail" : {
+      "comment" : "Subtitle for the New Work destination",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Start a new draft"
+          }
+        }
+      }
+    },
+    "share.work.section.destination" : {
+      "comment" : "Section title above the New Work destination",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Destination"
+          }
+        }
+      }
+    },
+    "share.work.section.recent" : {
+      "comment" : "Section title above recent open Work destinations",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recent Work"
+          }
+        }
+      }
+    },
+    "share.work.title" : {
+      "comment" : "Share Extension title while saving an inert Work draft",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add to Work"
+          }
+        }
+      }
+    },
+    "share.work.untitled" : {
+      "comment" : "Fallback title for an open Work destination without a title",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Untitled Work"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

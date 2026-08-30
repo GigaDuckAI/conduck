@@ -22,10 +22,12 @@ final class ShareTargetsSnapshotTests: XCTestCase {
 
     func testEncodeDecodeRoundTripPreservesEveryField() throws {
         let convoID = UUID()
+        let workID = UUID()
         let generated = Date(timeIntervalSince1970: 1_700_000_000)
         let lastActivity = Date(timeIntervalSince1970: 1_700_000_500)
+        let workModified = Date(timeIntervalSince1970: 1_700_000_750)
         let original = ShareTargetsSnapshot(
-            schemaVersion: 1,
+            schemaVersion: 2,
             generatedAt: generated,
             gateways: [
                 ShareTargetsSnapshot.Gateway(
@@ -50,13 +52,20 @@ final class ShareTargetsSnapshotTests: XCTestCase {
                     backendRef: "hermes",
                     lastActivityAt: lastActivity
                 )
+            ],
+            recentWorkItems: [
+                ShareTargetsSnapshot.RecentWorkItem(
+                    id: workID,
+                    title: "Launch brief",
+                    modifiedAt: workModified
+                )
             ]
         )
 
         let data = try original.encoded()
         let decoded = try XCTUnwrap(ShareTargetsSnapshot.decode(data))
 
-        XCTAssertEqual(decoded.schemaVersion, 1)
+        XCTAssertEqual(decoded.schemaVersion, 2)
         XCTAssertEqual(decoded.generatedAt.timeIntervalSince1970, generated.timeIntervalSince1970, accuracy: 0.001)
 
         XCTAssertEqual(decoded.gateways.count, 2)
@@ -75,6 +84,12 @@ final class ShareTargetsSnapshotTests: XCTestCase {
         XCTAssertEqual(r0.label, "Trip planning")
         XCTAssertEqual(r0.backendRef, "hermes")
         XCTAssertEqual(r0.lastActivityAt.timeIntervalSince1970, lastActivity.timeIntervalSince1970, accuracy: 0.001)
+
+        XCTAssertEqual(decoded.recentWorkItems.count, 1)
+        let w0 = decoded.recentWorkItems[0]
+        XCTAssertEqual(w0.id, workID)
+        XCTAssertEqual(w0.title, "Launch brief")
+        XCTAssertEqual(w0.modifiedAt.timeIntervalSince1970, workModified.timeIntervalSince1970, accuracy: 0.001)
     }
 
     // MARK: - Tolerant decode (forward-compat)
@@ -87,6 +102,7 @@ final class ShareTargetsSnapshotTests: XCTestCase {
         XCTAssertEqual(decoded.schemaVersion, 1, "missing schemaVersion defaults to 1")
         XCTAssertEqual(decoded.gateways, [], "missing gateways defaults to empty")
         XCTAssertEqual(decoded.recentConversations, [], "missing recents defaults to empty")
+        XCTAssertEqual(decoded.recentWorkItems, [], "an older snapshot defaults Work targets to empty")
     }
 
     func testTolerantGatewayDecodeDefaultsRenderFields() throws {
@@ -109,6 +125,18 @@ final class ShareTargetsSnapshotTests: XCTestCase {
         XCTAssertEqual(decoded.id, id)
         XCTAssertEqual(decoded.label, "")
         XCTAssertEqual(decoded.backendRef, "")
+    }
+
+    func testTolerantRecentWorkDecodeDefaultsRenderFields() throws {
+        let id = UUID()
+        let json = "{\"id\":\"\(id.uuidString)\"}"
+        let decoded = try JSONDecoder().decode(
+            ShareTargetsSnapshot.RecentWorkItem.self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(decoded.id, id)
+        XCTAssertEqual(decoded.title, "")
+        XCTAssertEqual(decoded.modifiedAt, Date(timeIntervalSince1970: 0))
     }
 
     func testMalformedSnapshotDecodesToNil() {
@@ -139,7 +167,7 @@ final class ShareTargetsSnapshotTests: XCTestCase {
     // / `decode(_:)` — NOT a bare coder like the round-trip tests above.
     func testPinnedWireContractFreezesDateStrategyAndFieldNames() throws {
         let snapshot = ShareTargetsSnapshot(
-            schemaVersion: 1,
+            schemaVersion: 2,
             generatedAt: Date(timeIntervalSince1970: 1_700_000_000),
             gateways: [
                 ShareTargetsSnapshot.Gateway(
@@ -152,6 +180,13 @@ final class ShareTargetsSnapshotTests: XCTestCase {
                     id: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
                     label: "Trip planning", backendRef: "hermes",
                     lastActivityAt: Date(timeIntervalSince1970: 1_700_000_500)
+                )
+            ],
+            recentWorkItems: [
+                ShareTargetsSnapshot.RecentWorkItem(
+                    id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+                    title: "Launch brief",
+                    modifiedAt: Date(timeIntervalSince1970: 1_700_000_750)
                 )
             ]
         )
@@ -169,20 +204,24 @@ final class ShareTargetsSnapshotTests: XCTestCase {
                       "lastActivityAt must serialize ISO-8601 via the pinned coder — wire: \(wire)")
 
         // 2. Every field name is frozen — a rename on either mirror breaks decode.
-        for key in ["\"schemaVersion\"", "\"generatedAt\"", "\"gateways\"", "\"recentConversations\"",
+        for key in ["\"schemaVersion\"", "\"generatedAt\"", "\"gateways\"", "\"recentConversations\"", "\"recentWorkItems\"",
                     "\"ref\"", "\"displayName\"", "\"colorHex\"", "\"monogram\"", "\"configured\"",
-                    "\"id\"", "\"label\"", "\"backendRef\"", "\"lastActivityAt\""] {
+                    "\"id\"", "\"label\"", "\"backendRef\"", "\"lastActivityAt\"", "\"title\"", "\"modifiedAt\""] {
             XCTAssertTrue(wire.contains(key), "wire contract missing key \(key) — wire: \(wire)")
         }
 
         // 3. `.sortedKeys` → deterministic bytes. Top-level `gateways` precedes
-        //    `recentConversations` precedes `schemaVersion` (alphabetical).
+        //    `recentConversations` precedes `recentWorkItems` precedes
+        //    `schemaVersion` (alphabetical).
         let gatewaysAt = try XCTUnwrap(wire.range(of: "\"gateways\""))
         let recentsAt = try XCTUnwrap(wire.range(of: "\"recentConversations\""))
+        let workAt = try XCTUnwrap(wire.range(of: "\"recentWorkItems\""))
         let schemaAt = try XCTUnwrap(wire.range(of: "\"schemaVersion\""))
         XCTAssertTrue(gatewaysAt.lowerBound < recentsAt.lowerBound,
                       "top-level keys must be sorted (.sortedKeys) for deterministic wire bytes")
-        XCTAssertTrue(recentsAt.lowerBound < schemaAt.lowerBound,
+        XCTAssertTrue(recentsAt.lowerBound < workAt.lowerBound,
+                      "top-level keys must be sorted (.sortedKeys) for deterministic wire bytes")
+        XCTAssertTrue(workAt.lowerBound < schemaAt.lowerBound,
                       "top-level keys must be sorted (.sortedKeys) for deterministic wire bytes")
         // Nested gateway keys are sorted too: `colorHex` precedes `ref`.
         let colorHexAt = try XCTUnwrap(wire.range(of: "\"colorHex\""))
@@ -192,12 +231,13 @@ final class ShareTargetsSnapshotTests: XCTestCase {
 
         // 4. Full loop through the PINNED coders preserves every field.
         let back = try XCTUnwrap(ShareTargetsSnapshot.decode(try snapshot.encoded()))
-        XCTAssertEqual(back.schemaVersion, 1)
+        XCTAssertEqual(back.schemaVersion, 2)
         XCTAssertEqual(back.generatedAt.timeIntervalSince1970, snapshot.generatedAt.timeIntervalSince1970, accuracy: 0.001)
         XCTAssertEqual(back.gateways.first?.ref, "openclaw")
         XCTAssertEqual(back.gateways.first?.colorHex, "#3A86FF")
         XCTAssertEqual(back.recentConversations.first?.backendRef, "hermes")
         XCTAssertEqual(back.recentConversations.first?.label, "Trip planning")
+        XCTAssertEqual(back.recentWorkItems.first?.title, "Launch brief")
     }
 
     // MARK: - Byte-identical mirror guard
@@ -256,5 +296,16 @@ extension ShareTargetsSnapshot.RecentConversation: Equatable {
             && lhs.label == rhs.label
             && lhs.backendRef == rhs.backendRef
             && lhs.lastActivityAt == rhs.lastActivityAt
+    }
+}
+
+extension ShareTargetsSnapshot.RecentWorkItem: Equatable {
+    public static func == (
+        lhs: ShareTargetsSnapshot.RecentWorkItem,
+        rhs: ShareTargetsSnapshot.RecentWorkItem
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.title == rhs.title
+            && lhs.modifiedAt == rhs.modifiedAt
     }
 }

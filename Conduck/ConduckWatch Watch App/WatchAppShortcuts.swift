@@ -20,6 +20,18 @@ struct WatchAppShortcuts: AppShortcutsProvider {
             shortTitle: "GigaAction",
             systemImageName: "note.text"
         )
+
+        // Text-only preparation is intentionally its own action: unlike
+        // GigaAction it opens no microphone and starts no AI turn.
+        AppShortcut(
+            intent: CaptureWorkboardIntent(),
+            phrases: [
+                "Add a thought to my Workboard in \(.applicationName)",
+                "Prepare work in \(.applicationName)"
+            ],
+            shortTitle: "Add to Workboard",
+            systemImageName: "tray.and.arrow.down.fill"
+        )
     }
 
     static var shortcutTileColor: ShortcutTileColor {

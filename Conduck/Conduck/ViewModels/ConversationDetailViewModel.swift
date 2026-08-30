@@ -4628,6 +4628,8 @@ final class ConversationDetailViewModel {
         localURL: URL,
         storedKey: String,
         snapshot: SettingsManager.FileTransferSnapshot,
+        recoveryID: UUID? = nil,
+        recoverySequence: Int? = nil,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
         try Task.checkCancellation()
@@ -4649,6 +4651,8 @@ final class ConversationDetailViewModel {
                 localURL: tmp,
                 snapshot: snapshot,
                 storedKey: storedKey,
+                shareEnvelopeID: recoveryID,
+                sequence: recoverySequence,
                 onProgress: onProgress
             )
         } catch {

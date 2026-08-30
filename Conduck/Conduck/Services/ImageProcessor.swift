@@ -114,6 +114,21 @@ actor ImageProcessor {
         return jpeg
     }
 
+    /// Downsample a file-backed image directly through ImageIO. Unlike the
+    /// `Data` overload, this does not first map or copy an arbitrarily large
+    /// source file into memory, so Work can show a small device-local preview
+    /// for a 100+ MB screenshot or RAW capture without weakening the vault's
+    /// metadata-only CloudKit boundary.
+    nonisolated static func thumbnailOnly(fromFileAt url: URL) -> Data? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let thumb = try? downsizedCGImage(from: source, maxPixel: thumbnailMaxPixel),
+              let jpeg = try? encodeJPEG(thumb) else {
+            return nil
+        }
+        guard jpeg.count <= thumbnailPreviewByteCeiling else { return nil }
+        return jpeg
+    }
+
     /// Normalise raw image bytes into a `ProcessedImage`.
     ///
     /// - Parameters:

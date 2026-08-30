@@ -908,7 +908,7 @@ enum FileServerClient {
     /// instruction line, and a rendered chip label. Holding an inbound name to
     /// THIS set instead silently discards every `Übersicht.md` a user's own
     /// agent writes.
-    static let storedKeySafeCharacters = Set(
+    nonisolated static let storedKeySafeCharacters = Set(
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
     )
 
@@ -918,7 +918,7 @@ enum FileServerClient {
     /// pathological name whose "extension" is hundreds of characters cannot
     /// consume the budget the stem needs — such a name is truncated blind
     /// instead, which is the better failure.
-    private static let maxPreservedExtensionCharacters = 16
+    private nonisolated static let maxPreservedExtensionCharacters = 16
 
     /// Bound an already-sanitized name so `<prefix><name>` fits inside one path
     /// component, keeping the file extension.
@@ -931,7 +931,7 @@ enum FileServerClient {
     /// must re-mint the same key so a re-PUT overwrites the partial blob instead
     /// of orphaning it. And a no-op for every name that already fits, so no key
     /// any existing conversation already holds changes shape.
-    static func boundedStoredKeyName(
+    nonisolated static func boundedStoredKeyName(
         _ safeName: String,
         reservedPrefixCharacters: Int
     ) -> String {
@@ -989,7 +989,7 @@ enum FileServerClient {
     ///
     /// Deterministic given the same `(originalName, uuid, folder)` — tests assert
     /// this so a retry mints the SAME key (the bytes are already on the server).
-    static func makeStoredKey(originalName: String, uuid: UUID, folder: String? = nil) -> String {
+    nonisolated static func makeStoredKey(originalName: String, uuid: UUID, folder: String? = nil) -> String {
         // First 8 hex of the UUID, lowercased, no dashes. `uuidString` is
         // upper-cased with dashes (`E621E1F8-C36C-...`); strip + lower + take 8.
         let hex = uuid.uuidString
@@ -1062,7 +1062,7 @@ enum FileServerClient {
     /// recovery still holds: a relaunch passes the SAME folder (the routed
     /// `conversationID`) so the re-mint is byte-identical. A gateway probed
     /// `folderCapable=false` passes `folder: nil` → the historic flat key.
-    static func deterministicStoredKey(
+    nonisolated static func deterministicStoredKey(
         envelopeID: UUID,
         sequence: Int,
         originalName: String,

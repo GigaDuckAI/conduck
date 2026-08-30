@@ -118,6 +118,16 @@ private final class NotificationDelegate: NSObject, UNUserNotificationCenterDele
         // userInfo. Re-post on the in-app deep-link bus so RootView/ContentView
         // foregrounds + opens that thread (local fetch by ID; no URL scheme).
         let userInfo = response.notification.request.content.userInfo
+        if let itemID = userInfo[NotificationDeepLink.workItemIDKey] as? String,
+           UUID(uuidString: itemID) != nil {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .openWorkboardDeepLink,
+                    object: nil,
+                    userInfo: [NotificationDeepLink.workItemIDKey: itemID]
+                )
+            }
+        }
         if let idString = userInfo[NotificationDeepLink.conversationIDKey] as? String {
             let requestIdentifier = response.notification.request.identifier
             // Retire the WHOLE conversation's banners, not just the tapped one.
@@ -222,6 +232,8 @@ struct ConduckApp: App {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     private let notificationDelegate = NotificationDelegate()
+    /// Keeps the share-extension Darwin bridge alive for the process lifetime.
+    private let workCaptureObserver = WorkCaptureChangeObserver()
 
     init() {
         // Foreground banner delegate stays App-scope (shared with iOS branch
@@ -271,7 +283,9 @@ struct ConduckApp: App {
         // .openConversationsWindow) or a reply-notification tap
         // (.openConversationDeepLink → opens window + selects the thread).
         Window("Conduck", id: "main") {
-            MainWindowView(coordinator: appDelegate.coordinator)
+            PersonalWorkbenchView {
+                MainWindowView(coordinator: appDelegate.coordinator)
+            }
                 .frame(minWidth: 880, minHeight: 600)
                 .onReceive(NotificationCenter.default.publisher(for: .openOnboardingWindow)) { _ in
                     openWindow(id: "onboarding")
@@ -281,6 +295,18 @@ struct ConduckApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .openConversationDeepLink)) { _ in
                     // Foreground the window when a reply-notification is tapped.
+                    openWindow(id: "main")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .openWorkboardDeepLink)) { _ in
+                    // A review reminder can arrive while the accessory-style
+                    // app has no visible window. Foreground the singleton main
+                    // window before PersonalWorkbenchView selects the card.
+                    openWindow(id: "main")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .showWorkboard)) { _ in
+                    // Menu-bar Work is an explicit capture destination. Open the
+                    // singleton window; PersonalWorkbenchView consumes the same
+                    // event and switches its top-level destination to Work.
                     openWindow(id: "main")
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
@@ -318,6 +344,19 @@ struct ConduckApp: App {
                     NotificationCenter.default.post(name: .newConversation, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+            }
+            CommandGroup(after: .newItem) {
+                Button("Workboard") {
+                    openWindow(id: "main")
+                    NotificationCenter.default.post(name: .showWorkboard, object: nil)
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Chats") {
+                    openWindow(id: "main")
+                    NotificationCenter.default.post(name: .showChats, object: nil)
+                }
+                .keyboardShortcut("2", modifiers: .command)
             }
         }
         // No `.defaultLaunchBehavior(.presented)` — under Option A launch is
@@ -384,6 +423,8 @@ struct ConduckApp: App {
 @main
 struct ConduckApp: App {
     private let notificationDelegate = NotificationDelegate()
+    /// Keeps the share-extension Darwin bridge alive for the process lifetime.
+    private let workCaptureObserver = WorkCaptureChangeObserver()
     /// Owns the share-targets snapshot regeneration observers for the app's
     /// lifetime (gateway/conversation changes → rewrite the appex picker's
     /// `share-targets.json`). Held as a stored property so its `NotificationCenter`
@@ -407,6 +448,7 @@ struct ConduckApp: App {
         Task {
             await SettingsManager.shared.performInitialSync()
             await FileTransferCapabilityRefresher.refreshIfNeeded()
+            await WorkboardUploadJournal.shared.reconcile()
         }
 
         // 2. Privacy hygiene. Two independent reclaims, deliberately NOT chained
@@ -606,6 +648,7 @@ struct ConduckApp: App {
                     continuation.resume()
                 }
             }
+            await WorkboardUploadJournal.shared.reconcile()
         }
     }
 }

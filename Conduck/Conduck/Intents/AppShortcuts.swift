@@ -40,6 +40,31 @@ struct ConduckShortcuts: AppShortcutsProvider {
             shortTitle: "Check Conduck",                      // xcstrings
             systemImageName: "checkmark.shield"
         )
+
+        // A content-free status briefing. The intent counts locally derived
+        // Workboard states and never sends a brief to a gateway.
+        AppShortcut(
+            intent: BriefWorkboardIntent(),
+            phrases: [
+                "Brief my Workboard in \(.applicationName)",
+                "What needs me in \(.applicationName)"
+            ],
+            shortTitle: "Brief My Workboard",
+            systemImageName: "sun.max.fill"
+        )
+
+        // Fast, inert capture for Siri, the Action Button, and user-built
+        // shortcuts. This only creates a draft; it never selects a gateway or
+        // dispatches network work.
+        AppShortcut(
+            intent: CaptureWorkboardIntent(),
+            phrases: [
+                "Add a thought to my Workboard in \(.applicationName)",
+                "Prepare something in \(.applicationName)"
+            ],
+            shortTitle: "Add to Work",
+            systemImageName: "tray.and.arrow.down.fill"
+        )
     }
 
     static var shortcutTileColor: ShortcutTileColor {

@@ -80,6 +80,12 @@ final class InAppAudioRecorder {
     /// vanishing. Default nil → standalone use (previews/tests) just drops it.
     var onAutoStopResult: ((Result<String, AppError>) -> Void)?
 
+    /// Recovery routing is frozen when the recorder is created. Existing Chat
+    /// composers use the default; capture surfaces that promise inert Work
+    /// storage opt into `.work`, so a later retry can never cross into an agent
+    /// send path.
+    let retryDestination: PendingRetryDestination
+
     /// Underlying capture engine. Composed (not inherited) so the
     /// AudioRecorder's `ObservableObject`-based timer callbacks stay in
     /// their existing shape without leaking into this view-facing API.
@@ -99,7 +105,8 @@ final class InAppAudioRecorder {
     /// auto-speak can't slip in before `.recording` is set.
     private var isStarting = false
 
-    init() {
+    init(retryDestination: PendingRetryDestination = .chat) {
+        self.retryDestination = retryDestination
         #if os(macOS)
         // macOS has NO AVAudioSession arbitration, so the in-window composer mic
         // joins the speech-exclusivity bus as a mic authority (mirrors the
@@ -522,7 +529,8 @@ final class InAppAudioRecorder {
             audioFileURL: audioFileURL,
             preferredLanguage: preferredLanguage,
             attemptCount: 1,
-            lastErrorCode: error.errorCode
+            lastErrorCode: error.errorCode,
+            destination: retryDestination
         )
         try? await PendingRetryStore.shared.save(audioData: uploadData, metadata: metadata)
     }

@@ -422,6 +422,20 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
         "Conduck/Views/Conversation/ConversationListView.swift": .notErrorDriven(
             reason: "Reloads the LOCAL conversation store after a read failure; no transport, no `AppError`."
         ),
+        "Conduck/Views/Workboard/WorkboardView.swift": .notErrorDriven(
+            reason: "Reloads the private LOCAL/CloudKit Workboard store after a read failure; it does not replay a gateway request."
+        ),
+        "Conduck/Views/Workboard/WorkboardVoiceCaptureView.swift": .gated(
+            tokens: ["isRetryable"],
+            decidedIn: nil,
+            reason: "Re-runs microphone/STT only when the recorder's typed `AppError.isRetryable` verdict allows the same operation to improve."
+        ),
+        "ConduckShareExtension/ShareView.swift": .notErrorDriven(
+            reason: "Retries an inert App Group filesystem publication after a transient storage failure; deterministic size/empty failures hide Retry. No `AppError` or gateway request reaches it."
+        ),
+        "ConduckShareExtensionMac/ShareView.swift": .notErrorDriven(
+            reason: "macOS twin of the inert App Group publication retry; deterministic failures cannot be replayed and no gateway `AppError` reaches it."
+        ),
         "ConduckWatch Watch App/Views/WatchConversationListView.swift": .notErrorDriven(
             reason: "Reloads the LOCAL conversation store on the wrist; same as its phone twin."
         ),

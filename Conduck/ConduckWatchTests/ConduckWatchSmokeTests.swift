@@ -4,11 +4,55 @@
 // Validates the ConduckWatchTests target compiles + runs on the watchOS
 // Simulator. Real Watch-only contract tests live alongside this file.
 import XCTest
+import CoreData
 @testable import ConduckWatch_Watch_App
 
 final class ConduckWatchSmokeTests: XCTestCase {
     func testWatchTestTargetExecutes() {
         XCTAssertEqual(2 + 2, 4, "watchOS unit-test target is wired and executing on the watch simulator.")
+    }
+
+    func testWorkboardCaptureNormalizesAndBoundsItsTitle() throws {
+        let firstLine = String(repeating: "a", count: 90)
+        let capture = try WatchWorkboardCaptureText.prepare("  \(firstLine)\r\nMore detail  ")
+
+        XCTAssertEqual(capture.title, String(repeating: "a", count: 72))
+        XCTAssertEqual(capture.objective, "\(firstLine)\nMore detail")
+        XCTAssertThrowsError(try WatchWorkboardCaptureText.prepare(" \n "))
+    }
+
+    func testWorkboardCapturePersistsOnlyAnInertBrief() async throws {
+        let store = ConversationStore(inMemory: true)
+        let capture = WatchWorkboardCapture(
+            title: "Prepare launch review",
+            objective: "Collect launch risks before deciding what to send."
+        )
+
+        let returnedTitle = try await store.createInertWatchWorkboardCapture(capture)
+        let context = await store.newReadContext()
+        let counts = try await context.perform { [context] in
+            func count(_ entityName: String) throws -> Int {
+                try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: entityName))
+            }
+            let itemRequest = NSFetchRequest<NSDictionary>(entityName: "WorkItem")
+            itemRequest.resultType = .dictionaryResultType
+            itemRequest.propertiesToFetch = ["title", "objective", "preferredGatewayRef"]
+            return (
+                items: try context.fetch(itemRequest),
+                dispatches: try count("WorkDispatch"),
+                conversations: try count("Conversation"),
+                messages: try count("Message")
+            )
+        }
+
+        XCTAssertEqual(returnedTitle, capture.title)
+        XCTAssertEqual(counts.items.count, 1)
+        XCTAssertEqual(counts.items.first?["title"] as? String, capture.title)
+        XCTAssertEqual(counts.items.first?["objective"] as? String, capture.objective)
+        XCTAssertNil(counts.items.first?["preferredGatewayRef"] as? String)
+        XCTAssertEqual(counts.dispatches, 0)
+        XCTAssertEqual(counts.conversations, 0)
+        XCTAssertEqual(counts.messages, 0)
     }
 }
 

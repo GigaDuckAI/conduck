@@ -59,6 +59,9 @@ final class TempScratchSweeperTests: XCTestCase {
             "conduck-share-upload-ABC",                  // SharedInboxDrainer (share-extension file)
             "diagnostics-stt-probe-ABC.m4a",             // DiagnosticsRunner bundled probe copy
             "conduck-ftupload-ABC",                       // ConversationDetailViewModel
+            "conduck-workboard-ABC.pdf",                  // Workboard dispatch snapshot
+            "Conduck-Workboard-Preview-ABC",              // Workboard Quick Look preview
+            "conduck-workasset-tests-ABC",                 // isolated Debug-Testing vault
         ]
         for name in writtenNames {
             XCTAssertTrue(

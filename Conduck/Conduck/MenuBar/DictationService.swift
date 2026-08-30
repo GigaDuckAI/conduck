@@ -178,9 +178,9 @@ final class DictationService: RecordingExclusivityAuthority {
     }
 
     /// Retry the last failed transcription from PendingRetryStore.
-    /// Reads the audio file path + preferredLanguage from the simplified
-    /// 6-field `PendingRetryMetadata`; resolves the API key fresh at retry
-    /// time so a rotated key takes effect.
+    /// Reads the audio file path, language, and terminal destination from the
+    /// retry record; resolves the API key fresh at retry time so a rotated key
+    /// takes effect.
     func retryLast() {
         Task {
             guard case .error = state else { return }
@@ -269,26 +269,33 @@ final class DictationService: RecordingExclusivityAuthority {
                     )
                     return
                 }
-                await PendingRetryStore.shared.clear()
-                // Hand off to the agent round-trip rather than copy to
-                // clipboard. Return to idle — the conversation thread + reply
-                // in-flight UX live on the coordinator's VM (popover).
+
+                if pending.metadata.resolvedDestination == .work {
+                    _ = try await WorkCaptureRetryCoordinator.publish(
+                        transcript: trimmed,
+                        rawImageData: pending.workImageData,
+                        captureID: pending.metadata.id,
+                        createdAt: pending.metadata.createdAt
+                    )
+                }
+                _ = await PendingRetryStore.shared.clear(ifCurrentID: pending.metadata.id)
+                PendingRetryGuard.cancelDeferredNotification(for: pending.metadata.id)
                 state = .idle
-                onTranscript(trimmed)
+                if pending.metadata.resolvedDestination == .chat {
+                    // Legacy and explicit Chat records continue into the agent
+                    // round-trip. Work has already been durably published and
+                    // must never reach this Chat handoff.
+                    onTranscript(trimmed)
+                }
             } catch let error as AppError {
                 if error.shouldPreserveForRetry {
-                    // Audio still on disk in PendingRetryStore — re-save metadata
-                    // with bumped attempt count so the UI surfaces "Retry again".
-                    try? await PendingRetryStore.shared.save(
-                        audioData: pending.audioData,
-                        metadata: PendingRetryMetadata(
-                            id: pending.metadata.id,
-                            createdAt: pending.metadata.createdAt,
-                            audioFileURL: pending.metadata.audioFileURL,
-                            preferredLanguage: pending.metadata.preferredLanguage,
-                            attemptCount: pending.metadata.attemptCount + 1,
-                            lastErrorCode: error.errorCode
-                        )
+                    // Update only while this capture still owns the slot. An
+                    // overlapping Action-Button capture may have replaced it
+                    // while STT was suspended; the older retry must never
+                    // overwrite that newer audio/destination.
+                    _ = await PendingRetryStore.shared.updateAttemptIfCurrent(
+                        id: pending.metadata.id,
+                        lastErrorCode: error.errorCode
                     )
                 }
                 lastError = error
@@ -309,7 +316,17 @@ final class DictationService: RecordingExclusivityAuthority {
                 )
             } catch {
                 lastError = nil
-                state = .error(message: error.localizedDescription, isRetryable: false)
+                if pending.metadata.resolvedDestination == .work {
+                    state = .error(
+                        message: String(
+                            localized: "workboard.capture.retry.message",
+                            defaultValue: "Couldn't add this recording to Work. Try again."
+                        ),
+                        isRetryable: true
+                    )
+                } else {
+                    state = .error(message: error.localizedDescription, isRetryable: false)
+                }
             }
         }
     }
@@ -549,8 +566,6 @@ final class DictationService: RecordingExclusivityAuthority {
                 return
             }
 
-            // Clear any stale pending-retry slot — this capture succeeded.
-            await PendingRetryStore.shared.clear()
             // Terminal step (`docs/ai-context/spec.md`): hand the
             // transcript to the coordinator (→ agent round-trip) and return to
             // idle. No clipboard, no `.done`, no auto-dismiss.

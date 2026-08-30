@@ -3,7 +3,7 @@
 // Conduck
 // ShareTargetsSnapshotWriter.swift
 //
-// Share-Extension "Send to" picker — the MAIN-APP WRITER that REGENERATES the
+// Share-Extension destination picker — the MAIN-APP WRITER that REGENERATES the
 // App-Group `share-targets.json` the appex reads to fill its picker. The appex
 // can't reach the live store / palette enum / `RemoteAgentRef`, so every render
 // value (display name, badge color "#RRGGBB", monogram) is RESOLVED here and
@@ -27,11 +27,15 @@ import Foundation
 import SwiftUI
 
 /// Builds + atomically writes the App-Group `share-targets.json` the appex
-/// picker reads. An `actor` so concurrent triggers (`.conversationsDidChange` +
-/// `.settingsDidChangeRemotely` firing near-simultaneously) serialize their
-/// writes — the body is two cheap fetches, so no debounce is needed beyond the
-/// actor's natural serialization.
+/// picker reads. Concurrent triggers (`.conversationsDidChange` +
+/// `.settingsDidChangeRemotely` firing near-simultaneously) are generation-
+/// coalesced: actor methods are re-entrant across `await`, so an older build is
+/// explicitly discarded when a newer regeneration has started.
 actor ShareTargetsSnapshotWriter {
+
+    /// Keep the cross-process snapshot glanceable and cheap to decode inside an
+    /// extension. The full board remains available after opening Conduck.
+    nonisolated static let maximumRecentWorkItems = 8
 
     /// Production singleton — writes into the App-Group `Application Support`
     /// container, reads the shared store + settings singletons.
@@ -42,6 +46,13 @@ actor ShareTargetsSnapshotWriter {
     /// `Constants.shareTargetsSnapshotFileName` is the cross-process literal.
     private let store: ConversationStore
     private let settings: SettingsManager
+
+    /// Actor methods are re-entrant at every store/settings await. These two
+    /// flags make regeneration a true single-flight loop: a notification storm
+    /// can request one follow-up pass, but can never fan out hundreds of Core
+    /// Data fetches while the first snapshot is still being assembled.
+    private var regenerationIsRunning = false
+    private var regenerationWasRequested = false
 
     private init() {
         self.store = .shared
@@ -61,8 +72,21 @@ actor ShareTargetsSnapshotWriter {
     /// never throws.
     func regenerate() async {
         #if os(iOS) || os(macOS)
-        let snapshot = await buildSnapshot()
-        write(snapshot)
+        regenerationWasRequested = true
+        guard !regenerationIsRunning else { return }
+
+        regenerationIsRunning = true
+        defer { regenerationIsRunning = false }
+
+        while regenerationWasRequested {
+            regenerationWasRequested = false
+            let snapshot = await buildSnapshot()
+
+            // If another trigger arrived during the awaits, skip publishing the
+            // stale projection and immediately build the one coalesced follow-up.
+            guard !regenerationWasRequested else { continue }
+            write(snapshot)
+        }
         #endif
         // watchOS: intentional no-op (the wrist has no share sheet; the snapshot
         // is consumed by the iOS + macOS share extensions only).
@@ -77,43 +101,74 @@ actor ShareTargetsSnapshotWriter {
     ///     colorHex / monogram / configured=true, all pre-resolved here.
     ///   - recentConversations: the most-recent conversations (cap 12) → the flat
     ///     RecentConversation (id / label / backendRef / lastActivityAt).
+    ///   - recentWorkItems: a bounded most-recent-first list of open Work items.
     private func buildSnapshot() async -> ShareTargetsSnapshot {
         // One customs roster read drives both the metadata + palette resolution
         // (built-in refs ignore it; customs key on it).
         let customs = await settings.customGateways()
         let configuredRefs = await settings.configuredRemoteAgentRefs()
 
-        let gateways: [ShareTargetsSnapshot.Gateway] = configuredRefs.map { ref in
-            let color = RemoteAgentBadgePalette.color(for: ref, customs: customs)
-            return ShareTargetsSnapshot.Gateway(
-                ref: ref.rawString,
-                displayName: RemoteAgentRefMetadata.displayName(for: ref, customs: customs),
-                colorHex: Self.hexString(from: color),
-                monogram: RemoteAgentRefMetadata.monogram(for: ref, customs: customs),
-                // `configuredRemoteAgentRefs()` only returns refs with BOTH a URL
-                // and a token, so every entry here is by-definition configured.
-                configured: true
-            )
+        // Badge colors and display metadata are UI-owned helpers under the app's
+        // default MainActor isolation. Resolve the complete render projection in
+        // one hop, then bring only dependency-free snapshot values back here.
+        let (gateways, configuredRefStrings) = await MainActor.run {
+            let gateways: [ShareTargetsSnapshot.Gateway] = configuredRefs.map { ref in
+                let color = RemoteAgentBadgePalette.color(for: ref, customs: customs)
+                return ShareTargetsSnapshot.Gateway(
+                    ref: ref.rawString,
+                    displayName: RemoteAgentRefMetadata.displayName(for: ref, customs: customs),
+                    colorHex: Self.hexString(from: color),
+                    monogram: RemoteAgentRefMetadata.monogram(for: ref, customs: customs),
+                    // `configuredRemoteAgentRefs()` only returns refs with BOTH a URL
+                    // and a token, so every entry here is by-definition configured.
+                    configured: true
+                )
+            }
+            return (gateways, Set(configuredRefs.map(\.rawString)))
         }
 
-        // The set of still-configured gateway rawStrings. A recent conversation
-        // bound to a gateway the user has since DELETED / un-configured would route
-        // through precedence #1 (route by the row's backend) → throw → guaranteed
-        // share failure. Presenting such a recent in the picker offers a target
-        // that ALWAYS fails, so drop them here (the appex only ever sees appendable
-        // recents). Customs deleted from the roster also drop out of
-        // `configuredRemoteAgentRefs()`, so they're filtered the same way.
-        let configuredRefStrings = Set(configuredRefs.map { $0.rawString })
+        // `configuredRefStrings` is the set of still-configured gateways. A
+        // recent bound to a gateway the user has since DELETED / un-configured
+        // would route through precedence #1 and fail, so it never enters the
+        // extension picker. Deleted customs drop out by the same rule.
 
         let recents = (try? await store.fetchRecentForPicker(limit: 12)) ?? []
         let recentConversations = Self.filterRecents(recents, configuredRefStrings: configuredRefStrings)
+        let workItems = (try? await store.fetchWorkItems()) ?? []
+        let recentWorkItems = Self.makeRecentWorkItems(workItems)
 
         return ShareTargetsSnapshot(
-            schemaVersion: 1,
+            schemaVersion: 2,
             generatedAt: Date(),
             gateways: gateways,
-            recentConversations: recentConversations
+            recentConversations: recentConversations,
+            recentWorkItems: recentWorkItems
         )
+    }
+
+    /// Pure projection for tests and for keeping the publication rule explicit:
+    /// Done items never enter the extension snapshot, ordering is true modified
+    /// recency (independent of the board's pinned grouping), and the payload is
+    /// bounded before it crosses the process boundary.
+    nonisolated static func makeRecentWorkItems(
+        _ items: [WorkItemRecord],
+        limit: Int = maximumRecentWorkItems
+    ) -> [ShareTargetsSnapshot.RecentWorkItem] {
+        guard limit > 0 else { return [] }
+        return items
+            .filter { $0.state != .done }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            .prefix(limit)
+            .map { item in
+                ShareTargetsSnapshot.RecentWorkItem(
+                    id: item.id,
+                    title: item.content.title.trimmingCharacters(in: .whitespacesAndNewlines),
+                    modifiedAt: item.updatedAt
+                )
+            }
     }
 
     /// PURE filter+map: keep only recents whose bound `backend` is still in
@@ -122,7 +177,7 @@ actor ShareTargetsSnapshotWriter {
     /// unconfigured gateway is DROPPED (it would route → throw → share failure — a
     /// dead picker target). Extracted as a static pure func so the filter is
     /// unit-testable headless (no store / Keychain / signing).
-    static func filterRecents(
+    nonisolated static func filterRecents(
         _ recents: [ConversationStore.RecentConversation],
         configuredRefStrings: Set<String>
     ) -> [ShareTargetsSnapshot.RecentConversation] {

@@ -49,6 +49,7 @@ enum PendingRetryGuard {
     private static let notificationIDPrefix = "conduck-pending-retry-"
 
     struct Token: Sendable {
+        let retryID: UUID
         let notificationID: String
         /// Whether the audio actually reached `PendingRetryStore`. False means
         /// the save threw and there are NO bytes to come back for, so nothing
@@ -65,13 +66,22 @@ enum PendingRetryGuard {
     /// safety net is nice-to-have, not load-bearing for the user flow — but it
     /// is reported rather than swallowed, on the token and by withholding the
     /// notification that would otherwise announce a recording that is not there.
-    static func arm(audio: Data, metadata: PendingRetryMetadata) async -> Token {
+    static func arm(
+        audio: Data,
+        metadata: PendingRetryMetadata,
+        workImageData: Data? = nil,
+        requestNotificationAuthorization: Bool = true
+    ) async -> Token {
         // PendingRetryStore.save is throwing (disk I/O can fail, and a
         // `.completeFileProtection` write is at its least certain before first
         // unlock).
         var preserved = true
         do {
-            try await PendingRetryStore.shared.save(audioData: audio, metadata: metadata)
+            try await PendingRetryStore.shared.save(
+                audioData: audio,
+                metadata: metadata,
+                workImageData: workImageData
+            )
         } catch {
             preserved = false
             #if DEBUG
@@ -79,14 +89,18 @@ enum PendingRetryGuard {
             #endif
         }
         let token = Token(
-            notificationID: notificationIDPrefix + UUID().uuidString,
+            retryID: metadata.id,
+            notificationID: notificationID(for: metadata.id),
             audioPreserved: preserved
         )
         // The notification's entire content is a claim about the store ("Recording
         // Saved" / "Tap to retry your transcription"). With nothing in the store
         // it is false in both halves, and tapping it reaches an empty retry lane.
         if preserved {
-            await scheduleDeferredNotification(id: token.notificationID)
+            await scheduleDeferredNotification(
+                id: token.notificationID,
+                requestAuthorization: requestNotificationAuthorization
+            )
         }
         #if DEBUG
         print("🛡️ PendingRetryGuard armed (id=\(token.notificationID.suffix(8)), preserved=\(preserved))")
@@ -99,12 +113,12 @@ enum PendingRetryGuard {
     /// no_speech_detected, invalid_audio, rate_limit_exceeded, etc.) where
     /// retrying the same audio cannot help.
     ///
-    /// Prefix-based notification cancellation (rather than by `token.notificationID`
-    /// alone) so any orphans from prior arms — e.g. a process restart between
-    /// arm and disarm, or back-to-back intent runs — also get mopped up.
+    /// Capture-scoped cleanup is load-bearing: a second App Intent can arm while
+    /// the first is suspended in STT or gateway work. Completing the first must
+    /// never delete the newer recording or cancel its recovery notice.
     static func disarm(_ token: Token) async {
-        await cancelAllDeferredNotifications()
-        await PendingRetryStore.shared.clear()
+        cancelDeferredNotification(for: token.retryID)
+        _ = await PendingRetryStore.shared.clear(ifCurrentID: token.retryID)
         #if DEBUG
         print("🛡️ PendingRetryGuard disarmed (id=\(token.notificationID.suffix(8)))")
         #endif
@@ -131,10 +145,22 @@ enum PendingRetryGuard {
         }
     }
 
+    static func cancelDeferredNotification(for retryID: UUID) {
+        let center = UNUserNotificationCenter.current()
+        let id = notificationID(for: retryID)
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        center.removeDeliveredNotifications(withIdentifiers: [id])
+    }
+
+    private static func notificationID(for retryID: UUID) -> String {
+        notificationIDPrefix + retryID.uuidString
+    }
+
     // MARK: - Deferred Notification
 
     private static func scheduleDeferredNotification(
-        id: String
+        id: String,
+        requestAuthorization: Bool
     ) async {
         // `kind:` parameter dropped (PendingRetryMetadata simplified — no mode
         // discriminator any more). Notification copy is mode-agnostic.
@@ -144,7 +170,7 @@ enum PendingRetryGuard {
         // Lazily request permission on first use. If the user already
         // authorized for another notification, they get this notification
         // automatically with no second prompt.
-        if settings.authorizationStatus == .notDetermined {
+        if settings.authorizationStatus == .notDetermined && requestAuthorization {
             _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
             settings = await center.notificationSettings()
         }

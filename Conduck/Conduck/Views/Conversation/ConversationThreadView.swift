@@ -75,6 +75,8 @@ struct ConversationThreadView: View {
     /// the same gating `DictationPopoverView.workingView` and
     /// `ConversationActivityMark` already apply to their own state transitions.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     /// A marker write this view owed and could not take, because the thread was
     /// not exposed at the moment the event that owed it arrived. Drives the
@@ -144,6 +146,11 @@ struct ConversationThreadView: View {
     /// mirrors `MessageBubble.didCopy`.
     @State private var didCopyAll = false
 
+    /// Brief confirmation for the explicit Chat → Work action. It carries the
+    /// durable Work id so the banner can cross the top-level Work/Chats shell
+    /// without teaching this thread anything about Workboard navigation state.
+    @State private var workCaptureNotice: MessageWorkCaptureNotice?
+
     /// The terminal spoken-voice refusal behind the current built-in-voice
     /// fallback, until the user dismisses it (`.spokenReplyVoiceRefused`).
     /// EPHEMERAL and view-local, exactly like `usedFallbackVoice`: it describes
@@ -177,9 +184,7 @@ struct ConversationThreadView: View {
     @State private var reviewingRefusals: OutputRefusalReview?
 
     var body: some View {
-        @Bindable var vm = viewModel
-        @Bindable var preview = filePreview
-        return ZStack(alignment: .bottom) {
+        ZStack(alignment: .bottom) {
             scrollContent
 
             if hasUnseenReply && !isAtBottom {
@@ -190,6 +195,9 @@ struct ConversationThreadView: View {
         }
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
+                if let notice = workCaptureNotice {
+                    workCaptureBanner(notice)
+                }
                 // Recovery banner: the bound gateway is gone/unconfigured — the
                 // thread stays readable; offer Clone & continue (no dead-end).
                 if !viewModel.messages.isEmpty && !viewModel.boundGatewayAvailable {
@@ -216,10 +224,11 @@ struct ConversationThreadView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .spokenReplyVoiceRefused)) { note in
+            guard workbenchDestinationIsActive else { return }
             guard let code = note.userInfo?[SpokenReplyVoiceRefusal.errorCodeKey] as? Int else { return }
             voiceRefusal = AppError.from(errorCode: code, message: nil)
         }
-        .sheet(isPresented: $vm.showingGatewaySheet) {
+        .sheet(isPresented: activeGatewaySheet) {
             gatewayLockSheet
         }
         // "Review file setup" from an output-discovery fault row. A SHEET, not a
@@ -228,7 +237,7 @@ struct ConversationThreadView: View {
         // Settings (same reasoning as `TroubleshootButton`). On dismiss the
         // lane identity is re-resolved, so a repointed or removed server retires
         // its fault rows immediately rather than on the next unrelated reload.
-        .sheet(isPresented: $showingFileSetup, onDismiss: {
+        .sheet(isPresented: activeFileSetup, onDismiss: {
             Task { await viewModel.refreshFileLaneDerivedState() }
         }) {
             if let ref = viewModel.boundRef {
@@ -253,7 +262,7 @@ struct ConversationThreadView: View {
         // carries its own title and its own Done, exactly as `CertificateTrustSheet`
         // does, so a navigation container would only add an empty bar above copy
         // that already says what the sheet is.
-        .sheet(item: $reviewingRefusals) { review in
+        .sheet(item: activeRefusalReview) { review in
             OutputRefusalReviewSheet(
                 entries: review.entries,
                 boundRef: viewModel.boundRef,
@@ -265,7 +274,7 @@ struct ConversationThreadView: View {
         // The modifier nils the binding on user dismissal — that transition
         // (non-nil → nil, and ONLY that; scene backgrounding never fires it)
         // drives the iOS scratch-file reclaim inside `handleDismiss`.
-        .quickLookPreview($preview.previewURL)
+        .quickLookPreview(activePreviewURL)
         .onChange(of: filePreview.previewURL) { oldValue, newValue in
             if oldValue != nil && newValue == nil {
                 filePreview.handleDismiss()
@@ -275,6 +284,7 @@ struct ConversationThreadView: View {
         // suppresses banners for replies that land for it. iPad multi-scene +
         // macOS multi-window register independently (Set<UUID> in the tracker).
         .onAppear {
+            guard workbenchDestinationIsActive else { return }
             ActiveViewTracker.track(viewModel.conversationID)
             // The acknowledgement seam. Opening the thread IS the act of
             // looking at it, so it stamps the read marker (which un-bolds its
@@ -295,6 +305,21 @@ struct ConversationThreadView: View {
             // job in `handleMessageCountChange`.
             attemptAutoSpeak()
             #endif
+        }
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            if isActive {
+                ActiveViewTracker.track(viewModel.conversationID)
+                markThreadViewed()
+                acknowledgeVisibleFailure()
+                NotificationDeepLink.clearDelivered(for: viewModel.conversationID)
+                claimCloneContinuation()
+                #if os(iOS)
+                attemptAutoSpeak()
+                #endif
+            } else {
+                ActiveViewTracker.untrack(viewModel.conversationID)
+                dismissTransientChatUI()
+            }
         }
         // A reply landing while the user is READING must never light the row
         // they are looking at, so re-stamp on every new tail. Keyed on the tail
@@ -376,7 +401,10 @@ struct ConversationThreadView: View {
             }
         }
         #endif
-        .onDisappear { ActiveViewTracker.untrack(viewModel.conversationID) }
+        .onDisappear {
+            ActiveViewTracker.untrack(viewModel.conversationID)
+            dismissTransientChatUI()
+        }
         // Copy conversation — declared HERE (not in the three host views) so
         // the child `.toolbar` merges into each host's nav bar: iPhone
         // `ContentView`, iPad `ConversationLibraryView` detail, macOS
@@ -384,7 +412,7 @@ struct ConversationThreadView: View {
         // (`.topBarTrailing` is iOS-only). Hidden — not disabled — on an
         // empty thread: a brand-new chat has nothing to copy.
         .toolbar {
-            if !viewModel.messages.isEmpty {
+            if workbenchDestinationIsActive, !viewModel.messages.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: copyAllTapped) {
                         Image(systemName: didCopyAll ? "checkmark" : "doc.on.doc")
@@ -407,6 +435,67 @@ struct ConversationThreadView: View {
             attemptAutoSpeak()
         }
         #endif
+    }
+
+    private var activeGatewaySheet: Binding<Bool> {
+        Binding(
+            get: { workbenchDestinationIsActive && viewModel.showingGatewaySheet },
+            set: { isPresented in
+                if !isPresented || workbenchDestinationIsActive {
+                    viewModel.showingGatewaySheet = isPresented
+                }
+            }
+        )
+    }
+
+    private var activeFileSetup: Binding<Bool> {
+        Binding(
+            get: { workbenchDestinationIsActive && showingFileSetup },
+            set: { isPresented in
+                if !isPresented || workbenchDestinationIsActive {
+                    showingFileSetup = isPresented
+                }
+            }
+        )
+    }
+
+    private var activeRefusalReview: Binding<OutputRefusalReview?> {
+        Binding(
+            get: { workbenchDestinationIsActive ? reviewingRefusals : nil },
+            set: { review in
+                if review == nil || workbenchDestinationIsActive {
+                    reviewingRefusals = review
+                }
+            }
+        )
+    }
+
+    private var activePreviewURL: Binding<URL?> {
+        Binding(
+            get: { workbenchDestinationIsActive ? filePreview.previewURL : nil },
+            set: { url in
+                if url == nil || workbenchDestinationIsActive {
+                    filePreview.previewURL = url
+                }
+            }
+        )
+    }
+
+    private func dismissTransientChatUI() {
+        viewModel.showingGatewaySheet = false
+        showingCloneTargets = false
+        pendingCloneTarget = nil
+        showingFileSetup = false
+        reviewingRefusals = nil
+        voiceRefusal = nil
+        workCaptureNotice = nil
+        // Invalidate not only the preview already on screen but every async
+        // download/adoption that still owns a future presentation claim. A
+        // hidden Chat must never reopen Quick Look or a Save panel over Work.
+        filePreview.cancelPendingPresentation()
+        if speaker.state != .idle {
+            speaker.stop()
+        }
     }
 
     // MARK: - Scroll content
@@ -441,6 +530,7 @@ struct ConversationThreadView: View {
                             awaitsCloneContinuation: awaitsCloneContinuation(message),
                             filePreview: filePreview,
                             onCopy: { viewModel.copy(message) },
+                            onAddToWork: { captureMessageInWork(message) },
                             onSpeak: { speaker.speak(message.text, messageID: message.id) },
                             onRetry: { Task { await viewModel.retry(message) } },
                             onResendWithoutPhoto: { Task { await viewModel.resendWithoutPhoto(message) } },
@@ -548,11 +638,11 @@ struct ConversationThreadView: View {
     /// expose completely different evidence, and reading the wrong one is
     /// silent rather than broken.
     ///
-    /// macOS: `appearsActive`, and nothing else. A Mac's windows are
-    /// independently active or not, so this is the whole question there, and it
-    /// is the same signal `WindowThreadVisibilityReporter` already uses for the
-    /// menu-bar dot — deliberately, so the two surfaces can never disagree
-    /// about whether a window was being looked at.
+    /// macOS: the Chat destination must be selected and `appearsActive` must be
+    /// true. A hidden-but-mounted Chat is state preservation, not evidence that
+    /// the person saw a reply. The same pair drives
+    /// `WindowThreadVisibilityReporter`, so the read marker and menu-bar dot
+    /// cannot disagree.
     ///
     /// iOS/iPadOS: `appearsActive` reads `true` unconditionally (see its own
     /// declaration), so it proves nothing and `ThreadCoverage.isThreadExposed`
@@ -592,9 +682,9 @@ struct ConversationThreadView: View {
     /// every device the user owns, permanently, because nothing re-bolds a row.
     private var threadIsExposed: Bool {
         #if os(macOS)
-        appearsActive
+        workbenchDestinationIsActive && appearsActive
         #else
-        appearsActive && ThreadCoverage.isThreadExposed
+        workbenchDestinationIsActive && appearsActive && ThreadCoverage.isThreadExposed
         #endif
     }
 
@@ -1304,6 +1394,115 @@ struct ConversationThreadView: View {
 
     // MARK: - Copy conversation
 
+    private func captureMessageInWork(_ message: MessageRecord) {
+        Task { @MainActor in
+            do {
+                let receipt = try await ConversationStore.shared.captureMessageToWork(
+                    message,
+                    conversationID: viewModel.conversationID
+                )
+                let detail: String
+                if receipt.failedMaterialCount > 0 {
+                    detail = receipt.failedMaterialCount == 1
+                        ? String(
+                            localized: "workboard.chatCapture.partial.one",
+                            defaultValue: "Added to Work. One attachment needs another try."
+                        )
+                        : String.localizedStringWithFormat(
+                            String(
+                                localized: "workboard.chatCapture.partial",
+                                defaultValue: "Added to Work. %lld attachments need another try."
+                            ),
+                            Int64(receipt.failedMaterialCount)
+                        )
+                } else if receipt.referencedOnlyMaterialCount > 0 {
+                    detail = receipt.referencedOnlyMaterialCount == 1
+                        ? String(
+                            localized: "workboard.chatCapture.remote.one",
+                            defaultValue: "Added to Work. One gateway file remains available from the original chat."
+                        )
+                        : String.localizedStringWithFormat(
+                            String(
+                                localized: "workboard.chatCapture.remote",
+                                defaultValue: "Added to Work. %lld gateway files remain available from the original chat."
+                            ),
+                            Int64(receipt.referencedOnlyMaterialCount)
+                        )
+                } else {
+                    detail = receipt.wasAlreadyCaptured
+                        ? String(localized: "workboard.chatCapture.already", defaultValue: "This message is already in Work.")
+                        : String(localized: "workboard.chatCapture.saved", defaultValue: "Added to Work. Nothing was sent.")
+                }
+                presentWorkCaptureNotice(.init(itemID: receipt.itemID, message: detail, isError: false))
+            } catch {
+                presentWorkCaptureNotice(.init(itemID: nil, message: error.localizedDescription, isError: true))
+            }
+        }
+    }
+
+    private func presentWorkCaptureNotice(_ notice: MessageWorkCaptureNotice) {
+        let animation: Animation? = reduceMotion ? nil : .easeOut(duration: 0.18)
+        withAnimation(animation) { workCaptureNotice = notice }
+        AccessibilityAnnouncer.announce(notice.message)
+        guard !voiceOverEnabled else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard workCaptureNotice?.id == notice.id else { return }
+            withAnimation(animation) { workCaptureNotice = nil }
+        }
+    }
+
+    private func workCaptureBanner(_ notice: MessageWorkCaptureNotice) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: notice.isError ? "exclamationmark.triangle.fill" : "rectangle.stack.badge.checkmark")
+                .foregroundStyle(notice.isError ? AppColors.warning : AppColors.brandTeal)
+            Text(verbatim: notice.message)
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textPrimary)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            if let itemID = notice.itemID {
+                Button {
+                    NotificationCenter.default.post(
+                        name: .openWorkboardDeepLink,
+                        object: nil,
+                        userInfo: [NotificationDeepLink.workItemIDKey: itemID.uuidString]
+                    )
+                } label: {
+                    Text(LocalizedStringResource("workboard.chatCapture.open", defaultValue: "Open Work"))
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 36)
+                        .background(AppColors.brandAmber.opacity(0.12), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .choiceCardButton(cornerRadius: 18)
+                .foregroundStyle(AppColors.brandAmber)
+            }
+            MessageActionButton(
+                systemImage: "xmark",
+                tint: AppColors.textTertiary,
+                accessibilityLabel: Text(LocalizedStringResource(
+                    "common.dismiss",
+                    defaultValue: "Dismiss"
+                ))
+            ) {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                    workCaptureNotice = nil
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(AppColors.borderSubtle, lineWidth: 1)
+        }
+        .padding(.horizontal, 12)
+        .accessibilityElement(children: .contain)
+    }
+
     private func copyAllTapped() {
         viewModel.copyEntireConversation()
         withAnimation(.easeOut(duration: 0.15)) { didCopyAll = true }
@@ -1346,6 +1545,13 @@ struct ConversationThreadView: View {
 
     private static let bottomAnchorID = "thread.bottom.anchor"
     private static let thinkingAnchorID = "thread.thinking.anchor"
+}
+
+private struct MessageWorkCaptureNotice: Identifiable, Equatable {
+    let id = UUID()
+    let itemID: UUID?
+    let message: String
+    let isError: Bool
 }
 
 // MARK: - MessageBubble
@@ -1452,6 +1658,7 @@ private struct MessageBubble: View, Equatable {
     /// `==` alongside the closures).
     let filePreview: FilePreviewCoordinator
     let onCopy: () -> Void
+    let onAddToWork: () -> Void
     let onSpeak: () -> Void
     /// Re-fire a failed user turn (drives the delivery row's "Try again").
     let onRetry: () -> Void
@@ -2445,28 +2652,9 @@ private struct MessageBubble: View, Equatable {
         }
     }
 
-    /// Whether the footer has a manual-look verb to offer at all. Both flags are
-    /// false on a user row (the VM's predicates require an agent role) and on an
-    /// agent row with no file lane.
-    private var showsOutputActionsMenu: Bool {
-        canRecheckOutputs || canSearchMentionedFiles
-    }
-
-    /// The footer, carrying the manual-look menu ONLY when it has something to
-    /// put in it.
-    ///
-    /// ATTACHED CONDITIONALLY, and that is the whole point: a `.contextMenu`
-    /// whose body evaluates to nothing still runs the long-press lift animation
-    /// and then presents an EMPTY sheet. Attached unconditionally with its
-    /// contents gated instead, a long press on the user's own sent message — and
-    /// on any agent turn with no file lane, the majority configuration — lifts
-    /// the bubble and offers nothing.
-    ///
-    /// ON THE FOOTER, not on the bubble, and that is deliberate too: the agent
-    /// bubble's body is a Textual document with its own long-press/right-click
-    /// selection, and a context menu over it would compete with the shipped
-    /// selection gesture. The footer is the row's action strip already (Copy,
-    /// Speak), so it is both conflict-free and where a user looks for verbs.
+    /// The footer exposes Work beside Copy/Speak; its context menu keeps the
+    /// same action plus the less-common file-lane recovery verbs. Keeping these
+    /// off the Textual bubble preserves its long-press/right-click selection.
     ///
     /// Within an agent row that HAS a lane, the entry stays available whether or
     /// not the app decided to show a diagnostic row — including a turn whose
@@ -2476,8 +2664,19 @@ private struct MessageBubble: View, Equatable {
     /// is one the user cannot find when they need it.
     @ViewBuilder
     private var footerWithOutputActions: some View {
-        if showsOutputActionsMenu {
-            footer.contextMenu {
+        footer.contextMenu {
+            Button(action: onAddToWork) {
+                Label(
+                    LocalizedStringResource(
+                        "workboard.chatCapture.action",
+                        defaultValue: "Add message to Work"
+                    ),
+                    systemImage: "rectangle.stack.badge.plus"
+                )
+            }
+            if canRecheckOutputs || canSearchMentionedFiles {
+                Divider()
+            }
                 if canRecheckOutputs {
                     Button(action: onRecheckOutputs) {
                         Label(
@@ -2496,9 +2695,6 @@ private struct MessageBubble: View, Equatable {
                             systemImage: "magnifyingglass")
                     }
                 }
-            }
-        } else {
-            footer
         }
     }
 
@@ -2549,6 +2745,16 @@ private struct MessageBubble: View, Equatable {
                     speakGlyph
                 }
             }
+
+            MessageActionButton(
+                systemImage: "rectangle.stack.badge.plus",
+                tint: footerTint,
+                accessibilityLabel: Text(LocalizedStringResource(
+                    "workboard.chatCapture.action",
+                    defaultValue: "Add message to Work"
+                )),
+                action: onAddToWork
+            )
 
             MessageActionButton(
                 systemImage: didCopy ? "checkmark" : "doc.on.doc",
@@ -3215,8 +3421,7 @@ private struct ServerFileDownloadChip: View {
         // Preview requests mint their claim NOW (the moment of user intent),
         // BEFORE the async download — completion order must not decide which
         // file gets the panel (latest-tap-wins, see `FilePreviewCoordinator`).
-        var previewToken: UInt64?
-        if route == .preview { previewToken = filePreview.beginRequest() }
+        let presentationToken = filePreview.beginRequest()
         Task {
             // `??` with an `await` RHS is rejected (the operator's autoclosure
             // isn't async) — resolve the ref with an explicit if-let instead.
@@ -3239,15 +3444,25 @@ private struct ServerFileDownloadChip: View {
                 let tempURL = try await BackgroundFileTransfer.shared.downloadFile(
                     snapshot: snapshot,
                     storedKey: attachment.storedKey ?? "")
+                guard filePreview.isCurrent(presentationToken) else {
+                    try? FileManager.default.removeItem(at: tempURL)
+                    state = .idle
+                    return
+                }
                 // THE preview seam, and the only one: the bytes are already on
                 // local disk because the user asked for them, so a bounded read
                 // of the file this device just downloaded costs no network at
                 // all. It runs BEFORE the hand-off so a Quick Look dismissal
                 // that reclaims the scratch file cannot race the read.
                 await patchPreviewFromDownload(at: tempURL, snapshot: snapshot)
+                guard filePreview.isCurrent(presentationToken) else {
+                    try? FileManager.default.removeItem(at: tempURL)
+                    state = .idle
+                    return
+                }
                 switch route {
                 case .preview:
-                    await presentPreview(tempURL: tempURL, token: previewToken ?? 0)
+                    await presentPreview(tempURL: tempURL, token: presentationToken)
                 #if os(macOS)
                 case .saveAs:
                     await presentSavePanel(tempURL: tempURL)
@@ -3414,6 +3629,13 @@ final class FilePreviewCoordinator {
         return latestToken
     }
 
+    /// Whether asynchronous work still owns the most recent user-intent claim.
+    /// Destination cleanup advances the counter, so late downloads can reclaim
+    /// their temp file without presenting UI over another top-level surface.
+    func isCurrent(_ token: UInt64) -> Bool {
+        token == latestToken
+    }
+
     /// Present an adopted download — or, when a newer claim exists, discard it.
     func present(_ item: AgentDownloadScratch.ScratchItem, token: UInt64) {
         guard token == latestToken else {
@@ -3444,6 +3666,15 @@ final class FilePreviewCoordinator {
         }
         #endif
         currentItem = nil
+    }
+
+    /// Cancel the visible preview and every in-flight claim. `present` will
+    /// discard an adopted item carrying an older token, while download routes
+    /// check `isCurrent` before Quick Look or NSSavePanel hand-off.
+    func cancelPendingPresentation() {
+        latestToken &+= 1
+        previewURL = nil
+        handleDismiss()
     }
 }
 

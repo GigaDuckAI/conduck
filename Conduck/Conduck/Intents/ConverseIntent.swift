@@ -85,6 +85,32 @@ import os.log
 import UIKit
 #endif
 
+/// Explicit terminal destination for the established voice-first GigaAction.
+/// Chat remains the migration-safe default for every existing shortcut; Work
+/// stores the transcript and optional screenshot as an inert private capture.
+enum GigaActionDestination: String, AppEnum {
+    case chat
+    case work
+
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(
+        name: LocalizedStringResource(
+            "intent.converse.destination.type",
+            defaultValue: "Destination"
+        )
+    )
+
+    static var caseDisplayRepresentations: [GigaActionDestination: DisplayRepresentation] = [
+        .chat: DisplayRepresentation(title: LocalizedStringResource(
+            "intent.converse.destination.chat",
+            defaultValue: "Chat"
+        )),
+        .work: DisplayRepresentation(title: LocalizedStringResource(
+            "intent.converse.destination.work",
+            defaultValue: "Work"
+        )),
+    ]
+}
+
 /// Main capture-and-converse intent — fires from the bundled Shortcut
 /// (Action Button, Lock Screen, Control Center widget). Foreground STTClient
 /// call for the STT hop; `PendingRetryGuard` arms preempt-save so an OS-kill —
@@ -106,7 +132,7 @@ struct ConverseIntent: AppIntent {
     static var description: IntentDescription = IntentDescription(
         LocalizedStringResource(
             "intent.converse.description",
-            defaultValue: "Transcribe recorded audio and send it to your configured AI, returning the reply."
+            defaultValue: "Transcribe recorded audio, then send it to Chat or save it in Work."
         )
     )
 
@@ -135,13 +161,25 @@ struct ConverseIntent: AppIntent {
     )
     var screenshotFile: IntentFile?
 
+    /// Additive and defaulted so installed/bundled shortcuts created before
+    /// Work existed continue sending to Chat byte-for-byte until the person
+    /// explicitly chooses Work in the Shortcuts editor.
+    @Parameter(
+        title: LocalizedStringResource(
+            "intent.converse.destination",
+            defaultValue: "Destination"
+        ),
+        default: .chat
+    )
+    var destination: GigaActionDestination
+
     // MARK: - Parameter Summary
 
     /// REQUIRED so the screenshot field appears as a wireable slot in the
     /// Shortcuts editor (the intent had no summary before; without one the
     /// optional parameter is not surfaced for wiring).
     static var parameterSummary: some ParameterSummary {
-        Summary("Converse using \(\.$audioFile) and \(\.$screenshotFile)")    // xcstrings
+        Summary("Use \(\.$audioFile) and \(\.$screenshotFile) in \(\.$destination)")    // xcstrings
     }
 
     // MARK: - Perform
@@ -154,7 +192,9 @@ struct ConverseIntent: AppIntent {
         // a headless capture (e.g. a shortcut synced from another device, or the
         // Action Button bound without finishing the in-app Setup Guide), so
         // request here too. Idempotent + non-blocking (no-op once determined).
-        await NotificationPermissions.ensureRequested()
+        if destination == .chat {
+            await NotificationPermissions.ensureRequested()
+        }
 
         // ATOMIC snapshot: (presetID, apiKey, provider) in
         // one actor hop so a concurrent preset switch can't produce a
@@ -205,17 +245,25 @@ struct ConverseIntent: AppIntent {
         // the queued notification persist via App Groups +
         // UNUserNotificationCenter so the user gets a path back into the
         // app to retry.
+        let retryDestination: PendingRetryDestination = destination == .work ? .work : .chat
+        let pendingWorkImageData = destination == .work ? screenshotFile?.data : nil
         let pendingMetadata = PendingRetryMetadata(
             id: UUID(),
             createdAt: Date(),
             audioFileURL: audioFileURL,
             preferredLanguage: preferredLanguage,
             attemptCount: 1,
-            lastErrorCode: nil
+            lastErrorCode: nil,
+            destination: retryDestination
         )
         let guardToken = await PendingRetryGuard.arm(
             audio: originalAudioData,
-            metadata: pendingMetadata
+            metadata: pendingMetadata,
+            workImageData: pendingWorkImageData,
+            // A Work-only first run does not need reply-notification
+            // permission. Existing authorization is still used for the
+            // deferred recovery notice if the intent is interrupted.
+            requestNotificationAuthorization: destination == .chat
         )
 
         // Pre-flight the KEY, on the same terms and for the same reason as the
@@ -299,6 +347,7 @@ struct ConverseIntent: AppIntent {
         // of `runConverseHop` instead. The guard is still armed there, because
         // it disarms only inside `runConverseHop` once the user turn is stored,
         // so that refusal reaches the same outcome.)
+        if destination == .chat {
         let preflight = await SettingsManager.shared.newChatPickerSnapshot()
         // The pointer arm, asked FIRST and through the router's own helper — the
         // same question `CheckNetworkIntent` asks before the microphone, so a
@@ -346,6 +395,7 @@ struct ConverseIntent: AppIntent {
                 // be perfectly healthy behind a locked Keychain.
                 break
             }
+        }
         }
 
         // True from the moment the spoken words exist as text. Until the user
@@ -402,6 +452,17 @@ struct ConverseIntent: AppIntent {
 
             // Completion chime / haptic for the STT hop landing.
             CompletionFeedbackPlayer.play(mode: "sound")
+
+            if destination == .work {
+                _ = try await WorkCaptureRetryCoordinator.publish(
+                    transcript: transcript,
+                    rawImageData: pendingWorkImageData,
+                    captureID: pendingMetadata.id,
+                    createdAt: pendingMetadata.createdAt
+                )
+                await PendingRetryGuard.disarm(guardToken)
+                return .result(value: transcript)
+            }
 
             // --- Optional screenshot ---
             // Kept entirely outside the audio retry machinery. Best-effort,

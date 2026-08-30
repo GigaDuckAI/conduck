@@ -389,9 +389,7 @@ Treating the two as interchangeable is the single most consequential mistake ava
 
 ### The published repository is the whole application
 
-The official build is this source plus private brand artwork, signing, and Apple's per-team CarPlay entitlement. No functional code is held back — all the CarPlay code ships here; it is the entitlement that does not. Community builds are that same app minus CarPlay, under a neutral identity with placeholder art. A clone builds and runs on the simulator with no configuration at all, though an unsigned simulator build cannot write the keychain, so actually pointing it at a gateway needs either a signing identity or the QA-mode launch arguments.
-
-**Why:** a partial open-sourcing invites the question of what is missing, and the honest answer has to be "nothing that does anything."
+The official build is this source plus private brand art, signing, and Apple's CarPlay entitlement; no functional code is held back. Community builds replace the identity and art and omit CarPlay. A clone runs in the simulator without configuration, though gateway credentials require signing or QA launch arguments.
 
 ### The quick-capture trigger stays out of the app
 
@@ -422,6 +420,14 @@ The Watch holds its own copy of every gateway's address and token, and forgettin
 The hard part is not sending it, it is knowing when not to. "No gateway is configured" is also what a restored device reads before iCloud finishes downloading, what a locked keychain reads before its first unlock, and what a device with an unsynced roster reads — and the phone broadcasts to the Watch without waiting for any of those to settle. Inferring a teardown from that reading would destroy the credentials of a Watch that is working perfectly. So the teardown is authorised by a *recorded user action* and by nothing else, and it travels as its own explicit flag rather than as an empty list of gateways — an empty list is also what a Watch too old to parse a future message sees, and a compatibility gap must never read as an instruction to erase.
 
 **Residual, accepted:** a forget performed on iPad or Mac does not reach the wrist, because the paired iPhone is the only courier and it never witnessed the intent.
+
+---
+
+## The Workboard prepares work before it becomes a conversation
+
+Workboard is Conduck's inert pre-flight path: **Board → Brief → immutable dispatch snapshot → Conversation → Review**. The adaptive Work/Chats shell preserves both sides' drafts while switching. Work accepts typed or dictated thoughts, drag-and-drop files/photos/screenshots/links, file and photo pickers, Chat-turn capture, Shortcuts, GigaAction, the Mac menu bar, and both Share Extensions. Share can create New Work or append idempotently to a recent open item; a stale/Done target falls back honestly to a new draft. Every capture ingress is inert and has no gateway API.
+
+People inspect the exact packet and choose a gateway; only they dispatch or mark Done. Metadata syncs privately, file and screenshot bytes stay in a device-local vault. External preview/open/share surfaces receive disposable copies, never the authoritative vault URL. GigaAction's additive destination defaults to Chat for installed-shortcut compatibility; Work voice retries persist destination, audio, and an optional screenshot under one capture identity, and can never fall through to Chat. Deploy additive model 14 to production CloudKit before release.
 
 ---
 

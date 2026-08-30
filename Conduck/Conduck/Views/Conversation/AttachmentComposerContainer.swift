@@ -20,6 +20,7 @@ import SwiftUI
 import PhotosUI
 
 struct AttachmentComposerContainer: View {
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     let viewModel: ConversationDetailViewModel?
     var recorder: InAppAudioRecorder
     @Binding var draft: String
@@ -100,11 +101,15 @@ struct AttachmentComposerContainer: View {
         )
         // Photo library — NO maxSelectionCount (no cap, locked).
         .photosPicker(
-            isPresented: $coordinator.showingPhotosPicker,
+            isPresented: activePhotosPickerPresentation,
             selection: $coordinator.pickerSelection,
             matching: .images
         )
         .onChange(of: coordinator.pickerSelection) { _, items in
+            guard workbenchDestinationIsActive else {
+                coordinator.pickerSelection.removeAll()
+                return
+            }
             coordinator.handlePickerSelection(items, vm: viewModel, ref: effectiveRef)
         }
         // UNIFIED "Choose Files…" importer — accepts ANY file (broad type set so
@@ -112,10 +117,11 @@ struct AttachmentComposerContainer: View {
         // classifier routes each pick (image → inline; text → inline/dual; binary
         // → server or a `.needsSetup` tile, with the >100 MB soft-confirm).
         .fileImporter(
-            isPresented: $coordinator.showingFileImporter,
+            isPresented: activeFileImporterPresentation,
             allowedContentTypes: ComposerAttachmentTypes.unifiedContentTypes,
             allowsMultipleSelection: true
         ) { result in
+            guard workbenchDestinationIsActive else { return }
             coordinator.handleUnifiedImport(result, vm: viewModel, ref: effectiveRef)
         }
         .task(id: viewModel?.conversationID) {
@@ -148,7 +154,7 @@ struct AttachmentComposerContainer: View {
         // File-transfer setup guide (sheet) scoped to the bound gateway. On
         // dismiss: refresh file-transfer state AND auto-promote any `.needsSetup`
         // tiles to uploads (the user may have just set up the server).
-        .sheet(isPresented: $showingSetupGuide, onDismiss: {
+        .sheet(isPresented: activeSetupGuidePresentation, onDismiss: {
             Task {
                 await refreshFileTransfer()
                 await coordinator.promoteNeedsSetupTiles(vm: viewModel, ref: effectiveRef)
@@ -171,7 +177,9 @@ struct AttachmentComposerContainer: View {
         .alert(
             LocalizedStringResource("fileTransfer.softConfirm.title", defaultValue: "Attach large file?"),
             isPresented: Binding(
-                get: { coordinator.pendingLargeFile != nil },
+                get: {
+                    workbenchDestinationIsActive && coordinator.pendingLargeFile != nil
+                },
                 set: { _ in }
             ),
             presenting: coordinator.pendingLargeFile
@@ -193,9 +201,12 @@ struct AttachmentComposerContainer: View {
             ))
         }
         // Camera (JIT permission gated by the coordinator before presenting).
-        .fullScreenCover(isPresented: $coordinator.showingCamera) {
+        .fullScreenCover(isPresented: activeCameraPresentation) {
             CameraPicker(
-                onCapture: { coordinator.stageCameraImage($0, vm: viewModel, ref: effectiveRef) },
+                onCapture: { image in
+                    guard workbenchDestinationIsActive else { return }
+                    coordinator.stageCameraImage(image, vm: viewModel, ref: effectiveRef)
+                },
                 onDismiss: { coordinator.showingCamera = false }
             )
             .ignoresSafeArea()
@@ -203,7 +214,7 @@ struct AttachmentComposerContainer: View {
         // Camera access denied — inline alert with an Open Settings action.
         .alert(
             LocalizedStringResource("composer.camera.deniedTitle", defaultValue: "Camera access is off"),
-            isPresented: $coordinator.showingCameraDeniedAlert
+            isPresented: activeCameraDeniedPresentation
         ) {
             Button(LocalizedStringResource("composer.camera.openSettings", defaultValue: "Open Settings")) {
                 CameraPermission.openSettings()
@@ -215,6 +226,67 @@ struct AttachmentComposerContainer: View {
                 defaultValue: "Allow camera access in Settings to take a photo."
             ))
         }
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            guard !isActive else { return }
+            // Native pickers/camera are ephemeral system UI. Dismiss them when
+            // Chats becomes inactive so they cannot float over Work or reopen
+            // unexpectedly later; already-staged attachments and typed text stay.
+            coordinator.showingPhotosPicker = false
+            coordinator.pickerSelection.removeAll()
+            coordinator.showingFileImporter = false
+            coordinator.showingCamera = false
+            coordinator.showingCameraDeniedAlert = false
+            showingSetupGuide = false
+        }
+    }
+
+    private var activePhotosPickerPresentation: Binding<Bool> {
+        activePresentationBinding(
+            get: { coordinator.showingPhotosPicker },
+            set: { coordinator.showingPhotosPicker = $0 }
+        )
+    }
+
+    private var activeFileImporterPresentation: Binding<Bool> {
+        activePresentationBinding(
+            get: { coordinator.showingFileImporter },
+            set: { coordinator.showingFileImporter = $0 }
+        )
+    }
+
+    private var activeSetupGuidePresentation: Binding<Bool> {
+        activePresentationBinding(
+            get: { showingSetupGuide },
+            set: { showingSetupGuide = $0 }
+        )
+    }
+
+    private var activeCameraPresentation: Binding<Bool> {
+        activePresentationBinding(
+            get: { coordinator.showingCamera },
+            set: { coordinator.showingCamera = $0 }
+        )
+    }
+
+    private var activeCameraDeniedPresentation: Binding<Bool> {
+        activePresentationBinding(
+            get: { coordinator.showingCameraDeniedAlert },
+            set: { coordinator.showingCameraDeniedAlert = $0 }
+        )
+    }
+
+    private func activePresentationBinding(
+        get: @escaping () -> Bool,
+        set: @escaping (Bool) -> Void
+    ) -> Binding<Bool> {
+        Binding(
+            get: { workbenchDestinationIsActive && get() },
+            set: { value in
+                // Always accept dismissal. Only the active destination may
+                // originate a presentation.
+                if !value || workbenchDestinationIsActive { set(value) }
+            }
+        )
     }
 
     /// The setup-sheet title — the bound gateway's display name (resolved via the

@@ -28,7 +28,7 @@ import Foundation
 /// names the file with, and the `mime` the agent's tooling sees. `bin` /
 /// `application/octet-stream` is the fallback for unrecognised leading bytes
 /// (the file still uploads under a safe generic extension — never blocks).
-enum ImageFormatSniffer {
+nonisolated enum ImageFormatSniffer {
 
     /// The format derived from a `Data`'s leading bytes.
     struct Format: Equatable {

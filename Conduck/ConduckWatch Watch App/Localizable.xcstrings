@@ -4,15 +4,6 @@
     "" : {
 
     },
-    "…" : {
-
-    },
-    "[File attached]" : {
-
-    },
-    "[Image attached]" : {
-
-    },
     "%@ is answering…" : {
 
     },
@@ -49,162 +40,14 @@
         }
       }
     },
-    "activity.a11y.newReply" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "New reply"
-          }
-        }
-      }
+    "Add ${thought} to Workboard" : {
+
     },
-    "activity.a11y.notSentUnseen" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not sent, new reply"
-          }
-        }
-      }
-    },
-    "activity.a11y.sentAtTime" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sent at %@"
-          }
-        }
-      }
-    },
-    "activity.a11y.sentOnDay" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sent %@"
-          }
-        }
-      }
-    },
-    "activity.a11y.working" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Working"
-          }
-        }
-      }
-    },
-    "activity.a11y.workingUnseen" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Working, new reply"
-          }
-        }
-      }
-    },
-    "activity.noReplyYet" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No reply yet"
-          }
-        }
-      }
-    },
-    "activity.notSent" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not sent"
-          }
-        }
-      }
-    },
-    "activity.waitingForReply" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting for a reply…"
-          }
-        }
-      }
+    "Add to Workboard" : {
+
     },
     "Answering…" : {
 
-    },
-    "api.error.failure" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Something glitched on our end. Try again in a moment."
-          }
-        }
-      }
-    },
-    "api.error.failure.recovery" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Should be back in a minute or two."
-          }
-        }
-      }
-    },
-    "api.error.failure.v2" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Something went wrong with the last request. Try again in a moment."
-          }
-        }
-      }
-    },
-    "api.error.unknown" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "An unexpected error occurred: %@"
-          }
-        }
-      }
-    },
-    "api.error.unknown.recovery" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Try again."
-          }
-        }
-      }
     },
     "Ask" : {
       "extractionState" : "manual",
@@ -239,127 +82,6 @@
         }
       }
     },
-    "audio.error.invalid" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't read that audio. Record again."
-          }
-        }
-      }
-    },
-    "audio.error.invalid.recovery" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Record new audio."
-          }
-        }
-      }
-    },
-    "audio.error.micBusy" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The microphone is already in use by another recording."
-          }
-        }
-      }
-    },
-    "audio.error.micBusy.recovery" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Finish the other recording first, then try again."
-          }
-        }
-      }
-    },
-    "audio.error.missingData" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No audio data to transcribe."
-          }
-        }
-      }
-    },
-    "audio.error.noSpeechDetected" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No speech was recognized in the recording."
-          }
-        }
-      }
-    },
-    "audio.error.noSpeechDetected.recovery" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Try recording again."
-          }
-        }
-      }
-    },
-    "audio.error.processingFailed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "STT provider couldn't process that audio. Record again."
-          }
-        }
-      }
-    },
-    "audio.error.processingFailed.recovery" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Record new audio."
-          }
-        }
-      }
-    },
-    "audio.error.tooLarge" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recording too long. Keep it under 5 minutes."
-          }
-        }
-      }
-    },
-    "audio.error.tooLarge.recovery" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Split it into shorter recordings."
-          }
-        }
-      }
-    },
     "Cancel" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -384,17 +106,6 @@
     },
     "CarPlay" : {
 
-    },
-    "chat.waitingForConnection" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting for a connection…"
-          }
-        }
-      }
     },
     "Clear search" : {
       "extractionState" : "manual",
@@ -436,17 +147,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Conversation"
-          }
-        }
-      }
-    },
-    "conversation.row.youSaid" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "You: %@"
           }
         }
       }
@@ -582,6 +282,724 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Done."
+          }
+        }
+      }
+    },
+    "GigaAction" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "GigaAction"
+          }
+        }
+      }
+    },
+    "Got it" : {
+
+    },
+    "Loading" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Loading"
+          }
+        }
+      }
+    },
+    "Mac" : {
+
+    },
+    "Message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Message"
+          }
+        }
+      }
+    },
+    "Microphone access is required. Please enable it in Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Microphone access is required. Please enable it in Settings."
+          }
+        }
+      }
+    },
+    "New conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New conversation"
+          }
+        }
+      }
+    },
+    "No conversations yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No conversations yet"
+          }
+        }
+      }
+    },
+    "No matches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No matches"
+          }
+        }
+      }
+    },
+    "No response received from server." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No response received from server."
+          }
+        }
+      }
+    },
+    "Nothing matches that search." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing matches that search."
+          }
+        }
+      }
+    },
+    "On-device voice isn't ready on your iPhone yet. Open Conduck there to set it up." : {
+
+    },
+    "Open Conduck on iPhone to get started" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Conduck on iPhone to get started"
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Pause"
+          }
+        }
+      }
+    },
+    "Raise to ask" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Raise to ask"
+          }
+        }
+      }
+    },
+    "Read aloud" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Read aloud"
+          }
+        }
+      }
+    },
+    "Record voice message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record voice message"
+          }
+        }
+      }
+    },
+    "Recording could not be sent. Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recording could not be sent. Please try again."
+          }
+        }
+      }
+    },
+    "Recording file not found." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recording file not found."
+          }
+        }
+      }
+    },
+    "Recording…" : {
+
+    },
+    "Reply from your personal AI" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reply from your personal AI"
+          }
+        }
+      }
+    },
+    "Resume" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Resume"
+          }
+        }
+      }
+    },
+    "Saved." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved."
+          }
+        }
+      }
+    },
+    "Search conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Search conversations"
+          }
+        }
+      }
+    },
+    "Send message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send message"
+          }
+        }
+      }
+    },
+    "Sending…" : {
+
+    },
+    "Sent to iPhone. Your transcript will arrive when it reconnects." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sent to iPhone. Your transcript will arrive when it reconnects."
+          }
+        }
+      }
+    },
+    "Set up your personal AI on iPhone first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up your personal AI on iPhone first."
+          }
+        }
+      }
+    },
+    "Starting…" : {
+
+    },
+    "Still answering your last question." : {
+
+    },
+    "Stop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stop"
+          }
+        }
+      }
+    },
+    "Tap to Stop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap to Stop"
+          }
+        }
+      }
+    },
+    "Thinking…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Thinking…"
+          }
+        }
+      }
+    },
+    "This conversation is empty." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This conversation is empty."
+          }
+        }
+      }
+    },
+    "Transcribe" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcribe"
+          }
+        }
+      }
+    },
+    "Transcribing…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcribing…"
+          }
+        }
+      }
+    },
+    "Transcription complete. Sending to your AI." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcription complete. Sending to your AI."
+          }
+        }
+      }
+    },
+    "Try Again" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try Again"
+          }
+        }
+      }
+    },
+    "Turned off for Apple Watch. Enable it in iPhone Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Turned off for Apple Watch. Enable it in iPhone Settings."
+          }
+        }
+      }
+    },
+    "Waiting for iPhone to set up Conduck…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Waiting for iPhone to set up Conduck…"
+          }
+        }
+      }
+    },
+    "Watch" : {
+
+    },
+    "Yesterday" : {
+
+    },
+    "Your first one or two interactions may need a moment to warm up. It settles after that." : {
+
+    },
+    "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again."
+          }
+        }
+      }
+    },
+    "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive."
+          }
+        }
+      }
+    },
+    "[File attached]" : {
+
+    },
+    "[Image attached]" : {
+
+    },
+    "activity.a11y.newReply" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New reply"
+          }
+        }
+      }
+    },
+    "activity.a11y.notSentUnseen" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not sent, new reply"
+          }
+        }
+      }
+    },
+    "activity.a11y.sentAtTime" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sent at %@"
+          }
+        }
+      }
+    },
+    "activity.a11y.sentOnDay" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sent %@"
+          }
+        }
+      }
+    },
+    "activity.a11y.working" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Working"
+          }
+        }
+      }
+    },
+    "activity.a11y.workingUnseen" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Working, new reply"
+          }
+        }
+      }
+    },
+    "activity.noReplyYet" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No reply yet"
+          }
+        }
+      }
+    },
+    "activity.notSent" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not sent"
+          }
+        }
+      }
+    },
+    "activity.waitingForReply" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Waiting for a reply…"
+          }
+        }
+      }
+    },
+    "api.error.failure" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something glitched on our end. Try again in a moment."
+          }
+        }
+      }
+    },
+    "api.error.failure.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Should be back in a minute or two."
+          }
+        }
+      }
+    },
+    "api.error.failure.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something went wrong with the last request. Try again in a moment."
+          }
+        }
+      }
+    },
+    "api.error.unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "An unexpected error occurred: %@"
+          }
+        }
+      }
+    },
+    "api.error.unknown.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again."
+          }
+        }
+      }
+    },
+    "audio.error.invalid" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't read that audio. Record again."
+          }
+        }
+      }
+    },
+    "audio.error.invalid.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record new audio."
+          }
+        }
+      }
+    },
+    "audio.error.micBusy" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The microphone is already in use by another recording."
+          }
+        }
+      }
+    },
+    "audio.error.micBusy.recovery" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Finish the other recording first, then try again."
+          }
+        }
+      }
+    },
+    "audio.error.missingData" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No audio data to transcribe."
+          }
+        }
+      }
+    },
+    "audio.error.noSpeechDetected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No speech was recognized in the recording."
+          }
+        }
+      }
+    },
+    "audio.error.noSpeechDetected.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try recording again."
+          }
+        }
+      }
+    },
+    "audio.error.processingFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "STT provider couldn't process that audio. Record again."
+          }
+        }
+      }
+    },
+    "audio.error.processingFailed.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record new audio."
+          }
+        }
+      }
+    },
+    "audio.error.tooLarge" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recording too long. Keep it under 5 minutes."
+          }
+        }
+      }
+    },
+    "audio.error.tooLarge.recovery" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Split it into shorter recordings."
+          }
+        }
+      }
+    },
+    "chat.waitingForConnection" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Waiting for a connection…"
+          }
+        }
+      }
+    },
+    "conversation.row.youSaid" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You: %@"
           }
         }
       }
@@ -784,58 +1202,63 @@
         }
       }
     },
-    "GigaAction" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "GigaAction"
-          }
-        }
-      }
-    },
-    "Got it" : {
-
-    },
     "iPad" : {
 
     },
     "iPhone" : {
 
     },
-    "Loading" : {
-      "extractionState" : "manual",
+    "intent.workboardCapture.confirmation" : {
+      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Loading"
+            "value" : "Added to Workboard. Nothing was sent."
           }
         }
       }
     },
-    "Mac" : {
-
-    },
-    "Message" : {
-      "extractionState" : "manual",
+    "intent.workboardCapture.description" : {
+      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Message"
+            "value" : "Save a thought as a private Workboard draft without sending it to an AI."
           }
         }
       }
     },
-    "Microphone access is required. Please enable it in Settings." : {
-      "extractionState" : "manual",
+    "intent.workboardCapture.error.empty" : {
+      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Microphone access is required. Please enable it in Settings."
+            "value" : "Say or type what you want to prepare first."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.thought" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "What needs doing?"
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add to Workboard"
           }
         }
       }
@@ -916,144 +1339,6 @@
           }
         }
       }
-    },
-    "New conversation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "New conversation"
-          }
-        }
-      }
-    },
-    "No conversations yet" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No conversations yet"
-          }
-        }
-      }
-    },
-    "No matches" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No matches"
-          }
-        }
-      }
-    },
-    "No response received from server." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No response received from server."
-          }
-        }
-      }
-    },
-    "Nothing matches that search." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Nothing matches that search."
-          }
-        }
-      }
-    },
-    "On-device voice isn't ready on your iPhone yet. Open Conduck there to set it up." : {
-
-    },
-    "Open Conduck on iPhone to get started" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Conduck on iPhone to get started"
-          }
-        }
-      }
-    },
-    "Pause" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Pause"
-          }
-        }
-      }
-    },
-    "Raise to ask" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Raise to ask"
-          }
-        }
-      }
-    },
-    "Read aloud" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Read aloud"
-          }
-        }
-      }
-    },
-    "Record voice message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Record voice message"
-          }
-        }
-      }
-    },
-    "Recording could not be sent. Please try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recording could not be sent. Please try again."
-          }
-        }
-      }
-    },
-    "Recording file not found." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recording file not found."
-          }
-        }
-      }
-    },
-    "Recording…" : {
-
     },
     "remoteAgent.error.authFailed.recovery.hosted" : {
       "extractionState" : "manual",
@@ -1902,17 +2187,6 @@
         }
       }
     },
-    "Reply from your personal AI" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reply from your personal AI"
-          }
-        }
-      }
-    },
     "request.error.decodingError" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1942,75 +2216,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Invalid API endpoint URL"
-          }
-        }
-      }
-    },
-    "Resume" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Resume"
-          }
-        }
-      }
-    },
-    "Saved." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Saved."
-          }
-        }
-      }
-    },
-    "Search conversations" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Search conversations"
-          }
-        }
-      }
-    },
-    "Send message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Send message"
-          }
-        }
-      }
-    },
-    "Sending…" : {
-
-    },
-    "Sent to iPhone. Your transcript will arrive when it reconnects." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sent to iPhone. Your transcript will arrive when it reconnects."
-          }
-        }
-      }
-    },
-    "Set up your personal AI on iPhone first." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Set up your personal AI on iPhone first."
           }
         }
       }
@@ -2202,23 +2407,6 @@
         }
       }
     },
-    "Starting…" : {
-
-    },
-    "Still answering your last question." : {
-
-    },
-    "Stop" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Stop"
-          }
-        }
-      }
-    },
     "stt.error.appleSpeechLanguageUnsupported" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2380,6 +2568,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "If this persists, the provider may have changed its API."
+          }
+        }
+      }
+    },
+    "stt.error.gemini.badRequest" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That request was rejected. Check the model name in Advanced settings."
+          }
+        }
+      }
+    },
+    "stt.error.gemini.modelNotFound" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That model is not available. Check the model name in Advanced settings."
           }
         }
       }
@@ -2560,39 +2770,6 @@
         }
       }
     },
-    "Tap to Stop" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Tap to Stop"
-          }
-        }
-      }
-    },
-    "Thinking…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Thinking…"
-          }
-        }
-      }
-    },
-    "This conversation is empty." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This conversation is empty."
-          }
-        }
-      }
-    },
     "thread.speak.announce.paused" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2644,50 +2821,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Spoken with the built-in voice"
-          }
-        }
-      }
-    },
-    "Transcribe" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Transcribe"
-          }
-        }
-      }
-    },
-    "Transcribing…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Transcribing…"
-          }
-        }
-      }
-    },
-    "Transcription complete. Sending to your AI." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Transcription complete. Sending to your AI."
-          }
-        }
-      }
-    },
-    "Try Again" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Try Again"
           }
         }
       }
@@ -2801,31 +2934,6 @@
           }
         }
       }
-    },
-    "Turned off for Apple Watch. Enable it in iPhone Settings." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Turned off for Apple Watch. Enable it in iPhone Settings."
-          }
-        }
-      }
-    },
-    "Waiting for iPhone to set up Conduck…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting for iPhone to set up Conduck…"
-          }
-        }
-      }
-    },
-    "Watch" : {
-
     },
     "watch.attachment.location" : {
       "extractionState" : "extracted_with_value",
@@ -2981,33 +3089,19 @@
         }
       }
     },
-    "Yesterday" : {
-
-    },
-    "Your first one or two interactions may need a moment to warm up. It settles after that." : {
-
-    },
-    "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again." : {
-      "extractionState" : "manual",
+    "workboard.item.untitled" : {
+      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again."
+            "value" : "Untitled brief"
           }
         }
       }
     },
-    "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive."
-          }
-        }
-      }
+    "…" : {
+
     }
   },
   "version" : "1.0"
