@@ -1,5 +1,8 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
+  - name: Report a security vulnerability
+    url: https://conduck.com/security/
+    about: Use a private reporting route. Do not disclose vulnerabilities in a public issue.
   - name: Setup guide
     url: https://conduck.com/setup/
     about: Step-by-step pairing and configuration guide on the official site.

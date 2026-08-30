@@ -46,11 +46,13 @@ anonymous, you can report indirectly through CERT-EE, Estonia's national CSIRT
 
 ## Which versions get fixes
 
-Security fixes ship in the current App Store release. Every App Store release is
-tagged in this repository as `v<version>-<build>` — the marketing version and
-build number Apple shows — and that tag, not `main`, identifies the source the
-shipped binary was built from, because `main` moves on. There are no backports
-to older builds — a fix reaches you by updating the app. A report against an
+Security fixes ship in the current App Store release. Every App Store release
+from version 1.3 onward is tagged in this repository as `v<version>-<build>` —
+the marketing version and build number Apple shows — and that tag, not `main`,
+identifies the source the shipped binary was built from, because `main` moves on.
+The repository does not contain exact-source tags for versions 1.0 through 1.2.
+There are no backports to older builds — a fix reaches you by updating the app.
+A report against an
 older build is still welcome; it is closed once the issue is confirmed fixed in
 the shipping version.
 
@@ -98,12 +100,14 @@ ignored. Reports about that boundary are very much in scope — a fact the revie
 screen states wrongly, a way to reach the network or storage before the user
 consents, or anything inside a code that changes the certificate outcome.
 
-That settlement can only go one way. Conduck runs under App Transport Security —
-Apple's platform rule for app network traffic — with no exemptions, so a
-certificate the device does not trust is refused outright, and no surface in the
-app offers to trust a server anyway. The optional certificate fingerprint a user
-can pin only narrows a chain the system has already accepted; it can never admit
-one.
+That settlement can only go one way. Conduck runs under App Transport Security.
+Public and otherwise routable plain-HTTP addresses are rejected. A narrow
+local-network carveout permits an explicitly saved `http://` address only when
+its host string is loopback, a private IPv4 or IPv6 literal, or a Bonjour name
+ending in `.local`; that connection is unencrypted and cannot use certificate
+pinning. HTTPS destinations still require a certificate the device already
+trusts. The optional certificate fingerprint only narrows a trusted HTTPS chain;
+it cannot admit an untrusted one.
 
 ## Safe harbor
 
