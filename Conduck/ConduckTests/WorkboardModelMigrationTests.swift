@@ -3,10 +3,12 @@
 // ConduckTests
 // WorkboardModelMigrationTests.swift
 //
-// Schema and real SQLite migration contracts for Conversations v14. The three
-// Workboard entities are additive, CloudKit-compatible, relationship-free, and
-// cannot alter any shipped conversation entity. Binary material/snapshot fields
-// stay external assets so a rich card does not inflate every list fetch.
+// Schema and real SQLite migration contracts for the Workboard's model
+// versions. The three Workboard entities are additive, CloudKit-compatible,
+// relationship-free, and cannot alter any shipped conversation entity. Binary
+// material/snapshot fields stay external assets so a rich card does not inflate
+// every list fetch. v15 adds exactly one presentation column, so an account
+// that never resized a card carries nothing new.
 
 import XCTest
 import CoreData
@@ -18,7 +20,7 @@ final class WorkboardModelMigrationTests: XCTestCase {
     override func setUp() {
         super.setUp()
         storeURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conversations-v13-v14-\(UUID().uuidString).sqlite")
+            .appendingPathComponent("conversations-workboard-\(UUID().uuidString).sqlite")
     }
 
     override func tearDown() {
@@ -139,6 +141,95 @@ final class WorkboardModelMigrationTests: XCTestCase {
             workItem.setValue(Date(), forKey: "createdAt")
             try context.save()
             XCTAssertEqual(workItem.value(forKey: "id") as? UUID, workItemID)
+        }
+    }
+
+    func testV15AddsOnlyTheMaterialCardSizeColumn() throws {
+        let v14 = try requiredModel(named: "Conversations 14.mom")
+        let v15 = try requiredModel(named: "Conversations 15.mom")
+        XCTAssertEqual(Set(v15.entitiesByName.keys), Set(v14.entitiesByName.keys),
+                       "a card-size column is not a reason to add an entity")
+
+        for entityName in v14.entitiesByName.keys {
+            let before = try XCTUnwrap(v14.entitiesByName[entityName])
+            let after = try XCTUnwrap(v15.entitiesByName[entityName])
+            XCTAssertEqual(Set(after.relationshipsByName.keys), Set(before.relationshipsByName.keys),
+                           "v15 must not mutate \(entityName) relationships")
+            let added = Set(after.attributesByName.keys)
+                .subtracting(Set(before.attributesByName.keys))
+            XCTAssertEqual(added, entityName == "WorkMaterial" ? ["cardSize"] : [],
+                           "v15 must not add columns to \(entityName)")
+            XCTAssertTrue(
+                Set(before.attributesByName.keys).isSubset(of: Set(after.attributesByName.keys)),
+                "v15 must not drop a shipped \(entityName) column"
+            )
+        }
+
+        let cardSize = try XCTUnwrap(
+            v15.entitiesByName["WorkMaterial"]?.attributesByName["cardSize"]
+        )
+        XCTAssertEqual(cardSize.attributeType, .stringAttributeType)
+        XCTAssertTrue(cardSize.isOptional)
+        XCTAssertNil(cardSize.defaultValue,
+                     "an unresized card stores nothing; absence is the standard size")
+        XCTAssertTrue(
+            try XCTUnwrap(v15.entitiesByName["WorkMaterial"]).uniquenessConstraints.isEmpty,
+            "CloudKit mirrored models cannot carry unique constraints"
+        )
+    }
+
+    func testV14SQLiteMigratesToV15LeavingExistingMaterialsUnsized() async throws {
+        let v14 = try requiredModel(named: "Conversations 14.mom")
+        let v15 = try requiredModel(named: "Conversations 15.mom")
+        let itemID = UUID()
+        let materialID = UUID()
+
+        do {
+            let container = try await loadStore(model: v14)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let item = NSEntityDescription.insertNewObject(forEntityName: "WorkItem", into: context)
+                item.setValue(itemID, forKey: "id")
+                item.setValue("Existing brief", forKey: "title")
+                item.setValue(Date(timeIntervalSince1970: 1_800_000_000), forKey: "createdAt")
+                item.setValue(Date(timeIntervalSince1970: 1_800_000_000), forKey: "updatedAt")
+
+                let material = NSEntityDescription.insertNewObject(
+                    forEntityName: "WorkMaterial", into: context
+                )
+                material.setValue(materialID, forKey: "id")
+                material.setValue(itemID, forKey: "workItemID")
+                material.setValue("note", forKey: "kind")
+                material.setValue("Captured before v15", forKey: "title")
+                material.setValue(NSNumber(value: Int32(3)), forKey: "sequence")
+                material.setValue(Date(timeIntervalSince1970: 1_800_000_001), forKey: "createdAt")
+                material.setValue(Date(timeIntervalSince1970: 1_800_000_001), forKey: "updatedAt")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+
+        let container = try await loadStore(model: v15)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
+            let material = try XCTUnwrap(context.fetch(request).first)
+            XCTAssertEqual(material.value(forKey: "title") as? String, "Captured before v15")
+            XCTAssertEqual((material.value(forKey: "sequence") as? NSNumber)?.int32Value, 3)
+            XCTAssertNil(material.value(forKey: "cardSize"),
+                         "a migrated card must not be invented into a deliberate size")
+            XCTAssertEqual(
+                material.value(forKey: "updatedAt") as? Date,
+                Date(timeIntervalSince1970: 1_800_000_001),
+                "migration may not move a revision-bearing timestamp"
+            )
+
+            material.setValue("large", forKey: "cardSize")
+            try context.save()
+            XCTAssertEqual(material.value(forKey: "cardSize") as? String, "large")
         }
     }
 

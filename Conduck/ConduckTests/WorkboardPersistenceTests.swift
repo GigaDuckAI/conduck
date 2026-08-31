@@ -715,4 +715,267 @@ final class WorkboardPersistenceTests: XCTestCase {
         XCTAssertEqual(laterRun.conversationRemovedAt, firstRemovedAt,
                        "an erase-everything must not backdate history onto an older removal")
     }
+
+    // MARK: - Board arrangement
+
+    func testCardSizeRoundTripsAndAnUnknownStoredSizeReadsAsStandard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Arrangeable"))
+        )
+        let material = try await store.addWorkMaterial(
+            WorkMaterialDraft(kind: .note, title: "A thought", textContent: "Keep this"),
+            to: item.id
+        )
+        XCTAssertEqual(material.cardSize, .standard,
+                       "a freshly captured card claims the neutral size")
+
+        func storedSize() async throws -> WorkMaterialCardSize {
+            let value = try await store.fetchWorkItem(id: item.id)
+            let record = try XCTUnwrap(value)
+            return try XCTUnwrap(record.materials.first { $0.id == material.id }).cardSize
+        }
+
+        try await store.setWorkMaterialCardSize(.large, materialID: material.id, itemID: item.id)
+        let enlarged = try await storedSize()
+        XCTAssertEqual(enlarged, .large)
+
+        try await store.setWorkMaterialCardSize(.small, materialID: material.id, itemID: item.id)
+        let shrunk = try await storedSize()
+        XCTAssertEqual(shrunk, .small)
+
+        try await store.setWorkMaterialCardSize(.standard, materialID: material.id, itemID: item.id)
+        let reset = try await storedSize()
+        XCTAssertEqual(reset, .standard)
+        let resetColumns = await store._workMaterialRowsForTesting(id: material.id).map(\.cardSize)
+        XCTAssertEqual(
+            resetColumns, [nil],
+            "returning to standard clears the column instead of leaving a marker"
+        )
+
+        await store._setWorkMaterialCardSizeColumnForTesting("colossal", materialID: material.id)
+        let forward = try await storedSize()
+        XCTAssertEqual(
+            forward, .standard,
+            "a size only a newer build knows must lay out, not disappear"
+        )
+        XCTAssertEqual(WorkMaterialCardSize(stored: nil), .standard)
+        let decoded = try JSONDecoder().decode(
+            WorkMaterialCardSize.self, from: Data(#""colossal""#.utf8)
+        )
+        XCTAssertEqual(
+            decoded, .standard,
+            "decoding a forward size is a layout fallback, never a thrown error"
+        )
+    }
+
+    func testResizingACardIsInvisibleToDivergenceAndToAnApprovedPreflight() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(
+                title: "Sent brief",
+                objective: "Answer exactly what was approved"
+            ))
+        )
+        let material = try await store.addWorkMaterial(
+            WorkMaterialDraft(kind: .note, title: "Context note", textContent: "Approved text"),
+            to: item.id
+        )
+        let approvedValue = try await store.fetchWorkItem(id: item.id)
+        let approved = try XCTUnwrap(approvedValue)
+        let approvedItemRevision = WorkboardRevision.value(for: approved.updatedAt)
+        let approvedMaterial = try XCTUnwrap(approved.materials.first { $0.id == material.id })
+        let approvedMaterialRevision = WorkboardRevision.value(for: approvedMaterial.updatedAt)
+
+        try await store.setWorkMaterialCardSize(.small, materialID: material.id, itemID: item.id)
+
+        let resizedValue = try await store.fetchWorkItem(id: item.id)
+        let resized = try XCTUnwrap(resizedValue)
+        XCTAssertEqual(resized.updatedAt, approved.updatedAt,
+                       "a card size is not activity on the brief")
+        XCTAssertEqual(WorkboardRevision.value(for: resized.updatedAt), approvedItemRevision)
+        let resizedMaterial = try XCTUnwrap(resized.materials.first { $0.id == material.id })
+        XCTAssertEqual(resizedMaterial.cardSize, .small)
+        XCTAssertEqual(
+            WorkboardRevision.value(for: resizedMaterial.updatedAt),
+            approvedMaterialRevision,
+            "a per-material revision feeds preflight; resizing may not move it"
+        )
+
+        // The strongest statement of the same contract: a preflight approved
+        // BEFORE the resize still sends afterwards.
+        let snapshot = WorkBriefSnapshot(
+            title: approved.content.title,
+            objective: approved.content.objective,
+            context: approved.content.context,
+            desiredOutcome: approved.content.desiredOutcome,
+            constraints: approved.content.constraints,
+            dueAt: approved.content.dueAt,
+            materials: [WorkMaterialSnapshot(record: approvedMaterial)]
+        )
+        let prepared = try await store.prepareWorkDispatch(WorkDispatchPreparation(
+            workItemID: item.id,
+            gatewayRef: "custom:v1:test",
+            gatewayName: "Gateway",
+            canonicalPrompt: "Approved packet",
+            briefSnapshot: snapshot,
+            expectedWorkItemRevision: approvedItemRevision,
+            expectedMaterialVersions: [
+                WorkboardMaterialVersion(id: material.id, revision: approvedMaterialRevision)
+            ],
+            sourceDevice: "test"
+        ))
+        XCTAssertNotNil(prepared.dispatch.dispatchedAt)
+    }
+
+    func testResizingWritesEveryDuplicateRowAndRefusesAnotherItemsMaterial() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Merged card"))
+        )
+        let other = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Someone else's board"))
+        )
+        let material = try await store.addWorkMaterial(
+            WorkMaterialDraft(kind: .note, title: "Duplicated by sync"),
+            to: item.id
+        )
+        await store._duplicateWorkMaterialRowForTesting(id: material.id)
+        let mergedRows = await store._workMaterialRowsForTesting(id: material.id)
+        XCTAssertEqual(mergedRows.count, 2)
+
+        try await store.setWorkMaterialCardSize(.large, materialID: material.id, itemID: item.id)
+        let sizedRows = await store._workMaterialRowsForTesting(id: material.id)
+        XCTAssertEqual(
+            Set(sizedRows.map(\.cardSize)),
+            ["large"],
+            "whichever merged row wins the canonical read must report the chosen size"
+        )
+
+        do {
+            try await store.setWorkMaterialCardSize(
+                .small, materialID: material.id, itemID: other.id
+            )
+            XCTFail("resizing a card from a board that does not own it must be refused")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // Expected.
+        }
+        do {
+            try await store.setWorkMaterialCardSize(
+                .small, materialID: UUID(), itemID: item.id
+            )
+            XCTFail("resizing a material that does not exist must be refused")
+        } catch WorkboardStoreError.materialNotFound {
+            // Expected.
+        }
+    }
+
+    func testReorderingMaterialsRewritesSequenceAndAdvancesTheItemRevision() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Ordered brief"))
+        )
+        var ids: [UUID] = []
+        for index in 0..<3 {
+            let material = try await store.addWorkMaterial(
+                WorkMaterialDraft(kind: .note, title: "Card \(index)", sequence: index),
+                to: item.id
+            )
+            ids.append(material.id)
+        }
+        let beforeValue = try await store.fetchWorkItem(id: item.id)
+        let before = try XCTUnwrap(beforeValue)
+        XCTAssertEqual(before.materials.map(\.id), ids)
+
+        let reordered = [ids[2], ids[0], ids[1]]
+        let after = try await store.reorderWorkMaterials(
+            itemID: item.id,
+            orderedMaterialIDs: reordered
+        )
+        XCTAssertEqual(after.materials.map(\.id), reordered)
+        XCTAssertEqual(after.materials.map(\.sequence), [0, 1, 2])
+        XCTAssertGreaterThan(after.updatedAt, before.updatedAt,
+                             "order decides the sent prompt, so a drag is a real change")
+        XCTAssertNotEqual(
+            WorkboardRevision.value(for: after.updatedAt),
+            WorkboardRevision.value(for: before.updatedAt)
+        )
+
+        // Replaying the same arrangement is a no-op, so an idle board cannot
+        // keep marking an already-sent brief as changed.
+        let replayed = try await store.reorderWorkMaterials(
+            itemID: item.id,
+            orderedMaterialIDs: reordered
+        )
+        XCTAssertEqual(replayed.updatedAt, after.updatedAt)
+    }
+
+    func testReorderingWritesEveryDuplicateRowAndRefusesAnIncompleteOrStaleOrder() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Merged order"))
+        )
+        var ids: [UUID] = []
+        for index in 0..<2 {
+            let material = try await store.addWorkMaterial(
+                WorkMaterialDraft(kind: .note, title: "Card \(index)", sequence: index),
+                to: item.id
+            )
+            ids.append(material.id)
+        }
+        await store._duplicateWorkMaterialRowForTesting(id: ids[0])
+
+        let reordered = [ids[1], ids[0]]
+        _ = try await store.reorderWorkMaterials(itemID: item.id, orderedMaterialIDs: reordered)
+        let movedRows = await store._workMaterialRowsForTesting(id: ids[0])
+        XCTAssertEqual(
+            Set(movedRows.map(\.sequence)),
+            [1],
+            "a duplicated row left at its old rank would resurrect the old order"
+        )
+
+        do {
+            _ = try await store.reorderWorkMaterials(
+                itemID: item.id,
+                orderedMaterialIDs: [ids[0]]
+            )
+            XCTFail("an order naming only part of the board must be refused")
+        } catch WorkboardStoreError.staleRevision {
+            // Expected.
+        }
+        do {
+            _ = try await store.reorderWorkMaterials(
+                itemID: item.id,
+                orderedMaterialIDs: [ids[0], ids[1]],
+                expectedOwnerRevision: 1
+            )
+            XCTFail("a rewrite built on an order the person never saw must be refused")
+        } catch WorkboardStoreError.staleRevision {
+            // Expected.
+        }
+        do {
+            _ = try await store.reorderWorkMaterials(
+                itemID: UUID(),
+                orderedMaterialIDs: []
+            )
+            XCTFail("reordering a card that does not exist must be refused")
+        } catch WorkboardStoreError.itemNotFound {
+            // Expected.
+        }
+    }
+
+    func testDuplicatingACardKeepsTheArrangementItWasGiven() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Template"))
+        )
+        let material = try await store.addWorkMaterial(
+            WorkMaterialDraft(kind: .note, title: "Wide note", textContent: "Body"),
+            to: item.id
+        )
+        try await store.setWorkMaterialCardSize(.large, materialID: material.id, itemID: item.id)
+
+        let copy = try await store.duplicateWorkItem(id: item.id)
+        XCTAssertEqual(copy.materials.map(\.cardSize), [.large])
+    }
 }

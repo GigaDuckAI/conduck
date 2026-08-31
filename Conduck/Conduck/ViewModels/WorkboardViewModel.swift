@@ -69,6 +69,11 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
     var byteCount: Int64?
     var availability: WorkboardMaterialAvailability
     var sequence: Int
+    /// Presentation-only board footprint. It is deliberately absent from
+    /// `WorkboardEditDraft.contentFingerprint` and from every prompt packet:
+    /// resizing a card must never advance the owner revision, trip the
+    /// "changed after send" banner, or invalidate a preflight.
+    var cardSize: WorkMaterialCardSize
     var createdAt: Date
     var revision: Int64
 
@@ -84,6 +89,7 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
         byteCount: Int64? = nil,
         availability: WorkboardMaterialAvailability = .available,
         sequence: Int = 0,
+        cardSize: WorkMaterialCardSize = .standard,
         createdAt: Date = Date(),
         revision: Int64 = 0
     ) {
@@ -98,6 +104,7 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
         self.byteCount = byteCount
         self.availability = availability
         self.sequence = sequence
+        self.cardSize = cardSize
         self.createdAt = createdAt
         self.revision = revision
     }
@@ -834,6 +841,118 @@ enum WorkboardBoardOrdering {
     }
 }
 
+/// Pure planning for card drag, drop-slot insertion and the equivalent
+/// accessibility actions inside one project's board. The result is always a
+/// COMPLETE ordering of that project's materials, because the store rewrites
+/// dense sequence ranks from the whole list under one owner-revision CAS.
+enum WorkboardMaterialOrdering {
+    /// `index` is a slot in the CURRENT order, `0...count` — exactly what the
+    /// mosaic engine's `insertionIndex(at:)` returns. Nil when the move is a
+    /// no-op or the material does not belong to `materials`.
+    nonisolated static func order(
+        moving materialID: UUID,
+        toInsertionIndex index: Int,
+        in materials: [WorkboardMaterialSnapshot]
+    ) -> [UUID]? {
+        var orderedIDs = materials.map(\.id)
+        guard let sourceIndex = orderedIDs.firstIndex(of: materialID) else { return nil }
+        let slot = min(max(index, 0), orderedIDs.count)
+        // A slot is a gap between cards, so removing the dragged card first
+        // shifts every later gap down by one.
+        let destination = slot > sourceIndex ? slot - 1 : slot
+        orderedIDs.remove(at: sourceIndex)
+        orderedIDs.insert(materialID, at: min(destination, orderedIDs.count))
+        return orderedIDs == materials.map(\.id) ? nil : orderedIDs
+    }
+
+    nonisolated static func order(
+        moving materialID: UUID,
+        relativeTo targetMaterialID: UUID,
+        placement: WorkboardReorderPlacement,
+        in materials: [WorkboardMaterialSnapshot]
+    ) -> [UUID]? {
+        guard materialID != targetMaterialID else { return nil }
+        let orderedIDs = materials.map(\.id)
+        guard orderedIDs.contains(materialID),
+              let targetIndex = orderedIDs.firstIndex(of: targetMaterialID) else { return nil }
+        return order(
+            moving: materialID,
+            toInsertionIndex: placement == .before ? targetIndex : targetIndex + 1,
+            in: materials
+        )
+    }
+
+    nonisolated static func order(
+        moving materialID: UUID,
+        direction: WorkboardMoveDirection,
+        in materials: [WorkboardMaterialSnapshot]
+    ) -> [UUID]? {
+        let orderedIDs = materials.map(\.id)
+        guard let index = orderedIDs.firstIndex(of: materialID) else { return nil }
+        switch direction {
+        case .earlier:
+            guard index > 0 else { return nil }
+            return order(moving: materialID, toInsertionIndex: index - 1, in: materials)
+        case .later:
+            guard index < orderedIDs.count - 1 else { return nil }
+            return order(moving: materialID, toInsertionIndex: index + 2, in: materials)
+        }
+    }
+}
+
+/// Which brief field the editor should adopt focus in when it opens. The board
+/// asks for this instead of silently refusing an unsendable brief.
+nonisolated enum WorkboardEditorFocusTarget: Hashable, Sendable {
+    case objective
+}
+
+/// Builds the transcript Apple's on-device model shapes into a brief. Shaping
+/// reads the collected thoughts, not only the authored fields, so a board full
+/// of notes produces a real brief. Neither `WorkBriefPromptBuilder` nor
+/// `WorkBriefAssistant` bounds its input, while one stored note may run to
+/// `WorkCaptureEnvelope.maximumNoteCharacters` and the system model's context
+/// window is far smaller — so the bounds live here. Truncation is silent
+/// because the result is an editable suggestion, never a send. Presentation
+/// kind `.note` covers voice transcripts: the store's `.transcript` rows map
+/// onto it, and Workboard retains no audio.
+nonisolated enum WorkBriefShapingSource {
+    static let maximumNoteCount = 12
+    static let maximumNoteCharacters = 800
+    static let maximumTranscriptCharacters = 6_000
+
+    static func transcript(for draft: WorkboardEditDraft) -> String {
+        let authored = [
+            draft.title,
+            draft.objective,
+            draft.context,
+            draft.desiredResult,
+            draft.constraints
+        ]
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+        let notes = draft.materials
+            .filter { $0.kind == .note }
+            .compactMap { material -> String? in
+                let text = (material.textContent ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return text.isEmpty ? nil : truncated(text, to: maximumNoteCharacters)
+            }
+            .prefix(maximumNoteCount)
+
+        var sections = authored
+        if !notes.isEmpty {
+            sections.append("Collected thoughts:\n" + notes.map { "- \($0)" }.joined(separator: "\n"))
+        }
+        return truncated(sections.joined(separator: "\n\n"), to: maximumTranscriptCharacters)
+    }
+
+    private static func truncated(_ value: String, to limit: Int) -> String {
+        guard value.count > limit, limit > 1 else { return value }
+        return String(value.prefix(limit - 1)) + "…"
+    }
+}
+
 enum WorkboardWorkspaceCaptureLogic {
     nonisolated static func normalizedThought(_ rawValue: String) -> String {
         rawValue
@@ -879,7 +998,8 @@ enum WorkboardPromptComposer {
                     url: material.urlString,
                     mimeType: material.mimeType,
                     byteSize: material.byteCount,
-                    sequence: material.sequence
+                    sequence: material.sequence,
+                    createdAt: material.createdAt
                 )
             }
         return WorkBriefPromptBuilder.build(
@@ -942,6 +1062,14 @@ final class WorkboardViewModel {
         var shapeDraft: (@MainActor (WorkboardEditDraft) async throws -> WorkboardEditDraft)?
         var readBriefingAloud: (@MainActor (String) async -> Void)?
         var stopBriefingAloud: (@MainActor () -> Void)?
+        /// `(itemID, orderedMaterialIDs, expectedOwnerRevision) -> refreshed item`.
+        /// Rewriting sequence is canonical prompt order, so it advances the
+        /// owner revision and is refused when the drag was built on an order the
+        /// person never saw.
+        var reorderMaterials: (@MainActor (UUID, [UUID], Int64) async throws -> WorkboardItemSnapshot)?
+        /// `(itemID, materialID, size)`. Revision-neutral by contract: it must
+        /// not stamp `updatedAt` on the material or its owner.
+        var setMaterialCardSize: (@MainActor (UUID, UUID, WorkMaterialCardSize) async throws -> Void)?
     }
 
     private let dependencies: Dependencies
@@ -985,6 +1113,9 @@ final class WorkboardViewModel {
     /// whole run timeline beside it.
     private(set) var nonEmptyComposerDrafts: Set<UUID> = []
     var editorSavedAt: Date?
+    /// Set when the brief is opened because something needed a field the person
+    /// has not written yet. The editor consumes it once and clears it.
+    var editorFocusRequest: WorkboardEditorFocusTarget?
     var editorSuggestion: WorkboardEditDraft?
     var editorConflict: WorkboardEditorConflict?
     var isShapingDraft = false
@@ -1160,17 +1291,29 @@ final class WorkboardViewModel {
         editorWasPersisted = false
         editorSavedAt = nil
         editorSuggestion = nil
+        editorFocusRequest = nil
         editorPresented = true
     }
 
-    func showEditor(for item: WorkboardItemSnapshot) {
+    func showEditor(
+        for item: WorkboardItemSnapshot,
+        focusing target: WorkboardEditorFocusTarget? = nil
+    ) {
         autosaveTask?.cancel()
         editingDraft = WorkboardEditDraft(item: item)
         lastSavedFingerprint = editingDraft.contentFingerprint
         editorWasPersisted = true
         editorSavedAt = item.modifiedAt
         editorSuggestion = nil
+        editorFocusRequest = target
         editorPresented = true
+    }
+
+    /// One-shot read. The editor takes the request as it appears and clears it,
+    /// so reopening the brief later does not re-steal focus.
+    func consumeEditorFocusRequest() -> WorkboardEditorFocusTarget? {
+        defer { editorFocusRequest = nil }
+        return editorFocusRequest
     }
 
     func noteEditorChanged() {
@@ -1251,7 +1394,10 @@ final class WorkboardViewModel {
     }
 
     func reviewEditorAndSend() async {
-        guard editingDraft.isReadyToSend else { return }
+        guard editingDraft.isReadyToSend else {
+            editorFocusRequest = .objective
+            return
+        }
         guard await saveEditorNow(showFailure: true) else { return }
         let itemID = editingDraft.id
         editorPresented = false
@@ -1303,9 +1449,9 @@ final class WorkboardViewModel {
     }
 
     /// Appends one chat-like thought without turning capture into execution.
-    /// The first thought becomes the objective so a fresh workspace is useful;
-    /// later thoughts remain independent note materials in the chronological
-    /// source shelf. Either path is durable before this method returns.
+    /// Every thought is a note card — the composer never writes the brief, so
+    /// what the person typed stays a rearrangeable card and the objective stays
+    /// theirs to author. The thought is durable before this method returns.
     @discardableResult
     func addWorkspaceThought(_ rawValue: String, to itemID: UUID) async -> Bool {
         let thought = WorkboardWorkspaceCaptureLogic.normalizedThought(rawValue)
@@ -1317,38 +1463,12 @@ final class WorkboardViewModel {
     }
 
     private func addWorkspaceThoughtUnlocked(_ thought: String, to itemID: UUID) async -> Bool {
-        guard let item = item(withID: itemID) else {
-            var draft = WorkboardEditDraft(id: itemID)
-            draft.objective = thought
-            draft.title = WorkboardWorkspaceCaptureLogic.title(for: thought)
-            do {
-                let saved = try await dependencies.saveDraft(draft)
-                upsert(saved)
-                provisionalWorkspaceID = nil
-                selectedItemID = saved.id
-                return true
-            } catch {
-                presentWorkspaceCaptureFailure(error)
-                return false
-            }
-        }
-
-        if item.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            var draft = WorkboardEditDraft(item: item)
-            draft.objective = thought
-            if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                draft.title = WorkboardWorkspaceCaptureLogic.title(for: thought)
-            }
-            do {
-                let saved = try await dependencies.saveDraft(draft)
-                upsert(saved)
-                return true
-            } catch {
-                presentWorkspaceCaptureFailure(error)
-                return false
-            }
-        }
-
+        // One route for every thought, on a provisional canvas as much as on an
+        // established project. A first thought on a canvas that owns no row yet
+        // still lands atomically: the import path publishes owner and first
+        // material in a single store transaction and derives the project title
+        // from the note's own first line, leaving the objective empty for the
+        // person to write.
         let material = WorkboardMaterialImport(
             kind: .note,
             name: WorkboardWorkspaceCaptureLogic.noteTitle(for: thought),
@@ -1364,12 +1484,17 @@ final class WorkboardViewModel {
 
     /// Saves the exact visible composer text before opening preflight. This is
     /// the one path used by both the canvas and toolbar, so ⌘-Return cannot skip
-    /// a half-written thought.
+    /// a half-written thought. Collected thoughts do not describe the work, so a
+    /// brief without an objective opens the editor on that field instead of
+    /// refusing without explanation.
     @discardableResult
     func reviewWorkspaceAndSend(itemID: UUID) async -> Bool {
         guard await flushWorkspaceComposer(itemID: itemID) else { return false }
-        guard selectedItemID == itemID,
-              item(withID: itemID)?.isReadyToSend == true else { return false }
+        guard selectedItemID == itemID, let item = item(withID: itemID) else { return false }
+        guard item.isReadyToSend else {
+            showEditor(for: item, focusing: .objective)
+            return false
+        }
         await showPreflight(itemID: itemID)
         return preflightItemID == itemID
     }
@@ -1926,6 +2051,196 @@ final class WorkboardViewModel {
             isReorderingBoard = false
             return false
         }
+    }
+
+    /// Drops a card into a slot the mosaic engine reported, `0...count` in the
+    /// order the person is looking at.
+    @discardableResult
+    func reorderMaterial(
+        _ materialID: UUID,
+        toInsertionIndex index: Int,
+        in itemID: UUID
+    ) async -> Bool {
+        await performMaterialReorder(in: itemID) { materials in
+            WorkboardMaterialOrdering.order(
+                moving: materialID,
+                toInsertionIndex: index,
+                in: materials
+            )
+        }
+    }
+
+    /// Card-relative form for menus and pointer drops that resolve to a
+    /// neighbour rather than a slot.
+    @discardableResult
+    func reorderMaterial(
+        _ materialID: UUID,
+        relativeTo targetMaterialID: UUID,
+        placement: WorkboardReorderPlacement = .before,
+        in itemID: UUID
+    ) async -> Bool {
+        await performMaterialReorder(in: itemID) { materials in
+            WorkboardMaterialOrdering.order(
+                moving: materialID,
+                relativeTo: targetMaterialID,
+                placement: placement,
+                in: materials
+            )
+        }
+    }
+
+    /// Keyboard/Switch Control/VoiceOver equivalent to dragging a card.
+    @discardableResult
+    func moveMaterial(
+        _ materialID: UUID,
+        direction: WorkboardMoveDirection,
+        in itemID: UUID
+    ) async -> Bool {
+        await performMaterialReorder(in: itemID) { materials in
+            WorkboardMaterialOrdering.order(
+                moving: materialID,
+                direction: direction,
+                in: materials
+            )
+        }
+    }
+
+    /// Board footprint only. It deliberately skips the capture lane and the
+    /// owner revision: a resize is presentation, so it must never make a sent
+    /// brief look changed or invalidate an open preflight.
+    @discardableResult
+    func setMaterialCardSize(
+        _ size: WorkMaterialCardSize,
+        materialID: UUID,
+        in itemID: UUID
+    ) async -> Bool {
+        guard let setCardSize = dependencies.setMaterialCardSize,
+              let itemIndex = items.firstIndex(where: { $0.id == itemID }),
+              let materialIndex = items[itemIndex].materials
+                  .firstIndex(where: { $0.id == materialID }) else { return false }
+        let previous = items[itemIndex].materials[materialIndex].cardSize
+        guard previous != size else { return true }
+        items[itemIndex].materials[materialIndex].cardSize = size
+        do {
+            try await setCardSize(itemID, materialID, size)
+            return true
+        } catch {
+            if let index = items.firstIndex(where: { $0.id == itemID }),
+               let materialIndex = items[index].materials
+                   .firstIndex(where: { $0.id == materialID }) {
+                items[index].materials[materialIndex].cardSize = previous
+            }
+            notice = WorkboardNotice(
+                kind: .error,
+                title: LocalizedStringResource(
+                    "workboard.action.failed.title",
+                    defaultValue: "Couldn’t update the board"
+                ),
+                message: error.localizedDescription
+            )
+            return false
+        }
+    }
+
+    /// Board-scoped removal. `removeMaterial(_:from:)` is the editor's form —
+    /// it is keyed to `editingDraft` and flushes it first, so calling it from a
+    /// board whose brief is closed would be a silent no-op. This one takes the
+    /// capture lane and CASes on the item's own revision instead, and only
+    /// touches the editor when that same item happens to be open.
+    @discardableResult
+    func removeMaterialFromBoard(_ materialID: UUID, in itemID: UUID) async -> Bool {
+        await acquireWorkspaceMutation(for: itemID)
+        defer { releaseWorkspaceMutation(for: itemID) }
+        guard let current = item(withID: itemID),
+              current.materials.contains(where: { $0.id == materialID }) else { return false }
+        do {
+            let refreshed = try await dependencies.removeMaterial(
+                itemID,
+                current.revision,
+                materialID
+            )
+            upsert(refreshed)
+            if editingDraft.id == itemID {
+                refreshEditorAfterMaterialMutation(refreshed)
+            }
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            notice = WorkboardNotice(
+                kind: .error,
+                title: LocalizedStringResource(
+                    "workboard.material.remove.failed.title",
+                    defaultValue: "Couldn’t remove material"
+                ),
+                message: error.localizedDescription
+            )
+            return false
+        }
+    }
+
+    /// Reorder shares the capture lane with thoughts and drops: it rewrites
+    /// canonical prompt order under the owner's optimistic revision, so a drag
+    /// racing an import would otherwise be refused as stale.
+    private func performMaterialReorder(
+        in itemID: UUID,
+        plan: ([WorkboardMaterialSnapshot]) -> [UUID]?
+    ) async -> Bool {
+        guard let reorderMaterials = dependencies.reorderMaterials else { return false }
+        await acquireWorkspaceMutation(for: itemID)
+        defer { releaseWorkspaceMutation(for: itemID) }
+        guard let current = item(withID: itemID),
+              let orderedIDs = plan(current.materials) else { return false }
+
+        let previousMaterials = current.materials
+        applyMaterialOrder(orderedIDs, in: itemID)
+        do {
+            let refreshed = try await reorderMaterials(itemID, orderedIDs, current.revision)
+            upsert(refreshed)
+            if editingDraft.id == itemID {
+                refreshEditorAfterMaterialMutation(refreshed)
+            }
+            return true
+        } catch {
+            // The drag is optimistic for direct-manipulation responsiveness. On
+            // conflict, prefer the latest private-store order; if that read also
+            // fails, restore only the order captured before this drag.
+            if let latest = try? await dependencies.loadItems() {
+                items = latest
+            } else {
+                applyMaterials(previousMaterials, in: itemID)
+            }
+            notice = WorkboardNotice(
+                kind: .error,
+                title: LocalizedStringResource(
+                    "workboard.action.failed.title",
+                    defaultValue: "Couldn’t update the board"
+                ),
+                message: error.localizedDescription
+            )
+            return false
+        }
+    }
+
+    /// Mirrors the store's dense rank rewrite so the optimistic board and the
+    /// persisted sequence agree before the round trip completes.
+    private func applyMaterialOrder(_ orderedIDs: [UUID], in itemID: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else { return }
+        let byID = Dictionary(
+            items[index].materials.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var reordered = orderedIDs.compactMap { byID[$0] }
+        guard reordered.count == items[index].materials.count else { return }
+        for position in reordered.indices {
+            reordered[position].sequence = position
+        }
+        items[index].materials = reordered
+    }
+
+    private func applyMaterials(_ materials: [WorkboardMaterialSnapshot], in itemID: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else { return }
+        items[index].materials = materials
     }
 
     private func applyBoardPositions(_ positions: [WorkItemBoardPosition]) {

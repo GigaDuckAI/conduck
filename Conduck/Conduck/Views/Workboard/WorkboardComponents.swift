@@ -30,6 +30,13 @@ extension UTType {
     nonisolated static let conduckWorkboardCard = UTType(
         exportedAs: "\(Constants.identityNamespace).workboard-card"
     )
+
+    /// A material card carries its own type so a project drag and a card drag
+    /// can never be mistaken for one another, and so the pane-wide capture drop
+    /// (file, image, url, text) never claims an in-board rearrangement.
+    nonisolated static let conduckWorkboardMaterial = UTType(
+        exportedAs: "\(Constants.identityNamespace).workboard-material"
+    )
 }
 
 /// The drag carries identity only. The receiving board resolves current state,
@@ -39,6 +46,18 @@ nonisolated struct WorkboardCardDragPayload: Codable, Hashable, Sendable, Transf
 
     static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .conduckWorkboardCard)
+    }
+}
+
+/// Identity only, plus the project the card was lifted from: a material may be
+/// rearranged only inside its own board, so a receiving board rejects a payload
+/// carrying a different `itemID` before it plans anything.
+nonisolated struct WorkMaterialDragPayload: Codable, Hashable, Sendable, Transferable {
+    let itemID: UUID
+    let materialID: UUID
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .conduckWorkboardMaterial)
     }
 }
 

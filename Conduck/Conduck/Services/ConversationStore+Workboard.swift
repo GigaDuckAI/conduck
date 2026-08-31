@@ -14,6 +14,16 @@
 import Foundation
 import CoreData
 
+#if CONDUCK_TESTING
+/// One PHYSICAL `WorkMaterial` row, before deduplication collapses a
+/// CloudKit-merged material to a single logical card.
+nonisolated struct WorkMaterialRowProbe: Sendable, Hashable {
+    let sequence: Int32?
+    let cardSize: String?
+    let updatedAt: Date?
+}
+#endif
+
 extension ConversationStore {
 
     // MARK: - Work items
@@ -457,37 +467,16 @@ extension ConversationStore {
                     throw WorkboardStoreError.staleRevision
                 }
 
-                let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
-                request.predicate = NSPredicate(format: "workItemID == %@", id as CVarArg)
-                let materials = try context.fetch(request)
-                var rowsByID: [UUID: [NSManagedObject]] = [:]
-                for material in materials {
-                    guard let materialID = material.value(forKey: "id") as? UUID else {
-                        throw WorkboardStoreError.staleRevision
-                    }
-                    rowsByID[materialID, default: []].append(material)
-                }
-                guard orderedMaterialIDs.count == rowsByID.count,
-                      Set(orderedMaterialIDs) == Set(rowsByID.keys) else {
-                    throw WorkboardStoreError.staleRevision
-                }
-
-                var didChange = false
+                let rewrite = try Self.rewriteWorkMaterialSequence(
+                    orderedMaterialIDs: orderedMaterialIDs,
+                    workItemID: id,
+                    in: context
+                )
+                let materials = rewrite.materials
+                var didChange = rewrite.didChange
                 if Self.content(of: row) != content {
                     try Self.apply(content, to: row)
                     didChange = true
-                }
-                for (index, materialID) in orderedMaterialIDs.enumerated() {
-                    guard let materialRows = rowsByID[materialID] else {
-                        throw WorkboardStoreError.staleRevision
-                    }
-                    let next = Int32(clamping: index)
-                    for material in materialRows {
-                        let current = (material.value(forKey: "sequence") as? NSNumber)?.int32Value
-                        guard current != next else { continue }
-                        material.setValue(NSNumber(value: next), forKey: "sequence")
-                        didChange = true
-                    }
                 }
                 guard didChange else { return false }
                 let now = Date()
@@ -614,6 +603,7 @@ extension ConversationStore {
                         sequence: material.sequence,
                         storageMode: material.storageMode,
                         sourceDevice: material.sourceDevice,
+                        cardSize: material.cardSize,
                         createdAt: createdAt
                     )
                 }
@@ -1056,6 +1046,90 @@ extension ConversationStore {
         }
         if let key = outcome.1 { try? await workAssetVault.remove(key) }
         if outcome.0 { await postDidChange() }
+    }
+
+    /// Rank the board's cards through the SAME rewrite the editor's autosave
+    /// uses, so the two surfaces cannot disagree about what order means. Order
+    /// is canonical: it decides the dispatch prompt, so this deliberately
+    /// advances the item's revision and an already-sent run is honestly marked
+    /// as changed. `expectedOwnerRevision` is optional in the same sense it is
+    /// for the other material mutations here — supplied, it refuses a rewrite
+    /// built on an order the person never saw.
+    @discardableResult
+    func reorderWorkMaterials(
+        itemID: UUID,
+        orderedMaterialIDs: [UUID],
+        expectedOwnerRevision: Int64? = nil
+    ) async throws -> WorkItemRecord {
+        try await ensureLoaded()
+        let context = newWriteContext()
+        let changed = try await context.perform { [context] in
+            guard let owner = try Self.workItemRow(id: itemID, in: context) else {
+                throw WorkboardStoreError.itemNotFound
+            }
+            if let expectedOwnerRevision {
+                guard let updatedAt = owner.value(forKey: "updatedAt") as? Date,
+                      Self.workRevision(for: updatedAt) == expectedOwnerRevision else {
+                    throw WorkboardStoreError.staleRevision
+                }
+            }
+            let rewrite = try Self.rewriteWorkMaterialSequence(
+                orderedMaterialIDs: orderedMaterialIDs,
+                workItemID: itemID,
+                in: context
+            )
+            guard rewrite.didChange else { return false }
+            let now = Date()
+            owner.setValue(now, forKey: "updatedAt")
+            for material in rewrite.materials where material.hasChanges {
+                material.setValue(now, forKey: "updatedAt")
+            }
+            try context.save()
+            return true
+        }
+        if changed { await postDidChange() }
+        guard let record = try await fetchWorkItem(id: itemID) else {
+            throw WorkboardStoreError.itemNotFound
+        }
+        return record
+    }
+
+    /// Resize one card. Card size is a fact about the board, never about the
+    /// brief: it is absent from every prompt and dispatch snapshot, so this
+    /// writes NO timestamp on either the material or its item. That is the whole
+    /// contract — both revisions are derived from `updatedAt`, so touching one
+    /// would raise "Changed after this was sent" on an untouched brief and
+    /// invalidate an approved preflight because somebody made a card bigger.
+    /// Every physical row of the material is written, because CloudKit can
+    /// merge one logical card into several and whichever row wins the canonical
+    /// read must report the size the person chose.
+    func setWorkMaterialCardSize(
+        _ size: WorkMaterialCardSize,
+        materialID: UUID,
+        itemID: UUID
+    ) async throws {
+        try await ensureLoaded()
+        let context = newWriteContext()
+        let changed = try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
+            let rows = try context.fetch(request)
+            guard !rows.isEmpty else { throw WorkboardStoreError.materialNotFound }
+            let owners = Set(rows.compactMap { $0.value(forKey: "workItemID") as? UUID })
+            guard owners == [itemID] else {
+                throw WorkboardStoreError.invalidMaterialOwner
+            }
+            let stored = size.storedValue
+            var didChange = false
+            for row in rows where row.value(forKey: "cardSize") as? String != stored {
+                row.setValue(stored, forKey: "cardSize")
+                didChange = true
+            }
+            guard didChange else { return false }
+            try context.save()
+            return true
+        }
+        if changed { await postDidChange() }
     }
 
     func loadWorkMaterial(id: UUID) async throws -> LoadedWorkMaterial? {
@@ -1665,6 +1739,49 @@ extension ConversationStore {
         return try context.fetch(request).first
     }
 
+    /// The single sequence-rewrite the Workboard has. Both the editor's autosave
+    /// and a board drag land here, so material order can never mean one thing in
+    /// one surface and another elsewhere. `orderedMaterialIDs` must name every
+    /// LOGICAL material of the item exactly once; CloudKit can materialize one
+    /// logical material as several physical rows, so each of them is rewritten
+    /// to the same rank and a stray duplicate is normalized rather than refused.
+    /// Timestamps are the caller's business: this only decides ranks.
+    private static func rewriteWorkMaterialSequence(
+        orderedMaterialIDs: [UUID],
+        workItemID: UUID,
+        in context: NSManagedObjectContext
+    ) throws -> (materials: [NSManagedObject], didChange: Bool) {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+        request.predicate = NSPredicate(format: "workItemID == %@", workItemID as CVarArg)
+        let materials = try context.fetch(request)
+        var rowsByID: [UUID: [NSManagedObject]] = [:]
+        for material in materials {
+            guard let materialID = material.value(forKey: "id") as? UUID else {
+                throw WorkboardStoreError.staleRevision
+            }
+            rowsByID[materialID, default: []].append(material)
+        }
+        guard orderedMaterialIDs.count == rowsByID.count,
+              Set(orderedMaterialIDs) == Set(rowsByID.keys) else {
+            throw WorkboardStoreError.staleRevision
+        }
+
+        var didChange = false
+        for (index, materialID) in orderedMaterialIDs.enumerated() {
+            guard let materialRows = rowsByID[materialID] else {
+                throw WorkboardStoreError.staleRevision
+            }
+            let next = Int32(clamping: index)
+            for material in materialRows {
+                let current = (material.value(forKey: "sequence") as? NSNumber)?.int32Value
+                guard current != next else { continue }
+                material.setValue(NSNumber(value: next), forKey: "sequence")
+                didChange = true
+            }
+        }
+        return (materials, didChange)
+    }
+
     private static func workDispatchRow(id: UUID, in context: NSManagedObjectContext) throws -> NSManagedObject? {
         let request = NSFetchRequest<NSManagedObject>(entityName: "WorkDispatch")
         request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
@@ -1772,6 +1889,7 @@ extension ConversationStore {
         row.setValue(NSNumber(value: Int32(clamping: draft.sequence)), forKey: "sequence")
         row.setValue(storageMode.rawValue, forKey: "storageMode")
         row.setValue(localVaultKey, forKey: "localVaultKey")
+        row.setValue(draft.cardSize.storedValue, forKey: "cardSize")
         row.setValue(draft.sourceDevice, forKey: "sourceDevice")
         row.setValue(draft.createdAt, forKey: "createdAt")
         row.setValue(updatedAt, forKey: "updatedAt")
@@ -1996,6 +2114,7 @@ extension ConversationStore {
         let localVaultKey: String?
         let sourceDevice: String?
         let sequence: Int
+        let cardSize: WorkMaterialCardSize
         let createdAt: Date
         let updatedAt: Date
 
@@ -2025,6 +2144,7 @@ extension ConversationStore {
             localVaultKey = row.value(forKey: "localVaultKey") as? String
             sourceDevice = row.value(forKey: "sourceDevice") as? String
             sequence = (row.value(forKey: "sequence") as? NSNumber)?.intValue ?? 0
+            cardSize = WorkMaterialCardSize(stored: row.value(forKey: "cardSize") as? String)
             createdAt = row.value(forKey: "createdAt") as? Date ?? .distantPast
             updatedAt = row.value(forKey: "updatedAt") as? Date ?? createdAt
         }
@@ -2060,6 +2180,7 @@ extension ConversationStore {
                 localVaultKey: localVaultKey,
                 sourceDevice: sourceDevice,
                 sequence: sequence,
+                cardSize: cardSize,
                 createdAt: createdAt,
                 updatedAt: updatedAt
             )
@@ -2143,6 +2264,90 @@ extension ConversationStore {
             deliveryAttemptID = row.value(forKey: "deliveryAttemptID") as? UUID
         }
     }
+
+    #if CONDUCK_TESTING
+    /// TEST SEAM — read the PHYSICAL rows behind one logical material.
+    ///
+    /// WHY IT HAS TO EXIST. Every read path deduplicates to one canonical row,
+    /// which is exactly what hides the property the size and order writers are
+    /// built for: that they touch EVERY duplicate. A projection-level assertion
+    /// passes whether one row was written or all of them, so the duplicate
+    /// tolerance could be deleted and the suite would stay green until a real
+    /// account merged two records and a card silently reverted its size.
+    ///
+    /// Gated on the in-memory store for the same reason every other seam is:
+    /// nothing here may reach the founder's real data from a signed suite run.
+    func _workMaterialRowsForTesting(id: UUID) async -> [WorkMaterialRowProbe] {
+        do { try await ensureLoaded() } catch { return [] }
+        let context = newWriteContext()
+        return await context.perform { [context] in
+            guard Self.isInMemory(context) else { return [] }
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+            request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
+            return ((try? context.fetch(request)) ?? []).map { row in
+                WorkMaterialRowProbe(
+                    sequence: (row.value(forKey: "sequence") as? NSNumber)?.int32Value,
+                    cardSize: row.value(forKey: "cardSize") as? String,
+                    updatedAt: row.value(forKey: "updatedAt") as? Date
+                )
+            }
+        }
+    }
+
+    /// TEST SEAM — add a second physical row carrying the same app-level UUID.
+    ///
+    /// WHY IT HAS TO EXIST. CloudKit cannot enforce Core Data uniqueness, so two
+    /// offline devices can import one logical material as several rows. No
+    /// public API can produce that state — every insert path refuses a colliding
+    /// id — so the duplicate-tolerant writes have no reachable test without a
+    /// seam. Same in-memory gate as above.
+    func _duplicateWorkMaterialRowForTesting(id: UUID) async {
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        await context.perform { [context] in
+            guard Self.isInMemory(context) else { return }
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+            request.fetchLimit = 1
+            guard let source = try? context.fetch(request).first else { return }
+            let copy = NSEntityDescription.insertNewObject(
+                forEntityName: "WorkMaterial", into: context
+            )
+            for name in source.entity.attributesByName.keys {
+                copy.setValue(source.value(forKey: name), forKey: name)
+            }
+            try? context.save()
+        }
+    }
+
+    /// TEST SEAM — write an arbitrary raw string into the `cardSize` column of
+    /// every physical row of one material.
+    ///
+    /// WHY IT HAS TO EXIST. The size a NEWER build writes is by definition a
+    /// value this build's enum does not contain, and the public setter accepts
+    /// only values it does contain. Without a seam the lenient read is
+    /// unreachable, and a card synced from a newer device would be free to
+    /// vanish or crash the board with nothing to catch it.
+    func _setWorkMaterialCardSizeColumnForTesting(_ rawValue: String?, materialID: UUID) async {
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        await context.perform { [context] in
+            guard Self.isInMemory(context) else { return }
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
+            for row in (try? context.fetch(request)) ?? [] {
+                row.setValue(rawValue, forKey: "cardSize")
+            }
+            try? context.save()
+        }
+    }
+
+    private static func isInMemory(_ context: NSManagedObjectContext) -> Bool {
+        context.persistentStoreCoordinator?.persistentStores
+            .allSatisfy { $0.type == NSInMemoryStoreType } == true
+    }
+    #endif
 
     private static func workDispatchActivity(
         dispatch: StoredWorkDispatch,

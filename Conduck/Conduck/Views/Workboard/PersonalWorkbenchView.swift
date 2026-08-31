@@ -745,16 +745,10 @@ final class PersonalWorkbenchModel {
         let shapingHandler: (@MainActor (WorkboardEditDraft) async throws -> WorkboardEditDraft)?
         if WorkBriefAssistant.availability == .available {
             shapingHandler = { draft in
-                let source = [
-                    draft.title,
-                    draft.objective,
-                    draft.context,
-                    draft.desiredResult,
-                    draft.constraints
-                ]
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n\n")
+                // Shaping reads the collected thought cards as well as the
+                // authored fields: on this board the thoughts are usually the
+                // only description of the work that exists yet.
+                let source = WorkBriefShapingSource.transcript(for: draft)
                 let suggestion = try await WorkBriefAssistant.shared.shape(transcript: source)
                 var shaped = draft
                 if !suggestion.title.isEmpty { shaped.title = suggestion.title }

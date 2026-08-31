@@ -60,6 +60,50 @@ final class WorkBriefPromptBuilderTests: XCTestCase {
         """)
     }
 
+    /// Two devices capturing offline both derive the same `sequence` from the
+    /// order each can see, so a tie is normal rather than pathological. The
+    /// board breaks it on `createdAt`, and the prompt has to break it the same
+    /// way or the person approves one arrangement and the gateway gets another.
+    func testTiedSequencesBreakOnCreatedAtBeforeIdentifier() {
+        // The identifier tie-break alone would put `later` first.
+        let earlyID = UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!
+        let laterID = UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!
+        let captured = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let packet = WorkBriefPromptBuilder.build(
+            workItemID: UUID(),
+            title: "",
+            objective: "Decide",
+            context: "",
+            constraints: "",
+            desiredResult: "",
+            reviewBy: nil,
+            materials: [
+                .init(id: laterID, kind: .note, label: "Second", sequence: 3, createdAt: captured.addingTimeInterval(300)),
+                .init(id: earlyID, kind: .note, label: "First", sequence: 3, createdAt: captured)
+            ]
+        )
+
+        XCTAssertEqual(packet.materialIDs, [earlyID, laterID])
+
+        // Identical timestamps still fall through to the stable identifier.
+        let tied = WorkBriefPromptBuilder.build(
+            workItemID: UUID(),
+            title: "",
+            objective: "Decide",
+            context: "",
+            constraints: "",
+            desiredResult: "",
+            reviewBy: nil,
+            materials: [
+                .init(id: earlyID, kind: .note, label: "Second", sequence: 3, createdAt: captured),
+                .init(id: laterID, kind: .note, label: "First", sequence: 3, createdAt: captured)
+            ]
+        )
+
+        XCTAssertEqual(tied.materialIDs, [laterID, earlyID])
+    }
+
     func testEmptyOptionalSectionsAreOmittedAndSubstanceRuleCountsMaterials() {
         let packet = WorkBriefPromptBuilder.build(
             workItemID: UUID(),

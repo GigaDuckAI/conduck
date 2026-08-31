@@ -70,6 +70,12 @@ struct WorkboardEditorView: View {
         .onChange(of: viewModel.editingDraft) { _, _ in
             viewModel.noteEditorChanged()
         }
+        // Keyed on the request itself so it lands both when the brief opens
+        // already carrying one and when Review & Send raises one in place.
+        .task(id: viewModel.editorFocusRequest) {
+            guard let target = viewModel.consumeEditorFocusRequest() else { return }
+            focusedField = target.editorField
+        }
         .alert(item: $viewModel.notice) { notice in
             Alert(
                 title: Text(notice.title),
@@ -1049,6 +1055,14 @@ private enum WorkboardEditorField: Hashable {
     case context
     case desiredResult
     case constraints
+}
+
+private extension WorkboardEditorFocusTarget {
+    var editorField: WorkboardEditorField {
+        switch self {
+        case .objective: return .objective
+        }
+    }
 }
 
 private struct WorkboardLabeledEditor<Trailing: View>: View {

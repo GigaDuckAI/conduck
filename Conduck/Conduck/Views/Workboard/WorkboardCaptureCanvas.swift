@@ -114,17 +114,22 @@ struct WorkboardCaptureCanvas: View {
                 compactComposer
             } else {
                 WorkboardSurface {
-                    VStack(alignment: .leading, spacing: 16) {
-                        canvasHeader
-                        dropTarget
-                        if !item.materials.isEmpty {
-                            sourceShelf
+                    VStack(alignment: .leading, spacing: 14) {
+                        importProgress
+                        if item.materials.isEmpty {
+                            dropTile
+                        } else {
+                            WorkboardMaterialBoard(
+                                viewModel: viewModel,
+                                item: item,
+                                onOpen: openMaterial,
+                                onReattach: beginReattachment
+                            )
                         }
                         if mode == .full {
                             Divider().overlay(AppColors.borderSubtle)
                             expandedComposer
                         }
-                        privacyStatus
                     }
                 }
             }
@@ -264,116 +269,57 @@ struct WorkboardCaptureCanvas: View {
         if composerFocused { composerFocused = false }
     }
 
-    private var canvasHeader: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringResource(
-                    "workboard.workspace.canvas.title",
-                    defaultValue: "Project canvas"
-                ))
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(AppColors.textEmphasis)
-                .accessibilityAddTraits(.isHeader)
-
-                Text(LocalizedStringResource(
-                    "workboard.workspace.canvas.caption",
-                    defaultValue: "Collect the rough material first. Shape and send it only when you are ready."
-                ))
-                .font(.subheadline)
-                .foregroundStyle(AppColors.textSecondary)
-            }
-            Spacer(minLength: 12)
-            if let state = viewModel.workspaceImportState, state.itemID == item.id {
-                VStack(alignment: .trailing, spacing: 5) {
-                    ProgressView(value: state.progress)
-                        .frame(width: 92)
-                    Text(String.localizedStringWithFormat(
-                        String(localized: LocalizedStringResource(
-                            "workboard.workspace.import.progress",
-                            defaultValue: "%1$lld of %2$lld"
-                        )),
-                        Int64(state.completedCount),
-                        Int64(state.totalCount)
-                    ))
+    /// The only surviving canvas status: it exists while an import is running
+    /// and disappears with it, so it costs the de-texted board nothing at rest.
+    @ViewBuilder
+    private var importProgress: some View {
+        if let state = viewModel.workspaceImportState, state.itemID == item.id {
+            let progressText = String.localizedStringWithFormat(
+                String(localized: LocalizedStringResource(
+                    "workboard.workspace.import.progress",
+                    defaultValue: "%1$lld of %2$lld"
+                )),
+                Int64(state.completedCount),
+                Int64(state.totalCount)
+            )
+            HStack(spacing: 8) {
+                ProgressView(value: state.progress)
+                    .frame(width: 92)
+                Text(verbatim: progressText)
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(Text(LocalizedStringResource(
-                    "workboard.material.importing",
-                    defaultValue: "Adding materials"
-                )))
-                .accessibilityValue(Text(verbatim: String.localizedStringWithFormat(
-                    String(localized: LocalizedStringResource(
-                        "workboard.workspace.import.progress",
-                        defaultValue: "%1$lld of %2$lld"
-                    )),
-                    Int64(state.completedCount),
-                    Int64(state.totalCount)
-                )))
-            } else {
-                Label(
-                    LocalizedStringResource(
-                        "workboard.workspace.inert",
-                        defaultValue: "Not sent"
-                    ),
-                    systemImage: "lock.fill"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AppColors.brandTeal)
+                Spacer(minLength: 0)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(Text(LocalizedStringResource(
+                "workboard.material.importing",
+                defaultValue: "Adding materials"
+            )))
+            .accessibilityValue(Text(verbatim: progressText))
         }
     }
 
-    private var dropTarget: some View {
+    /// The ghost tile an empty board shows in place of the old explainer. One
+    /// short line: everything it used to spell out is taught once by
+    /// `WorkboardTutorialView` and by the pane-wide drop itself.
+    private var dropTile: some View {
         Button {
             guard !isImporting else { return }
             showsFileImporter = true
         } label: {
-            VStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(AppColors.brandAmber.opacity(0.12))
-                        .frame(width: 62, height: 62)
-                    Image(systemName: "square.and.arrow.down.on.square")
-                        .font(.system(size: 26, weight: .semibold))
-                        .foregroundStyle(AppColors.brandAmber)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-
-                VStack(spacing: 4) {
-                    Text(LocalizedStringResource(
-                        "workboard.workspace.drop.title",
-                        defaultValue: "Drop anywhere, or choose files"
-                    ))
-                    .font(.headline)
-                    .foregroundStyle(AppColors.textPrimary)
-                    Text(LocalizedStringResource(
-                        "workboard.workspace.drop.caption",
-                        defaultValue: "Files stay private and inert until Review & Send."
-                    ))
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textTertiary)
-                }
-
-                HStack(spacing: 8) {
-                    captureRoute("square.and.arrow.up", LocalizedStringResource(
-                        "workboard.workspace.route.share",
-                        defaultValue: "Share"
-                    ))
-                    captureRoute("button.programmable", LocalizedStringResource(
-                        "workboard.workspace.route.actionButton",
-                        defaultValue: "Action Button"
-                    ))
-                    #if os(macOS)
-                    captureRoute("menubar.rectangle", LocalizedStringResource(
-                        "workboard.workspace.route.menuBar",
-                        defaultValue: "Menu bar"
-                    ))
-                    #endif
-                }
+            VStack(spacing: 10) {
+                Image(systemName: "square.and.arrow.down.on.square")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(AppColors.brandAmber)
+                Text(LocalizedStringResource(
+                    "workboard.workspace.drop.title",
+                    defaultValue: "Drop anywhere, or choose files"
+                ))
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textSecondary)
+                .multilineTextAlignment(.center)
             }
-            .frame(maxWidth: .infinity, minHeight: item.materials.isEmpty ? 190 : 142)
+            .frame(maxWidth: .infinity, minHeight: 118)
             .padding(.horizontal, 18)
             .background(AppColors.backgroundSecondary.opacity(0.7), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay {
@@ -393,51 +339,18 @@ struct WorkboardCaptureCanvas: View {
         )))
     }
 
-    private func captureRoute(_ systemImage: String, _ title: LocalizedStringResource) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(AppColors.textTertiary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(AppColors.cardBackground, in: Capsule())
-            .overlay { Capsule().stroke(AppColors.borderSubtle, lineWidth: 1) }
+    private func openMaterial(_ material: WorkboardMaterialSnapshot) {
+        if material.availability == .unavailableOnThisDevice {
+            beginReattachment(material)
+        } else {
+            viewModel.openMaterial(material)
+        }
     }
 
-    private var sourceShelf: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack(spacing: 8) {
-                Text(LocalizedStringResource(
-                    "workboard.workspace.sources.title",
-                    defaultValue: "Sources and thoughts"
-                ))
-                .font(.headline)
-                .foregroundStyle(AppColors.textPrimary)
-                .accessibilityAddTraits(.isHeader)
-                Text(item.materials.count, format: .number)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppColors.textTertiary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(AppColors.backgroundSecondary, in: Capsule())
-            }
-
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 190, maximum: 300), spacing: 10)],
-                alignment: .leading,
-                spacing: 10
-            ) {
-                ForEach(item.materials.sorted(by: newestMaterialFirst)) { material in
-                    WorkboardSourceCard(material: material) {
-                        if material.availability == .unavailableOnThisDevice {
-                            materialPendingReattachment = material
-                            showsFileImporter = true
-                        } else {
-                            viewModel.openMaterial(material)
-                        }
-                    }
-                }
-            }
-        }
+    private func beginReattachment(_ material: WorkboardMaterialSnapshot) {
+        guard workbenchDestinationIsActive else { return }
+        materialPendingReattachment = material
+        showsFileImporter = true
     }
 
     /// The pinned composer follows the sketch's single-row capture bar. The
@@ -454,14 +367,6 @@ struct WorkboardCaptureCanvas: View {
 
     private var expandedComposer: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(LocalizedStringResource(
-                "workboard.workspace.composer.title",
-                defaultValue: "Add a thought"
-            ))
-            .font(.headline)
-            .foregroundStyle(AppColors.textPrimary)
-            .accessibilityAddTraits(.isHeader)
-
             HStack(alignment: .bottom, spacing: 8) {
                 attachmentMenu
                 composerField(lineLimit: 1...7)
@@ -635,21 +540,6 @@ struct WorkboardCaptureCanvas: View {
         case .denied: showsCameraDeniedAlert = true
         }
         #endif
-    }
-
-    private var privacyStatus: some View {
-        Label {
-            Text(LocalizedStringResource(
-                "workboard.workspace.privacy",
-                defaultValue: "Briefs sync privately. Source files and screenshots stay on this device. You choose every gateway at send time."
-            ))
-        } icon: {
-            Image(systemName: "lock.shield.fill")
-                .foregroundStyle(AppColors.brandTeal)
-        }
-        .font(.caption)
-        .foregroundStyle(AppColors.textTertiary)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var cleanComposerText: String {
@@ -853,11 +743,6 @@ struct WorkboardCaptureCanvas: View {
         )
         for url in mapped.scopedURLs { url.stopAccessingSecurityScopedResource() }
         WorkboardImportMapping.reclaim(batch)
-    }
-
-    private func newestMaterialFirst(_ lhs: WorkboardMaterialSnapshot, _ rhs: WorkboardMaterialSnapshot) -> Bool {
-        if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
-        return lhs.id.uuidString < rhs.id.uuidString
     }
 
     private func appending(_ addition: String, to existing: String) -> String {
@@ -1155,94 +1040,533 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     }
 }
 
-private struct WorkboardSourceCard: View {
-    let material: WorkboardMaterialSnapshot
-    let onOpen: () -> Void
+// MARK: - The board
+
+/// The free card board. Cards render in the item's OWN material order — the
+/// repository already sorts by `(sequence, createdAt, id)` — laid out by
+/// `WorkboardMosaicLayout`, and every drop resolves to an insertion slot read
+/// from the SAME engine result the layout placed with, so the gap a person aims
+/// at is the gap the reorder writes.
+private struct WorkboardMaterialBoard: View {
+    @Bindable var viewModel: WorkboardViewModel
+    let item: WorkboardItemSnapshot
+    let onOpen: (WorkboardMaterialSnapshot) -> Void
+    let onReattach: (WorkboardMaterialSnapshot) -> Void
+
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+
+    @State private var boardWidth: CGFloat = 0
+    @State private var isDropTargeted = false
+    @State private var materialPendingRemoval: WorkboardMaterialSnapshot?
+
+    private var metrics: WorkboardMosaicMetrics {
+        .scaled(for: dynamicTypeSize)
+    }
+
+    /// The grid the mosaic settles on at this width. A `large` card clamps to
+    /// it, so the card needs the column count to know which layout it actually
+    /// got rather than which one it asked for.
+    private var gridColumns: Int {
+        WorkboardMosaicEngine(metrics: metrics).columnCount(forWidth: boardWidth)
+    }
+
+    /// Placement is recomputed from the same inputs the `Layout` memoises, so
+    /// drop geometry can never disagree with the frames on screen.
+    private var placement: WorkboardMosaicEngine.Result {
+        WorkboardMosaicEngine(metrics: metrics).place(
+            sizes: item.materials.map { (id: $0.id, size: $0.cardSize) },
+            availableWidth: boardWidth
+        )
+    }
+
+    /// Order and footprint together: the two inputs a reflow can come from.
+    private var arrangement: [WorkboardMosaicEngine.Item] {
+        item.materials.map { WorkboardMosaicEngine.Item(id: $0.id, size: $0.cardSize) }
+    }
 
     var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(alignment: .top, spacing: 9) {
-                    sourceArtwork
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: material.name)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AppColors.textPrimary)
-                            .lineLimit(2)
-                        Text(material.kind.title)
-                            .font(.caption2)
-                            .foregroundStyle(AppColors.textTertiary)
-                    }
-                    Spacer(minLength: 5)
-                    if material.availability != .available {
-                        Image(systemName: material.availability == .localOnly ? "internaldrive" : "paperclip.badge.ellipsis")
-                            .foregroundStyle(material.availability == .localOnly ? AppColors.brandTeal : AppColors.warning)
-                            .accessibilityLabel(Text(availabilityLabel))
-                    }
-                }
-
-                if let preview = previewText, !preview.isEmpty {
-                    Text(verbatim: preview)
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                HStack(spacing: 6) {
-                    if let byteCount = material.byteCount {
-                        Text(ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file))
-                    }
-                    Spacer(minLength: 5)
-                    Text(material.createdAt, format: .relative(presentation: .named))
-                }
-                .font(.caption2)
-                .foregroundStyle(AppColors.textTertiary)
+        WorkboardMosaicLayout(metrics: metrics, layoutDirection: layoutDirection) {
+            ForEach(Array(item.materials.enumerated()), id: \.element.id) { index, material in
+                WorkboardSourceCard(
+                    material: material,
+                    size: material.cardSize,
+                    grantedColumns: gridColumns,
+                    boardPosition: index + 1,
+                    boardCount: item.materials.count,
+                    onOpen: { onOpen(material) },
+                    onReattach: material.availability == .unavailableOnThisDevice
+                        ? { onReattach(material) }
+                        : nil,
+                    onSetSize: { size in setSize(size, for: material) },
+                    onMoveEarlier: index > 0
+                        ? { move(material, direction: .earlier) }
+                        : nil,
+                    onMoveLater: index + 1 < item.materials.count
+                        ? { move(material, direction: .later) }
+                        : nil,
+                    onRemove: { materialPendingRemoval = material }
+                )
+                .workboardMosaicCardSize(material.cardSize)
+                .draggable(WorkMaterialDragPayload(itemID: item.id, materialID: material.id))
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
-            .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .stroke(AppColors.borderSubtle, lineWidth: 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         }
-        .choiceCardButton(cornerRadius: 13)
-        .accessibilityElement(children: .combine)
+        .frame(maxWidth: .infinity)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            boardWidth = width
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .strokeBorder(AppColors.brandAmber, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                .padding(-6)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12)) { content in
+                    content.opacity(isDropTargeted ? 1 : 0)
+                }
+                .allowsHitTesting(false)
+        }
+        .dropDestination(for: WorkMaterialDragPayload.self) { payloads, location in
+            drop(payloads, at: location)
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+        // A reflow is a frame change, not a leaf property, so it takes the
+        // value form. It is scoped to the board container and never reaches the
+        // navigation split view that hosts it.
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: arrangement)
+        .confirmationDialog(
+            String(localized: LocalizedStringResource(
+                "workboard.material.remove.confirm.title",
+                defaultValue: "Remove this material?"
+            )),
+            isPresented: Binding(
+                get: { materialPendingRemoval != nil },
+                set: { if !$0 { materialPendingRemoval = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: materialPendingRemoval
+        ) { material in
+            Button(
+                LocalizedStringResource(
+                    "workboard.material.remove.action",
+                    defaultValue: "Remove Material"
+                ),
+                role: .destructive
+            ) {
+                materialPendingRemoval = nil
+                remove(material)
+            }
+            Button(
+                LocalizedStringResource("common.cancel", defaultValue: "Cancel"),
+                role: .cancel
+            ) {
+                materialPendingRemoval = nil
+            }
+        } message: { material in
+            Text(String.localizedStringWithFormat(
+                String(localized: LocalizedStringResource(
+                    "workboard.material.remove.confirm.message",
+                    defaultValue: "“%@” will be removed from this private draft."
+                )),
+                material.name
+            ))
+        }
+    }
+
+    private func drop(_ payloads: [WorkMaterialDragPayload], at location: CGPoint) -> Bool {
+        guard workbenchDestinationIsActive,
+              let moving = payloads.first,
+              moving.itemID == item.id,
+              item.materials.contains(where: { $0.id == moving.materialID }) else { return false }
+        let index = WorkboardMosaicLayout.insertionIndex(
+            at: location,
+            in: placement,
+            containerWidth: boardWidth,
+            layoutDirection: layoutDirection
+        )
+        Task {
+            await viewModel.reorderMaterial(
+                moving.materialID,
+                toInsertionIndex: index,
+                in: item.id
+            )
+        }
+        return true
+    }
+
+    private func setSize(_ size: WorkMaterialCardSize, for material: WorkboardMaterialSnapshot) {
+        guard workbenchDestinationIsActive else { return }
+        Task {
+            await viewModel.setMaterialCardSize(size, materialID: material.id, in: item.id)
+        }
+    }
+
+    /// Move Earlier/Later is the only non-drag path to arrange, so the new
+    /// position is announced: the card's label changes but VoiceOver has no
+    /// reason to re-read it after an action it did not visibly move.
+    private func move(_ material: WorkboardMaterialSnapshot, direction: WorkboardMoveDirection) {
+        guard workbenchDestinationIsActive else { return }
+        Task {
+            guard await viewModel.moveMaterial(material.id, direction: direction, in: item.id),
+                  let refreshed = viewModel.item(withID: item.id),
+                  let index = refreshed.materials.firstIndex(where: { $0.id == material.id })
+            else { return }
+            AccessibilityAnnouncer.announce([
+                material.name,
+                WorkboardSourceCard.boardPositionLabel(
+                    position: index + 1,
+                    count: refreshed.materials.count
+                )
+            ].joined(separator: ". "))
+        }
+    }
+
+    private func remove(_ material: WorkboardMaterialSnapshot) {
+        guard workbenchDestinationIsActive else { return }
+        Task {
+            await viewModel.removeMaterialFromBoard(material.id, in: item.id)
+        }
+    }
+}
+
+/// One material as a board card at one of three footprints. The card fills the
+/// frame the mosaic proposes — it never states its own height — so a size change
+/// is a single persisted attribute rather than a second layout system.
+private struct WorkboardSourceCard: View {
+    let material: WorkboardMaterialSnapshot
+    var size: WorkMaterialCardSize = .standard
+    /// The grid width the mosaic granted. `size` stays the stored choice — it
+    /// drives the menu and the label — while the layout keys off the footprint
+    /// the card actually received, which is narrower whenever the grid clamps.
+    var grantedColumns: Int = WorkboardMosaicSpan.large.columns
+    var boardPosition: Int = 0
+    var boardCount: Int = 0
+    let onOpen: () -> Void
+    var onReattach: (() -> Void)?
+    var onSetSize: ((WorkMaterialCardSize) -> Void)?
+    var onMoveEarlier: (() -> Void)?
+    var onMoveLater: (() -> Void)?
+    var onRemove: (() -> Void)?
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Button(action: onOpen) {
+                cardBody
+                    .padding(layoutSize == .small ? 9 : 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // The mosaic hands every card a fixed frame, so content that
+                    // cannot compress is clipped rather than allowed to bleed
+                    // over a neighbouring tile.
+                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .strokeBorder(AppColors.borderSubtle, lineWidth: 1)
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            }
+            .choiceCardButton(cornerRadius: 13)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilitySummary)
+            .accessibilityActions { cardAccessibilityActions }
+
+            // Every action the menu carries is also an accessibility action on
+            // the card itself, so the affordance is presentation only.
+            cardMenu
+                .padding(menuInset)
+                .allowsHitTesting(showsMenuAffordance)
+                .accessibilityHidden(true)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12)) { content in
+                    content.opacity(showsMenuAffordance ? 1 : 0)
+                }
+        }
+        .contextMenu { cardMenuContent }
+        #if os(macOS)
+        .onHover { hovering in isHovering = hovering }
+        #endif
+    }
+
+    /// Pointer platforms reveal the control on hover so a resting board is
+    /// quiet; touch platforms have no hover state, so it is always there.
+    private var showsMenuAffordance: Bool {
+        #if os(macOS)
+        return isHovering
+        #else
+        return true
+        #endif
+    }
+
+    /// The footprint the card draws into. A `large` card on a grid too narrow
+    /// to grant four columns is placed as a standard tile, so drawing the wide
+    /// banner would push its text column under the clip shape.
+    private var layoutSize: WorkMaterialCardSize {
+        size == .large && grantedColumns < WorkboardMosaicSpan.large.columns ? .standard : size
+    }
+
+    /// Small is a thumbnail with one line of name; standard keeps the vertical
+    /// card; large spends its extra width on bigger artwork beside more preview
+    /// text rather than on a taller tile, because the mosaic gives `large` the
+    /// same two-unit row band as `standard`.
+    @ViewBuilder
+    private var cardBody: some View {
+        switch layoutSize {
+        case .small:
+            VStack(alignment: .leading, spacing: 6) {
+                artwork(dimension: 30, cornerRadius: 8)
+                HStack(spacing: 4) {
+                    availabilityGlyph
+                    Text(verbatim: material.name)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+            }
+        case .standard:
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
+                    artwork(dimension: 40, cornerRadius: 10)
+                    availabilityGlyph
+                    // The menu affordance owns this corner: keep content clear.
+                    Spacer(minLength: 26)
+                }
+                Text(verbatim: material.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppColors.textPrimary)
+                    .lineLimit(2)
+                previewBody(lineLimit: 2)
+                Spacer(minLength: 0)
+                cardFooter
+            }
+        case .large:
+            HStack(alignment: .top, spacing: 12) {
+                artwork(dimension: 92, cornerRadius: 12)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(verbatim: material.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                        .lineLimit(2)
+                    Text(material.kind.title)
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textTertiary)
+                    previewBody(lineLimit: 4)
+                    Spacer(minLength: 0)
+                    cardFooter
+                }
+                availabilityGlyph
+                Spacer(minLength: 26)
+            }
+        }
     }
 
     @ViewBuilder
-    private var sourceArtwork: some View {
-        if material.kind == .image,
-           let data = material.thumbnailData {
+    private func previewBody(lineLimit: Int) -> some View {
+        if let preview = previewText, !preview.isEmpty {
+            Text(verbatim: preview)
+                .font(.caption)
+                .foregroundStyle(AppColors.textSecondary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(lineLimit)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var cardFooter: some View {
+        HStack(spacing: 6) {
+            if let byteCount = material.byteCount {
+                Text(ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file))
+            }
+            Spacer(minLength: 5)
+            Text(material.createdAt, format: .relative(presentation: .named))
+        }
+        .font(.caption2)
+        .foregroundStyle(AppColors.textTertiary)
+        .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var availabilityGlyph: some View {
+        if material.availability != .available {
+            Image(systemName: material.availability == .localOnly ? "internaldrive" : "paperclip.badge.ellipsis")
+                .font(.caption)
+                .foregroundStyle(material.availability == .localOnly ? AppColors.brandTeal : AppColors.warning)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// The glyph stays 30pt so it never dominates a tile, but the tappable
+    /// region reaches the 44pt minimum on everything wider than a `small` card,
+    /// where 44pt would swallow the tile the affordance sits on. The inset
+    /// shrinks by the same amount, so the reserved 26pt content gap still
+    /// clears the control.
+    private var menuHitDimension: CGFloat {
+        layoutSize == .small ? 30 : WorkboardMetrics.touchTarget
+    }
+
+    private var menuInset: CGFloat {
+        layoutSize == .small ? 4 : 0
+    }
+
+    private var cardMenu: some View {
+        Menu {
+            cardMenuContent
+        } label: {
+            Image(systemName: "ellipsis.circle.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(AppColors.textSecondary, AppColors.cardBackgroundElevated)
+                .frame(width: 30, height: 30)
+                .frame(width: menuHitDimension, height: menuHitDimension)
+                .contentShape(Circle())
+        }
+        .pointerIconButton(size: menuHitDimension, shape: .circle)
+        .help(String(localized: LocalizedStringResource(
+            "workboard.material.card.more",
+            defaultValue: "Card actions"
+        )))
+    }
+
+    @ViewBuilder
+    private var cardMenuContent: some View {
+        Button(action: onOpen) {
+            Label(
+                LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
+                systemImage: "arrow.up.forward.square"
+            )
+        }
+        if let onReattach {
+            Button(action: onReattach) {
+                Label(
+                    LocalizedStringResource(
+                        "workboard.material.reattach.action",
+                        defaultValue: "Reattach or Replace"
+                    ),
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+            }
+        }
+        if let onSetSize {
+            Divider()
+            Picker(
+                LocalizedStringResource("workboard.material.card.size", defaultValue: "Card Size"),
+                selection: Binding(get: { size }, set: { onSetSize($0) })
+            ) {
+                ForEach(WorkMaterialCardSize.allCases, id: \.self) { option in
+                    Text(option.cardSizeTitle).tag(option)
+                }
+            }
+            .pickerStyle(.inline)
+        }
+        if onMoveEarlier != nil || onMoveLater != nil {
+            Divider()
+            if let onMoveEarlier {
+                Button(action: onMoveEarlier) {
+                    Label(
+                        LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier"),
+                        systemImage: "arrow.left"
+                    )
+                }
+            }
+            if let onMoveLater {
+                Button(action: onMoveLater) {
+                    Label(
+                        LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later"),
+                        systemImage: "arrow.right"
+                    )
+                }
+            }
+        }
+        if let onRemove {
+            Divider()
+            Button(role: .destructive, action: onRemove) {
+                Label(
+                    LocalizedStringResource(
+                        "workboard.material.remove.action",
+                        defaultValue: "Remove Material"
+                    ),
+                    systemImage: "trash"
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var cardAccessibilityActions: some View {
+        if let onReattach {
+            Button(
+                LocalizedStringResource(
+                    "workboard.material.reattach.action",
+                    defaultValue: "Reattach or Replace"
+                ),
+                action: onReattach
+            )
+        }
+        if let onMoveEarlier {
+            Button(
+                LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier"),
+                action: onMoveEarlier
+            )
+        }
+        if let onMoveLater {
+            Button(
+                LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later"),
+                action: onMoveLater
+            )
+        }
+        if let onSetSize {
+            ForEach(WorkMaterialCardSize.allCases.filter { $0 != size }, id: \.self) { option in
+                Button(option.cardSizeAccessibilityAction) {
+                    onSetSize(option)
+                }
+            }
+        }
+        if let onRemove {
+            Button(
+                LocalizedStringResource(
+                    "workboard.material.remove.action",
+                    defaultValue: "Remove Material"
+                ),
+                action: onRemove
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func artwork(dimension: CGFloat, cornerRadius: CGFloat) -> some View {
+        if material.kind == .image, let data = material.thumbnailData {
             StagedImageTile(
                 id: material.id,
                 data: data,
                 maxPixel: ImageProcessor.thumbnailMaxPixel,
                 cacheVersion: material.revision
             ) {
-                sourceArtworkPlaceholder
+                artworkPlaceholder(dimension: dimension, cornerRadius: cornerRadius)
             }
-                .frame(width: 54, height: 54)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(AppColors.borderSubtle, lineWidth: 1)
-                }
-                .accessibilityHidden(true)
+            .frame(width: dimension, height: dimension)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(AppColors.borderSubtle, lineWidth: 1)
+            }
+            .accessibilityHidden(true)
         } else {
-            sourceArtworkPlaceholder
+            artworkPlaceholder(dimension: dimension, cornerRadius: cornerRadius)
         }
     }
 
-    private var sourceArtworkPlaceholder: some View {
+    private func artworkPlaceholder(dimension: CGFloat, cornerRadius: CGFloat) -> some View {
         Image(systemName: WorkboardMaterialIcon.symbol(for: material))
-            .font(.title3)
+            .font(.system(size: max(13, dimension * 0.42)))
             .foregroundStyle(WorkboardMaterialIcon.tint(for: material))
-            .frame(width: 38, height: 38)
-            .background(AppColors.backgroundSecondary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .frame(width: dimension, height: dimension)
+            .background(AppColors.backgroundSecondary, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .accessibilityHidden(true)
     }
 
@@ -1252,6 +1576,35 @@ private struct WorkboardSourceCard: View {
         case .link: return material.urlString
         case .image, .file: return material.detail
         }
+    }
+
+    private var accessibilitySummary: Text {
+        var parts = [String(localized: material.kind.title), material.name]
+        if let preview = previewText?.trimmingCharacters(in: .whitespacesAndNewlines), !preview.isEmpty {
+            parts.append(preview)
+        }
+        if material.availability != .available {
+            parts.append(String(localized: availabilityLabel))
+        }
+        parts.append(String(localized: size.cardSizeTitle))
+        // Arranging is what the board is for, so the position is part of the
+        // card's identity: it is the only thing that changes when Move
+        // Earlier/Later succeeds.
+        if boardCount > 0, boardPosition > 0 {
+            parts.append(Self.boardPositionLabel(position: boardPosition, count: boardCount))
+        }
+        return Text(parts.joined(separator: ". "))
+    }
+
+    static func boardPositionLabel(position: Int, count: Int) -> String {
+        String.localizedStringWithFormat(
+            String(localized: LocalizedStringResource(
+                "workboard.material.card.position",
+                defaultValue: "%1$lld of %2$lld"
+            )),
+            position,
+            count
+        )
     }
 
     private var availabilityLabel: LocalizedStringResource {
@@ -1264,6 +1617,43 @@ private struct WorkboardSourceCard: View {
                 "workboard.material.reattach.short",
                 defaultValue: "Reattach"
             )
+    }
+}
+
+extension WorkMaterialCardSize {
+    /// Board footprint as the person picks it. Presentation only — the stored
+    /// value carries no copy of its own.
+    var cardSizeTitle: LocalizedStringResource {
+        switch self {
+        case .small:
+            return LocalizedStringResource("workboard.material.card.size.small", defaultValue: "Small")
+        case .standard:
+            return LocalizedStringResource("workboard.material.card.size.standard", defaultValue: "Standard")
+        case .large:
+            return LocalizedStringResource("workboard.material.card.size.large", defaultValue: "Large")
+        }
+    }
+
+    /// The same three footprints as verbs, because an accessibility action is
+    /// an instruction rather than a selectable value.
+    var cardSizeAccessibilityAction: LocalizedStringResource {
+        switch self {
+        case .small:
+            return LocalizedStringResource(
+                "workboard.material.card.size.small.action",
+                defaultValue: "Make Card Small"
+            )
+        case .standard:
+            return LocalizedStringResource(
+                "workboard.material.card.size.standard.action",
+                defaultValue: "Make Card Standard"
+            )
+        case .large:
+            return LocalizedStringResource(
+                "workboard.material.card.size.large.action",
+                defaultValue: "Make Card Large"
+            )
+        }
     }
 }
 

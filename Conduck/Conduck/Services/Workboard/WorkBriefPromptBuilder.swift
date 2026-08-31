@@ -29,6 +29,11 @@ nonisolated struct WorkBriefMaterialPacket: Equatable, Sendable {
     let mimeType: String?
     let byteSize: Int64?
     let sequence: Int
+    /// Second sort key. Two devices capturing offline both derive the same
+    /// `sequence` from the order they can see, so the prompt must break that
+    /// tie exactly the way the board does or the person approves one order and
+    /// the gateway receives another.
+    let createdAt: Date
 
     init(
         id: UUID,
@@ -38,7 +43,8 @@ nonisolated struct WorkBriefMaterialPacket: Equatable, Sendable {
         url: String? = nil,
         mimeType: String? = nil,
         byteSize: Int64? = nil,
-        sequence: Int
+        sequence: Int,
+        createdAt: Date = .distantPast
     ) {
         self.id = id
         self.kind = kind
@@ -48,6 +54,7 @@ nonisolated struct WorkBriefMaterialPacket: Equatable, Sendable {
         self.mimeType = mimeType
         self.byteSize = byteSize
         self.sequence = sequence
+        self.createdAt = createdAt
     }
 }
 
@@ -81,7 +88,8 @@ extension WorkBriefMaterialPacket {
             // "0 bytes" would describe the material with a fact the human
             // never saw.
             byteSize: record.byteSize > 0 ? record.byteSize : nil,
-            sequence: record.sequence
+            sequence: record.sequence,
+            createdAt: record.createdAt
         )
     }
 
@@ -149,7 +157,9 @@ nonisolated struct WorkBriefPacket: Equatable, Sendable {
 /// A single serializer for prompt preview and dispatch persistence.
 nonisolated enum WorkBriefPromptBuilder {
     /// Builds a stable packet. Empty optional sections are omitted, materials
-    /// are ordered by user sequence then UUID, and dates are UTC ISO-8601.
+    /// are ordered by `(sequence, createdAt, id)` — the SAME key the board
+    /// renders with, so the arrangement the person approved is the arrangement
+    /// that ships — and dates are UTC ISO-8601.
     static func build(
         workItemID: UUID,
         title: String,
@@ -166,8 +176,8 @@ nonisolated enum WorkBriefPromptBuilder {
         let normalizedConstraints = normalized(constraints)
         let normalizedDesiredResult = normalized(desiredResult)
         let orderedMaterials = materials.sorted {
-            if $0.sequence != $1.sequence { return $0.sequence < $1.sequence }
-            return $0.id.uuidString < $1.id.uuidString
+            ($0.sequence, $0.createdAt, $0.id.uuidString)
+                < ($1.sequence, $1.createdAt, $1.id.uuidString)
         }
 
         var sections: [String] = []

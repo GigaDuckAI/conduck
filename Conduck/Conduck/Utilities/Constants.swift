@@ -202,6 +202,15 @@ enum Constants {
     /// `onboardingCompletedKey` / `screenshotAskTipSeenKey`).
     static let gatewayPrimerSeenKey = "gateway_primer_seen"
 
+    /// Device-local: whether the one-time Work board tutorial
+    /// (`WorkboardTutorialView`) has been acknowledged. App Groups UserDefaults,
+    /// NOT iCloud-synced (a per-machine "you've seen this screen" flag, mirroring
+    /// `gatewayPrimerSeenKey` / `screenshotAskTipSeenKey`). Device-local is the
+    /// right posture even though briefs sync: the tutorial teaches the board's
+    /// drag / resize / drop affordances, which differ per input device, so a
+    /// first visit on a second device earns its own showing.
+    static let workboardTutorialSeenKey = "workboard_tutorial_seen"
+
     /// macOS-only, device-local: the Diagnostics relevance gate for the Screen
     /// Recording capability row. Written by the capture preflight
     /// (`RegionCaptureController.preflightPermissions`) when Screen Recording

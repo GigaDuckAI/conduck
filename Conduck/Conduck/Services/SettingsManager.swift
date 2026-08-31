@@ -287,6 +287,30 @@ actor SettingsManager {
         defaults.set(true, forKey: Constants.gatewayPrimerSeenKey)
     }
 
+    // MARK: - Work board tutorial one-time flag (device-local)
+
+    /// Whether the one-time Work board tutorial (`WorkboardTutorialView` — the
+    /// duck beat that replaces the board surface's removed explainer text) should
+    /// still show. Device-local (App Groups, NOT iCloud-synced), mirroring
+    /// `shouldShowScreenshotAskTip`.
+    ///
+    /// ASYNC instance pair, not the synchronous `static` shape
+    /// `hasSeenGatewayPrimer` uses: the presentation site is
+    /// `WorkboardPresentationModifier`, which reads this from a `.task` (it can
+    /// await the actor) and latches the result in its own `@State`, so the gate is
+    /// evaluated once per process and no reopen can race the mark-seen write.
+    func shouldShowWorkboardTutorial() -> Bool {
+        return !defaults.bool(forKey: Constants.workboardTutorialSeenKey)
+    }
+
+    /// Mark the Work board tutorial acknowledged so it never shows again. Called
+    /// on ACKNOWLEDGEMENT — its CTA, or a user dismissal of the sheet — NEVER on
+    /// appearance, so a tutorial that never actually got looked at still gets its
+    /// turn.
+    func markWorkboardTutorialSeen() {
+        defaults.set(true, forKey: Constants.workboardTutorialSeenKey)
+    }
+
     // MARK: - Show in Dock (macOS, device-local)
 
     /// macOS "Show in Dock" preference. ON (default) = Dock-app mode

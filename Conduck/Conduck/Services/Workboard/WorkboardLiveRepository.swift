@@ -128,7 +128,21 @@ final class WorkboardLiveRepository {
             openGatewaySettings: { [self] in openGatewaySettingsHandler() },
             shapeDraft: shapeDraftHandler,
             readBriefingAloud: readBriefingHandler,
-            stopBriefingAloud: stopBriefingHandler
+            stopBriefingAloud: stopBriefingHandler,
+            reorderMaterials: { [self] itemID, orderedMaterialIDs, expectedRevision in
+                try await reorderMaterials(
+                    orderedMaterialIDs,
+                    in: itemID,
+                    expectedRevision: expectedRevision
+                )
+            },
+            setMaterialCardSize: { [self] itemID, materialID, size in
+                try await store.setWorkMaterialCardSize(
+                    size,
+                    materialID: materialID,
+                    itemID: itemID
+                )
+            }
         )
     }
 
@@ -357,6 +371,7 @@ final class WorkboardLiveRepository {
             byteCount: record.byteSize > 0 ? record.byteSize : nil,
             availability: presentationAvailability(record),
             sequence: record.sequence,
+            cardSize: record.cardSize,
             createdAt: record.createdAt,
             revision: revision(for: record.updatedAt)
         )
@@ -760,6 +775,27 @@ final class WorkboardLiveRepository {
         case .file: return .file
         case .link: return .link
         case .note: return .note
+        }
+    }
+
+    /// Board drag. The store owns the single sequence rewrite, so this only
+    /// carries the compare-and-swap token and re-projects the owner.
+    private func reorderMaterials(
+        _ orderedMaterialIDs: [UUID],
+        in workItemID: UUID,
+        expectedRevision: Int64
+    ) async throws -> WorkboardItemSnapshot {
+        do {
+            let saved = try await store.reorderWorkMaterials(
+                itemID: workItemID,
+                orderedMaterialIDs: orderedMaterialIDs,
+                expectedOwnerRevision: expectedRevision
+            )
+            return try await snapshot(for: saved)
+        } catch WorkboardStoreError.staleRevision {
+            throw WorkboardLiveRepositoryError.staleDraft
+        } catch WorkboardStoreError.itemNotFound {
+            throw WorkboardLiveRepositoryError.itemNotFound
         }
     }
 

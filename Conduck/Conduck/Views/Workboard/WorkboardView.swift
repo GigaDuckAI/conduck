@@ -134,8 +134,20 @@ struct WorkboardPresentationModifier: ViewModifier {
     /// the old `.task` behaviour without a second load owner.
     @State private var hasAppliedInitialSelection = false
 
+    /// The one-time board tutorial. `hasEvaluatedTutorial` latches only once the
+    /// gate has actually been READ, so a first activation that arrives while
+    /// another Work sheet is up gets a later turn instead of being consumed.
+    @State private var showsTutorial = false
+    @State private var hasEvaluatedTutorial = false
+
     func body(content: Content) -> some View {
         content
+            .task(id: tutorialGate) {
+                await evaluateTutorialGate()
+            }
+            .sheet(isPresented: tutorialIsPresented) {
+                WorkboardTutorialView(onDone: acknowledgeTutorial)
+            }
             .onChange(of: viewModel.isLoading) { _, isLoading in
                 guard !isLoading, !hasAppliedInitialSelection, viewModel.loadError == nil else { return }
                 hasAppliedInitialSelection = true
@@ -261,6 +273,65 @@ struct WorkboardPresentationModifier: ViewModifier {
             viewModel: viewModel,
             showsOverview: $showsOverview,
             preferredCompactColumn: $preferredCompactColumn
+        )
+    }
+
+    // MARK: - One-time board tutorial
+
+    /// SwiftUI drops the second of two concurrent presentations, so the tutorial
+    /// waits until Work owns no other sheet, alert or confirmation. Both inputs
+    /// key the `.task`, which is what gives it a later turn.
+    private struct WorkboardTutorialGate: Hashable {
+        let isActive: Bool
+        let isBlocked: Bool
+    }
+
+    private var tutorialGate: WorkboardTutorialGate {
+        WorkboardTutorialGate(
+            isActive: isActive,
+            isBlocked: viewModel.editorPresented
+                || viewModel.preflightItemID != nil
+                || viewModel.briefing != nil
+                || viewModel.notice != nil
+                || viewModel.confirmation != nil
+        )
+    }
+
+    private func evaluateTutorialGate() async {
+        guard !hasEvaluatedTutorial else { return }
+        let gate = tutorialGate
+        guard gate.isActive, !gate.isBlocked else { return }
+        hasEvaluatedTutorial = true
+        let shouldShow = await SettingsManager.shared.shouldShowWorkboardTutorial()
+        // A sheet or alert can open across the actor hop, which restarts the
+        // `.task`. Release the latch when that happened so the tutorial gets a
+        // later turn instead of presenting into an occupied slot.
+        let resolved = tutorialGate
+        guard !Task.isCancelled, resolved.isActive, !resolved.isBlocked else {
+            hasEvaluatedTutorial = false
+            return
+        }
+        guard shouldShow else { return }
+        showsTutorial = true
+    }
+
+    /// "Seen" means acknowledged, so the write happens here and nowhere else:
+    /// the CTA calls this directly, and a swipe-down or Escape reaches it
+    /// through the binding's setter. Leaving Work parks the sheet instead —
+    /// the flag is untouched and the tutorial returns on the next visit.
+    private func acknowledgeTutorial() {
+        guard showsTutorial else { return }
+        showsTutorial = false
+        Task { await SettingsManager.shared.markWorkboardTutorialSeen() }
+    }
+
+    private var tutorialIsPresented: Binding<Bool> {
+        Binding(
+            get: { isActive && showsTutorial },
+            set: { isPresented in
+                guard !isPresented, isActive else { return }
+                acknowledgeTutorial()
+            }
         )
     }
 
@@ -715,7 +786,7 @@ struct WorkboardDetailColumn: View {
                 ),
                 message: LocalizedStringResource(
                     "workboard.workspace.new.message",
-                    defaultValue: "Start loosely. Add a thought or drop source material; the project is created only when there is something to keep."
+                    defaultValue: "Add a thought or drop something in."
                 )
             )
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -774,7 +845,7 @@ struct WorkboardDetailColumn: View {
                     ),
                     message: LocalizedStringResource(
                         "workboard.empty.message",
-                        defaultValue: "Collect thoughts, screenshots, files and links here. Nothing leaves Conduck until you review the exact brief and choose a gateway."
+                        defaultValue: "Nothing is sent to an AI until you review it."
                     )
                 )
             } else {
@@ -1114,24 +1185,11 @@ private struct WorkboardProjectCanvas: View {
                 ))
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(AppColors.textEmphasis)
-                Text(LocalizedStringResource(
-                    "workboard.captureLanding.caption",
-                    defaultValue: "Files, screenshots, photos, links and text become a private new project. Nothing is sent automatically."
-                ))
-                .font(.subheadline)
-                .foregroundStyle(AppColors.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 560)
-            }
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { captureKinds }
-                VStack(spacing: 8) { captureKinds }
             }
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 28)
-        .frame(maxWidth: .infinity, minHeight: 230)
+        .frame(maxWidth: .infinity, minHeight: 180)
         .background(AppColors.backgroundSecondary.opacity(0.48), in: RoundedRectangle(
             cornerRadius: 20,
             style: .continuous
@@ -1146,35 +1204,6 @@ private struct WorkboardProjectCanvas: View {
         .accessibilityElement(children: .combine)
     }
 
-    @ViewBuilder
-    private var captureKinds: some View {
-        captureKind("doc", LocalizedStringResource(
-            "workboard.captureLanding.files",
-            defaultValue: "Files"
-        ))
-        captureKind("photo", LocalizedStringResource(
-            "workboard.captureLanding.photos",
-            defaultValue: "Photos"
-        ))
-        captureKind("text.alignleft", LocalizedStringResource(
-            "workboard.captureLanding.text",
-            defaultValue: "Text"
-        ))
-        captureKind("link", LocalizedStringResource(
-            "workboard.captureLanding.links",
-            defaultValue: "Links"
-        ))
-    }
-
-    private func captureKind(_ systemImage: String, _ title: LocalizedStringResource) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.caption.weight(.medium))
-            .foregroundStyle(AppColors.textTertiary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(AppColors.cardBackground, in: Capsule())
-            .overlay { Capsule().stroke(AppColors.borderSubtle, lineWidth: 1) }
-    }
 }
 
 /// A real gap target makes the resulting position visible before release and

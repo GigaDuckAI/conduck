@@ -372,6 +372,36 @@ nonisolated enum WorkMaterialStorageMode: String, CaseIterable, Codable, Sendabl
     }
 }
 
+/// How much room one material's card claims on the board. Presentation only:
+/// it is never part of a brief, a prompt, or a dispatch snapshot, so writing it
+/// must not advance any revision. `standard` is the absent value — a row that
+/// has never been resized stores nil, which keeps the CloudKit-mirrored column
+/// empty for every card nobody has deliberately sized.
+nonisolated enum WorkMaterialCardSize: String, CaseIterable, Codable, Sendable, Hashable {
+    case small
+    case standard
+    case large
+
+    /// A newer build may introduce a size this one cannot lay out. Falling back
+    /// to the neutral middle keeps the board readable instead of dropping the
+    /// card or guessing an extreme.
+    init(stored rawValue: String?) {
+        self = rawValue.flatMap(Self.init(rawValue:)) ?? .standard
+    }
+
+    /// Decoding is deliberately total. A size arriving from a newer build, or a
+    /// null where a string was expected, is a layout hint — never a reason to
+    /// fail the whole value that carries it.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self = Self(stored: try? container.decode(String.self))
+    }
+
+    /// Value written to the row. Standard is absence, so a reset clears the
+    /// column instead of leaving a synthetic marker behind.
+    var storedValue: String? { self == .standard ? nil : rawValue }
+}
+
 /// Device-relative availability shown before dispatch. This prevents a locally
 /// captured large file from simply disappearing when the card opens elsewhere.
 nonisolated enum WorkMaterialAvailability: String, Codable, Sendable, Hashable {
@@ -401,6 +431,9 @@ nonisolated struct WorkMaterialDraft: Sendable {
     let sequence: Int
     let storageMode: WorkMaterialStorageMode
     let sourceDevice: String?
+    /// Carried so duplicating a card reproduces the arrangement the person
+    /// built. Every fresh capture leaves it at `standard`.
+    let cardSize: WorkMaterialCardSize
     let createdAt: Date
 
     init(
@@ -420,6 +453,7 @@ nonisolated struct WorkMaterialDraft: Sendable {
         sequence: Int = 0,
         storageMode: WorkMaterialStorageMode? = nil,
         sourceDevice: String? = nil,
+        cardSize: WorkMaterialCardSize = .standard,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -438,6 +472,7 @@ nonisolated struct WorkMaterialDraft: Sendable {
         self.sequence = sequence
         self.storageMode = storageMode ?? (payload == nil ? .metadataOnly : .localVault)
         self.sourceDevice = sourceDevice
+        self.cardSize = cardSize
         self.createdAt = createdAt
     }
 }
@@ -462,8 +497,59 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
     let localVaultKey: String?
     let sourceDevice: String?
     let sequence: Int
+    /// Board presentation only. It is defaulted rather than required so no
+    /// caller that describes a material's content has to state a layout fact.
+    let cardSize: WorkMaterialCardSize
     let createdAt: Date
     let updatedAt: Date
+
+    init(
+        id: UUID,
+        workItemID: UUID,
+        kind: WorkMaterialKind,
+        title: String,
+        caption: String,
+        textContent: String?,
+        urlString: String?,
+        filename: String?,
+        mimeType: String?,
+        thumbnailData: Data?,
+        width: Int?,
+        height: Int?,
+        byteSize: Int64,
+        hasPayload: Bool,
+        storageMode: WorkMaterialStorageMode,
+        availability: WorkMaterialAvailability,
+        localVaultKey: String?,
+        sourceDevice: String?,
+        sequence: Int,
+        cardSize: WorkMaterialCardSize = .standard,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.id = id
+        self.workItemID = workItemID
+        self.kind = kind
+        self.title = title
+        self.caption = caption
+        self.textContent = textContent
+        self.urlString = urlString
+        self.filename = filename
+        self.mimeType = mimeType
+        self.thumbnailData = thumbnailData
+        self.width = width
+        self.height = height
+        self.byteSize = byteSize
+        self.hasPayload = hasPayload
+        self.storageMode = storageMode
+        self.availability = availability
+        self.localVaultKey = localVaultKey
+        self.sourceDevice = sourceDevice
+        self.sequence = sequence
+        self.cardSize = cardSize
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
 }
 
 /// Payload + metadata loaded only at the dispatch/preview boundary.

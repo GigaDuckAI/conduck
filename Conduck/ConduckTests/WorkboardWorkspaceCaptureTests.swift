@@ -63,6 +63,57 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         }
     }
 
+    /// Suspends every material import so a test can prove the capture lane
+    /// serializes a thought and a drop against one advancing owner revision.
+    private final class ImportGate {
+        struct PendingImport {
+            let itemID: UUID
+            let materialImport: WorkboardMaterialImport
+            let continuation: CheckedContinuation<WorkboardItemSnapshot, any Error>
+        }
+
+        var pending: [PendingImport] = []
+        var startedNames: [String] = []
+        var expectedRevisions: [Int64] = []
+        private var revision: Int64 = 0
+        private var materials: [WorkboardMaterialSnapshot] = []
+
+        func importMaterial(
+            itemID: UUID,
+            expectedRevision: Int64,
+            materialImport: WorkboardMaterialImport
+        ) async throws -> WorkboardItemSnapshot {
+            startedNames.append(materialImport.name)
+            expectedRevisions.append(expectedRevision)
+            return try await withCheckedThrowingContinuation { continuation in
+                pending.append(PendingImport(
+                    itemID: itemID,
+                    materialImport: materialImport,
+                    continuation: continuation
+                ))
+            }
+        }
+
+        func resolveNext() {
+            let next = pending.removeFirst()
+            materials.append(WorkboardMaterialSnapshot(
+                id: next.materialImport.id,
+                kind: next.materialImport.kind,
+                name: next.materialImport.name,
+                textContent: next.materialImport.textContent,
+                sequence: materials.count,
+                revision: 1
+            ))
+            revision += 1
+            next.continuation.resume(returning: WorkboardItemSnapshot(
+                id: next.itemID,
+                title: WorkboardWorkspaceCaptureLogic.title(for: next.materialImport.name),
+                materials: materials,
+                revision: revision
+            ))
+        }
+    }
+
     func testCaptureLogicNormalizesAndInfersACompactFirstLineTitle() {
         let longFirstLine = String(repeating: "a", count: 90)
         let normalized = WorkboardWorkspaceCaptureLogic.normalizedThought(
@@ -77,7 +128,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         )
     }
 
-    func testFirstThoughtBecomesObjectiveWithoutDispatching() async {
+    func testFirstThoughtOnAnEmptyBriefBecomesANoteAndLeavesTheObjectiveEmpty() async {
         let item = WorkboardItemSnapshot(title: "", objective: "", revision: 4)
         let harness = Harness(item: item)
         let viewModel = makeViewModel(harness: harness)
@@ -89,13 +140,16 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         )
 
         XCTAssertTrue(added)
-        XCTAssertEqual(harness.savedDrafts.count, 1)
-        XCTAssertEqual(harness.savedDrafts[0].title, "Compare the launch plans")
+        XCTAssertTrue(harness.savedDrafts.isEmpty, "the composer never writes the brief")
+        XCTAssertEqual(harness.importedNames, ["Compare the launch plans"])
+        let materials = viewModel.item(withID: item.id)?.materials ?? []
+        XCTAssertEqual(materials.map(\.kind), [.note])
         XCTAssertEqual(
-            harness.savedDrafts[0].objective,
+            materials.first?.textContent,
             "Compare the launch plans\nwith the latest notes."
         )
-        XCTAssertTrue(harness.importedNames.isEmpty)
+        XCTAssertEqual(viewModel.item(withID: item.id)?.objective, "")
+        XCTAssertEqual(viewModel.item(withID: item.id)?.title, "")
         XCTAssertEqual(harness.dispatchCount, 0)
     }
 
@@ -109,13 +163,61 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         XCTAssertEqual(viewModel.provisionalWorkspaceID, provisionalID)
         XCTAssertNil(viewModel.selectedItemID)
 
-        let added = await viewModel.addWorkspaceThought("A real first thought", to: provisionalID)
+        let added = await viewModel.addWorkspaceThought(
+            "A real first thought\nand a second line",
+            to: provisionalID
+        )
 
         XCTAssertTrue(added)
-        XCTAssertEqual(harness.savedDrafts.map(\.id), [provisionalID])
+        // One atomic create through the initial-material import path: the note
+        // is the payload, the title is derived from it, the objective is the
+        // person's to write.
+        XCTAssertTrue(harness.savedDrafts.isEmpty)
+        XCTAssertEqual(harness.importExpectedRevisions, [0])
+        XCTAssertEqual(harness.importedNames, ["A real first thought"])
+        XCTAssertEqual(viewModel.item(withID: provisionalID)?.title, "A real first thought")
+        XCTAssertEqual(viewModel.item(withID: provisionalID)?.objective, "")
+        XCTAssertEqual(
+            viewModel.item(withID: provisionalID)?.materials.first?.textContent,
+            "A real first thought\nand a second line"
+        )
         XCTAssertNil(viewModel.provisionalWorkspaceID)
         XCTAssertEqual(viewModel.selectedItemID, provisionalID)
         XCTAssertEqual(harness.dispatchCount, 0)
+    }
+
+    func testReviewAndSendWithoutABriefOpensTheEditorOnTheObjective() async {
+        let item = WorkboardItemSnapshot(title: "Launch plan", objective: "", revision: 4)
+        let harness = Harness(item: item)
+        let viewModel = makeViewModel(harness: harness)
+        viewModel.items = [item]
+        viewModel.selectedItemID = item.id
+        viewModel.setWorkspaceComposerDraft("One more thought", for: item.id)
+
+        let opened = await viewModel.reviewWorkspaceAndSend(itemID: item.id)
+
+        XCTAssertFalse(opened)
+        XCTAssertNil(viewModel.preflightItemID, "an unwritten brief never reaches preflight")
+        XCTAssertTrue(viewModel.editorPresented)
+        XCTAssertEqual(viewModel.editingDraft.id, item.id)
+        XCTAssertEqual(viewModel.consumeEditorFocusRequest(), .objective)
+        XCTAssertNil(viewModel.editorFocusRequest, "the request is consumed exactly once")
+        // The pending composer text is still captured before the editor opens.
+        XCTAssertEqual(harness.importedNames, ["One more thought"])
+    }
+
+    func testEditorReviewAndSendWithoutAnObjectiveRaisesAFocusRequest() async {
+        let item = WorkboardItemSnapshot(title: "Launch plan", objective: "", revision: 4)
+        let harness = Harness(item: item)
+        let viewModel = makeViewModel(harness: harness)
+        viewModel.items = [item]
+        viewModel.showEditor(for: item)
+
+        await viewModel.reviewEditorAndSend()
+
+        XCTAssertEqual(viewModel.editorFocusRequest, .objective)
+        XCTAssertTrue(viewModel.editorPresented)
+        XCTAssertNil(viewModel.preflightItemID)
     }
 
     func testSmallTextFileCanUseTextOnlyGatewayWithoutSyncedExtract() {
@@ -245,31 +347,19 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
 
     func testFirstThoughtAndDropShareOneSerializedMutationLane() async {
         let itemID = UUID()
-        let saveGate = SaveGate()
-        var importCalled = false
+        let gate = ImportGate()
         let viewModel = WorkboardViewModel(dependencies: WorkboardViewModel.Dependencies(
             loadItems: { [] },
             loadGateways: { ([], []) },
-            saveDraft: { [saveGate] draft in try await saveGate.save(draft) },
+            saveDraft: { _ in throw TestError.unexpectedCall },
             saveDraftAsCopy: { _ in throw TestError.unexpectedCall },
-            importMaterial: { id, expectedRevision, materialImport, onProgress in
-                importCalled = true
+            importMaterial: { [gate] id, expectedRevision, materialImport, onProgress in
                 XCTAssertEqual(id, itemID)
-                XCTAssertEqual(expectedRevision, 21)
                 onProgress(1)
-                return WorkboardItemSnapshot(
-                    id: itemID,
-                    title: "First thought",
-                    objective: "First thought",
-                    materials: [WorkboardMaterialSnapshot(
-                        id: materialImport.id,
-                        kind: materialImport.kind,
-                        name: materialImport.name,
-                        textContent: materialImport.textContent,
-                        sequence: 0,
-                        revision: 1
-                    )],
-                    revision: 22
+                return try await gate.importMaterial(
+                    itemID: id,
+                    expectedRevision: expectedRevision,
+                    materialImport: materialImport
                 )
             },
             removeMaterial: { _, _, _ in throw TestError.unexpectedCall },
@@ -289,7 +379,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         let thoughtTask = Task { @MainActor in
             await viewModel.addWorkspaceThought("First thought", to: itemID)
         }
-        await waitUntil { saveGate.pending.count == 1 }
+        await waitUntil { gate.pending.count == 1 }
         let dropTask = Task { @MainActor in
             await viewModel.importWorkspaceMaterials(
                 [WorkboardMaterialImport(kind: .note, name: "Second", textContent: "Second")],
@@ -298,14 +388,23 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         }
         for _ in 0..<10 { await Task.yield() }
 
-        XCTAssertFalse(importCalled, "the drop must wait for the first thought revision")
-        saveGate.resolveNext()
+        XCTAssertEqual(
+            gate.startedNames,
+            ["First thought"],
+            "the drop must wait for the first thought revision"
+        )
+        gate.resolveNext()
+        await waitUntil { gate.pending.count == 1 }
+        gate.resolveNext()
 
         let thoughtAdded = await thoughtTask.value
         let dropReport = await dropTask.value
         XCTAssertTrue(thoughtAdded)
         XCTAssertEqual(dropReport, WorkboardWorkspaceImportReport(addedCount: 1, failedCount: 0))
-        XCTAssertTrue(importCalled)
+        XCTAssertEqual(gate.startedNames, ["First thought", "Second"])
+        // Zero publishes the owner with its first material; the drop then runs
+        // against the revision that create returned.
+        XCTAssertEqual(gate.expectedRevisions, [0, 1])
     }
 
     func testAutosavePersistsKeystrokesMadeWhilePreviousSaveIsSuspended() async {
@@ -397,10 +496,35 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
             },
             saveDraftAsCopy: { _ in throw TestError.unexpectedCall },
             importMaterial: { [harness] itemID, expectedRevision, materialImport, onProgress in
-                XCTAssertEqual(itemID, harness.item.id)
+                // A provisional canvas has no row yet: the repository publishes
+                // owner and first material in one transaction and derives the
+                // owner's title from that material.
+                let createsOwner = harness.item.id != itemID
                 harness.importExpectedRevisions.append(expectedRevision)
                 if harness.failingImportNames.contains(materialImport.name) {
                     throw TestError.expectedFailure
+                }
+                if createsOwner {
+                    XCTAssertEqual(expectedRevision, 0)
+                    harness.item = WorkboardItemSnapshot(
+                        id: itemID,
+                        title: WorkboardWorkspaceCaptureLogic.title(for: materialImport.name),
+                        materials: [WorkboardMaterialSnapshot(
+                            id: materialImport.id,
+                            kind: materialImport.kind,
+                            name: materialImport.name,
+                            detail: materialImport.detail,
+                            textContent: materialImport.textContent,
+                            urlString: materialImport.urlString,
+                            mimeType: materialImport.mimeType,
+                            sequence: 0,
+                            revision: 1
+                        )],
+                        revision: 1
+                    )
+                    harness.importedNames.append(materialImport.name)
+                    onProgress(1)
+                    return harness.item
                 }
                 XCTAssertEqual(expectedRevision, harness.item.revision)
                 let material = WorkboardMaterialSnapshot(

@@ -22200,61 +22200,6 @@
         }
       }
     },
-    "workboard.captureLanding.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Files, screenshots, photos, links and text become a private new project. Nothing is sent automatically."
-          }
-        }
-      }
-    },
-    "workboard.captureLanding.files" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Files"
-          }
-        }
-      }
-    },
-    "workboard.captureLanding.links" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Links"
-          }
-        }
-      }
-    },
-    "workboard.captureLanding.photos" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Photos"
-          }
-        }
-      }
-    },
-    "workboard.captureLanding.text" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Text"
-          }
-        }
-      }
-    },
     "workboard.captureLanding.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22695,13 +22640,24 @@
         }
       }
     },
-    "workboard.detail.brief.title" : {
+    "workboard.detail.brief.edit" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Current Brief"
+            "value" : "Edit Brief"
+          }
+        }
+      }
+    },
+    "workboard.detail.brief.empty" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No brief yet"
           }
         }
       }
@@ -22811,7 +22767,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Add a thought that explains what you want the AI to do."
+            "value" : "Before sending, open the brief and describe what needs doing."
           }
         }
       }
@@ -23174,7 +23130,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Collect thoughts, screenshots, files and links here. Nothing leaves Conduck until you review the exact brief and choose a gateway."
+            "value" : "Nothing is sent to an AI until you review it."
           }
         }
       }
@@ -23817,6 +23773,105 @@
         }
       }
     },
+    "workboard.material.card.more" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Card actions"
+          }
+        }
+      }
+    },
+    "workboard.material.card.position" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld"
+          }
+        }
+      }
+    },
+    "workboard.material.card.size" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Card Size"
+          }
+        }
+      }
+    },
+    "workboard.material.card.size.large" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Large"
+          }
+        }
+      }
+    },
+    "workboard.material.card.size.large.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Make Card Large"
+          }
+        }
+      }
+    },
+    "workboard.material.card.size.small" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Small"
+          }
+        }
+      }
+    },
+    "workboard.material.card.size.small.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Make Card Small"
+          }
+        }
+      }
+    },
+    "workboard.material.card.size.standard" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Standard"
+          }
+        }
+      }
+    },
+    "workboard.material.card.size.standard.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Make Card Standard"
+          }
+        }
+      }
+    },
     "workboard.material.file" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24110,6 +24165,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Not included"
+          }
+        }
+      }
+    },
+    "workboard.material.open" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open"
           }
         }
       }
@@ -25203,6 +25269,61 @@
         }
       }
     },
+    "workboard.tutorial.done" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Start collecting"
+          }
+        }
+      }
+    },
+    "workboard.tutorial.point.arrange" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Drag cards to rearrange them, and resize the ones that matter most."
+          }
+        }
+      }
+    },
+    "workboard.tutorial.point.collect" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Collect anything — files, screenshots, links and thoughts."
+          }
+        }
+      }
+    },
+    "workboard.tutorial.point.review" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing is sent to an AI until you review it."
+          }
+        }
+      }
+    },
+    "workboard.tutorial.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "How your board works"
+          }
+        }
+      }
+    },
     "workboard.unpin" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25401,28 +25522,6 @@
         }
       }
     },
-    "workboard.workspace.canvas.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Collect the rough material first. Shape and send it only when you are ready."
-          }
-        }
-      }
-    },
-    "workboard.workspace.canvas.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Project canvas"
-          }
-        }
-      }
-    },
     "workboard.workspace.capture.failed.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25467,17 +25566,6 @@
         }
       }
     },
-    "workboard.workspace.composer.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Add a thought"
-          }
-        }
-      }
-    },
     "workboard.workspace.drop.accessibilityHint" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25485,17 +25573,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Opens the file picker. You can also drag items onto this project canvas."
-          }
-        }
-      }
-    },
-    "workboard.workspace.drop.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Files stay private and inert until Review & Send."
           }
         }
       }
@@ -25621,24 +25698,13 @@
         }
       }
     },
-    "workboard.workspace.inert" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not sent"
-          }
-        }
-      }
-    },
     "workboard.workspace.new.message" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Start loosely. Add a thought or drop source material; the project is created only when there is something to keep."
+            "value" : "Add a thought or drop something in."
           }
         }
       }
@@ -25654,17 +25720,6 @@
         }
       }
     },
-    "workboard.workspace.privacy" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Briefs sync privately. Source files and screenshots stay on this device. You choose every gateway at send time."
-          }
-        }
-      }
-    },
     "workboard.workspace.recent" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25676,39 +25731,6 @@
         }
       }
     },
-    "workboard.workspace.route.actionButton" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Action Button"
-          }
-        }
-      }
-    },
-    "workboard.workspace.route.menuBar" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Menu bar"
-          }
-        }
-      }
-    },
-    "workboard.workspace.route.share" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Share"
-          }
-        }
-      }
-    },
     "workboard.workspace.sidebar.privacy" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25716,17 +25738,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Briefs sync privately · source files and screenshots stay on this device"
-          }
-        }
-      }
-    },
-    "workboard.workspace.sources.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sources and thoughts"
           }
         }
       }

@@ -56,7 +56,6 @@ struct WorkboardDetailView: View {
                             )
                         }
                         actionDeck(item)
-                        briefDocument(item)
                         if !item.runs.isEmpty {
                             runTimeline(item)
                         }
@@ -186,11 +185,71 @@ struct WorkboardDetailView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
 
-            Text(item.objective)
+            briefLine(item)
+        }
+    }
+
+    /// The board surface carries no brief document any more, so the one place
+    /// the objective still shows is this compact line — with the way to write
+    /// it standing right beside it, including when there is nothing yet.
+    private func briefLine(_ item: WorkboardItemSnapshot) -> some View {
+        let objective = item.objective.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                objectiveText(objective)
+                editBriefButton(item)
+                Spacer(minLength: 0)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                objectiveText(objective)
+                editBriefButton(item)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func objectiveText(_ objective: String) -> some View {
+        if objective.isEmpty {
+            Text(LocalizedStringResource(
+                "workboard.detail.brief.empty",
+                defaultValue: "No brief yet"
+            ))
+            .font(.title3)
+            .foregroundStyle(AppColors.textTertiary)
+        } else {
+            Text(verbatim: objective)
                 .font(.title3)
                 .foregroundStyle(AppColors.textSecondary)
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// Offered in every state, `.done` included: this is the only route to the
+    /// context, constraints, desired result and review date, so gating it would
+    /// leave four authored fields stored but unreadable once work is finished.
+    private func editBriefButton(_ item: WorkboardItemSnapshot) -> some View {
+        Button {
+            viewModel.showEditor(for: item, focusing: .objective)
+        } label: {
+            Label(
+                LocalizedStringResource(
+                    "workboard.detail.brief.edit",
+                    defaultValue: "Edit Brief"
+                ),
+                systemImage: "square.and.pencil"
+            )
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(AppColors.textPrimary)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 34)
+            .background(AppColors.backgroundSecondary, in: Capsule())
+            .overlay { Capsule().strokeBorder(AppColors.borderSubtle, lineWidth: 1) }
+            .contentShape(Capsule())
+        }
+        .choiceCardButton(cornerRadius: 17)
+        .disabled(!workbenchDestinationIsActive)
     }
 
     @ViewBuilder
@@ -440,11 +499,14 @@ struct WorkboardDetailView: View {
                     VStack(spacing: 10) { actionButtons(item) }
                 }
 
-                if item.state == .draft, !canReviewAndSend(item) {
+                // Reads the brief gate, not the send gate: a composer draft
+                // enables the button (it flushes, then opens the brief focused
+                // on the objective) without making the requirement untrue.
+                if item.state == .draft, !item.isReadyToSend {
                     Label(
                         LocalizedStringResource(
                             "workboard.detail.review.requirement",
-                            defaultValue: "Add a thought that explains what you want the AI to do."
+                            defaultValue: "Before sending, open the brief and describe what needs doing."
                         ),
                         systemImage: "text.bubble"
                     )
@@ -579,78 +641,6 @@ struct WorkboardDetailView: View {
                 .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .modifier(WorkboardActionButtonModifier(primary: primary))
-    }
-
-    private func briefDocument(_ item: WorkboardItemSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(LocalizedStringResource(
-                "workboard.detail.brief.title",
-                defaultValue: "Current Brief"
-            ))
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(AppColors.textEmphasis)
-            .accessibilityAddTraits(.isHeader)
-
-            WorkboardSurface {
-                VStack(alignment: .leading, spacing: 18) {
-                    documentSection(
-                        LocalizedStringResource("workboard.editor.objective.title", defaultValue: "What needs doing?"),
-                        value: item.objective
-                    )
-                    if !item.context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Divider().overlay(AppColors.borderSubtle)
-                        documentSection(
-                            LocalizedStringResource("workboard.editor.context.title", defaultValue: "Context and thoughts"),
-                            value: item.context
-                        )
-                    }
-                    if !item.desiredResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Divider().overlay(AppColors.borderSubtle)
-                        documentSection(
-                            LocalizedStringResource("workboard.editor.desiredResult.title", defaultValue: "A good result includes"),
-                            value: item.desiredResult
-                        )
-                    }
-                    if !item.constraints.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Divider().overlay(AppColors.borderSubtle)
-                        documentSection(
-                            LocalizedStringResource("workboard.editor.constraints.title", defaultValue: "Constraints and guardrails"),
-                            value: item.constraints
-                        )
-                    }
-                    if let reviewBy = item.reviewBy {
-                        Divider().overlay(AppColors.borderSubtle)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(LocalizedStringResource(
-                                "workboard.editor.reviewBy.date",
-                                defaultValue: "Review by"
-                            ))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(AppColors.brandAmber)
-                            Label {
-                                Text(reviewBy, format: .dateTime.weekday(.wide).month(.wide).day().hour().minute())
-                            } icon: {
-                                Image(systemName: "calendar")
-                            }
-                            .font(.body)
-                            .foregroundStyle(reviewBy < Date() && item.state != .done ? AppColors.error : AppColors.textPrimary)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func documentSection(_ title: LocalizedStringResource, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AppColors.brandAmber)
-            Text(verbatim: value)
-                .font(.body)
-                .foregroundStyle(AppColors.textPrimary)
-                .textSelection(.enabled)
-        }
     }
 
     private func runTimeline(_ item: WorkboardItemSnapshot) -> some View {
